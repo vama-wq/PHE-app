@@ -5,8 +5,8 @@
   "scripts": {
     "install-all": "cd server && npm install && cd ../client && npm install",
     "dev": "concurrently \"cd server && npm run dev\" \"cd client && npm run dev\"",
-    "build": "cd client && npm run build",
-    "start": "cd server && node src/index.js",
+    "build": "npm install --prefix server && NODE_ENV=development npm install --prefix client && cd client && npx vite build",
+    "start": "node server/src/index.js",
     "setup": "cd server && npm run setup"
   },
   "devDependencies": {
