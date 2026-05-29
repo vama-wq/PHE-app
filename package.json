@@ -1,0 +1,15 @@
+{
+  "name": "phe-app",
+  "version": "1.0.0",
+  "description": "Peena Heat Elements Management System",
+  "scripts": {
+    "install-all": "cd server && npm install && cd ../client && npm install",
+    "dev": "concurrently \"cd server && npm run dev\" \"cd client && npm run dev\"",
+    "build": "cd client && npm run build",
+    "start": "cd server && node src/index.js",
+    "setup": "cd server && npm run setup"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -1,0 +1,15 @@
+# Railway build configuration
+# Installs deps for both server and client, builds the React app,
+# then starts the Express server which serves everything.
+
+[phases.install]
+cmds = [
+  "npm install --prefix server",
+  "npm install --prefix client"
+]
+
+[phases.build]
+cmds = ["npm run build --prefix client"]
+
+[start]
+cmd = "node server/src/index.js"

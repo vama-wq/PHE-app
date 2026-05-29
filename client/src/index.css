@@ -1,0 +1,104 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-gray-900 antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  /* ── Buttons ─────────────────────────────────────────── */
+  .btn {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 text-white hover:bg-brand-700 shadow-sm hover:shadow focus:ring-brand-600;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 hover:border-gray-300 shadow-sm focus:ring-gray-300;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700 shadow-sm focus:ring-red-500;
+  }
+  .btn-ghost {
+    @apply btn text-gray-600 hover:bg-gray-100 focus:ring-gray-300;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+
+  /* ── Form Controls ───────────────────────────────────── */
+  .input {
+    @apply w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-600/30 focus:border-brand-600 transition-colors placeholder-gray-400 shadow-sm;
+  }
+  .label {
+    @apply block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide;
+  }
+
+  /* ── Cards ───────────────────────────────────────────── */
+  .card {
+    @apply bg-white rounded-xl border border-gray-100 shadow-sm;
+  }
+  .card-elevated {
+    @apply bg-white rounded-xl border border-gray-100 shadow-md;
+  }
+
+  /* ── Typography ──────────────────────────────────────── */
+  .section-title {
+    @apply text-lg font-semibold text-gray-900 flex items-center gap-2;
+  }
+  .page-title {
+    @apply text-2xl font-bold text-gray-900 tracking-tight;
+  }
+
+  /* ── Tables ──────────────────────────────────────────── */
+  .table-cell {
+    @apply px-4 py-3 text-sm;
+  }
+  .table-header {
+    @apply px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider;
+  }
+
+  /* ── Stat Cards ──────────────────────────────────────── */
+  .stat-card {
+    @apply card p-5 hover:shadow-md transition-shadow duration-200;
+  }
+}
+
+/* ── Sidebar nav link active indicator ────────────────────── */
+.sidebar-link-active {
+  background: rgba(255,255,255,0.12);
+  box-shadow: inset 3px 0 0 #e11d48;
+}
+
+/* ── Premium scrollbar ────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+/* ── Print ────────────────────────────────────────────────── */
+@media print {
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  body { background: white; }
+  /* PO print: hide app shell, show only the document */
+  aside, nav, header { display: none !important; }
+  main > *:not(:has(.po-print-area)) { display: none !important; }
+  .po-print-area {
+    font-family: Arial, sans-serif !important;
+    font-size: 12px !important;
+    color: #000 !important;
+    padding: 8px !important;
+  }
+}
+.print-only { display: none; }

@@ -1,0 +1,988 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import api from '../../lib/api';
+import { useAuthStore } from '../../store/authStore';
+import StatusBadge from '../../components/ui/StatusBadge';
+import Modal from '../../components/ui/Modal';
+import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS, getStageLabel, downloadExcel, WORKER_NAME_STAGES, SCRAP_VALUE_STAGES } from '../../lib/utils';
+import {
+  Wrench, Calendar, Plus, CheckSquare, Square, CheckCircle,
+  X, ExternalLink, ClipboardList, Check, Image as ImageIcon,
+  AlertTriangle, ChevronRight, ArrowLeft, Lock, Download
+} from 'lucide-react';
+
+export default function ProductionDashboard() {
+  const { user } = useAuthStore();
+  const [tab, setTab] = useState('today');
+  const [allCards, setAllCards] = useState([]);
+  const [todayPicks, setTodayPicks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showPickModal, setShowPickModal] = useState(false);
+  const [checklistTarget, setChecklistTarget] = useState(null);
+  const today = new Date().toISOString().split('T')[0];
+
+  const canManage = ['production', 'owner', 'admin'].includes(user.role);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [allRes, picksRes] = await Promise.all([
+        api.get('/job-cards'),
+        api.get('/job-cards/picks/today'),
+      ]);
+      setAllCards(allRes.data);
+      setTodayPicks(picksRes.data);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const pickCard = async (cardId) => {
+    await api.post(`/job-cards/${cardId}/pick`);
+    await load();
+  };
+
+  const unpickCard = async (cardId) => {
+    await api.delete(`/job-cards/${cardId}/pick`);
+    await load();
+  };
+
+  const todayPickIds = new Set(todayPicks.map(p => p.id));
+  const activeCards = allCards.filter(c => c.status !== 'dispatched');
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Production</h1>
+          <p className="text-gray-500 text-sm mt-0.5">{fmtDate(today)}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {['owner','admin','production'].includes(user.role) && (
+            <button className="btn-secondary flex items-center gap-1.5 text-sm"
+              onClick={() => downloadExcel('production-checklist', 'production_checklist.xlsx')}>
+              <Download size={15} /> Export
+            </button>
+          )}
+          {canManage && tab === 'today' && (
+            <button className="btn-primary" onClick={() => setShowPickModal(true)}>
+              <Plus size={16} /> Pick Job Cards for Today
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex border-b border-gray-200 mb-6 gap-1">
+        {[
+          { key: 'today', label: `Today's Work`, count: todayPicks.length },
+          { key: 'all',   label: 'All Job Cards', count: activeCards.length },
+        ].map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-5 py-2.5 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
+              tab === t.key
+                ? 'border-brand-500 text-brand-600 bg-brand-50/50'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {t.label}
+            <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full font-semibold ${
+              tab === t.key ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {t.count}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="text-center text-gray-400 py-16">Loading...</div>
+      ) : tab === 'today' ? (
+        <TodayTab
+          picks={todayPicks}
+          canManage={canManage}
+          onUnpick={unpickCard}
+          onChecklist={setChecklistTarget}
+          onPickMore={() => setShowPickModal(true)}
+        />
+      ) : (
+        <AllCardsTab
+          cards={activeCards}
+          todayPickIds={todayPickIds}
+          canManage={canManage}
+          onPick={pickCard}
+          onUnpick={unpickCard}
+          onChecklist={setChecklistTarget}
+        />
+      )}
+
+      {showPickModal && (
+        <PickModal
+          cards={activeCards}
+          todayPickIds={todayPickIds}
+          onPick={pickCard}
+          onUnpick={unpickCard}
+          onClose={() => setShowPickModal(false)}
+        />
+      )}
+
+      {checklistTarget && (
+        <ChecklistModal
+          card={checklistTarget}
+          onClose={() => setChecklistTarget(null)}
+          onSave={load}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Today's Work tab ──────────────────────────────────────────────────────────
+function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore }) {
+  if (picks.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <Wrench size={40} className="mx-auto mb-3 text-gray-200" />
+        <p className="text-gray-500 font-medium">No job cards picked for today.</p>
+        {canManage && (
+          <button className="btn-primary mt-4" onClick={onPickMore}>
+            <Plus size={16} /> Pick Job Cards for Today
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {picks.map(jc => {
+        const days = daysUntil(jc.dispatch_date);
+        const isOverdue = days < 0;
+        const isUrgent  = days >= 0 && days <= 3;
+        const stageLabel = getStageLabel(jc.current_stage);
+        const isOnHold = jc.status === 'on_hold';
+        return (
+          <div key={jc.id} className={`card p-5 border-l-4 ${
+            isOnHold ? 'border-l-red-500' : isOverdue ? 'border-l-red-500' : isUrgent ? 'border-l-orange-400' : 'border-l-brand-400'
+          }`}>
+            <div className="flex items-start gap-4">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <span className="font-bold text-gray-900 text-base">{jc.job_card_no}</span>
+                  <StatusBadge status={jc.status} />
+                  {stageLabel && !isOnHold && (
+                    <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                      {stageLabel}
+                    </span>
+                  )}
+                  {isOnHold && (
+                    <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                      <AlertTriangle size={11} /> Awaiting Owner Approval
+                    </span>
+                  )}
+                </div>
+                <div className="text-sm text-gray-600 mb-1">
+                  <Link to={`/orders/${jc.order_id}`} className="text-brand-600 hover:underline font-medium">
+                    {jc.order_code}
+                  </Link>
+                  {' · '}{jc.customer_code}
+                  {jc.qty && <span className="text-gray-400"> · Qty: {jc.qty}</span>}
+                </div>
+                <div className={`text-sm font-semibold ${
+                  isOverdue ? 'text-red-600' : isUrgent ? 'text-orange-500' : 'text-gray-500'
+                }`}>
+                  {isOverdue
+                    ? `⚠️ ${Math.abs(days)}d overdue · Dispatch was ${fmtDate(jc.dispatch_date)}`
+                    : days === 0
+                      ? `🔔 Dispatch today — ${fmtDate(jc.dispatch_date)}`
+                      : `Dispatch: ${fmtDate(jc.dispatch_date)} (${days}d left)`}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {jc.file_name && (
+                  <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+                    className="btn-secondary btn-sm flex items-center gap-1">
+                    <ExternalLink size={13} /> View Card
+                  </a>
+                )}
+                <button className="btn-primary btn-sm flex items-center gap-1" onClick={() => onChecklist(jc)}>
+                  <ClipboardList size={13} /> Checklist
+                </button>
+                <button
+                  className="btn-ghost btn-sm p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50"
+                  onClick={() => onUnpick(jc.id)} title="Remove from today"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── All Job Cards tab ─────────────────────────────────────────────────────────
+function AllCardsTab({ cards, todayPickIds, canManage, onPick, onUnpick, onChecklist }) {
+  if (cards.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <CheckCircle size={40} className="mx-auto mb-3 text-green-200" />
+        <p className="text-gray-500">No active job cards. All done!</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card overflow-hidden">
+      <table className="w-full">
+        <thead className="bg-gray-50 border-b border-gray-200">
+          <tr>
+            <th className="table-header text-left">Job Card</th>
+            <th className="table-header text-left">Order / Customer</th>
+            <th className="table-header text-right">Qty</th>
+            <th className="table-header text-left">Dispatch Date</th>
+            <th className="table-header text-left">Status / Stage</th>
+            {canManage && <th className="table-header text-center">Today</th>}
+            {canManage && <th className="table-header text-center">Checklist</th>}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100">
+          {cards.map(jc => {
+            const days = daysUntil(jc.dispatch_date);
+            const isOverdue = days < 0;
+            const isUrgent  = days >= 0 && days <= 3;
+            const isPicked  = todayPickIds.has(jc.id);
+            const stageLabel = getStageLabel(jc.current_stage);
+            return (
+              <tr key={jc.id} className={`hover:bg-gray-50 ${isOverdue ? 'bg-red-50/30' : ''}`}>
+                <td className="table-cell">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-brand-700">{jc.job_card_no}</span>
+                    {isPicked && (
+                      <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">Today</span>
+                    )}
+                  </div>
+                  {jc.file_name && (
+                    <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+                      className="text-xs text-brand-500 hover:underline flex items-center gap-0.5 mt-0.5">
+                      <ExternalLink size={10} /> View file
+                    </a>
+                  )}
+                </td>
+                <td className="table-cell">
+                  <Link to={`/orders/${jc.order_id}`} className="text-brand-600 hover:underline text-sm font-medium">
+                    {jc.order_code}
+                  </Link>
+                  <div className="text-xs text-gray-400">{jc.customer_code}</div>
+                </td>
+                <td className="table-cell text-right font-medium">{jc.qty ?? '—'}</td>
+                <td className="table-cell">
+                  <div className="text-sm">{fmtDate(jc.dispatch_date)}</div>
+                  <div className={`text-xs font-medium ${
+                    isOverdue ? 'text-red-600' : isUrgent ? 'text-orange-500' : 'text-gray-400'
+                  }`}>
+                    {isOverdue ? `${Math.abs(days)}d overdue` : days === 0 ? 'Today!' : `${days}d left`}
+                  </div>
+                </td>
+                <td className="table-cell">
+                  <StatusBadge status={jc.status} />
+                  {stageLabel && jc.status === 'in_progress' && (
+                    <div className="text-xs text-gray-400 mt-0.5">{stageLabel}</div>
+                  )}
+                </td>
+                {canManage && (
+                  <td className="table-cell text-center">
+                    {isPicked ? (
+                      <button
+                        className="btn-ghost btn-sm text-xs text-orange-600 hover:bg-orange-50 px-2 py-1 gap-1 flex items-center mx-auto"
+                        onClick={() => onUnpick(jc.id)}
+                      >
+                        <CheckSquare size={14} /> Picked
+                      </button>
+                    ) : (
+                      <button
+                        className="btn-secondary btn-sm text-xs px-2 py-1 gap-1 flex items-center mx-auto"
+                        onClick={() => onPick(jc.id)}
+                      >
+                        <Square size={14} /> Pick
+                      </button>
+                    )}
+                  </td>
+                )}
+                {canManage && (
+                  <td className="table-cell text-center">
+                    <button
+                      className="btn-ghost btn-sm text-xs text-brand-600 hover:bg-brand-50 px-2 py-1 gap-1 flex items-center mx-auto"
+                      onClick={() => onChecklist(jc)}
+                    >
+                      <ClipboardList size={13} /> Open
+                    </button>
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Pick Modal ────────────────────────────────────────────────────────────────
+function PickModal({ cards, todayPickIds, onPick, onUnpick, onClose }) {
+  const [search, setSearch] = useState('');
+  const filtered = cards.filter(c =>
+    c.job_card_no.toLowerCase().includes(search.toLowerCase()) ||
+    c.order_code.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <Modal open title="Pick Job Cards for Today" onClose={onClose} size="lg">
+      <p className="text-sm text-gray-500 mb-4">Select job cards to work on today.</p>
+      <input className="input mb-4" placeholder="Search by job card or order..."
+        value={search} onChange={e => setSearch(e.target.value)} />
+      <div className="space-y-2 max-h-96 overflow-y-auto">
+        {filtered.length === 0 ? (
+          <p className="text-center text-gray-400 py-8">No active job cards found.</p>
+        ) : filtered.map(jc => {
+          const isPicked = todayPickIds.has(jc.id);
+          const days = daysUntil(jc.dispatch_date);
+          return (
+            <div key={jc.id}
+              className={`flex items-center gap-3 p-3 rounded-xl border transition-colors cursor-pointer ${
+                isPicked ? 'bg-orange-50 border-orange-200' : 'bg-gray-50 border-gray-200 hover:border-brand-300'
+              }`}
+              onClick={() => isPicked ? onUnpick(jc.id) : onPick(jc.id)}
+            >
+              <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${
+                isPicked ? 'bg-orange-500' : 'border-2 border-gray-300'
+              }`}>
+                {isPicked && <CheckCircle size={14} className="text-white" />}
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-sm text-gray-900">{jc.job_card_no}</span>
+                  <span className="text-xs text-gray-500">{jc.order_code} · {jc.customer_code}</span>
+                </div>
+                <div className={`text-xs mt-0.5 font-medium ${
+                  days < 0 ? 'text-red-600' : days <= 3 ? 'text-orange-500' : 'text-gray-400'
+                }`}>
+                  Dispatch: {fmtDate(jc.dispatch_date)}
+                  {days < 0 ? ` · ${Math.abs(days)}d overdue` : days === 0 ? ' · Today!' : ` · ${days}d left`}
+                </div>
+              </div>
+              <StatusBadge status={jc.status} />
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-5 flex justify-end">
+        <button className="btn-primary" onClick={onClose}>Done</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Checklist Modal (list view → stage detail view) ───────────────────────────
+function ChecklistModal({ card, onClose, onSave }) {
+  const { user } = useAuthStore();
+  const [data, setData] = useState(null); // { stages: [], hold: null|{...} }
+  const [view, setView] = useState('list'); // 'list' | 'stage'
+  const [selectedDef, setSelectedDef] = useState(null);
+  const [approvingHold, setApprovingHold] = useState(false);
+
+  const canManage = ['production', 'owner', 'admin'].includes(user.role);
+  const canApproveHold = ['owner', 'admin'].includes(user.role);
+
+  const loadChecklist = async () => {
+    const r = await api.get(`/job-cards/${card.id}/checklist`);
+    setData(r.data);
+  };
+
+  useEffect(() => { loadChecklist(); }, [card.id]);
+
+  const stageMap = useMemo(() => {
+    const m = {};
+    data?.stages?.forEach(s => { m[s.stage_no] = s; });
+    return m;
+  }, [data]);
+
+  const approveHold = async () => {
+    setApprovingHold(true);
+    try {
+      await api.put(`/job-cards/${card.id}/hold/approve`);
+      await loadChecklist();
+      onSave();
+    } catch (e) {
+      alert(e.response?.data?.error || 'Failed to approve hold');
+    } finally {
+      setApprovingHold(false);
+    }
+  };
+
+  const completedCount = data?.stages?.filter(s => s.done).length || 0;
+  const visibleCount = data
+    ? PRODUCTION_STAGES.filter(def => !(def.hideIfDone && stageMap[def.hideIfDone]?.done)).length
+    : 29;
+  const progress = visibleCount > 0 ? Math.round(completedCount / visibleCount * 100) : 0;
+  const isOnHold = !!data?.hold;
+
+  const openStage = (def) => {
+    if (!canManage) return;
+    setSelectedDef(def);
+    setView('stage');
+  };
+
+  return (
+    <Modal open title={view === 'list' ? `Checklist — ${card.job_card_no}` : `Stage ${selectedDef?.no}: ${selectedDef?.name}`} onClose={onClose} size="xl">
+      {/* Sub-header: order info + progress */}
+      <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
+        <div className="text-sm text-gray-500">
+          <Link to={`/orders/${card.order_id}`} className="text-brand-600 hover:underline font-medium">
+            {card.order_code}
+          </Link>
+          {' · '}{card.customer_code}
+          {card.qty && <span> · Qty: {card.qty}</span>}
+          {' · '}Dispatch: <span className="font-medium text-gray-700">{fmtDate(card.dispatch_date)}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-28 h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-full bg-green-500 rounded-full transition-all duration-300"
+              style={{ width: `${progress}%` }} />
+          </div>
+          <span className="text-sm font-semibold text-gray-600">{completedCount}/{visibleCount}</span>
+        </div>
+      </div>
+
+      {!data ? (
+        <div className="text-center py-12 text-gray-400">Loading checklist...</div>
+      ) : view === 'list' ? (
+        <>
+          {/* Hold banner */}
+          {isOnHold && (
+            <div className="mb-4 rounded-xl bg-red-50 border border-red-200 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="font-semibold text-red-700 flex items-center gap-2">
+                    <AlertTriangle size={16} /> Work On Hold
+                  </div>
+                  {data.hold && (
+                    <div className="text-sm text-red-600 mt-1">
+                      {data.hold.rejection_qty} rejection{data.hold.rejection_qty > 1 ? 's' : ''} reported
+                      at Stage {data.hold.stage_no}{' '}
+                      ({PRODUCTION_STAGES.find(s => s.no === data.hold.stage_no)?.name})
+                      {data.hold.hold_photo_file && (
+                        <a href={`/uploads/rejection-photos/${data.hold.hold_photo_file}`}
+                          target="_blank" rel="noopener noreferrer"
+                          className="ml-2 underline text-red-500">View photo</a>
+                      )}
+                    </div>
+                  )}
+                  <div className="text-xs text-red-500 mt-1">Owner approval required to resume production.</div>
+                </div>
+                {canApproveHold && (
+                  <button
+                    className="btn-primary bg-red-600 hover:bg-red-700 border-red-600 whitespace-nowrap flex-shrink-0"
+                    onClick={approveHold} disabled={approvingHold}
+                  >
+                    {approvingHold ? 'Approving...' : 'Approve to Resume'}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Stage list */}
+          <div className="space-y-1 max-h-[55vh] overflow-y-auto pr-1">
+            {PRODUCTION_STAGES.map(def => {
+              if (def.hideIfDone && stageMap[def.hideIfDone]?.done) return null;
+              const sData = stageMap[def.no] || { done: 0, value1: null, value2: null, photo_file: null, rejection_qty: 0, remade_qty: 0 };
+              const isDone = sData.done === 1;
+              const hasRejection = (sData.rejection_qty || 0) > 0;
+              const clickable = canManage && (!isOnHold || isDone);
+
+              return (
+                <div
+                  key={def.no}
+                  className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors ${
+                    isDone ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'
+                  } ${clickable ? 'cursor-pointer hover:border-brand-300 hover:bg-brand-50/20' : 'opacity-60'}`}
+                  onClick={() => clickable && openStage(def)}
+                >
+                  {/* Status icon */}
+                  <div className={`w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center ${
+                    isDone ? 'bg-green-500' : isOnHold ? 'bg-gray-300 border-2 border-gray-300' : 'border-2 border-gray-300'
+                  }`}>
+                    {isDone
+                      ? <Check size={13} className="text-white" />
+                      : isOnHold ? <Lock size={10} className="text-white" /> : null
+                    }
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-mono text-gray-300 w-5 text-right flex-shrink-0">{def.no}</span>
+                      <span className={`text-sm font-medium ${isDone ? 'text-green-800' : 'text-gray-800'}`}>
+                        {def.name}
+                      </span>
+                      {def.optional && <span className="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded">Optional</span>}
+                      {isDone && sData.done_at && (
+                        <span className="text-xs text-green-500 ml-auto flex-shrink-0">{fmtDateTime(sData.done_at)}</span>
+                      )}
+                    </div>
+                    {isDone && (sData.value1 || sData.value2 || hasRejection || sData.worker_name || sData.scrap_value) && (
+                      <div className="ml-7 text-xs text-gray-500 mt-0.5 flex flex-wrap gap-2">
+                        {sData.worker_name && <span className="font-medium text-gray-600">{sData.worker_name}</span>}
+                        {sData.value1 && <span>{sData.value1}</span>}
+                        {sData.value2 && <span className="text-gray-400">{sData.value2}</span>}
+                        {sData.scrap_value && <span className="text-amber-600">Scrap: {sData.scrap_value}</span>}
+                        {hasRejection && (
+                          <span className="text-orange-600 font-medium">
+                            Rej: {sData.rejection_qty} · Remade: {sData.remade_qty || 0}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {clickable && <ChevronRight size={15} className="text-gray-300 flex-shrink-0" />}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        /* Stage detail view */
+        selectedDef && (
+          <StageDetailView
+            card={card}
+            stageDef={selectedDef}
+            stageData={stageMap[selectedDef.no] || { done: 0, value1: null, value2: null, photo_file: null, rejection_qty: 0, remade_qty: 0, rejection_photo_file: null }}
+            stageMap={stageMap}
+            onBack={() => setView('list')}
+            onSaved={async () => {
+              setView('list');
+              await loadChecklist();
+              onSave();
+            }}
+          />
+        )
+      )}
+
+      {view === 'list' && (
+        <div className="mt-4 flex justify-between items-center pt-3 border-t border-gray-100">
+          <span className="text-sm text-gray-400">
+            {completedCount} of {visibleCount} stages complete · {progress}%
+          </span>
+          <button className="btn-primary" onClick={onClose}>Close</button>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ── Stage Detail View (inline within ChecklistModal) ──────────────────────────
+function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved }) {
+  const { user } = useAuthStore();
+  const [value1, setValue1] = useState(stageData.value1 || '');
+  const [value2, setValue2] = useState(stageData.value2 || '');
+  const [workerName, setWorkerName] = useState(stageData.worker_name || '');
+  const [scrapValue, setScrapValue] = useState(stageData.scrap_value || '');
+  const [rejQty, setRejQty] = useState(String(stageData.rejection_qty || 0));
+  const [remadeQty, setRemadeQty] = useState(String(stageData.remade_qty || 0));
+  const [dispatchedQty, setDispatchedQty] = useState(String(stageData.dispatched_qty || ''));
+  const [rejPhoto, setRejPhoto] = useState(stageData.rejection_photo_file || null);
+  const [uploadingRejPhoto, setUploadingRejPhoto] = useState(false);
+  const [uploadingStagePhoto, setUploadingStagePhoto] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const needsWorker = WORKER_NAME_STAGES.has(stageDef.no);
+  const hasScrap = SCRAP_VALUE_STAGES.has(stageDef.no);
+
+  const isDone = stageData.done === 1;
+  const rejQtyInt = parseInt(rejQty, 10) || 0;
+  const canManage = ['production', 'owner', 'admin'].includes(user.role);
+
+  // Check if all mandatory stages are done (for stage 28 gate)
+  const mandatoryMissing = useMemo(() => {
+    if (stageDef.no !== 28) return [];
+    const stage12Done = stageMap[12]?.done;
+    const required = [...MANDATORY_STAGE_NOS];
+    if (!stage12Done) required.push(13);
+    return required.filter(n => !stageMap[n]?.done);
+  }, [stageDef.no, stageMap]);
+
+  const canMarkDone = () => {
+    if (isDone || saving) return false;
+    if (needsWorker && !workerName.trim()) return false;
+    if (stageDef.fields) {
+      if (!value1.trim()) return false;
+      if (stageDef.fields.length > 1 && !value2.trim()) return false;
+    }
+    if (stageDef.photo) return false; // photo stages use upload button
+    if (rejQtyInt > 2 && !rejPhoto) return false;
+    if (stageDef.no === 28 && mandatoryMissing.length > 0) return false;
+    if (stageDef.no === 29 && card.status !== 'qc_approved') return false;
+    if (stageDef.no === 29 && !(parseInt(dispatchedQty, 10) > 0)) return false;
+    return true;
+  };
+
+  const uploadRejectionPhoto = async (file) => {
+    setUploadingRejPhoto(true);
+    setError('');
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const r = await api.post(`/job-cards/${card.id}/checklist/${stageDef.no}/rejection-photo`, fd);
+      setRejPhoto(r.data.file_name);
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to upload rejection photo');
+    } finally {
+      setUploadingRejPhoto(false);
+    }
+  };
+
+  const uploadStagePhoto = async (file) => {
+    if (needsWorker && !workerName.trim()) {
+      return setError('Worker name is required');
+    }
+    setUploadingStagePhoto(true);
+    setError('');
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('rejection_qty', String(rejQtyInt));
+    fd.append('remade_qty', remadeQty || '0');
+    if (workerName) fd.append('worker_name', workerName);
+    if (scrapValue) fd.append('scrap_value', scrapValue);
+    if (stageDef.no === 29) fd.append('dispatched_qty', dispatchedQty || '0');
+    try {
+      await api.post(`/job-cards/${card.id}/checklist/${stageDef.no}/photo`, fd);
+      await onSaved();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to upload photo');
+      setUploadingStagePhoto(false);
+    }
+  };
+
+  const handleMarkDone = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      await api.put(`/job-cards/${card.id}/checklist/${stageDef.no}`, {
+        done: true,
+        value1: value1 || null,
+        value2: value2 || null,
+        rejection_qty: rejQtyInt,
+        remade_qty: parseInt(remadeQty, 10) || 0,
+        worker_name: workerName || null,
+        scrap_value: scrapValue || null,
+      });
+      await onSaved();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to save');
+      setSaving(false);
+    }
+  };
+
+  const handleUndo = async () => {
+    if (!window.confirm(`Undo Stage ${stageDef.no}: ${stageDef.name}?`)) return;
+    setSaving(true);
+    setError('');
+    try {
+      await api.put(`/job-cards/${card.id}/checklist/${stageDef.no}`, {
+        done: false,
+        value1: stageData.value1,
+        value2: stageData.value2,
+        rejection_qty: stageData.rejection_qty || 0,
+        remade_qty: stageData.remade_qty || 0,
+      });
+      await onSaved();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to undo');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      {/* Back link */}
+      <button
+        className="flex items-center gap-1 text-sm text-brand-600 hover:text-brand-800 mb-4"
+        onClick={onBack}
+      >
+        <ArrowLeft size={15} /> Back to checklist
+      </button>
+
+      {/* Done banner */}
+      {isDone && (
+        <div className="flex items-center gap-2 mb-4 p-3 bg-green-50 rounded-xl border border-green-200">
+          <CheckCircle size={18} className="text-green-500 flex-shrink-0" />
+          <span className="text-green-700 text-sm font-medium">
+            Completed {fmtDateTime(stageData.done_at)}
+          </span>
+        </div>
+      )}
+
+      {/* Stage 28 QC gate warning */}
+      {stageDef.no === 28 && !isDone && mandatoryMissing.length > 0 && (
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <div className="text-amber-700 font-semibold text-sm flex items-center gap-2 mb-1">
+            <AlertTriangle size={15} /> Cannot trigger QC yet
+          </div>
+          <p className="text-xs text-amber-600">
+            Complete these mandatory stages first:{' '}
+            {mandatoryMissing.map(n => `Stage ${n}`).join(', ')}
+          </p>
+        </div>
+      )}
+
+      {stageDef.no === 29 && !isDone && card.status !== 'qc_approved' && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl">
+          <div className="text-red-700 font-semibold text-sm flex items-center gap-2 mb-1">
+            <AlertTriangle size={15} /> Dispatch blocked
+          </div>
+          <p className="text-xs text-red-600">
+            QC inspection must be completed and approved by the QC inspector before dispatch.
+            Current status: <strong>{card.status?.replace(/_/g, ' ')}</strong>
+          </p>
+        </div>
+      )}
+
+      {/* Dispatched quantity (stage 29 only) */}
+      {stageDef.no === 29 && (
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-xl">
+          <label className="block text-sm font-semibold text-blue-800 mb-1.5">
+            Final Dispatched Quantity <span className="text-red-500">*</span>
+          </label>
+          <input
+            className="input w-full"
+            type="number"
+            min="1"
+            placeholder={`Planned qty: ${card.qty || '—'}`}
+            value={dispatchedQty}
+            onChange={e => setDispatchedQty(e.target.value)}
+            disabled={isDone}
+          />
+          {isDone && stageData.dispatched_qty && (
+            <p className="text-xs text-blue-600 mt-1">Dispatched: <strong>{stageData.dispatched_qty} units</strong></p>
+          )}
+        </div>
+      )}
+
+      {/* Worker Name (all production stages up to QC) */}
+      {needsWorker && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Worker Name <span className="text-red-500">*</span>
+          </label>
+          {isDone && stageData.worker_name ? (
+            <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+              {stageData.worker_name}
+            </div>
+          ) : (
+            <input
+              className="input w-full"
+              placeholder="Enter worker name"
+              value={workerName}
+              onChange={e => setWorkerName(e.target.value)}
+              disabled={isDone}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Value fields */}
+      {stageDef.fields && (
+        <div className="mb-4 space-y-3">
+          {stageDef.fields.map((field, idx) => (
+            <div key={field.key}>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                {field.label} <span className="text-red-500">*</span>
+              </label>
+              <input
+                className="input w-full"
+                placeholder={`Enter ${field.label}`}
+                value={idx === 0 ? value1 : value2}
+                onChange={e => idx === 0 ? setValue1(e.target.value) : setValue2(e.target.value)}
+                disabled={isDone}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Scrap Value (optional, only for specific stages) */}
+      {hasScrap && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Scrap Value <span className="text-xs text-gray-400 font-normal">(optional)</span>
+          </label>
+          {isDone && stageData.scrap_value ? (
+            <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+              {stageData.scrap_value}
+            </div>
+          ) : (
+            <input
+              className="input w-full"
+              placeholder="Enter scrap value (optional)"
+              value={scrapValue}
+              onChange={e => setScrapValue(e.target.value)}
+              disabled={isDone}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Stage photo (required for stages 24, 29) */}
+      {stageDef.photo && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Stage Photo <span className="text-red-500">*</span>
+            <span className="text-xs text-gray-400 font-normal ml-2">(required to mark done)</span>
+          </label>
+          {stageData.photo_file ? (
+            <div className="flex items-center gap-3">
+              <a href={`/uploads/checklist-photos/${stageData.photo_file}`} target="_blank" rel="noopener noreferrer">
+                <img src={`/uploads/checklist-photos/${stageData.photo_file}`}
+                  alt="stage photo" className="w-16 h-16 object-cover rounded-lg border border-green-200 hover:opacity-90" />
+              </a>
+              {canManage && (
+                <label className="btn-secondary btn-sm text-xs cursor-pointer">
+                  Replace
+                  <input type="file" accept=".jpg,.jpeg,.png,.webp" className="hidden"
+                    onChange={e => e.target.files[0] && uploadStagePhoto(e.target.files[0])} />
+                </label>
+              )}
+            </div>
+          ) : canManage ? (
+            <label className={`inline-flex items-center gap-2 btn-secondary cursor-pointer ${uploadingStagePhoto ? 'opacity-50 pointer-events-none' : ''}`}>
+              <ImageIcon size={15} /> {uploadingStagePhoto ? 'Uploading...' : 'Upload Photo to Mark Done'}
+              <input type="file" accept=".jpg,.jpeg,.png,.webp" className="hidden"
+                onChange={e => e.target.files[0] && uploadStagePhoto(e.target.files[0])} />
+            </label>
+          ) : (
+            <p className="text-sm text-gray-400">No photo uploaded</p>
+          )}
+        </div>
+      )}
+
+      {/* Rejection section */}
+      <div className="mt-2 pt-4 border-t border-gray-100">
+        <p className="text-sm font-medium text-gray-700 mb-3">Rejection at this stage</p>
+
+        <div className="flex items-center gap-3 mb-3">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Rejected pieces</label>
+            <input
+              type="number" min="0"
+              className="input w-28 text-center"
+              value={rejQty}
+              onChange={e => setRejQty(e.target.value)}
+              disabled={isDone}
+            />
+          </div>
+          {rejQtyInt > 0 && (
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Remade qty</label>
+              <input
+                type="number" min="0"
+                className="input w-28 text-center"
+                value={remadeQty}
+                onChange={e => setRemadeQty(e.target.value)}
+                disabled={isDone}
+              />
+            </div>
+          )}
+        </div>
+
+        {isDone && (stageData.rejection_qty > 0) && (
+          <div className="text-sm text-orange-600 mb-2">
+            <span className="font-medium">Rejected: {stageData.rejection_qty}</span>
+            {stageData.remade_qty > 0 && <span className="text-gray-500 ml-3">Remade: {stageData.remade_qty}</span>}
+            {stageData.rejection_photo_file && (
+              <a href={`/uploads/rejection-photos/${stageData.rejection_photo_file}`}
+                target="_blank" rel="noopener noreferrer"
+                className="ml-3 text-red-500 underline text-xs">View rejection photo</a>
+            )}
+          </div>
+        )}
+
+        {!isDone && rejQtyInt > 2 && (
+          <div className="rounded-xl bg-red-50 border border-red-200 p-3 mt-2">
+            <div className="flex items-center gap-2 text-red-700 font-semibold text-sm mb-1">
+              <AlertTriangle size={15} /> High Rejection — Work Must Stop
+            </div>
+            <p className="text-xs text-red-600 mb-3">
+              {rejQtyInt} pieces rejected. Upload a photo of the rejected heater.
+              Owner approval required before work can continue.
+            </p>
+            {rejPhoto ? (
+              <div className="flex items-center gap-3">
+                <a href={`/uploads/rejection-photos/${rejPhoto}`} target="_blank" rel="noopener noreferrer">
+                  <img src={`/uploads/rejection-photos/${rejPhoto}`}
+                    alt="rejection" className="w-14 h-14 object-cover rounded-lg border border-red-200" />
+                </a>
+                <label className="btn-secondary btn-sm text-xs cursor-pointer">
+                  Replace Photo
+                  <input type="file" accept=".jpg,.jpeg,.png,.webp" className="hidden"
+                    onChange={e => e.target.files[0] && uploadRejectionPhoto(e.target.files[0])} />
+                </label>
+                <span className="text-xs text-green-600 font-medium">✓ Photo uploaded</span>
+              </div>
+            ) : (
+              <label className={`inline-flex items-center gap-2 cursor-pointer px-3 py-2 rounded-lg border border-red-300 text-red-600 hover:bg-red-100 text-sm font-medium ${uploadingRejPhoto ? 'opacity-50 pointer-events-none' : ''}`}>
+                <ImageIcon size={15} />
+                {uploadingRejPhoto ? 'Uploading...' : 'Upload Rejection Photo *'}
+                <input type="file" accept=".jpg,.jpeg,.png,.webp" className="hidden"
+                  onChange={e => e.target.files[0] && uploadRejectionPhoto(e.target.files[0])} />
+              </label>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+          {error}
+        </div>
+      )}
+
+      {/* Footer actions */}
+      <div className="flex justify-between gap-3 pt-4 mt-4 border-t border-gray-100">
+        <button className="btn-ghost text-gray-500" onClick={onBack}>Cancel</button>
+        <div className="flex gap-2">
+          {isDone && canManage && (
+            <button
+              className="btn-secondary text-red-600 border-red-200 hover:bg-red-50"
+              onClick={handleUndo} disabled={saving}
+            >
+              Undo Stage
+            </button>
+          )}
+          {!isDone && canManage && !stageDef.photo && (
+            <button
+              className="btn-primary"
+              onClick={handleMarkDone}
+              disabled={!canMarkDone()}
+              title={
+                mandatoryMissing.length > 0 ? 'Complete all mandatory stages first' :
+                rejQtyInt > 2 && !rejPhoto ? 'Upload rejection photo first' :
+                stageDef.no === 29 && card.status !== 'qc_approved' ? 'QC must be approved before dispatch' :
+                ''
+              }
+            >
+              {saving ? 'Saving...' : 'Mark Done'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
