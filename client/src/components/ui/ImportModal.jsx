@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import Modal from './Modal';
-import api from '../../lib/api';
+import api, { uploadApi } from '../../lib/api';
 import { Upload, Download, CheckCircle, AlertCircle, X, FileSpreadsheet } from 'lucide-react';
 
 const CONFIGS = {
@@ -120,7 +120,7 @@ export default function ImportModal({ type, onClose, onDone }) {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const r = await api.post(config.importPath, fd, {
+      const r = await uploadApi.post(config.importPath, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setResult(r.data);

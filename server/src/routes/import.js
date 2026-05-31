@@ -291,25 +291,30 @@ router.post('/products', authenticate, authorize('admin', 'owner'), upload.singl
     let imported = 0, skipped = 0, imagesImported = 0;
     const errors = [];
 
+    // Upload all images in parallel first (much faster than sequential)
+    const uploadedImages = new Map(); // rowIndex → { storagePath, photoFilename }
+    const uploadTasks = [];
+    for (const [i, row] of rows.entries()) {
+      const img = imageMap.get(i);
+      if (!img) continue;
+      const safeName = str(row.product_code).replace(/[^a-zA-Z0-9]/g, '_');
+      const filename = `${Date.now()}_${i}_import_${safeName}.${img.ext}`;
+      uploadTasks.push(
+        uploadToStorage('product-photos', filename, img.data, `image/${img.ext}`)
+          .then(storagePath => { uploadedImages.set(i, { storagePath, photoFilename: filename }); })
+          .catch(uploadErr => { errors.push(`Row ${i + 2}: image upload failed — ${uploadErr.message}`); })
+      );
+    }
+    await Promise.all(uploadTasks);
+    imagesImported = uploadedImages.size;
+    console.log(`[import/products] parallel image uploads done: ${imagesImported}/${imageMap.size}`);
+
     for (const [i, row] of rows.entries()) {
       const rowNum = i + 2;
       if (!str(row.product_code)) { errors.push(`Row ${rowNum}: product_code is required`); skipped++; continue; }
       if (!str(row.name))         { errors.push(`Row ${rowNum}: name is required`); skipped++; continue; }
 
-      // Upload photo to Supabase Storage if this row has an embedded image
-      let storagePath = null, photoFilename = null;
-      const img = imageMap.get(i);
-      if (img) {
-        const safeName = str(row.product_code).replace(/[^a-zA-Z0-9]/g, '_');
-        const filename = `${Date.now()}_import_${safeName}.${img.ext}`;
-        try {
-          storagePath = await uploadToStorage('product-photos', filename, img.data, `image/${img.ext}`);
-          photoFilename = filename;
-          imagesImported++;
-        } catch (uploadErr) {
-          errors.push(`Row ${rowNum}: image upload failed — ${uploadErr.message}`);
-        }
-      }
+      const { storagePath = null, photoFilename = null } = uploadedImages.get(i) || {};
 
       try {
         await db.run(`
