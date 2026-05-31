@@ -70,9 +70,9 @@ export default function ProductList() {
               <tr key={p.id} className="hover:bg-gray-50">
                 <td className="table-cell">
                   {p.photo_file ? (
-                    <a href={`/uploads/product-photos/${p.photo_file}`} target="_blank" rel="noopener noreferrer">
+                    <a href={`/uploads/${p.photo_file}`} target="_blank" rel="noopener noreferrer">
                       <img
-                        src={`/uploads/product-photos/${p.photo_file}`}
+                        src={`/uploads/${p.photo_file}`}
                         alt={p.name}
                         className="w-12 h-12 object-cover rounded-lg border border-gray-200 hover:opacity-80 transition-opacity"
                       />
@@ -160,9 +160,9 @@ function ProductModal({ product, onClose, onSave }) {
           <label className="label">Reference Photo</label>
           {product?.photo_file && !photoFile && (
             <div className="mb-2">
-              <a href={`/uploads/product-photos/${product.photo_file}`} target="_blank" rel="noopener noreferrer">
+              <a href={`/uploads/${product.photo_file}`} target="_blank" rel="noopener noreferrer">
                 <img
-                  src={`/uploads/product-photos/${product.photo_file}`}
+                  src={`/uploads/${product.photo_file}`}
                   alt="current"
                   className="w-24 h-24 object-cover rounded-lg border border-gray-200 hover:opacity-80"
                 />
