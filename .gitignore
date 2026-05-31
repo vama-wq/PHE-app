@@ -9,6 +9,7 @@ client/dist/
 # Environment variables (NEVER commit secrets)
 .env
 server/.env
+server/.env.save
 client/.env
 client/.env.local
 
