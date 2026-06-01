@@ -323,8 +323,11 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
         </div>
         <div>
           <label className="label">Tube Diameter (mm) <span className="text-red-500">*</span></label>
-          <input className="input" type="number" step="any" placeholder="e.g. 8"
-            value={f.tube_diameter} onChange={set('tube_diameter')} />
+          <select className="input" value={f.tube_diameter} onChange={set('tube_diameter')}>
+            <option value="">— Select diameter —</option>
+            <option value="8">8mm</option>
+            <option value="11">11mm</option>
+          </select>
         </div>
 
         {/* Electrical */}
