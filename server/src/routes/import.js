@@ -123,9 +123,13 @@ function parseRows(buffer) {
     }
   }
 
-  // Build trimmed header names
+  // Build normalised header names:
+  // trim, lowercase, replace spaces/hyphens with underscores
+  // e.g. "Customer Code" → "customer_code", "GST No." → "gst_no"
   const headers = (raw[headerRowIndex] || []).map(h =>
-    h !== null && h !== undefined ? String(h).trim() : ''
+    h !== null && h !== undefined
+      ? String(h).trim().toLowerCase().replace(/[\s\-]+/g, '_').replace(/[^a-z0-9_]/g, '')
+      : ''
   );
 
   // Build row objects from all subsequent non-empty rows
