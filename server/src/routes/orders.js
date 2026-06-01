@@ -115,31 +115,64 @@ router.post('/:id/quotation', authenticate, authorize('admin', 'owner'), ...uplo
 });
 
 router.get('/:id/items', authenticate, async (req, res) => {
-  res.json(await getDB().all('SELECT * FROM order_items WHERE order_id = $1 ORDER BY id ASC', [req.params.id]));
+  const items = await getDB().all('SELECT * FROM order_items WHERE order_id = $1 ORDER BY id ASC', [req.params.id]);
+  // Attach inventory selections to each item
+  for (const item of items) {
+    item.inventory_items = await getDB().all(
+      `SELECT ii.id, ii.item_code, ii.name, ii.unit, ii.category
+       FROM order_item_inventory oii
+       JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+       WHERE oii.order_item_id = $1`,
+      [item.id]
+    );
+  }
+  res.json(items);
 });
 
 router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req, res) => {
-  const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark } = req.body;
+  const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark, inventory_item_ids } = req.body;
   if (!quantity) return res.status(400).json({ error: 'Quantity is required' });
 
-  const r = await getDB().insert(
+  const db = getDB();
+  const r = await db.insert(
     `INSERT INTO order_items (order_id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [req.params.id, product_code||null, drawing_number||null, tube_material||null, tube_diameter||null,
      wattage||null, voltage||null, plating_instructions||null, quantity, remark||null]
   );
-  res.status(201).json({ id: r.lastInsertRowid });
+  const itemId = r.lastInsertRowid;
+  // Save inventory selections
+  if (Array.isArray(inventory_item_ids) && inventory_item_ids.length) {
+    for (const invId of inventory_item_ids) {
+      await db.run(
+        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+        [itemId, invId]
+      );
+    }
+  }
+  res.status(201).json({ id: itemId });
 });
 
 router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), async (req, res) => {
-  const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark } = req.body;
-  await getDB().run(
+  const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark, inventory_item_ids } = req.body;
+  const db = getDB();
+  await db.run(
     `UPDATE order_items SET product_code=$1, drawing_number=$2, tube_material=$3, tube_diameter=$4, wattage=$5,
        voltage=$6, plating_instructions=$7, quantity=$8, remark=$9
      WHERE id=$10 AND order_id=$11`,
     [product_code||null, drawing_number||null, tube_material||null, tube_diameter||null, wattage||null,
      voltage||null, plating_instructions||null, quantity, remark||null, req.params.itemId, req.params.id]
   );
+  // Replace inventory selections
+  await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [req.params.itemId]);
+  if (Array.isArray(inventory_item_ids) && inventory_item_ids.length) {
+    for (const invId of inventory_item_ids) {
+      await db.run(
+        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+        [req.params.itemId, invId]
+      );
+    }
+  }
   res.json({ message: 'Updated' });
 });
 
