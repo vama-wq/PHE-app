@@ -119,7 +119,7 @@ router.get('/:id/items', authenticate, async (req, res) => {
   // Attach inventory selections to each item
   for (const item of items) {
     item.inventory_items = await getDB().all(
-      `SELECT ii.id, ii.item_code, ii.name, ii.unit, ii.category
+      `SELECT ii.id, ii.item_code, ii.name, ii.unit, ii.category, oii.qty
        FROM order_item_inventory oii
        JOIN inventory_items ii ON ii.id = oii.inventory_item_id
        WHERE oii.order_item_id = $1`,
@@ -141,13 +141,24 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
      wattage||null, voltage||null, plating_instructions||null, quantity, remark||null]
   );
   const itemId = r.lastInsertRowid;
-  // Save inventory selections
+  // Save inventory selections and deduct stock
   if (Array.isArray(inventory_item_ids) && inventory_item_ids.length) {
-    for (const invId of inventory_item_ids) {
+    for (const { id: invId, qty: invQty } of inventory_item_ids) {
       await db.run(
-        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-        [itemId, invId]
+        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+        [itemId, invId, invQty || 0]
       );
+      // Deduct from inventory and log dispatch_to_production
+      const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [invId]);
+      if (invItem) {
+        const newStock = Math.max((invItem.current_stock || 0) - parseFloat(invQty || 0), 0);
+        await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, invId]);
+        await db.insert(
+          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+           VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
+          [invId, parseFloat(invQty || 0), newStock, `Order item — Order #${req.params.id}`, req.user.id]
+        );
+      }
     }
   }
   res.status(201).json({ id: itemId });
@@ -164,13 +175,37 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
      voltage||null, plating_instructions||null, quantity, remark||null, req.params.itemId, req.params.id]
   );
   // Replace inventory selections
+  // First reverse previous deductions
+  const prevInv = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [req.params.itemId]);
+  for (const prev of prevInv) {
+    const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [prev.inventory_item_id]);
+    if (invItem) {
+      const restoredStock = (invItem.current_stock || 0) + parseFloat(prev.qty || 0);
+      await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [restoredStock, prev.inventory_item_id]);
+      await db.insert(
+        `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+         VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
+        [prev.inventory_item_id, parseFloat(prev.qty || 0), restoredStock, `Order item edit — Order #${req.params.id}`, req.user.id]
+      );
+    }
+  }
   await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [req.params.itemId]);
   if (Array.isArray(inventory_item_ids) && inventory_item_ids.length) {
-    for (const invId of inventory_item_ids) {
+    for (const { id: invId, qty: invQty } of inventory_item_ids) {
       await db.run(
-        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-        [req.params.itemId, invId]
+        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+        [req.params.itemId, invId, invQty || 0]
       );
+      const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [invId]);
+      if (invItem) {
+        const newStock = Math.max((invItem.current_stock || 0) - parseFloat(invQty || 0), 0);
+        await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, invId]);
+        await db.insert(
+          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+           VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
+          [invId, parseFloat(invQty || 0), newStock, `Order item edit — Order #${req.params.id}`, req.user.id]
+        );
+      }
     }
   }
   res.json({ message: 'Updated' });

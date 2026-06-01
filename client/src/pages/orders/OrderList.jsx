@@ -195,8 +195,9 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
   const [productSearch, setProductSearch] = useState(item?.product_code || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [inventoryItems, setInventoryItems] = useState([]);
+  // selectedInventory: { [id]: qty }
   const [selectedInventory, setSelectedInventory] = useState(
-    item?.inventory_items?.map(i => i.id) || []
+    Object.fromEntries((item?.inventory_items || []).map(i => [i.id, i.qty || '']))
   );
   const [invSearch, setInvSearch] = useState('');
   const [showInvDropdown, setShowInvDropdown] = useState(false);
@@ -215,12 +216,15 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
   ).slice(0, 10);
 
   const toggleInventory = (id) => {
-    setSelectedInventory(prev =>
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-    );
+    setSelectedInventory(prev => {
+      if (id in prev) { const n = { ...prev }; delete n[id]; return n; }
+      return { ...prev, [id]: '' };
+    });
   };
 
-  const selectedInventoryItems = inventoryItems.filter(i => selectedInventory.includes(i.id));
+  const setInvQty = (id, qty) => setSelectedInventory(prev => ({ ...prev, [id]: qty }));
+
+  const selectedInventoryItems = inventoryItems.filter(i => i.id in selectedInventory);
 
   const filteredProducts = products.filter(p =>
     p.product_code.toLowerCase().includes(productSearch.toLowerCase()) ||
@@ -245,11 +249,18 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
       setError(`Required fields missing: ${missing.join(', ')}`);
       return;
     }
-    if (selectedInventory.length === 0) {
+    const invIds = Object.keys(selectedInventory);
+    if (invIds.length === 0) {
       setError('Please select at least one inventory item');
       return;
     }
-    onSave({ ...f, inventory_item_ids: selectedInventory }, images);
+    const missingQty = invIds.filter(id => !selectedInventory[id] || parseFloat(selectedInventory[id]) <= 0);
+    if (missingQty.length > 0) {
+      setError('Please enter a quantity for all selected inventory items');
+      return;
+    }
+    const inventory_item_ids = invIds.map(id => ({ id: parseInt(id), qty: parseFloat(selectedInventory[id]) }));
+    onSave({ ...f, inventory_item_ids }, images);
   };
 
   return (
@@ -347,16 +358,27 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
             Inventory Items <span className="text-red-500">*</span>
             <span className="text-gray-400 font-normal ml-1">(select all raw materials needed)</span>
           </label>
-          {/* Selected chips */}
+          {/* Selected items with qty */}
           {selectedInventoryItems.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-2">
+            <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-2">
               {selectedInventoryItems.map(i => (
-                <span key={i.id} className="inline-flex items-center gap-1 text-xs bg-brand-50 text-brand-700 border border-brand-200 px-2 py-1 rounded-full font-medium">
-                  {i.item_code} — {i.name}
-                  <button type="button" onClick={() => toggleInventory(i.id)} className="ml-0.5 hover:text-red-500">
-                    <X size={10} />
+                <div key={i.id} className="flex items-center gap-3 px-3 py-2">
+                  <span className="text-sm font-semibold text-brand-700 flex-1">{i.item_code}</span>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="any"
+                    placeholder={`Qty (${i.unit})`}
+                    value={selectedInventory[i.id] || ''}
+                    onChange={e => setInvQty(i.id, e.target.value)}
+                    className="input w-32 text-sm py-1"
+                    onClick={e => e.stopPropagation()}
+                  />
+                  <span className="text-xs text-gray-400 w-8">{i.unit}</span>
+                  <button type="button" onClick={() => toggleInventory(i.id)} className="text-gray-300 hover:text-red-500 transition-colors">
+                    <X size={14} />
                   </button>
-                </span>
+                </div>
               ))}
             </div>
           )}
@@ -377,16 +399,14 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
                   <button
                     key={i.id}
                     type="button"
-                    className={`w-full text-left px-4 py-2.5 flex items-center gap-3 border-b border-gray-50 last:border-0 transition-colors ${selected ? 'bg-brand-50' : 'hover:bg-gray-50'}`}
+                    className={`w-full text-left px-4 py-2 flex items-center gap-3 border-b border-gray-50 last:border-0 transition-colors ${selected ? 'bg-brand-50' : 'hover:bg-gray-50'}`}
                     onMouseDown={() => { toggleInventory(i.id); setInvSearch(''); }}
                   >
                     <div className={`w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center ${selected ? 'bg-brand-600 border-brand-600' : 'border-gray-300'}`}>
                       {selected && <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 4l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-800">{i.item_code}</p>
-                      <p className="text-xs text-gray-500 truncate">{i.name}{i.category ? ` · ${i.category}` : ''} · {i.unit}</p>
-                    </div>
+                    <span className="text-sm font-semibold text-gray-800">{i.item_code}</span>
+                    <span className="text-xs text-gray-400 ml-auto">{i.unit}</span>
                   </button>
                 );
               })}

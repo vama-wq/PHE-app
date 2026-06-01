@@ -149,16 +149,9 @@ export default function InventoryDetail() {
 
 function TransactionModal({ itemId, item, onClose, onSave }) {
   const [f, setF] = useState({ transaction_type: 'purchase_in', quantity: '', supplier_name: '', po_number: '', notes: '' });
-  const [jobCards, setJobCards] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
-
-  useEffect(() => {
-    if (f.transaction_type === 'dispatch_to_production') {
-      api.get('/job-cards').then(r => setJobCards(r.data.filter(jc => !['dispatched'].includes(jc.status))));
-    }
-  }, [f.transaction_type]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -174,7 +167,6 @@ function TransactionModal({ itemId, item, onClose, onSave }) {
           <label className="label">Transaction Type</label>
           <select className="input" value={f.transaction_type} onChange={set('transaction_type')}>
             <option value="purchase_in">Purchase In</option>
-            <option value="dispatch_to_production">Dispatch to Production</option>
             <option value="return_from_production">Return from Production</option>
             <option value="adjustment">Stock Adjustment</option>
           </select>
@@ -183,15 +175,6 @@ function TransactionModal({ itemId, item, onClose, onSave }) {
           <label className="label">Quantity ({item.unit}) *</label>
           <input className="input" type="number" step="any" value={f.quantity} onChange={set('quantity')} required />
         </div>
-        {f.transaction_type === 'dispatch_to_production' && (
-          <div>
-            <label className="label">Job Card</label>
-            <select className="input" value={f.job_card_id || ''} onChange={set('job_card_id')}>
-              <option value="">Select job card...</option>
-              {jobCards.map(jc => <option key={jc.id} value={jc.id}>{jc.job_card_no} — {jc.customer_code}</option>)}
-            </select>
-          </div>
-        )}
         {['purchase_in'].includes(f.transaction_type) && (
           <>
             <div><label className="label">Supplier</label><input className="input" value={f.supplier_name} onChange={set('supplier_name')} /></div>
