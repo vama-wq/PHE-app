@@ -312,8 +312,14 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
         {/* Tube */}
         <div>
           <label className="label">Tube Material <span className="text-red-500">*</span></label>
-          <input className="input" placeholder="e.g. Copper, SS 304"
-            value={f.tube_material} onChange={set('tube_material')} />
+          <select className="input" value={f.tube_material} onChange={set('tube_material')}>
+            <option value="">— Select material —</option>
+            <option value="SS 304">SS 304</option>
+            <option value="SS 316">SS 316</option>
+            <option value="Incoloy">Incoloy</option>
+            <option value="Copper">Copper</option>
+            <option value="Titanium">Titanium</option>
+          </select>
         </div>
         <div>
           <label className="label">Tube Diameter (mm) <span className="text-red-500">*</span></label>
