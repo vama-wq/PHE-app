@@ -210,8 +210,8 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
   }, []);
 
   const filteredInventory = inventoryItems.filter(i =>
-    i.item_code.toLowerCase().includes(invSearch.toLowerCase()) ||
-    i.name.toLowerCase().includes(invSearch.toLowerCase()) ||
+    (i.item_code || '').toLowerCase().includes(invSearch.toLowerCase()) ||
+    (i.name || '').toLowerCase().includes(invSearch.toLowerCase()) ||
     (i.category || '').toLowerCase().includes(invSearch.toLowerCase())
   ).slice(0, 10);
 
@@ -227,8 +227,8 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
   const selectedInventoryItems = inventoryItems.filter(i => i.id in selectedInventory);
 
   const filteredProducts = products.filter(p =>
-    p.product_code.toLowerCase().includes(productSearch.toLowerCase()) ||
-    p.name.toLowerCase().includes(productSearch.toLowerCase())
+    (p.product_code || '').toLowerCase().includes(productSearch.toLowerCase()) ||
+    (p.name || '').toLowerCase().includes(productSearch.toLowerCase())
   ).slice(0, 8);
 
   const selectProduct = (p) => {
