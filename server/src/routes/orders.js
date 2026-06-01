@@ -85,6 +85,7 @@ router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => 
       `INSERT INTO orders (order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [order_code.toUpperCase(), customer_id, inquiry_id||null, order_date, dispatch_date||null, notes||null, order_type||'local_he', req.user.id]
+    // valid: local_he, export_he, inventory_order, io_export_he, io_local_he
     );
 
     await logActivity(r.lastInsertRowid, null, 'order_created', `Order ${order_code} submitted for approval`, req.user.id);

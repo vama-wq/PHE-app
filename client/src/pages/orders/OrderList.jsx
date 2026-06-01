@@ -119,8 +119,18 @@ export default function OrderList() {
               <tr key={o.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/orders/${o.id}`)}>
                 <td className="table-cell font-semibold text-brand-700">{o.order_code}</td>
                 <td className="table-cell">
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${o.order_type === 'export_he' ? 'bg-purple-100 text-purple-700' : 'bg-blue-50 text-blue-700'}`}>
-                    {o.order_type === 'export_he' ? 'Export HE' : 'Local HE'}
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                    o.order_type === 'export_he'       ? 'bg-purple-100 text-purple-700' :
+                    o.order_type === 'inventory_order' ? 'bg-amber-100 text-amber-700' :
+                    o.order_type === 'io_export_he'    ? 'bg-orange-100 text-orange-700' :
+                    o.order_type === 'io_local_he'     ? 'bg-teal-100 text-teal-700' :
+                                                         'bg-blue-50 text-blue-700'
+                  }`}>
+                    {o.order_type === 'export_he'       ? 'Export HE' :
+                     o.order_type === 'inventory_order' ? 'IO' :
+                     o.order_type === 'io_export_he'    ? 'IO + Export HE' :
+                     o.order_type === 'io_local_he'     ? 'IO + Local HE' :
+                                                          'Local HE'}
                   </span>
                 </td>
                 <td className="table-cell">
@@ -425,6 +435,9 @@ function NewOrderModal({ onClose, onSave }) {
                 <select className="input" value={form.order_type} onChange={set('order_type')} required>
                   <option value="local_he">Local HE</option>
                   <option value="export_he">Export HE</option>
+                  <option value="inventory_order">Inventory Order (IO)</option>
+                  <option value="io_export_he">IO + Export HE</option>
+                  <option value="io_local_he">IO + Local HE</option>
                 </select>
               </div>
               <div>
