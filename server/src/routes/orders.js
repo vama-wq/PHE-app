@@ -141,24 +141,13 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
      wattage||null, voltage||null, plating_instructions||null, quantity, remark||null]
   );
   const itemId = r.lastInsertRowid;
-  // Save inventory selections and deduct stock
+  // Save inventory selections (deduction happens only on order approval)
   if (Array.isArray(inventory_item_ids) && inventory_item_ids.length) {
     for (const { id: invId, qty: invQty } of inventory_item_ids) {
       await db.run(
         'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
         [itemId, invId, invQty || 0]
       );
-      // Deduct from inventory and log dispatch_to_production
-      const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [invId]);
-      if (invItem) {
-        const newStock = Math.max((invItem.current_stock || 0) - parseFloat(invQty || 0), 0);
-        await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, invId]);
-        await db.insert(
-          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-           VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
-          [invId, parseFloat(invQty || 0), newStock, `Order item — Order #${req.params.id}`, req.user.id]
-        );
-      }
     }
   }
   res.status(201).json({ id: itemId });
@@ -174,21 +163,7 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
     [product_code||null, drawing_number||null, tube_material||null, tube_diameter||null, wattage||null,
      voltage||null, plating_instructions||null, quantity, remark||null, req.params.itemId, req.params.id]
   );
-  // Replace inventory selections
-  // First reverse previous deductions
-  const prevInv = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [req.params.itemId]);
-  for (const prev of prevInv) {
-    const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [prev.inventory_item_id]);
-    if (invItem) {
-      const restoredStock = (invItem.current_stock || 0) + parseFloat(prev.qty || 0);
-      await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [restoredStock, prev.inventory_item_id]);
-      await db.insert(
-        `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-         VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
-        [prev.inventory_item_id, parseFloat(prev.qty || 0), restoredStock, `Order item edit — Order #${req.params.id}`, req.user.id]
-      );
-    }
-  }
+  // Replace inventory selections (no stock movement — deduction happens only on order approval)
   await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [req.params.itemId]);
   if (Array.isArray(inventory_item_ids) && inventory_item_ids.length) {
     for (const { id: invId, qty: invQty } of inventory_item_ids) {
@@ -196,16 +171,6 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
         'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
         [req.params.itemId, invId, invQty || 0]
       );
-      const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [invId]);
-      if (invItem) {
-        const newStock = Math.max((invItem.current_stock || 0) - parseFloat(invQty || 0), 0);
-        await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, invId]);
-        await db.insert(
-          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-           VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
-          [invId, parseFloat(invQty || 0), newStock, `Order item edit — Order #${req.params.id}`, req.user.id]
-        );
-      }
     }
   }
   res.json({ message: 'Updated' });
@@ -292,10 +257,35 @@ router.post('/:id/messages', authenticate, async (req, res) => {
 
 router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) => {
   const db = getDB();
+
+  // Guard: don't double-deduct if already approved
+  const order = await db.get('SELECT status FROM orders WHERE id=$1', [req.params.id]);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.status === 'approved') return res.status(409).json({ error: 'Order already approved' });
+
   await db.run(
     "UPDATE orders SET status='approved', approved_by=$1, approved_at=NOW() WHERE id=$2",
     [req.user.id, req.params.id]
   );
+
+  // Deduct inventory for all items in this order
+  const items = await db.all('SELECT id FROM order_items WHERE order_id=$1', [req.params.id]);
+  for (const item of items) {
+    const invSelections = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
+    for (const sel of invSelections) {
+      const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
+      if (invItem) {
+        const newStock = Math.max((invItem.current_stock || 0) - parseFloat(sel.qty || 0), 0);
+        await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+        await db.insert(
+          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+           VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
+          [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, `Dispatch to production — Order #${req.params.id}`, req.user.id]
+        );
+      }
+    }
+  }
+
   await logActivity(req.params.id, null, 'order_approved', 'Order approved by owner', req.user.id);
   res.json({ message: 'Order approved' });
 });
@@ -335,8 +325,25 @@ router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {
     await db.run('DELETE FROM job_cards WHERE id=$1', [jc.id]);
   }
 
+  const fullOrder = await db.get('SELECT status FROM orders WHERE id=$1', [order.id]);
   const items = await db.all('SELECT id FROM order_items WHERE order_id=$1', [order.id]);
   for (const item of items) {
+    // If order was approved, reverse inventory deductions on delete
+    if (fullOrder?.status === 'approved') {
+      const invSelections = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
+      for (const sel of invSelections) {
+        const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
+        if (invItem) {
+          const restoredStock = (invItem.current_stock || 0) + parseFloat(sel.qty || 0);
+          await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [restoredStock, sel.inventory_item_id]);
+          await db.insert(
+            `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+             VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
+            [sel.inventory_item_id, parseFloat(sel.qty || 0), restoredStock, `Order deleted — Order #${req.params.id}`, req.user.id]
+          );
+        }
+      }
+    }
     const images = await db.all('SELECT file_path FROM order_item_images WHERE item_id=$1', [item.id]);
     for (const img of images) await deleteFromStorage(img.file_path);
     await db.run('DELETE FROM order_item_images WHERE item_id=$1', [item.id]);
