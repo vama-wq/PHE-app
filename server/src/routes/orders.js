@@ -328,23 +328,21 @@ router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {
     await db.run('DELETE FROM job_cards WHERE id=$1', [jc.id]);
   }
 
-  const fullOrder = await db.get('SELECT status FROM orders WHERE id=$1', [order.id]);
+  const fullOrder = await db.get('SELECT order_code FROM orders WHERE id=$1', [order.id]);
   const items = await db.all('SELECT id FROM order_items WHERE order_id=$1', [order.id]);
   for (const item of items) {
-    // If order was approved, reverse inventory deductions on delete
-    if (fullOrder?.status === 'approved') {
-      const invSelections = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
-      for (const sel of invSelections) {
-        const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
-        if (invItem) {
-          const restoredStock = (invItem.current_stock || 0) + parseFloat(sel.qty || 0);
-          await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [restoredStock, sel.inventory_item_id]);
-          await db.insert(
-            `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-             VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
-            [sel.inventory_item_id, parseFloat(sel.qty || 0), restoredStock, `Order deleted — Order #${req.params.id}`, req.user.id]
-          );
-        }
+    // Always reverse any inventory that was deducted for this order
+    const invSelections = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
+    for (const sel of invSelections) {
+      const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
+      if (invItem) {
+        const restoredStock = (invItem.current_stock || 0) + parseFloat(sel.qty || 0);
+        await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [restoredStock, sel.inventory_item_id]);
+        await db.insert(
+          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+           VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
+          [sel.inventory_item_id, parseFloat(sel.qty || 0), restoredStock, `Order deleted — ${fullOrder?.order_code || 'Order #' + req.params.id}`, req.user.id]
+        );
       }
     }
     const images = await db.all('SELECT file_path FROM order_item_images WHERE item_id=$1', [item.id]);
