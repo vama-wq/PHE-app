@@ -269,7 +269,8 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
   );
 
   // Deduct inventory for all items in this order
-  const items = await db.all('SELECT id FROM order_items WHERE order_id=$1', [req.params.id]);
+  const orderInfo = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
+  const items = await db.all('SELECT id, drawing_number FROM order_items WHERE order_id=$1', [req.params.id]);
   for (const item of items) {
     const invSelections = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
     for (const sel of invSelections) {
@@ -277,10 +278,12 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
       if (invItem) {
         const newStock = Math.max((invItem.current_stock || 0) - parseFloat(sel.qty || 0), 0);
         await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+        const noteParts = [`Order: ${orderInfo?.order_code || req.params.id}`];
+        if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
         await db.insert(
           `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
            VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
-          [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, `Dispatch to production — Order #${req.params.id}`, req.user.id]
+          [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, noteParts.join(' | '), req.user.id]
         );
       }
     }
