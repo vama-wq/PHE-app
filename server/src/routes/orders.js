@@ -119,26 +119,26 @@ router.get('/:id/items', authenticate, async (req, res) => {
 });
 
 router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req, res) => {
-  const { drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark } = req.body;
+  const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark } = req.body;
   if (!quantity) return res.status(400).json({ error: 'Quantity is required' });
 
   const r = await getDB().insert(
-    `INSERT INTO order_items (order_id, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [req.params.id, drawing_number||null, tube_material||null, tube_diameter||null,
+    `INSERT INTO order_items (order_id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [req.params.id, product_code||null, drawing_number||null, tube_material||null, tube_diameter||null,
      wattage||null, voltage||null, plating_instructions||null, quantity, remark||null]
   );
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
 router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), async (req, res) => {
-  const { drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark } = req.body;
+  const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark } = req.body;
   await getDB().run(
-    `UPDATE order_items SET drawing_number=$1, tube_material=$2, tube_diameter=$3, wattage=$4, voltage=$5,
-       plating_instructions=$6, quantity=$7, remark=$8
-     WHERE id=$9 AND order_id=$10`,
-    [drawing_number||null, tube_material||null, tube_diameter||null, wattage||null, voltage||null,
-     plating_instructions||null, quantity, remark||null, req.params.itemId, req.params.id]
+    `UPDATE order_items SET product_code=$1, drawing_number=$2, tube_material=$3, tube_diameter=$4, wattage=$5,
+       voltage=$6, plating_instructions=$7, quantity=$8, remark=$9
+     WHERE id=$10 AND order_id=$11`,
+    [product_code||null, drawing_number||null, tube_material||null, tube_diameter||null, wattage||null,
+     voltage||null, plating_instructions||null, quantity, remark||null, req.params.itemId, req.params.id]
   );
   res.json({ message: 'Updated' });
 });

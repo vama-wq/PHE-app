@@ -11,6 +11,7 @@ import { Plus, Search, Trash2, Edit2, Package, Image as ImageIcon, X, Download }
 // ── Validation helper ────────────────────────────────────────────────────────
 function validateItem(f) {
   const missing = [];
+  if (!f.product_code?.trim())       missing.push('Product Code');
   if (!f.drawing_number?.trim())     missing.push('Drawing Number');
   if (!f.tube_material?.trim())      missing.push('Tube Material');
   if (!f.tube_diameter)              missing.push('Tube Diameter');
@@ -184,14 +185,32 @@ export default function OrderList() {
 // ── Item sub-modal ──────────────────────────────────────────────────────────
 function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
   const blank = {
-    drawing_number: '', tube_material: '', tube_diameter: '',
+    product_code: '', drawing_number: '', tube_material: '', tube_diameter: '',
     wattage: '', voltage: '', plating_instructions: '', quantity: '', remark: ''
   };
   const [f, setF] = useState(item || blank);
   const [images, setImages] = useState(initialImages); // File[] for new images
   const [error, setError] = useState('');
+  const [products, setProducts] = useState([]);
+  const [productSearch, setProductSearch] = useState(item?.product_code || '');
+  const [showDropdown, setShowDropdown] = useState(false);
   const imgRef = useRef();
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+
+  useEffect(() => {
+    api.get('/products').then(r => setProducts(r.data)).catch(() => {});
+  }, []);
+
+  const filteredProducts = products.filter(p =>
+    p.product_code.toLowerCase().includes(productSearch.toLowerCase()) ||
+    p.name.toLowerCase().includes(productSearch.toLowerCase())
+  ).slice(0, 8);
+
+  const selectProduct = (p) => {
+    setF(prev => ({ ...prev, product_code: p.product_code }));
+    setProductSearch(p.product_code);
+    setShowDropdown(false);
+  };
 
   const addImages = (e) => {
     const files = Array.from(e.target.files);
@@ -211,6 +230,42 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
   return (
     <Modal open title={item ? 'Edit Item' : 'Add Item'} onClose={onClose} size="lg">
       <div className="grid grid-cols-2 gap-4">
+        {/* Product Code */}
+        <div className="col-span-2 relative">
+          <label className="label">Product Code <span className="text-red-500">*</span></label>
+          <input
+            className="input"
+            placeholder="Search by product code or name..."
+            value={productSearch}
+            onChange={e => { setProductSearch(e.target.value); setShowDropdown(true); setF(p => ({ ...p, product_code: e.target.value })); }}
+            onFocus={() => setShowDropdown(true)}
+            onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
+            autoComplete="off"
+          />
+          {showDropdown && filteredProducts.length > 0 && (
+            <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
+              {filteredProducts.map(p => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="w-full text-left px-4 py-2.5 hover:bg-brand-50 flex items-center gap-3 border-b border-gray-50 last:border-0"
+                  onMouseDown={() => selectProduct(p)}
+                >
+                  {p.photo_file ? (
+                    <img src={`/uploads/${p.photo_file}`} alt={p.name} className="w-8 h-8 object-cover rounded-md border border-gray-200 flex-shrink-0" />
+                  ) : (
+                    <div className="w-8 h-8 rounded-md bg-gray-100 flex-shrink-0" />
+                  )}
+                  <div>
+                    <p className="text-sm font-semibold text-brand-700">{p.product_code}</p>
+                    <p className="text-xs text-gray-500">{p.name}{p.category ? ` · ${p.category}` : ''}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Drawing Number */}
         <div className="col-span-2">
           <label className="label">Drawing Number <span className="text-red-500">*</span></label>
