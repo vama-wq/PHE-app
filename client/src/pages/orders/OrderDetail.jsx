@@ -517,6 +517,7 @@ export default function OrderDetail() {
         <UploadJobCardModal orderId={id}
           defaultDispatchDate={order.dispatch_date || ''}
           items={order.items || []}
+          jobCards={order.job_cards || []}
           onClose={() => setShowJobCardModal(false)}
           onSave={() => { setShowJobCardModal(false); load(); }}
         />
@@ -1054,7 +1055,7 @@ function QuotationModal({ orderId, onClose, onSave }) {
   );
 }
 
-function UploadJobCardModal({ orderId, defaultDispatchDate, items, onClose, onSave }) {
+function UploadJobCardModal({ orderId, defaultDispatchDate, items, jobCards, onClose, onSave }) {
   const [selectedItemId, setSelectedItemId] = useState('');
   const [form, setForm] = useState({
     qty: '', dispatch_date: defaultDispatchDate || '',
@@ -1064,6 +1065,12 @@ function UploadJobCardModal({ orderId, defaultDispatchDate, items, onClose, onSa
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
+
+  // Items that already have a job card uploaded (matched by drawing_number → job_card_no / drawing_no)
+  const takenDrawings = new Set(jobCards.flatMap(jc => [jc.job_card_no, jc.drawing_no].filter(Boolean)));
+  const availableItems = items.filter(item =>
+    !takenDrawings.has(item.drawing_number) && !takenDrawings.has(item.product_code)
+  );
 
   // The selected item object
   const selectedItem = items.find(i => String(i.id) === String(selectedItemId)) || null;
@@ -1102,19 +1109,28 @@ function UploadJobCardModal({ orderId, defaultDispatchDate, items, onClose, onSa
         {/* Step 1 — Pick item */}
         <div>
           <label className="label">Select Item <span className="text-red-500">*</span></label>
-          <select
-            className="input"
-            value={selectedItemId}
-            onChange={e => setSelectedItemId(e.target.value)}
-            required
-          >
-            <option value="">— Choose an order item —</option>
-            {items.map((item, idx) => (
-              <option key={item.id} value={item.id}>
-                Item {idx + 1}{item.product_code ? ` · ${item.product_code}` : ''}{item.drawing_number ? ` · ${item.drawing_number}` : ''}
-              </option>
-            ))}
-          </select>
+          {availableItems.length === 0 ? (
+            <div className="input bg-gray-50 text-gray-400 text-sm flex items-center">
+              ✅ All items already have a job card uploaded
+            </div>
+          ) : (
+            <select
+              className="input"
+              value={selectedItemId}
+              onChange={e => setSelectedItemId(e.target.value)}
+              required
+            >
+              <option value="">— Choose an order item —</option>
+              {availableItems.map((item, idx) => {
+                const originalIdx = items.indexOf(item);
+                return (
+                  <option key={item.id} value={item.id}>
+                    Item {originalIdx + 1}{item.product_code ? ` · ${item.product_code}` : ''}{item.drawing_number ? ` · ${item.drawing_number}` : ''}
+                  </option>
+                );
+              })}
+            </select>
+          )}
         </div>
 
         {/* Auto-filled read-only fields once item is selected */}
