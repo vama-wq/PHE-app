@@ -532,13 +532,38 @@ export default function OrderDetail() {
   );
 }
 
+// ── Render message with highlighted @mentions ─────────────────────────────────
+function MessageText({ text, isMe }) {
+  const parts = text.split(/(@\w[\w\s]*)/g);
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.startsWith('@') ? (
+          <span
+            key={i}
+            className={`font-semibold rounded px-0.5 ${isMe ? 'bg-white/20 text-white' : 'bg-brand-100 text-brand-700'}`}
+          >
+            {part}
+          </span>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+}
+
 // ── Chat Panel ───────────────────────────────────────────────────────────────
 function ChatPanel({ orderId, currentUser }) {
   const [messages, setMessages] = useState([]);
   const [newMsg, setNewMsg] = useState('');
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState([]);
+  const [mentionQuery, setMentionQuery] = useState(null); // string after @ or null
+  const [mentionPos, setMentionPos] = useState(0);        // caret position where @ was typed
   const bottomRef = useRef(null);
+  const textareaRef = useRef(null);
 
   const loadMessages = async () => {
     const r = await api.get(`/orders/${orderId}/messages`);
@@ -547,12 +572,54 @@ function ChatPanel({ orderId, currentUser }) {
   };
 
   useEffect(() => { loadMessages(); }, [orderId]);
+  useEffect(() => {
+    api.get('/auth/users').then(r => setUsers(r.data)).catch(() => {});
+  }, []);
 
   useEffect(() => {
-    if (!loading) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (!loading) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+  // Detect @mention as user types
+  const handleChange = (e) => {
+    const val = e.target.value;
+    setNewMsg(val);
+    const caret = e.target.selectionStart;
+    // Find the last @ before caret
+    const textToCaret = val.slice(0, caret);
+    const atIdx = textToCaret.lastIndexOf('@');
+    if (atIdx !== -1) {
+      const query = textToCaret.slice(atIdx + 1);
+      // Only show dropdown if no space before caret (i.e. still typing the mention)
+      if (!query.includes(' ') || query.length === 0) {
+        setMentionQuery(query.toLowerCase());
+        setMentionPos(atIdx);
+        return;
+      }
+    }
+    setMentionQuery(null);
+  };
+
+  const filteredUsers = mentionQuery !== null
+    ? users.filter(u =>
+        u.name.toLowerCase().includes(mentionQuery) ||
+        (u.role || '').toLowerCase().includes(mentionQuery)
+      ).slice(0, 6)
+    : [];
+
+  const insertMention = (user) => {
+    const before = newMsg.slice(0, mentionPos);
+    const after = newMsg.slice(mentionPos + 1 + (mentionQuery?.length || 0));
+    const inserted = `@${user.name} `;
+    const next = before + inserted + after;
+    setNewMsg(next);
+    setMentionQuery(null);
+    setTimeout(() => {
+      textareaRef.current?.focus();
+      const pos = before.length + inserted.length;
+      textareaRef.current?.setSelectionRange(pos, pos);
+    }, 0);
+  };
 
   const sendMessage = async () => {
     if (!newMsg.trim() || sending) return;
@@ -560,6 +627,7 @@ function ChatPanel({ orderId, currentUser }) {
     try {
       await api.post(`/orders/${orderId}/messages`, { message: newMsg });
       setNewMsg('');
+      setMentionQuery(null);
       await loadMessages();
     } finally {
       setSending(false);
@@ -567,7 +635,14 @@ function ChatPanel({ orderId, currentUser }) {
   };
 
   const handleKey = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    if (mentionQuery !== null && filteredUsers.length > 0 && e.key === 'Escape') {
+      setMentionQuery(null);
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey && mentionQuery === null) {
+      e.preventDefault();
+      sendMessage();
+    }
   };
 
   return (
@@ -611,7 +686,7 @@ function ChatPanel({ orderId, currentUser }) {
                       ? 'bg-brand-600 text-white rounded-tr-sm'
                       : 'bg-gray-100 text-gray-800 rounded-tl-sm'
                   }`}>
-                    {msg.message}
+                    <MessageText text={msg.message} isMe={isMe} />
                   </div>
                   <span className="text-xs text-gray-300">{fmtDateTime(msg.created_at)}</span>
                 </div>
@@ -623,12 +698,34 @@ function ChatPanel({ orderId, currentUser }) {
       </div>
 
       {/* Input */}
-      <div className="border-t border-gray-100 p-3 flex gap-2 items-end">
+      <div className="border-t border-gray-100 p-3 flex gap-2 items-end relative">
+        {/* @mention dropdown */}
+        {mentionQuery !== null && filteredUsers.length > 0 && (
+          <div className="absolute bottom-full left-3 mb-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
+            <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100">
+              <span className="text-xs text-gray-400 font-medium">Mention someone</span>
+            </div>
+            {filteredUsers.map(u => (
+              <button
+                key={u.id}
+                type="button"
+                className="w-full text-left px-3 py-2 hover:bg-brand-50 flex items-center gap-2 transition-colors"
+                onMouseDown={e => { e.preventDefault(); insertMention(u); }}
+              >
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${ROLE_COLORS[u.role] || 'bg-gray-100 text-gray-600'}`}>
+                  {ROLE_LABELS[u.role] || u.role}
+                </span>
+                <span className="text-sm text-gray-800 font-medium">{u.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <textarea
+          ref={textareaRef}
           className="input flex-1 resize-none text-sm py-2 leading-snug"
-          placeholder="Type a message… (Enter to send)"
+          placeholder="Type a message… use @ to mention someone"
           value={newMsg}
-          onChange={e => setNewMsg(e.target.value)}
+          onChange={handleChange}
           onKeyDown={handleKey}
           rows={2}
           style={{ minHeight: '40px', maxHeight: '80px' }}
