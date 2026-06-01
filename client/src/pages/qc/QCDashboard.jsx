@@ -18,6 +18,7 @@ export default function QCDashboard() {
   const [loading, setLoading] = useState(true);
   const [reportModal, setReportModal] = useState(null); // card to upload report for
   const [rejectModal, setRejectModal] = useState(null); // card to reject
+  const [approveModal, setApproveModal] = useState(null); // card to approve (IO split)
   const [expandedId, setExpandedId] = useState(null);
 
   // Purchase material QC
@@ -40,13 +41,17 @@ export default function QCDashboard() {
 
   useEffect(() => { load(); }, []);
 
-  const handleApprove = async (cardId) => {
-    if (!window.confirm('Approve QC for this job card?')) return;
-    try {
-      await api.put(`/qc/${cardId}/approve`);
-      await load();
-    } catch (e) {
-      alert(e.response?.data?.error || 'Failed to approve');
+  const handleApprove = (card) => {
+    // IO types need a split modal; pure HE types just confirm
+    if (card.order_type === 'inventory_order' ||
+        card.order_type === 'io_export_he' ||
+        card.order_type === 'io_local_he') {
+      setApproveModal(card);
+    } else {
+      if (!window.confirm('Approve QC for this job card? It will proceed to dispatch.')) return;
+      api.put(`/qc/${card.id}/approve`)
+        .then(() => load())
+        .catch(e => alert(e.response?.data?.error || 'Failed to approve'));
     }
   };
 
@@ -186,7 +191,7 @@ export default function QCDashboard() {
                       </button>
                       <button
                         className="btn-primary btn-sm flex items-center gap-1 bg-green-600 hover:bg-green-700 border-green-600"
-                        onClick={() => handleApprove(jc.id)}
+                        onClick={() => handleApprove(jc)}
                         disabled={jc.report_count === 0}
                         title={jc.report_count === 0 ? 'Upload QC report before approving' : 'Approve QC'}
                       >
@@ -233,6 +238,14 @@ export default function QCDashboard() {
           po={materialQCModal}
           onClose={() => setMaterialQCModal(null)}
           onSaved={() => { setMaterialQCModal(null); load(); }}
+        />
+      )}
+
+      {approveModal && (
+        <IOApproveModal
+          card={approveModal}
+          onClose={() => setApproveModal(null)}
+          onSaved={() => { setApproveModal(null); load(); }}
         />
       )}
     </div>
@@ -569,6 +582,83 @@ function MaterialQCModal({ po, onClose, onSaved }) {
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : result === 'accepted' ? <CheckCircle size={14} /> : <XCircle size={14} />}
             {saving ? 'Submitting...' : result === 'accepted' ? 'Accept Material' : 'Reject Material'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── IO Approve Modal ──────────────────────────────────────────────────────────
+function IOApproveModal({ card, onClose, onSaved }) {
+  const isSplit = card.order_type === 'io_export_he' || card.order_type === 'io_local_he';
+  const isIO    = card.order_type === 'inventory_order';
+  const [ioQty,       setIoQty]       = useState('');
+  const [dispatchQty, setDispatchQty] = useState('');
+  const [saving,      setSaving]      = useState(false);
+  const [error,       setError]       = useState('');
+
+  const dispatchLabel = card.order_type === 'io_export_he' ? 'Export HE Dispatch' : 'Local HE Dispatch';
+
+  const handleSubmit = async () => {
+    setError('');
+    if (!ioQty || parseInt(ioQty) <= 0) return setError('IO quantity is required');
+    if (isSplit && (!dispatchQty || parseInt(dispatchQty) <= 0)) return setError('Dispatch quantity is required');
+    setSaving(true);
+    try {
+      await api.put(`/qc/${card.id}/approve`, {
+        io_qty:       parseInt(ioQty),
+        dispatch_qty: isSplit ? parseInt(dispatchQty) : undefined,
+      });
+      onSaved();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to approve');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title="QC Approval — IO Routing" onClose={onClose} size="sm">
+      <div className="space-y-4">
+        <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-sm">
+          <p className="font-semibold text-amber-800">{card.job_card_no} · {card.order_code}</p>
+          <p className="text-amber-700 mt-0.5">
+            {isIO
+              ? 'This is an Inventory Order — all finished goods will go to the Finished Goods store.'
+              : `This order is split — specify how many go to Finished Goods (IO) and how many go to ${dispatchLabel}.`}
+          </p>
+        </div>
+
+        <div>
+          <label className="label">Qty → Finished Goods (IO) <span className="text-red-500">*</span></label>
+          <input
+            className="input"
+            type="number" min="1"
+            value={ioQty}
+            onChange={e => setIoQty(e.target.value)}
+            placeholder="Units going into Finished Goods store"
+          />
+        </div>
+
+        {isSplit && (
+          <div>
+            <label className="label">Qty → {dispatchLabel} <span className="text-red-500">*</span></label>
+            <input
+              className="input"
+              type="number" min="1"
+              value={dispatchQty}
+              onChange={e => setDispatchQty(e.target.value)}
+              placeholder="Units going to dispatch"
+            />
+          </div>
+        )}
+
+        {error && <p className="text-red-600 text-sm">{error}</p>}
+
+        <div className="flex gap-3 pt-1">
+          <button className="btn-secondary flex-1" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn-primary flex-1" onClick={handleSubmit} disabled={saving}>
+            {saving ? 'Approving...' : 'Confirm & Approve'}
           </button>
         </div>
       </div>

@@ -22,6 +22,8 @@ import PurchaseOrderList from './pages/purchases/PurchaseOrderList';
 import PurchaseOrderDetail from './pages/purchases/PurchaseOrderDetail';
 import PurchaseOrderForm from './pages/purchases/PurchaseOrderForm';
 import ReportsDashboard from './pages/reports/ReportsDashboard';
+import FinishedGoodsList from './pages/finishedGoods/FinishedGoodsList';
+import FinishedGoodsDetail from './pages/finishedGoods/FinishedGoodsDetail';
 
 // ── Module permission helper ──────────────────────────────────────────────────
 // null permitted_modules = full role-based access. Owner always has full access.
@@ -120,6 +122,9 @@ export default function App() {
               <PurchaseOrderForm />
             </ProtectedRoute>
           } />
+
+          <Route path="finished-goods" element={<ModuleRoute module="finished-goods"><FinishedGoodsList /></ModuleRoute>} />
+          <Route path="finished-goods/:id" element={<ModuleRoute module="finished-goods"><FinishedGoodsDetail /></ModuleRoute>} />
 
           <Route path="reports" element={<ModuleRoute module="reports"><ReportsDashboard /></ModuleRoute>} />
 

@@ -4,7 +4,7 @@ import { ROLE_LABELS } from '../../lib/utils';
 import {
   LayoutDashboard, ClipboardList, FileText, Package,
   Users, Box, Wrench, Truck, LogOut, FlaskConical,
-  Settings, UserCog, ShoppingCart, Building2, BarChart2
+  Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse
 } from 'lucide-react';
 
 const NAV = [
@@ -13,7 +13,8 @@ const NAV = [
   { id: 'job-cards',  to: '/job-cards',  icon: FileText,        label: 'Job Cards',       roles: null },
   { id: 'production', to: '/production', icon: Wrench,          label: 'Production',      roles: null },
   { id: 'qc',         to: '/qc',         icon: FlaskConical,    label: 'Quality Check',   roles: ['design','owner','admin'] },
-  { id: 'dispatch',   to: '/dispatch',   icon: Truck,           label: 'Dispatch',        roles: null },
+  { id: 'dispatch',        to: '/dispatch',        icon: Truck,      label: 'Dispatch',        roles: null },
+  { id: 'finished-goods', to: '/finished-goods',  icon: Warehouse,  label: 'Finished Goods',  roles: ['owner','admin','production'] },
   { id: 'inventory',  to: '/inventory',  icon: Package,         label: 'Inventory',       roles: ['owner','admin','accounts','design'] },
   { id: 'purchases',  to: '/purchases',  icon: ShoppingCart,    label: 'Purchases',       roles: ['owner','admin','accounts'] },
   { id: 'suppliers',  to: '/suppliers',  icon: Building2,       label: 'Suppliers',       roles: ['owner','admin','accounts'] },

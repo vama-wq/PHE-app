@@ -54,6 +54,7 @@ app.use('/api/purchase-orders', require('./routes/purchaseOrders'));
 app.use('/api/export',          require('./routes/export'));
 app.use('/api/reports',         require('./routes/reports'));
 app.use('/api/import',          require('./routes/import'));
+app.use('/api/finished-goods',  require('./routes/finishedGoods'));
 
 // Serve React client in production
 if (process.env.NODE_ENV === 'production') {
