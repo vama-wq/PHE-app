@@ -76,15 +76,15 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => {
-  const { order_code, customer_id, inquiry_id, order_date, dispatch_date, notes } = req.body;
+  const { order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type } = req.body;
   if (!order_code || !customer_id || !order_date) return res.status(400).json({ error: 'Code, customer and date required' });
 
   const db = getDB();
   try {
     const r = await db.insert(
-      `INSERT INTO orders (order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [order_code.toUpperCase(), customer_id, inquiry_id||null, order_date, dispatch_date||null, notes||null, req.user.id]
+      `INSERT INTO orders (order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [order_code.toUpperCase(), customer_id, inquiry_id||null, order_date, dispatch_date||null, notes||null, order_type||'local_he', req.user.id]
     );
 
     await logActivity(r.lastInsertRowid, null, 'order_created', `Order ${order_code} submitted for approval`, req.user.id);

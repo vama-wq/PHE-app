@@ -100,6 +100,7 @@ export default function OrderList() {
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               <th className="table-header text-left">Order Code</th>
+              <th className="table-header text-left">Type</th>
               <th className="table-header text-left">Customer</th>
               <th className="table-header text-left">Order Date</th>
               <th className="table-header text-center">Items</th>
@@ -111,12 +112,17 @@ export default function OrderList() {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={8} className="table-cell text-center text-gray-400 py-12">Loading...</td></tr>
+              <tr><td colSpan={9} className="table-cell text-center text-gray-400 py-12">Loading...</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={8} className="table-cell text-center text-gray-400 py-12">No orders found</td></tr>
+              <tr><td colSpan={9} className="table-cell text-center text-gray-400 py-12">No orders found</td></tr>
             ) : filtered.map(o => (
               <tr key={o.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/orders/${o.id}`)}>
                 <td className="table-cell font-semibold text-brand-700">{o.order_code}</td>
+                <td className="table-cell">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${o.order_type === 'export_he' ? 'bg-purple-100 text-purple-700' : 'bg-blue-50 text-blue-700'}`}>
+                    {o.order_type === 'export_he' ? 'Export HE' : 'Local HE'}
+                  </span>
+                </td>
                 <td className="table-cell">
                   <div className="font-medium">{o.customer_code}</div>
                   {o.customer_name && <div className="text-xs text-gray-400">{o.customer_name}</div>}
@@ -311,7 +317,8 @@ function NewOrderModal({ onClose, onSave }) {
     inquiry_id: '',
     order_date: new Date().toISOString().split('T')[0],
     dispatch_date: '',
-    notes: ''
+    notes: '',
+    order_type: 'local_he'
   });
   const [customers, setCustomers] = useState([]);
   const [inquiries, setInquiries] = useState([]);
@@ -412,6 +419,13 @@ function NewOrderModal({ onClose, onSave }) {
               <div>
                 <label className="label">Order Code <span className="text-red-500">*</span></label>
                 <input className="input" placeholder="e.g. ORD-2026-001" value={form.order_code} onChange={set('order_code')} required />
+              </div>
+              <div>
+                <label className="label">Order Type <span className="text-red-500">*</span></label>
+                <select className="input" value={form.order_type} onChange={set('order_type')} required>
+                  <option value="local_he">Local HE</option>
+                  <option value="export_he">Export HE</option>
+                </select>
               </div>
               <div>
                 <label className="label">Order Date <span className="text-red-500">*</span></label>
