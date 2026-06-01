@@ -394,7 +394,7 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
           {showInvDropdown && filteredInventory.length > 0 && (
             <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
               {filteredInventory.map(i => {
-                const selected = selectedInventory.includes(i.id);
+                const selected = i.id in selectedInventory;
                 return (
                   <button
                     key={i.id}
