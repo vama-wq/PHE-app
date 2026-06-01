@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import api from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import StatusBadge from '../components/ui/StatusBadge';
-import { fmtDate, daysUntil, ACTIVITY_ICONS, PRODUCTION_STAGES } from '../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, PRODUCTION_STAGES } from '../lib/utils';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle, ClipboardList, CheckCircle, Clock, TrendingUp,
   Package, XCircle, ShoppingCart, FlaskConical, Wrench,
-  Truck, IndianRupee,
+  Truck, IndianRupee, Bell, AtSign,
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -106,6 +106,79 @@ function ActivityFeed({ items }) {
         ))}
       </div>
     </SectionCard>
+  );
+}
+
+// ── Mentions Panel ────────────────────────────────────────────────────────────
+function MentionsPanel() {
+  const [mentions, setMentions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = () => {
+    api.get('/orders/my-mentions').then(r => { setMentions(r.data); setLoading(false); }).catch(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const markRead = async (id) => {
+    await api.put(`/orders/my-mentions/${id}/read`).catch(() => {});
+    setMentions(prev => prev.map(m => m.id === id ? { ...m, is_read: 1 } : m));
+  };
+
+  const markAllRead = async () => {
+    await api.put('/orders/my-mentions/read-all').catch(() => {});
+    setMentions(prev => prev.map(m => ({ ...m, is_read: 1 })));
+  };
+
+  const unread = mentions.filter(m => !m.is_read).length;
+
+  return (
+    <div className="card">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <h2 className="section-title">
+          <AtSign size={17} className="text-brand-500" />
+          Mentions
+          {unread > 0 && (
+            <span className="ml-2 bg-brand-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full">{unread}</span>
+          )}
+        </h2>
+        {unread > 0 && (
+          <button onClick={markAllRead} className="text-xs text-brand-600 hover:underline">Mark all read</button>
+        )}
+      </div>
+      {loading ? (
+        <div className="px-5 py-6 text-center text-gray-400 text-sm">Loading...</div>
+      ) : mentions.length === 0 ? (
+        <div className="px-5 py-8 text-center text-gray-400 text-sm">
+          <AtSign size={24} className="mx-auto mb-2 text-gray-200" />
+          No mentions yet
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-50 max-h-72 overflow-y-auto">
+          {mentions.map(m => (
+            <div
+              key={m.id}
+              className={`px-4 py-3 flex gap-3 transition-colors ${!m.is_read ? 'bg-brand-50' : ''}`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  {!m.is_read && <span className="w-2 h-2 rounded-full bg-brand-600 flex-shrink-0" />}
+                  <span className="text-xs font-semibold text-gray-700">{m.sender_name}</span>
+                  <span className="text-xs text-gray-400">in</span>
+                  <Link to={`/orders/${m.order_id}`} className="text-xs text-brand-600 hover:underline font-medium">{m.order_code}</Link>
+                </div>
+                <p className="text-sm text-gray-600 truncate">{m.message}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{fmtDateTime(m.created_at)}</p>
+              </div>
+              {!m.is_read && (
+                <button onClick={() => markRead(m.id)} className="text-xs text-gray-400 hover:text-brand-600 flex-shrink-0 self-start pt-1" title="Mark as read">
+                  <CheckCircle size={14} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -373,6 +446,7 @@ function OwnerAdminDashboard() {
             </SectionCard>
           )}
 
+          <MentionsPanel />
           <ActivityFeed items={recent} />
         </div>
       </div>
@@ -565,6 +639,7 @@ function AccountsDashboard() {
             </div>
           )}
 
+          <MentionsPanel />
           <ActivityFeed items={recent} />
         </div>
       </div>
@@ -714,6 +789,7 @@ function DesignDashboard() {
             </div>
           )}
 
+          <MentionsPanel />
           <ActivityFeed items={recent} />
         </div>
       </div>
@@ -879,6 +955,7 @@ function ProductionDashboard() {
             </div>
           )}
 
+          <MentionsPanel />
           <ActivityFeed items={recent} />
         </div>
       </div>

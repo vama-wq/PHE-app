@@ -3,6 +3,42 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, deleteFromStorage } = require('../middleware/upload');
 
+// ── Mentions ──────────────────────────────────────────────────────────────────
+router.get('/my-mentions', authenticate, async (req, res) => {
+  const db = getDB();
+  const mentions = await db.all(
+    `SELECT mm.id, mm.is_read, mm.created_at,
+            om.message, om.user_id as sender_id,
+            u.name as sender_name, u.role as sender_role,
+            o.id as order_id, o.order_code
+     FROM message_mentions mm
+     JOIN order_messages om ON om.id = mm.message_id
+     JOIN users u ON u.id = om.user_id
+     JOIN orders o ON o.id = mm.order_id
+     WHERE mm.mentioned_user_id = $1
+     ORDER BY mm.created_at DESC
+     LIMIT 50`,
+    [req.user.id]
+  );
+  res.json(mentions);
+});
+
+router.put('/my-mentions/:id/read', authenticate, async (req, res) => {
+  await getDB().run(
+    'UPDATE message_mentions SET is_read=1 WHERE id=$1 AND mentioned_user_id=$2',
+    [req.params.id, req.user.id]
+  );
+  res.json({ message: 'Marked as read' });
+});
+
+router.put('/my-mentions/read-all', authenticate, async (req, res) => {
+  await getDB().run(
+    'UPDATE message_mentions SET is_read=1 WHERE mentioned_user_id=$1',
+    [req.user.id]
+  );
+  res.json({ message: 'All marked as read' });
+});
+
 router.get('/', authenticate, async (req, res) => {
   const db = getDB();
   const canSeeNames = withCustomerVisibility(req);
@@ -248,11 +284,30 @@ router.get('/:id/messages', authenticate, async (req, res) => {
 router.post('/:id/messages', authenticate, async (req, res) => {
   const { message } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: 'Message cannot be empty' });
-  const r = await getDB().insert(
+  const db = getDB();
+  const r = await db.insert(
     'INSERT INTO order_messages (order_id, user_id, message) VALUES ($1,$2,$3)',
     [req.params.id, req.user.id, message.trim()]
   );
-  res.status(201).json({ id: r.lastInsertRowid });
+  const messageId = r.lastInsertRowid;
+
+  // Parse @mentions and notify mentioned users
+  const mentionMatches = [...message.matchAll(/@([^\s@][^@]*?)(?=\s|@|$)/g)];
+  if (mentionMatches.length) {
+    const allUsers = await db.all('SELECT id, name FROM users');
+    for (const match of mentionMatches) {
+      const mentionedName = match[1].trim();
+      const found = allUsers.find(u => u.name.toLowerCase() === mentionedName.toLowerCase());
+      if (found && found.id !== req.user.id) {
+        await db.run(
+          'INSERT INTO message_mentions (message_id, order_id, mentioned_user_id) VALUES ($1,$2,$3)',
+          [messageId, req.params.id, found.id]
+        );
+      }
+    }
+  }
+
+  res.status(201).json({ id: messageId });
 });
 
 router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) => {

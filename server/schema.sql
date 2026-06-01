@@ -315,6 +315,15 @@ CREATE TABLE IF NOT EXISTS order_messages (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS message_mentions (
+  id SERIAL PRIMARY KEY,
+  message_id INTEGER NOT NULL REFERENCES order_messages(id) ON DELETE CASCADE,
+  order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  mentioned_user_id INTEGER NOT NULL REFERENCES users(id),
+  is_read INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS production_checklist (
   id SERIAL PRIMARY KEY,
   job_card_id INTEGER NOT NULL REFERENCES job_cards(id) ON DELETE CASCADE,
