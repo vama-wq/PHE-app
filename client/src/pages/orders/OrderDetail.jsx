@@ -516,6 +516,7 @@ export default function OrderDetail() {
       {showJobCardModal && (
         <UploadJobCardModal orderId={id}
           defaultDispatchDate={order.dispatch_date || ''}
+          items={order.items || []}
           onClose={() => setShowJobCardModal(false)}
           onSave={() => { setShowJobCardModal(false); load(); }}
         />
@@ -1053,35 +1054,38 @@ function QuotationModal({ orderId, onClose, onSave }) {
   );
 }
 
-function UploadJobCardModal({ orderId, defaultDispatchDate, onClose, onSave }) {
+function UploadJobCardModal({ orderId, defaultDispatchDate, items, onClose, onSave }) {
+  const [selectedItemId, setSelectedItemId] = useState('');
   const [form, setForm] = useState({
-    job_card_no: '', qty: '', dispatch_date: defaultDispatchDate || '',
-    notes: '', punching: '', product_name: '', drawing_no: '',
+    qty: '', dispatch_date: defaultDispatchDate || '',
+    notes: '', punching: '',
   });
   const [file, setFile] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
+  // The selected item object
+  const selectedItem = items.find(i => String(i.id) === String(selectedItemId)) || null;
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.job_card_no || !form.dispatch_date) {
-      return setError('Job card number and dispatch date are required');
-    }
-    if (!form.punching.trim()) {
-      return setError('Punching value is required');
-    }
+    if (!selectedItemId) return setError('Please select an item');
+    if (!form.dispatch_date) return setError('Dispatch date is required');
+    if (!form.punching.trim()) return setError('Punching value is required');
     setSaving(true);
     try {
       const fd = new FormData();
-      fd.append('job_card_no', form.job_card_no);
       fd.append('order_id', orderId);
+      fd.append('order_item_id', selectedItemId);
+      // Drawing number is the job card identity
+      fd.append('job_card_no', selectedItem.drawing_number || selectedItem.product_code || `ITEM-${selectedItemId}`);
+      fd.append('drawing_no', selectedItem.drawing_number || '');
+      fd.append('product_name', selectedItem.product_code || '');
       fd.append('dispatch_date', form.dispatch_date);
       fd.append('punching', form.punching);
       if (form.qty) fd.append('qty', form.qty);
       if (form.notes) fd.append('notes', form.notes);
-      if (form.product_name) fd.append('product_name', form.product_name);
-      if (form.drawing_no) fd.append('drawing_no', form.drawing_no);
       if (file) fd.append('file', file);
       await api.post('/job-cards', fd);
       onSave();
@@ -1094,19 +1098,49 @@ function UploadJobCardModal({ orderId, defaultDispatchDate, onClose, onSave }) {
   return (
     <Modal open title="Upload Job Card" onClose={onClose} size="md">
       <form onSubmit={handleSubmit} className="space-y-4">
+
+        {/* Step 1 — Pick item */}
+        <div>
+          <label className="label">Select Item <span className="text-red-500">*</span></label>
+          <select
+            className="input"
+            value={selectedItemId}
+            onChange={e => setSelectedItemId(e.target.value)}
+            required
+          >
+            <option value="">— Choose an order item —</option>
+            {items.map((item, idx) => (
+              <option key={item.id} value={item.id}>
+                Item {idx + 1}{item.product_code ? ` · ${item.product_code}` : ''}{item.drawing_number ? ` · ${item.drawing_number}` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Auto-filled read-only fields once item is selected */}
+        {selectedItem && (
+          <div className="grid grid-cols-2 gap-3 bg-gray-50 rounded-xl p-3 border border-gray-100">
+            <div>
+              <div className="text-xs text-gray-400 mb-0.5 uppercase tracking-wide">Product Code</div>
+              <div className="text-sm font-semibold text-brand-700">{selectedItem.product_code || '—'}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400 mb-0.5 uppercase tracking-wide">Drawing Number</div>
+              <div className="text-sm font-semibold text-gray-800">{selectedItem.drawing_number || '—'}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400 mb-0.5 uppercase tracking-wide">Tube Material</div>
+              <div className="text-sm text-gray-600">{selectedItem.tube_material || '—'}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400 mb-0.5 uppercase tracking-wide">Wattage / Voltage</div>
+              <div className="text-sm text-gray-600">{selectedItem.wattage ? `${selectedItem.wattage}W / ${selectedItem.voltage}V` : '—'}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Remaining fields */}
         <div className="grid grid-cols-2 gap-4">
-          <div className="col-span-2">
-            <label className="label">Job Card Number <span className="text-red-500">*</span></label>
-            <input className="input" placeholder="e.g. JC-2026-001" value={form.job_card_no} onChange={set('job_card_no')} required />
-          </div>
-          <div>
-            <label className="label">Product Name <span className="text-gray-400 font-normal">(optional)</span></label>
-            <input className="input" placeholder="e.g. Immersion Heater" value={form.product_name} onChange={set('product_name')} />
-          </div>
-          <div>
-            <label className="label">Drawing No <span className="text-gray-400 font-normal">(optional)</span></label>
-            <input className="input" placeholder="e.g. DRW-001" value={form.drawing_no} onChange={set('drawing_no')} />
-          </div>
           <div className="col-span-2">
             <label className="label">Punching <span className="text-red-500">*</span></label>
             <input className="input" placeholder="Enter punching value" value={form.punching} onChange={set('punching')} required />
@@ -1121,13 +1155,15 @@ function UploadJobCardModal({ orderId, defaultDispatchDate, onClose, onSave }) {
           </div>
           <div className="col-span-2">
             <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
-            <input className="input" placeholder="e.g. for item #2, drawing PT-001" value={form.notes} onChange={set('notes')} />
+            <input className="input" placeholder="Any additional notes..." value={form.notes} onChange={set('notes')} />
           </div>
         </div>
+
         <div>
           <label className="label">Job Card File <span className="text-gray-400 font-normal">(PDF or image)</span></label>
           <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Upload job card document" />
         </div>
+
         {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
         <div className="flex gap-3 pt-2">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
