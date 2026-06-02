@@ -507,13 +507,19 @@ function ChecklistModal({ card, onClose, onSave }) {
                   </div>
                   {data.hold && (
                     <div className="text-sm text-red-600 mt-1">
-                      {data.hold.rejection_qty} rejection{data.hold.rejection_qty > 1 ? 's' : ''} reported
-                      at Stage {data.hold.stage_no}{' '}
-                      ({PRODUCTION_STAGES.find(s => s.no === data.hold.stage_no)?.name})
-                      {data.hold.hold_photo_file && (
-                        <a href={`/uploads/rejection-photos/${data.hold.hold_photo_file}`}
-                          target="_blank" rel="noopener noreferrer"
-                          className="ml-2 underline text-red-500">View photo</a>
+                      {data.hold.stage_no === 0 ? (
+                        <>⚠️ Cumulative rejections total: <strong>{data.hold.rejection_qty} pieces</strong> across all stages — high rejection count flagged.</>
+                      ) : (
+                        <>
+                          {data.hold.rejection_qty} rejection{data.hold.rejection_qty > 1 ? 's' : ''} reported
+                          at Stage {data.hold.stage_no}{' '}
+                          ({PRODUCTION_STAGES.find(s => s.no === data.hold.stage_no)?.name})
+                          {data.hold.hold_photo_file && (
+                            <a href={`/uploads/rejection-photos/${data.hold.hold_photo_file}`}
+                              target="_blank" rel="noopener noreferrer"
+                              className="ml-2 underline text-red-500">View photo</a>
+                          )}
+                        </>
                       )}
                     </div>
                   )}

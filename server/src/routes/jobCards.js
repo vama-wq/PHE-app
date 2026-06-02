@@ -45,6 +45,18 @@ router.get('/rejections/all', authenticate, authorize('owner', 'admin'), async (
   res.json(rows);
 });
 
+// ── GET all active (pending) holds ────────────────────────────────────────────
+router.get('/holds/active', authenticate, authorize('owner', 'admin'), async (req, res) => {
+  const rows = await getDB().all(`
+    SELECT jch.*, jc.job_card_no
+    FROM job_card_holds jch
+    JOIN job_cards jc ON jch.job_card_id = jc.id
+    WHERE jch.status = 'pending'
+    ORDER BY jch.created_at DESC
+  `);
+  res.json(rows);
+});
+
 // ── GET today's picks (persistent — once picked stays until manually removed or completed) ──
 router.get('/picks/today', authenticate, async (req, res) => {
   const today = TODAY();
@@ -266,6 +278,40 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   }
 }
 
+// ── Helper: check cumulative rejections across all stages ─────────────────────
+// If total > 4 and card is not already on hold, put it on hold (stage_no=0 sentinel)
+async function checkCumulativeRejections(db, jobCardId, userId) {
+  const jcRow = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);
+  if (!jcRow || jcRow.status === 'on_hold') return; // already on hold, skip
+
+  const totRow = await db.get(
+    'SELECT COALESCE(SUM(rejection_qty), 0) AS total FROM production_checklist WHERE job_card_id=$1',
+    [jobCardId]
+  );
+  const total = parseInt(totRow?.total || 0, 10);
+  if (total <= 4) return;
+
+  // Check if a cumulative hold already exists (stage_no=0) that's still pending
+  const existing = await db.get(
+    "SELECT id FROM job_card_holds WHERE job_card_id=$1 AND stage_no=0 AND status='pending'",
+    [jobCardId]
+  );
+  if (existing) return; // already flagged
+
+  await db.insert(`
+    INSERT INTO job_card_holds (job_card_id, stage_no, rejection_qty, notes, created_by)
+    VALUES ($1, 0, $2, $3, $4)
+  `, [jobCardId, total, `Cumulative rejection total: ${total} pieces across all stages`, userId]);
+
+  await db.run("UPDATE job_cards SET status='on_hold' WHERE id=$1", [jobCardId]);
+
+  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
+  if (jc) {
+    await logActivity(jc.order_id, jobCardId, 'status_changed',
+      `Job card ${jc.job_card_no} ON HOLD — cumulative rejections total ${total} pieces across all stages`, userId);
+  }
+}
+
 // ── Helper: trigger hold when rejection > 2 ──────────────────────────────────
 async function triggerHold(db, jobCardId, stageNo, rejQty, userId) {
   const row = await db.get(
@@ -406,6 +452,15 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     return res.json({ message: 'Stage updated. Job card placed on hold.', on_hold: true });
   }
 
+  // Check cumulative rejection limit (>4 across all stages)
+  if (done) {
+    await checkCumulativeRejections(db, jobCardId, req.user.id);
+    const jcCheck = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);
+    if (jcCheck?.status === 'on_hold') {
+      return res.json({ message: 'Stage updated. Job card placed on hold — cumulative rejections exceeded limit.', on_hold: true, cumulative: true });
+    }
+  }
+
   await updateJobCardAfterStageChange(db, jobCardId, req.user.id);
   res.json({ message: 'Stage updated' });
 });
@@ -525,6 +580,12 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
       if (rejQty > 2) {
         await triggerHold(db, jobCardId, stageNo, rejQty, req.user.id);
         return res.json({ file_name: req.file.filename, on_hold: true });
+      }
+      // Check cumulative rejection limit (>4 across all stages)
+      await checkCumulativeRejections(db, jobCardId, req.user.id);
+      const jcCheck = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);
+      if (jcCheck?.status === 'on_hold') {
+        return res.json({ file_name: req.file.filename, marked_done: true, on_hold: true, cumulative: true });
       }
       await updateJobCardAfterStageChange(db, jobCardId, req.user.id);
     }

@@ -191,6 +191,7 @@ function OwnerAdminDashboard() {
   const [lowStock, setLowStock]           = useState([]);
   const [recent, setRecent]               = useState([]);
   const [rejections, setRejections]       = useState([]);
+  const [activeHolds, setActiveHolds]     = useState([]);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [loading, setLoading]             = useState(true);
   const [approvingHold, setApprovingHold] = useState(null);
@@ -207,6 +208,7 @@ function OwnerAdminDashboard() {
     if (hasInventory) reqs.push(api.get('/inventory/low-stock').then(r => setLowStock(r.data)));
     if (hasPurchases) reqs.push(api.get('/purchase-orders').then(r => setPurchaseOrders(r.data)));
     if (hasJobCards)  reqs.push(api.get('/job-cards/rejections/all').then(r => setRejections(r.data)));
+    if (hasJobCards)  reqs.push(api.get('/job-cards/holds/active').then(r => setActiveHolds(r.data)));
     reqs.push(api.get('/activity/recent?limit=10').then(r => setRecent(r.data)));
     return Promise.all(reqs);
   };
@@ -233,6 +235,7 @@ function OwnerAdminDashboard() {
     if (hasInventory) reqs.push(api.get('/inventory/low-stock').then(r => setLowStock(r.data)));
     if (hasPurchases) reqs.push(api.get('/purchase-orders').then(r => setPurchaseOrders(r.data)));
     if (hasJobCards)  reqs.push(api.get('/job-cards/rejections/all').then(r => setRejections(r.data)));
+    if (hasJobCards)  reqs.push(api.get('/job-cards/holds/active').then(r => setActiveHolds(r.data)));
     reqs.push(api.get('/activity/recent?limit=10').then(r => setRecent(r.data)));
     Promise.all(reqs).finally(() => setLoading(false));
   }, []);
@@ -275,9 +278,13 @@ function OwnerAdminDashboard() {
             <SectionCard title="Job Cards On Hold — Approval Required" icon={AlertTriangle} iconColor="text-red-500">
               <div className="divide-y divide-gray-50">
                 {onHold.map(jc => {
-                  // Find matching rejection record for this job card
-                  const rej = rejections.find(r => r.job_card_no === jc.job_card_no);
-                  const stageName = rej ? (PRODUCTION_STAGES.find(s => s.no === rej.stage_no)?.name || '') : '';
+                  // Find active hold record for this job card (cumulative: stage_no=0, single-stage: stage_no>0)
+                  const hold = activeHolds.find(h => h.job_card_id === jc.id);
+                  const isCumulative = hold?.stage_no === 0;
+                  const stageName = (!isCumulative && hold) ? (PRODUCTION_STAGES.find(s => s.no === hold.stage_no)?.name || '') : '';
+                  // Fallback: find from rejections list for single-stage holds
+                  const rej = !hold ? rejections.find(r => r.job_card_no === jc.job_card_no) : null;
+                  const rejStageName = rej ? (PRODUCTION_STAGES.find(s => s.no === rej.stage_no)?.name || '') : '';
                   return (
                     <div key={jc.id} className="px-5 py-4 bg-red-50/30 hover:bg-red-50/50 transition-colors">
                       {/* Top row: card id + approve button */}
@@ -300,10 +307,47 @@ function OwnerAdminDashboard() {
                         )}
                       </div>
 
-                      {/* Rejection detail row */}
-                      {rej && (
+                      {/* Hold detail row */}
+                      {hold && isCumulative && (
+                        <div className="flex items-center gap-2 mt-1 ml-0.5">
+                          <AlertTriangle size={13} className="text-orange-500 flex-shrink-0" />
+                          <span className="text-xs font-semibold text-orange-700">
+                            High cumulative rejection: {hold.rejection_qty} pieces total across all stages
+                          </span>
+                        </div>
+                      )}
+                      {hold && !isCumulative && (
                         <div className="flex items-start gap-4 mt-1 ml-0.5">
-                          {/* Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-semibold text-red-700">
+                                {hold.rejection_qty} pieces rejected
+                              </span>
+                              <span className="text-xs text-gray-400">at</span>
+                              <span className="text-xs text-gray-700 font-medium">
+                                Stage {hold.stage_no}: {stageName}
+                              </span>
+                            </div>
+                          </div>
+                          {hold.hold_photo_file && (
+                            <a
+                              href={`/uploads/rejection-photos/${hold.hold_photo_file}`}
+                              target="_blank" rel="noopener noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              className="flex-shrink-0" title="View rejection photo"
+                            >
+                              <img
+                                src={`/uploads/rejection-photos/${hold.hold_photo_file}`}
+                                alt="Rejection"
+                                className="w-14 h-14 object-cover rounded-lg border-2 border-red-200 hover:border-red-400 transition-colors"
+                              />
+                            </a>
+                          )}
+                        </div>
+                      )}
+                      {/* Fallback: no active hold record found but card is on_hold (legacy/edge case) */}
+                      {!hold && rej && (
+                        <div className="flex items-start gap-4 mt-1 ml-0.5">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-xs font-semibold text-red-700">
@@ -311,28 +355,22 @@ function OwnerAdminDashboard() {
                               </span>
                               <span className="text-xs text-gray-400">at</span>
                               <span className="text-xs text-gray-700 font-medium">
-                                Stage {rej.stage_no}: {stageName}
+                                Stage {rej.stage_no}: {rejStageName}
                               </span>
                               {rej.remade_qty > 0 && (
                                 <span className="text-xs text-gray-500">· Remade: {rej.remade_qty}</span>
                               )}
                             </div>
                             {rej.done_at && (
-                              <div className="text-xs text-gray-400 mt-0.5">
-                                Reported: {fmtDateTime(rej.done_at)}
-                              </div>
+                              <div className="text-xs text-gray-400 mt-0.5">Reported: {fmtDateTime(rej.done_at)}</div>
                             )}
                           </div>
-
-                          {/* Rejection photo thumbnail */}
                           {rej.rejection_photo_file && (
                             <a
                               href={`/uploads/rejection-photos/${rej.rejection_photo_file}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                              target="_blank" rel="noopener noreferrer"
                               onClick={e => e.stopPropagation()}
-                              className="flex-shrink-0"
-                              title="View rejection photo"
+                              className="flex-shrink-0" title="View rejection photo"
                             >
                               <img
                                 src={`/uploads/rejection-photos/${rej.rejection_photo_file}`}
