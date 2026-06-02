@@ -572,11 +572,17 @@ function ChecklistModal({ card, onClose, onSave }) {
                     {isDone && (sData.value1 || sData.value2 || hasRejection || sData.worker_name || sData.scrap_value) && (
                       <div className="ml-7 text-xs text-gray-500 mt-0.5 flex flex-wrap gap-2">
                         {sData.worker_name && <span className="font-medium text-gray-600">{sData.worker_name}</span>}
-                        {def.hvLight && sData.value1 ? (
-                          sData.value1 === 'pass'
-                            ? <span className="text-green-600 font-medium">✅ All Passed</span>
-                            : <span className="text-red-600 font-medium">❌ {sData.value2?.split('|')[0]} failed — {sData.value2?.split('|').slice(1).join('|')}</span>
-                        ) : (
+                        {def.hvLight && sData.value1 ? (() => {
+                          let d = {};
+                          try { d = JSON.parse(sData.value1); } catch { d = { light: sData.value1 }; }
+                          const hvBadge = d.hv === 'pass'
+                            ? <span key="hv" className="text-green-600 font-medium">HV ✅</span>
+                            : <span key="hv" className="text-red-600 font-medium">HV ❌ {d.hvCount} — {d.hvReason}</span>;
+                          const ltBadge = d.light === 'pass'
+                            ? <span key="lt" className="text-green-600 font-medium">Light ✅</span>
+                            : <span key="lt" className="text-red-600 font-medium">Light ❌ {d.lightCount} — {d.lightReason}</span>;
+                          return <>{hvBadge}{ltBadge}{d.ohms && <span key="ohms" className="text-gray-500">{d.ohms} Ω</span>}</>;
+                        })() : (
                           <>
                             {sData.value1 && <span>{sData.value1}</span>}
                             {sData.value2 && <span className="text-gray-400">{sData.value2}</span>}
@@ -628,6 +634,54 @@ function ChecklistModal({ card, onClose, onSave }) {
   );
 }
 
+// ── Reusable HV / Light pass-fail block ──────────────────────────────────────
+function HvTestBlock({ label, result, failCount, failReason, isDone, doneResult, doneCount, doneReason, onResult, onCount, onReason }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-2">
+        {label} <span className="text-red-500">*</span>
+      </label>
+      {isDone ? (
+        <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${
+          doneResult === 'pass' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'
+        }`}>
+          {doneResult === 'pass'
+            ? '✅ All Passed'
+            : `❌ ${doneCount} failed — ${doneReason}`}
+        </div>
+      ) : (
+        <>
+          <div className="flex gap-3 mb-2">
+            <button type="button" onClick={() => onResult('pass')}
+              className={`flex-1 py-2.5 rounded-xl border-2 font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
+                result === 'pass' ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500 hover:border-green-300'
+              }`}>✅ All Passed</button>
+            <button type="button" onClick={() => onResult('fail')}
+              className={`flex-1 py-2.5 rounded-xl border-2 font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
+                result === 'fail' ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-500 hover:border-red-300'
+              }`}>❌ Some Failed</button>
+          </div>
+          {result === 'fail' && (
+            <div className="space-y-3 p-3 bg-red-50 rounded-xl border border-red-100">
+              <div>
+                <label className="block text-xs font-medium text-red-700 mb-1">How many failed? <span className="text-red-500">*</span></label>
+                <input type="number" min="1" className="input w-32 text-sm"
+                  placeholder="e.g. 3" value={failCount} onChange={e => onCount(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-red-700 mb-1">Why did they fail? <span className="text-red-500">*</span></label>
+                <textarea className="input w-full h-16 resize-none text-sm"
+                  placeholder="Describe the reason for failure..."
+                  value={failReason} onChange={e => onReason(e.target.value)} />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Stage Detail View (inline within ChecklistModal) ──────────────────────────
 function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved }) {
   const { user } = useAuthStore();
@@ -648,19 +702,20 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const hasScrap = SCRAP_VALUE_STAGES.has(stageDef.no);
   const isHvLight = !!stageDef.hvLight;
 
-  // HV + Light Check specific state — value1 = "pass"/"fail", value2 = "count|reason"
-  const [hvResult, setHvResult] = useState(() => {
-    if (!isHvLight) return '';
-    return stageData.value1 || '';
-  });
-  const [hvFailCount, setHvFailCount] = useState(() => {
-    if (!isHvLight || !stageData.value2) return '';
-    return stageData.value2.split('|')[0] || '';
-  });
-  const [hvFailReason, setHvFailReason] = useState(() => {
-    if (!isHvLight || !stageData.value2) return '';
-    return stageData.value2.split('|').slice(1).join('|') || '';
-  });
+  // HV + Light Check specific state — stored as JSON in value1
+  // { hv: 'pass'|'fail', hvCount, hvReason, light: 'pass'|'fail', lightCount, lightReason, ohms }
+  const hvData = (() => {
+    if (!isHvLight || !stageData.value1) return {};
+    try { return JSON.parse(stageData.value1); }
+    catch { return { light: stageData.value1 }; } // backward compat with old pipe format
+  })();
+  const [hvTestResult, setHvTestResult] = useState(hvData.hv || '');
+  const [hvTestFailCount, setHvTestFailCount] = useState(hvData.hvCount || '');
+  const [hvTestFailReason, setHvTestFailReason] = useState(hvData.hvReason || '');
+  const [hvLightResult, setHvLightResult] = useState(hvData.light || '');
+  const [hvLightFailCount, setHvLightFailCount] = useState(hvData.lightCount || '');
+  const [hvLightFailReason, setHvLightFailReason] = useState(hvData.lightReason || '');
+  const [hvOhms, setHvOhms] = useState(hvData.ohms || '');
 
   const isDone = stageData.done === 1;
   // After 6pm: require a photo for any stage completion
@@ -682,8 +737,9 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     if (isDone || saving) return false;
     if (needsWorker && !workerName.trim()) return false;
     if (isHvLight) {
-      if (!hvResult) return false;
-      if (hvResult === 'fail' && (!hvFailCount || !hvFailReason.trim())) return false;
+      if (!hvTestResult || !hvLightResult) return false;
+      if (hvTestResult === 'fail' && (!hvTestFailCount || !hvTestFailReason.trim())) return false;
+      if (hvLightResult === 'fail' && (!hvLightFailCount || !hvLightFailReason.trim())) return false;
     }
     if (stageDef.fields) {
       if (!value1.trim()) return false;
@@ -724,8 +780,12 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     fd.append('remade_qty', remadeQty || '0');
     if (workerName) fd.append('worker_name', workerName);
     if (scrapValue) fd.append('scrap_value', scrapValue);
-    const v1 = isHvLight ? hvResult : (value1 || null);
-    const v2 = isHvLight ? (hvResult === 'fail' ? `${hvFailCount}|${hvFailReason}` : '') : (value2 || null);
+    const v1 = isHvLight ? JSON.stringify({
+      hv: hvTestResult, hvCount: hvTestFailCount, hvReason: hvTestFailReason,
+      light: hvLightResult, lightCount: hvLightFailCount, lightReason: hvLightFailReason,
+      ohms: hvOhms,
+    }) : (value1 || null);
+    const v2 = isHvLight ? null : (value2 || null);
     if (v1) fd.append('value1', v1);
     if (v2) fd.append('value2', v2);
     if (stageDef.no === 29) fd.append('dispatched_qty', dispatchedQty || '0');
@@ -742,8 +802,12 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     setSaving(true);
     setError('');
     try {
-      const v1 = isHvLight ? hvResult : (value1 || null);
-      const v2 = isHvLight ? (hvResult === 'fail' ? `${hvFailCount}|${hvFailReason}` : '') : (value2 || null);
+      const v1 = isHvLight ? JSON.stringify({
+        hv: hvTestResult, hvCount: hvTestFailCount, hvReason: hvTestFailReason,
+        light: hvLightResult, lightCount: hvLightFailCount, lightReason: hvLightFailReason,
+        ohms: hvOhms,
+      }) : (value1 || null);
+      const v2 = isHvLight ? null : (value2 || null);
       await api.put(`/job-cards/${card.id}/checklist/${stageDef.no}`, {
         done: true,
         value1: v1,
@@ -869,55 +933,51 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
 
       {/* HV + Light Check */}
       {isHvLight && (
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Light Check Result <span className="text-red-500">*</span>
-          </label>
-          {isDone ? (
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${
-              stageData.value1 === 'pass' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'
-            }`}>
-              {stageData.value1 === 'pass'
-                ? '✅ All Passed'
-                : `❌ ${stageData.value2?.split('|')[0]} failed — ${stageData.value2?.split('|').slice(1).join('|')}`}
-            </div>
-          ) : (
-            <>
-              <div className="flex gap-3 mb-3">
-                <button type="button"
-                  onClick={() => setHvResult('pass')}
-                  className={`flex-1 py-2.5 rounded-xl border-2 font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
-                    hvResult === 'pass' ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500 hover:border-green-300'
-                  }`}
-                >✅ All Passed</button>
-                <button type="button"
-                  onClick={() => setHvResult('fail')}
-                  className={`flex-1 py-2.5 rounded-xl border-2 font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
-                    hvResult === 'fail' ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-500 hover:border-red-300'
-                  }`}
-                >❌ Some Failed</button>
+        <div className="mb-4 space-y-4">
+          {/* HV Test Result */}
+          <HvTestBlock
+            label="HV Test Result"
+            result={hvTestResult}
+            failCount={hvTestFailCount}
+            failReason={hvTestFailReason}
+            isDone={isDone}
+            doneResult={hvData.hv}
+            doneCount={hvData.hvCount}
+            doneReason={hvData.hvReason}
+            onResult={setHvTestResult}
+            onCount={setHvTestFailCount}
+            onReason={setHvTestFailReason}
+          />
+
+          {/* Light Check Result */}
+          <HvTestBlock
+            label="Light Check Result"
+            result={hvLightResult}
+            failCount={hvLightFailCount}
+            failReason={hvLightFailReason}
+            isDone={isDone}
+            doneResult={hvData.light}
+            doneCount={hvData.lightCount}
+            doneReason={hvData.lightReason}
+            onResult={setHvLightResult}
+            onCount={setHvLightFailCount}
+            onReason={setHvLightFailReason}
+          />
+
+          {/* Ohms / Remark */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Ohms Value <span className="text-xs text-gray-400 font-normal">(remark)</span>
+            </label>
+            {isDone ? (
+              <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+                {hvData.ohms || '—'}
               </div>
-              {hvResult === 'fail' && (
-                <div className="space-y-3 p-3 bg-red-50 rounded-xl border border-red-100">
-                  <div>
-                    <label className="block text-xs font-medium text-red-700 mb-1">
-                      How many failed? <span className="text-red-500">*</span>
-                    </label>
-                    <input type="number" min="1" className="input w-32 text-sm"
-                      placeholder="e.g. 3" value={hvFailCount} onChange={e => setHvFailCount(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-red-700 mb-1">
-                      Why did they fail? <span className="text-red-500">*</span>
-                    </label>
-                    <textarea className="input w-full h-16 resize-none text-sm"
-                      placeholder="Describe the reason for failure..."
-                      value={hvFailReason} onChange={e => setHvFailReason(e.target.value)} />
-                  </div>
-                </div>
-              )}
-            </>
-          )}
+            ) : (
+              <input className="input w-full" placeholder="Enter ohms value or remark"
+                value={hvOhms} onChange={e => setHvOhms(e.target.value)} />
+            )}
+          </div>
         </div>
       )}
 
