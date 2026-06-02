@@ -6,8 +6,7 @@ import {
   BarChart2, ClipboardList, FileText, FlaskConical, Truck,
   Package, ShoppingCart, XCircle, Play, Download, Plus,
   Edit2, Trash2, BookTemplate, ChevronRight, Loader2,
-  LayoutGrid, List, Save, X, Star, Clock, AlertCircle,
-  TrendingDown, IndianRupee, ChevronDown, ChevronUp
+  LayoutGrid, List, Save, X, Star, Clock, AlertCircle
 } from 'lucide-react';
 
 // ── Data-source definitions (columns + filter schema) ─────────────────────────
@@ -924,141 +923,8 @@ function TemplateCard({ tpl, onRun, onEdit, onDelete }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-// ── COGS Report Panel ─────────────────────────────────────────────────────────
-function COGSPanel() {
-  const year = new Date().getFullYear();
-  const [selectedYear, setSelectedYear] = useState(year);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [expandedMonth, setExpandedMonth] = useState(null);
-
-  useEffect(() => {
-    setLoading(true);
-    api.get(`/reports/cogs?year=${selectedYear}`)
-      .then(r => setData(r.data))
-      .finally(() => setLoading(false));
-  }, [selectedYear]);
-
-  const fmtRs = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-
-  if (loading) return <div className="text-center py-16 text-gray-400">Loading COGS data...</div>;
-
-  const allMonths = [
-    'Jan','Feb','Mar','Apr','May','Jun',
-    'Jul','Aug','Sep','Oct','Nov','Dec'
-  ].map((m, i) => {
-    const key = `${selectedYear}-${String(i + 1).padStart(2, '0')}`;
-    const found = data?.monthly?.find(r => r.month === key);
-    return { label: `${m} ${selectedYear}`, key, cogs: parseFloat(found?.cogs || 0), transactions: found?.transactions || 0 };
-  });
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-            <TrendingDown size={20} className="text-rose-500" /> COGS — Cost of Goods Sold
-          </h2>
-          <p className="text-sm text-gray-500 mt-0.5">Inventory consumed in production, valued at FIFO cost</p>
-        </div>
-        <select
-          className="input w-32 text-sm"
-          value={selectedYear}
-          onChange={e => setSelectedYear(Number(e.target.value))}
-        >
-          {[year - 1, year, year + 1].map(y => <option key={y} value={y}>{y}</option>)}
-        </select>
-      </div>
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="card p-5">
-          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Total COGS {selectedYear}</div>
-          <div className="text-3xl font-bold text-rose-600">{fmtRs(data?.total_cogs)}</div>
-        </div>
-        <div className="card p-5">
-          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Inventory on Hand (FIFO value)</div>
-          <div className="text-3xl font-bold text-green-600">{fmtRs(data?.inventory_value)}</div>
-        </div>
-        <div className="card p-5">
-          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Avg Monthly COGS</div>
-          <div className="text-3xl font-bold text-gray-700">
-            {fmtRs((data?.total_cogs || 0) / 12)}
-          </div>
-        </div>
-      </div>
-
-      {/* Monthly breakdown */}
-      <div className="card overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-100">
-          <h3 className="font-semibold text-gray-800 text-sm">Monthly Breakdown</h3>
-        </div>
-        <div className="divide-y divide-gray-50">
-          {allMonths.map(m => {
-            const isExpanded = expandedMonth === m.key;
-            const monthItems = data?.byItem?.filter(i => i.month === m.key) || [];
-            return (
-              <div key={m.key}>
-                <div
-                  className={`flex items-center gap-4 px-5 py-3 cursor-pointer hover:bg-gray-50 transition-colors ${m.cogs > 0 ? '' : 'opacity-40'}`}
-                  onClick={() => m.cogs > 0 && setExpandedMonth(isExpanded ? null : m.key)}
-                >
-                  <div className="w-24 text-sm font-medium text-gray-700">{m.label}</div>
-                  <div className="flex-1">
-                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-rose-400 rounded-full transition-all"
-                        style={{ width: data?.total_cogs > 0 ? `${Math.min((m.cogs / data.total_cogs) * 100, 100)}%` : '0%' }}
-                      />
-                    </div>
-                  </div>
-                  <div className="text-right w-32">
-                    <div className="text-sm font-bold text-gray-900">{m.cogs > 0 ? fmtRs(m.cogs) : '—'}</div>
-                    {m.transactions > 0 && <div className="text-xs text-gray-400">{m.transactions} txn</div>}
-                  </div>
-                  {m.cogs > 0 && (
-                    isExpanded ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" /> : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
-                  )}
-                </div>
-                {isExpanded && monthItems.length > 0 && (
-                  <div className="bg-gray-50 border-t border-gray-100 px-5 py-3">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="text-gray-400 uppercase tracking-wide">
-                          <th className="text-left pb-2 font-medium">Item</th>
-                          <th className="text-right pb-2 font-medium">Qty Used</th>
-                          <th className="text-right pb-2 font-medium">Avg Cost/Unit</th>
-                          <th className="text-right pb-2 font-medium">COGS</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {monthItems.map((item, idx) => (
-                          <tr key={idx}>
-                            <td className="py-1.5">
-                              <span className="font-semibold text-brand-700">{item.item_code}</span>
-                              <span className="text-gray-500 ml-1">{item.name}</span>
-                            </td>
-                            <td className="text-right py-1.5 text-gray-600">{Number(item.qty_consumed).toFixed(2)} {item.unit}</td>
-                            <td className="text-right py-1.5 text-gray-600">{fmtRs(item.avg_unit_cost)}</td>
-                            <td className="text-right py-1.5 font-semibold text-rose-600">{fmtRs(item.item_cogs)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function ReportsDashboard() {
-  const [tab, setTab] = useState('standard'); // 'standard' | 'templates' | 'cogs'
+  const [tab, setTab] = useState('standard'); // 'standard' | 'templates'
   const [templates, setTemplates] = useState([]);
   const [loadingTpl, setLoadingTpl] = useState(false);
 
@@ -1138,19 +1004,7 @@ export default function ReportsDashboard() {
             <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded-full">{templates.length}</span>
           )}
         </button>
-        <button
-          onClick={() => setTab('cogs')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-            tab === 'cogs' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          <TrendingDown size={15} />
-          COGS
-        </button>
       </div>
-
-      {/* COGS */}
-      {tab === 'cogs' && <COGSPanel />}
 
       {/* Standard Reports */}
       {tab === 'standard' && (
