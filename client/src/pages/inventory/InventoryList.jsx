@@ -118,7 +118,7 @@ export default function InventoryList() {
 }
 
 function NewItemModal({ onClose, onSave }) {
-  const [f, setF] = useState({ item_code: '', name: '', category: '', unit: '', current_stock: 0, reorder_level: 0, notes: '' });
+  const [f, setF] = useState({ item_code: '', name: '', category: '', unit: '', current_stock: 0, reorder_level: 0, unit_cost: '', notes: '' });
   const [drawing, setDrawing] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -150,6 +150,7 @@ function NewItemModal({ onClose, onSave }) {
           <div><label className="label">Category</label><input className="input" placeholder="e.g. Wire, Tube, Terminal" value={f.category} onChange={set('category')} /></div>
           <div><label className="label">Opening Stock</label><input className="input" type="number" step="any" value={f.current_stock} onChange={set('current_stock')} /></div>
           <div><label className="label">Reorder Level</label><input className="input" type="number" step="any" value={f.reorder_level} onChange={set('reorder_level')} /></div>
+          <div><label className="label">Unit Price (₹)</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 12.50" value={f.unit_cost} onChange={set('unit_cost')} /></div>
           <div><label className="label">Notes</label><input className="input" value={f.notes} onChange={set('notes')} /></div>
           <div className="col-span-2">
             <label className="label">Item Drawing <span className="font-normal normal-case text-gray-400">(PDF or image, optional)</span></label>
