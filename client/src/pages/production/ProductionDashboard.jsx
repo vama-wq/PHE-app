@@ -762,7 +762,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
 
   // Check if all mandatory stages are done (for stage 28 gate)
   const mandatoryMissing = useMemo(() => {
-    if (stageDef.no !== 28) return [];
+    if (stageDef.no !== 29) return [];
     return MANDATORY_STAGE_NOS.filter(n => !stageMap[n]?.done);
   }, [stageDef.no, stageMap]);
 
@@ -786,9 +786,9 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     }
     if (requiresPhoto) return false; // photo required — use upload button
     if (rejQtyInt > 2 && !rejPhoto) return false;
-    if (stageDef.no === 28 && mandatoryMissing.length > 0) return false;
-    if (stageDef.no === 29 && card.status !== 'qc_approved') return false;
-    if (stageDef.no === 29 && !(parseInt(dispatchedQty, 10) > 0)) return false;
+    if (stageDef.no === 29 && mandatoryMissing.length > 0) return false;
+    if (stageDef.no === 30 && card.status !== 'qc_approved') return false;
+    if (stageDef.no === 30 && !(parseInt(dispatchedQty, 10) > 0)) return false;
     return true;
   };
 
@@ -836,7 +836,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     const { v1, v2 } = buildValues();
     if (v1) fd.append('value1', v1);
     if (v2) fd.append('value2', v2);
-    if (stageDef.no === 29) fd.append('dispatched_qty', dispatchedQty || '0');
+    if (stageDef.no === 30) fd.append('dispatched_qty', dispatchedQty || '0');
     try {
       await api.post(`/job-cards/${card.id}/checklist/${stageDef.no}/photo`, fd);
       await onSaved();
@@ -906,8 +906,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         </div>
       )}
 
-      {/* Stage 28 QC gate warning */}
-      {stageDef.no === 28 && !isDone && mandatoryMissing.length > 0 && (
+      {/* Stage 29 QC gate warning */}
+      {stageDef.no === 29 && !isDone && mandatoryMissing.length > 0 && (
         <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
           <div className="text-amber-700 font-semibold text-sm flex items-center gap-2 mb-1">
             <AlertTriangle size={15} /> Cannot trigger QC yet
@@ -919,7 +919,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         </div>
       )}
 
-      {stageDef.no === 29 && !isDone && card.status !== 'qc_approved' && (
+      {stageDef.no === 30 && !isDone && card.status !== 'qc_approved' && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl">
           <div className="text-red-700 font-semibold text-sm flex items-center gap-2 mb-1">
             <AlertTriangle size={15} /> Dispatch blocked
@@ -932,7 +932,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       )}
 
       {/* Dispatched quantity (stage 29 only) */}
-      {stageDef.no === 29 && (
+      {stageDef.no === 30 && (
         <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-xl">
           <label className="block text-sm font-semibold text-blue-800 mb-1.5">
             Final Dispatched Quantity <span className="text-red-500">*</span>
@@ -1314,7 +1314,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               title={
                 mandatoryMissing.length > 0 ? 'Complete all mandatory stages first' :
                 rejQtyInt > 2 && !rejPhoto ? 'Upload rejection photo first' :
-                stageDef.no === 29 && card.status !== 'qc_approved' ? 'QC must be approved before dispatch' :
+                stageDef.no === 30 && card.status !== 'qc_approved' ? 'QC must be approved before dispatch' :
                 ''
               }
             >

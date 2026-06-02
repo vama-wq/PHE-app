@@ -1,9 +1,9 @@
 import { format, parseISO, differenceInDays } from 'date-fns';
 
 // Stages that require worker name (all stages up to and including stage 27, before QC)
-export const WORKER_NAME_STAGES = new Set([1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,17,18,19,20,21,22,23,24,25,26,27,30]);
+export const WORKER_NAME_STAGES = new Set([1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28]);
 // Stages that have an optional scrap value
-export const SCRAP_VALUE_STAGES = new Set([1, 3, 4, 5, 11, 20, 25]);
+export const SCRAP_VALUE_STAGES = new Set([1, 3, 4, 5, 11, 21, 26]);
 
 export const PRODUCTION_STAGES = [
   { no: 1,  name: 'Coil' },
@@ -19,27 +19,27 @@ export const PRODUCTION_STAGES = [
   { no: 11, name: 'Trimming' },
   { no: 12, name: 'Spot Annealing or Furnace Annealing' },
   { no: 14, name: 'Bending',            heaterAdjust: true },
-  { no: 30, name: 'Brazing',            optional: true, brazing: true },
-  { no: 15, name: 'In Plating' },
-  { no: 16, name: 'Plating Completed' },
-  { no: 17, name: 'Heater Cleaning',    note: 'Use Alcohol and Thinner', fields: [{ key: 'value1', label: 'Remark' }] },
-  { no: 18, name: 'Overnight Oven' },
-  { no: 19, name: 'HV + Light Check',   hvLight: true },
-  { no: 20, name: 'Nipple Press',       optional: true },
-  { no: 21, name: '3 Hours Oven',       optional: true },
-  { no: 22, name: 'Sealing' },
-  { no: 23, name: 'HV + Light Check',   hvLight: true },
-  { no: 24, name: 'Cleaning',           photo: true },
-  { no: 25, name: 'Nut Washer' },
-  { no: 26, name: 'HV + Light Check',   hvLight: true },
-  { no: 27, name: 'Ohms + Meggar',      fields: [{ key: 'value1', label: 'Remark' }] },
-  { no: 28, name: 'Quality Check',      triggerQC: true },
-  { no: 29, name: 'Dispatch',           photo: true },
+  { no: 15, name: 'Brazing',            optional: true, brazing: true },
+  { no: 16, name: 'In Plating' },
+  { no: 17, name: 'Plating Completed' },
+  { no: 18, name: 'Heater Cleaning',    note: 'Use Alcohol and Thinner', fields: [{ key: 'value1', label: 'Remark' }] },
+  { no: 19, name: 'Overnight Oven' },
+  { no: 20, name: 'HV + Light Check',   hvLight: true },
+  { no: 21, name: 'Nipple Press',       optional: true },
+  { no: 22, name: '3 Hours Oven',       optional: true },
+  { no: 23, name: 'Sealing' },
+  { no: 24, name: 'HV + Light Check',   hvLight: true },
+  { no: 25, name: 'Cleaning',           photo: true },
+  { no: 26, name: 'Nut Washer' },
+  { no: 27, name: 'HV + Light Check',   hvLight: true },
+  { no: 28, name: 'Ohms + Meggar',      fields: [{ key: 'value1', label: 'Remark' }] },
+  { no: 29, name: 'Quality Check',      triggerQC: true },
+  { no: 30, name: 'Dispatch',           photo: true },
 ];
 
-// Stages that must be completed before Stage 28 (QC) can be triggered.
-// Stages 30 (Brazing), 17 (Heater Cleaning) and 20 (Nipple Press) are optional so excluded.
-export const MANDATORY_STAGE_NOS = [1,3,4,5,6,7,8,9,10,11,12,14,15,16,18,19,22,23,24,25,26,27];
+// Stages that must be completed before Stage 29 (QC) can be triggered.
+// Optional stages excluded: 2 (Coil+Tube), 15 (Brazing), 18 (Heater Cleaning), 21 (Nipple Press), 22 (3hrs Oven).
+export const MANDATORY_STAGE_NOS = [1,3,4,5,6,7,8,9,10,11,12,14,16,17,19,20,23,24,25,26,27,28];
 
 export function getStageLabel(stageNo) {
   if (!stageNo) return null;
