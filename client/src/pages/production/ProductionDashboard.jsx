@@ -39,14 +39,13 @@ export default function ProductionDashboard() {
 
   useEffect(() => { load(); }, []);
 
+  // These return promises — callers (modal) batch them and call load() once after
   const pickCard = async (cardId) => {
     await api.post(`/job-cards/${cardId}/pick`);
-    await load();
   };
 
   const unpickCard = async (cardId) => {
     await api.delete(`/job-cards/${cardId}/pick`);
-    await load();
   };
 
   const todayPickIds = new Set(todayPicks.map(p => p.id));
@@ -104,7 +103,7 @@ export default function ProductionDashboard() {
         <TodayTab
           picks={todayPicks}
           canManage={canManage}
-          onUnpick={unpickCard}
+          onUnpick={async (id) => { await unpickCard(id); load(); }}
           onChecklist={setChecklistTarget}
           onPickMore={() => setShowPickModal(true)}
         />
@@ -113,8 +112,8 @@ export default function ProductionDashboard() {
           cards={activeCards}
           todayPickIds={todayPickIds}
           canManage={canManage}
-          onPick={pickCard}
-          onUnpick={unpickCard}
+          onPick={async (id) => { await pickCard(id); load(); }}
+          onUnpick={async (id) => { await unpickCard(id); load(); }}
           onChecklist={setChecklistTarget}
         />
       )}
@@ -125,7 +124,7 @@ export default function ProductionDashboard() {
           todayPickIds={todayPickIds}
           onPick={pickCard}
           onUnpick={unpickCard}
-          onClose={() => setShowPickModal(false)}
+          onClose={() => { setShowPickModal(false); load(); }}
         />
       )}
 
@@ -336,33 +335,62 @@ function AllCardsTab({ cards, todayPickIds, canManage, onPick, onUnpick, onCheck
 // ── Pick Modal ────────────────────────────────────────────────────────────────
 function PickModal({ cards, todayPickIds, onPick, onUnpick, onClose }) {
   const [search, setSearch] = useState('');
+  // Local selection state so multi-select is instant (no API call per click)
+  const [localPicked, setLocalPicked] = useState(new Set(todayPickIds));
+  const [saving, setSaving] = useState(false);
+
   const filtered = cards.filter(c =>
-    c.job_card_no.toLowerCase().includes(search.toLowerCase()) ||
-    c.order_code.toLowerCase().includes(search.toLowerCase())
+    (c.job_card_no || '').toLowerCase().includes(search.toLowerCase()) ||
+    (c.order_code || '').toLowerCase().includes(search.toLowerCase())
   );
+
+  const toggle = (id) => {
+    setLocalPicked(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const handleDone = async () => {
+    setSaving(true);
+    // Work out what changed vs. original todayPickIds
+    const toAdd    = [...localPicked].filter(id => !todayPickIds.has(id));
+    const toRemove = [...todayPickIds].filter(id => !localPicked.has(id));
+    await Promise.all([
+      ...toAdd.map(id => onPick(id)),
+      ...toRemove.map(id => onUnpick(id)),
+    ]);
+    onClose();
+  };
+
+  const changed = localPicked.size !== todayPickIds.size ||
+    [...localPicked].some(id => !todayPickIds.has(id));
 
   return (
     <Modal open title="Pick Job Cards for Today" onClose={onClose} size="lg">
-      <p className="text-sm text-gray-500 mb-4">Select job cards to work on today.</p>
+      <p className="text-sm text-gray-500 mb-4">
+        Select job cards to add to the active work queue. Picked cards stay visible every day until removed.
+      </p>
       <input className="input mb-4" placeholder="Search by job card or order..."
-        value={search} onChange={e => setSearch(e.target.value)} />
+        value={search} onChange={e => setSearch(e.target.value)} autoFocus />
       <div className="space-y-2 max-h-96 overflow-y-auto">
         {filtered.length === 0 ? (
           <p className="text-center text-gray-400 py-8">No active job cards found.</p>
         ) : filtered.map(jc => {
-          const isPicked = todayPickIds.has(jc.id);
+          const isPicked = localPicked.has(jc.id);
           const days = daysUntil(jc.dispatch_date);
           return (
             <div key={jc.id}
               className={`flex items-center gap-3 p-3 rounded-xl border transition-colors cursor-pointer ${
-                isPicked ? 'bg-orange-50 border-orange-200' : 'bg-gray-50 border-gray-200 hover:border-brand-300'
+                isPicked ? 'bg-brand-50 border-brand-300' : 'bg-gray-50 border-gray-200 hover:border-brand-300'
               }`}
-              onClick={() => isPicked ? onUnpick(jc.id) : onPick(jc.id)}
+              onClick={() => toggle(jc.id)}
             >
-              <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${
-                isPicked ? 'bg-orange-500' : 'border-2 border-gray-300'
+              <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 border-2 transition-colors ${
+                isPicked ? 'bg-brand-600 border-brand-600' : 'border-gray-300'
               }`}>
-                {isPicked && <CheckCircle size={14} className="text-white" />}
+                {isPicked && <Check size={12} className="text-white" />}
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">
@@ -381,8 +409,14 @@ function PickModal({ cards, todayPickIds, onPick, onUnpick, onClose }) {
           );
         })}
       </div>
-      <div className="mt-5 flex justify-end">
-        <button className="btn-primary" onClick={onClose}>Done</button>
+      <div className="mt-5 flex items-center justify-between">
+        <span className="text-sm text-gray-400">{localPicked.size} selected</span>
+        <div className="flex gap-3">
+          <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn-primary" onClick={handleDone} disabled={saving}>
+            {saving ? 'Saving...' : changed ? 'Save & Close' : 'Done'}
+          </button>
+        </div>
       </div>
     </Modal>
   );

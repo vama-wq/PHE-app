@@ -45,11 +45,11 @@ router.get('/rejections/all', authenticate, authorize('owner', 'admin'), async (
   res.json(rows);
 });
 
-// ── GET today's picks ─────────────────────────────────────────────────────────
+// ── GET today's picks (persistent — once picked stays until manually removed or completed) ──
 router.get('/picks/today', authenticate, async (req, res) => {
   const today = TODAY();
   const picks = await getDB().all(`
-    SELECT jc.*, o.order_code, c.customer_code,
+    SELECT DISTINCT ON (jc.id) jc.*, o.order_code, c.customer_code,
       (jc.dispatch_date::date - CURRENT_DATE) as days_until_dispatch,
       EXISTS(
         SELECT 1 FROM production_daily_reports
@@ -59,9 +59,9 @@ router.get('/picks/today', authenticate, async (req, res) => {
     JOIN job_cards jc ON pdp.job_card_id = jc.id
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
-    WHERE pdp.pick_date = $2
-    ORDER BY jc.dispatch_date ASC
-  `, [today, today]);
+    WHERE jc.status NOT IN ('dispatched','completed')
+    ORDER BY jc.id, jc.dispatch_date ASC
+  `, [today]);
   res.json(picks);
 });
 
@@ -184,11 +184,11 @@ router.post('/:id/pick', authenticate, authorize('production', 'owner', 'admin')
   }
 });
 
-// ── DELETE unpick ─────────────────────────────────────────────────────────────
+// ── DELETE unpick (removes all picks for this card across all dates) ──────────
 router.delete('/:id/pick', authenticate, authorize('production', 'owner', 'admin'), async (req, res) => {
   await getDB().run(
-    'DELETE FROM production_day_picks WHERE job_card_id=$1 AND pick_date=$2',
-    [req.params.id, TODAY()]
+    'DELETE FROM production_day_picks WHERE job_card_id=$1',
+    [req.params.id]
   );
   res.json({ message: 'Unpicked' });
 });
