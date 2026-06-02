@@ -17,15 +17,15 @@ export const PRODUCTION_STAGES = [
   { no: 9,  name: 'HV + Light Check',   hvLight: true },
   { no: 10, name: 'Straightening' },
   { no: 11, name: 'Trimming' },
-  { no: 12, name: 'Spot Annealing + Buffing' },
-  { no: 13, name: 'Furnace Annealing',  hideIfDone: 12 },
-  { no: 14, name: 'Bending' },
+  { no: 12, name: 'Spot Annealing or Furnace Annealing' },
+  { no: 13, name: 'Brazing',            optional: true, brazing: true },
+  { no: 14, name: 'Bending',            heaterAdjust: true },
   { no: 15, name: 'In Plating' },
   { no: 16, name: 'Plating Completed' },
-  { no: 17, name: 'Kharoch Process',    optional: true },
+  { no: 17, name: 'Heater Cleaning',    note: 'Use Alcohol and Thinner', fields: [{ key: 'value1', label: 'Remark' }] },
   { no: 18, name: 'Overnight Oven' },
   { no: 19, name: 'HV + Light Check',   hvLight: true },
-  { no: 20, name: 'Nipple Press' },
+  { no: 20, name: 'Nipple Press',       optional: true },
   { no: 21, name: '3 Hours Oven',       optional: true },
   { no: 22, name: 'Sealing' },
   { no: 23, name: 'HV + Light Check',   hvLight: true },
@@ -38,8 +38,8 @@ export const PRODUCTION_STAGES = [
 ];
 
 // Stages that must be completed before Stage 28 (QC) can be triggered.
-// Stage 13 is only required when Stage 12 is NOT done.
-export const MANDATORY_STAGE_NOS = [1,3,4,5,6,7,8,9,10,11,12,14,15,16,18,19,20,22,23,24,25,26,27];
+// Stages 13 (Brazing), 17 (Heater Cleaning) and 20 (Nipple Press) are optional so excluded.
+export const MANDATORY_STAGE_NOS = [1,3,4,5,6,7,8,9,10,11,12,14,15,16,18,19,22,23,24,25,26,27];
 
 export function getStageLabel(stageNo) {
   if (!stageNo) return null;

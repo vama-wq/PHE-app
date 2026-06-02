@@ -572,6 +572,22 @@ function ChecklistModal({ card, onClose, onSave }) {
                     {isDone && (sData.value1 || sData.value2 || hasRejection || sData.worker_name || sData.scrap_value) && (
                       <div className="ml-7 text-xs text-gray-500 mt-0.5 flex flex-wrap gap-2">
                         {sData.worker_name && <span className="font-medium text-gray-600">{sData.worker_name}</span>}
+                        {def.heaterAdjust && sData.value1 === 'adjusted' && (
+                          <span className="text-green-600 font-medium">✅ Heater Adjusted</span>
+                        )}
+                        {def.brazing && sData.value1 ? (() => {
+                          let d = {};
+                          try { d = JSON.parse(sData.value1); } catch {}
+                          return <>
+                            <span className={d.airPressure === 'pass' ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
+                              Air Pressure {d.airPressure === 'pass' ? '✅' : `❌ — ${d.airPressureRemark}`}
+                            </span>
+                            <span className={d.airCleaning ? 'text-green-600 font-medium' : 'text-gray-400'}>
+                              Air Cleaning {d.airCleaning ? '✅' : '—'}
+                            </span>
+                            {d.remark && <span className="text-gray-500">{d.remark}</span>}
+                          </>;
+                        })() : null}
                         {def.hvLight && sData.value1 ? (() => {
                           let d = {};
                           try { d = JSON.parse(sData.value1); } catch { d = { light: sData.value1 }; }
@@ -635,7 +651,7 @@ function ChecklistModal({ card, onClose, onSave }) {
 }
 
 // ── Reusable HV / Light pass-fail block ──────────────────────────────────────
-function HvTestBlock({ label, result, failCount, failReason, isDone, doneResult, doneCount, doneReason, onResult, onCount, onReason }) {
+function HvTestBlock({ label, result, failCount, failReason, isDone, doneResult, doneCount, doneReason, onResult, onCount, onReason, passLabel = '✅ All Passed', failLabel = '❌ Some Failed', hideCount = false }) {
   return (
     <div>
       <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -646,8 +662,8 @@ function HvTestBlock({ label, result, failCount, failReason, isDone, doneResult,
           doneResult === 'pass' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'
         }`}>
           {doneResult === 'pass'
-            ? '✅ All Passed'
-            : `❌ ${doneCount} failed — ${doneReason}`}
+            ? passLabel
+            : hideCount ? `❌ Failed — ${doneReason}` : `❌ ${doneCount} failed — ${doneReason}`}
         </div>
       ) : (
         <>
@@ -655,23 +671,27 @@ function HvTestBlock({ label, result, failCount, failReason, isDone, doneResult,
             <button type="button" onClick={() => onResult('pass')}
               className={`flex-1 py-2.5 rounded-xl border-2 font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
                 result === 'pass' ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500 hover:border-green-300'
-              }`}>✅ All Passed</button>
+              }`}>{passLabel}</button>
             <button type="button" onClick={() => onResult('fail')}
               className={`flex-1 py-2.5 rounded-xl border-2 font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
                 result === 'fail' ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-500 hover:border-red-300'
-              }`}>❌ Some Failed</button>
+              }`}>{failLabel}</button>
           </div>
           {result === 'fail' && (
             <div className="space-y-3 p-3 bg-red-50 rounded-xl border border-red-100">
+              {!hideCount && (
+                <div>
+                  <label className="block text-xs font-medium text-red-700 mb-1">How many failed? <span className="text-red-500">*</span></label>
+                  <input type="number" min="1" className="input w-32 text-sm"
+                    placeholder="e.g. 3" value={failCount} onChange={e => onCount(e.target.value)} />
+                </div>
+              )}
               <div>
-                <label className="block text-xs font-medium text-red-700 mb-1">How many failed? <span className="text-red-500">*</span></label>
-                <input type="number" min="1" className="input w-32 text-sm"
-                  placeholder="e.g. 3" value={failCount} onChange={e => onCount(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-red-700 mb-1">Why did they fail? <span className="text-red-500">*</span></label>
+                <label className="block text-xs font-medium text-red-700 mb-1">
+                  {hideCount ? 'Reason / Remark' : 'Why did they fail?'} <span className="text-red-500">*</span>
+                </label>
                 <textarea className="input w-full h-16 resize-none text-sm"
-                  placeholder="Describe the reason for failure..."
+                  placeholder="Describe the reason..."
                   value={failReason} onChange={e => onReason(e.target.value)} />
               </div>
             </div>
@@ -717,6 +737,22 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [hvLightFailReason, setHvLightFailReason] = useState(hvData.lightReason || '');
   const [hvOhms, setHvOhms] = useState(hvData.ohms || '');
 
+  // Bending (14) — Heater Adjustment checkbox
+  const isBending = stageDef.no === 14;
+  const [heaterAdjustDone, setHeaterAdjustDone] = useState(() => stageData.value1 === 'adjusted');
+
+  // Brazing (13) — stored as JSON in value1
+  // { airPressure: 'pass'|'fail', airPressureRemark, airCleaning: bool, remark }
+  const isBrazing = !!stageDef.brazing;
+  const brazingData = (() => {
+    if (!isBrazing || !stageData.value1) return {};
+    try { return JSON.parse(stageData.value1); } catch { return {}; }
+  })();
+  const [brazingAirPressure, setBrazingAirPressure] = useState(brazingData.airPressure || '');
+  const [brazingAirPressureRemark, setBrazingAirPressureRemark] = useState(brazingData.airPressureRemark || '');
+  const [brazingAirCleaning, setBrazingAirCleaning] = useState(!!brazingData.airCleaning);
+  const [brazingRemark, setBrazingRemark] = useState(brazingData.remark || '');
+
   const isDone = stageData.done === 1;
   // After 6pm: require a photo for any stage completion
   const isAfter6pm = new Date().getHours() >= 18;
@@ -727,15 +763,18 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   // Check if all mandatory stages are done (for stage 28 gate)
   const mandatoryMissing = useMemo(() => {
     if (stageDef.no !== 28) return [];
-    const stage12Done = stageMap[12]?.done;
-    const required = [...MANDATORY_STAGE_NOS];
-    if (!stage12Done) required.push(13);
-    return required.filter(n => !stageMap[n]?.done);
+    return MANDATORY_STAGE_NOS.filter(n => !stageMap[n]?.done);
   }, [stageDef.no, stageMap]);
 
   const canMarkDone = () => {
     if (isDone || saving) return false;
     if (needsWorker && !workerName.trim()) return false;
+    if (isBending && !heaterAdjustDone) return false;
+    if (isBrazing) {
+      if (!brazingAirPressure) return false;
+      if (brazingAirPressure === 'fail' && !brazingAirPressureRemark.trim()) return false;
+      if (!brazingAirCleaning) return false;
+    }
     if (isHvLight) {
       if (!hvTestResult || !hvLightResult) return false;
       if (hvTestResult === 'fail' && (!hvTestFailCount || !hvTestFailReason.trim())) return false;
@@ -751,6 +790,20 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     if (stageDef.no === 29 && card.status !== 'qc_approved') return false;
     if (stageDef.no === 29 && !(parseInt(dispatchedQty, 10) > 0)) return false;
     return true;
+  };
+
+  // Build value1 / value2 for saving
+  const buildValues = () => {
+    if (isHvLight) return {
+      v1: JSON.stringify({ hv: hvTestResult, hvCount: hvTestFailCount, hvReason: hvTestFailReason, light: hvLightResult, lightCount: hvLightFailCount, lightReason: hvLightFailReason, ohms: hvOhms }),
+      v2: null,
+    };
+    if (isBrazing) return {
+      v1: JSON.stringify({ airPressure: brazingAirPressure, airPressureRemark: brazingAirPressureRemark, airCleaning: brazingAirCleaning, remark: brazingRemark }),
+      v2: null,
+    };
+    if (isBending) return { v1: heaterAdjustDone ? 'adjusted' : null, v2: null };
+    return { v1: value1 || null, v2: value2 || null };
   };
 
   const uploadRejectionPhoto = async (file) => {
@@ -780,12 +833,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     fd.append('remade_qty', remadeQty || '0');
     if (workerName) fd.append('worker_name', workerName);
     if (scrapValue) fd.append('scrap_value', scrapValue);
-    const v1 = isHvLight ? JSON.stringify({
-      hv: hvTestResult, hvCount: hvTestFailCount, hvReason: hvTestFailReason,
-      light: hvLightResult, lightCount: hvLightFailCount, lightReason: hvLightFailReason,
-      ohms: hvOhms,
-    }) : (value1 || null);
-    const v2 = isHvLight ? null : (value2 || null);
+    const { v1, v2 } = buildValues();
     if (v1) fd.append('value1', v1);
     if (v2) fd.append('value2', v2);
     if (stageDef.no === 29) fd.append('dispatched_qty', dispatchedQty || '0');
@@ -802,12 +850,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     setSaving(true);
     setError('');
     try {
-      const v1 = isHvLight ? JSON.stringify({
-        hv: hvTestResult, hvCount: hvTestFailCount, hvReason: hvTestFailReason,
-        light: hvLightResult, lightCount: hvLightFailCount, lightReason: hvLightFailReason,
-        ohms: hvOhms,
-      }) : (value1 || null);
-      const v2 = isHvLight ? null : (value2 || null);
+      const { v1, v2 } = buildValues();
       await api.put(`/job-cards/${card.id}/checklist/${stageDef.no}`, {
         done: true,
         value1: v1,
@@ -976,6 +1019,117 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
             ) : (
               <input className="input w-full" placeholder="Enter ohms value or remark"
                 value={hvOhms} onChange={e => setHvOhms(e.target.value)} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Stage note (e.g. Heater Cleaning instructions) */}
+      {stageDef.note && (
+        <div className="mb-4 flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+          <span className="text-base">ℹ️</span> {stageDef.note}
+        </div>
+      )}
+
+      {/* Bending — Heater Adjustment */}
+      {isBending && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Heater Adjustment <span className="text-red-500">*</span>
+          </label>
+          {isDone ? (
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${
+              stageData.value1 === 'adjusted' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500'
+            }`}>
+              {stageData.value1 === 'adjusted' ? '✅ Heater Adjustment Done' : '— Not recorded'}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setHeaterAdjustDone(v => !v)}
+              className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl border-2 font-semibold text-sm transition-colors ${
+                heaterAdjustDone
+                  ? 'bg-green-50 border-green-500 text-green-700'
+                  : 'border-gray-200 text-gray-500 hover:border-green-300'
+              }`}
+            >
+              <div className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                heaterAdjustDone ? 'bg-green-500 border-green-500' : 'border-gray-300'
+              }`}>
+                {heaterAdjustDone && <Check size={12} className="text-white" />}
+              </div>
+              Heater Adjustment Done
+              {!heaterAdjustDone && <span className="text-xs text-red-500 ml-auto font-normal">(required to mark done)</span>}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Brazing (Stage 13) */}
+      {isBrazing && (
+        <div className="mb-4 space-y-4">
+          {/* Air Pressure Check */}
+          <HvTestBlock
+            label="Air Pressure Check"
+            result={brazingAirPressure}
+            failCount=""
+            failReason={brazingAirPressureRemark}
+            isDone={isDone}
+            doneResult={brazingData.airPressure}
+            doneCount=""
+            doneReason={brazingData.airPressureRemark}
+            onResult={setBrazingAirPressure}
+            onCount={() => {}}
+            onReason={setBrazingAirPressureRemark}
+            passLabel="✅ All Pass"
+            failLabel="❌ Some Failed"
+            hideCount
+          />
+
+          {/* Air Cleaning Check */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Air Cleaning Check <span className="text-red-500">*</span>
+            </label>
+            {isDone ? (
+              <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${
+                brazingData.airCleaning ? 'bg-green-50 border-green-200 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500'
+              }`}>
+                {brazingData.airCleaning ? '✅ Air Cleaning Done' : '— Not recorded'}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setBrazingAirCleaning(v => !v)}
+                className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl border-2 font-semibold text-sm transition-colors ${
+                  brazingAirCleaning
+                    ? 'bg-green-50 border-green-500 text-green-700'
+                    : 'border-gray-200 text-gray-500 hover:border-green-300'
+                }`}
+              >
+                <div className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                  brazingAirCleaning ? 'bg-green-500 border-green-500' : 'border-gray-300'
+                }`}>
+                  {brazingAirCleaning && <Check size={12} className="text-white" />}
+                </div>
+                Air Cleaning All Done
+                {!brazingAirCleaning && <span className="text-xs text-red-500 ml-auto font-normal">(required to mark done)</span>}
+              </button>
+            )}
+          </div>
+
+          {/* Brazing remark */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Remark <span className="text-xs text-gray-400 font-normal">(optional)</span>
+            </label>
+            {isDone ? (
+              <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+                {brazingData.remark || '—'}
+              </div>
+            ) : (
+              <input className="input w-full" placeholder="Add a remark..."
+                value={brazingRemark} onChange={e => setBrazingRemark(e.target.value)} />
             )}
           </div>
         </div>
