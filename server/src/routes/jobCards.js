@@ -245,7 +245,45 @@ router.post('/:id/daily-report', authenticate, authorize('production', 'owner', 
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-// ── Helper: recompute job card status + current_stage ─────────────────────────
+// ── Helper: recompute ORDER status from all its job cards ─────────────────────
+// Priority (highest wins):
+//   dispatched   → all job cards dispatched
+//   qc_approved  → any card qc_approved (and not all dispatched)
+//   qc_pending   → any card qc_pending
+//   in_progress  → any card in_progress or on_hold
+//   job_card_created → otherwise (cards exist but none started)
+async function syncOrderStatus(db, orderId, userId) {
+  const cards = await db.all('SELECT status FROM job_cards WHERE order_id=$1', [orderId]);
+  if (!cards.length) return;
+
+  const statuses = cards.map(c => c.status);
+  let newOrderStatus;
+
+  if (statuses.every(s => s === 'dispatched')) {
+    newOrderStatus = 'dispatched';
+  } else if (statuses.some(s => s === 'qc_approved')) {
+    newOrderStatus = 'qc_approved';
+  } else if (statuses.some(s => s === 'qc_pending')) {
+    newOrderStatus = 'qc_pending';
+  } else if (statuses.some(s => s === 'in_progress' || s === 'on_hold')) {
+    newOrderStatus = 'in_progress';
+  } else {
+    newOrderStatus = 'job_card_created';
+  }
+
+  const order = await db.get('SELECT status FROM orders WHERE id=$1', [orderId]);
+  if (!order || order.status === newOrderStatus) return;
+
+  // Don't overwrite terminal/upstream statuses
+  const locked = ['pending_approval', 'approved', 'rejected'];
+  if (locked.includes(order.status)) return;
+
+  await db.run('UPDATE orders SET status=$1 WHERE id=$2', [newOrderStatus, orderId]);
+  await logActivity(orderId, null, 'status_changed',
+    `Order status updated to ${newOrderStatus.replace(/_/g, ' ')}`, userId);
+}
+
+// ── Helper: recompute job card status + current_stage, then sync order ────────
 async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   const maxRow = await db.get(
     'SELECT MAX(stage_no) as m FROM production_checklist WHERE job_card_id=$1 AND done=1',
@@ -275,31 +313,12 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   await db.run('UPDATE job_cards SET current_stage=$1, status=$2 WHERE id=$3', [maxStage, newStatus, jobCardId]);
 
   if (newStatus !== jc.status) {
-    if (newStatus === 'in_progress') {
-      // Move order to in_progress as soon as any job card starts production
-      await db.run(
-        "UPDATE orders SET status='in_progress' WHERE id=$1 AND status IN ('approved','job_card_created')",
-        [jc.order_id]
-      );
-    } else if (newStatus === 'qc_pending') {
-      await logActivity(jc.order_id, jobCardId, 'status_changed',
-        `Job card ${jc.job_card_no} moved to QC Pending`, userId);
-    } else if (newStatus === 'dispatched') {
-      await logActivity(jc.order_id, jobCardId, 'dispatched',
-        `Job card ${jc.job_card_no} dispatched`, userId);
-
-      const orderCards = await db.all(
-        'SELECT status FROM job_cards WHERE order_id=$1',
-        [jc.order_id]
-      );
-      const allDispatched = orderCards.length > 0 && orderCards.every(c => c.status === 'dispatched');
-      if (allDispatched) {
-        await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [jc.order_id]);
-        await logActivity(jc.order_id, null, 'status_changed',
-          `All job cards dispatched — Order marked Dispatched`, userId);
-      }
-    }
+    await logActivity(jc.order_id, jobCardId, 'status_changed',
+      `Job card ${jc.job_card_no} → ${newStatus.replace(/_/g, ' ')}`, userId);
   }
+
+  // Always sync the parent order status
+  await syncOrderStatus(db, jc.order_id, userId);
 }
 
 // ── Helper: check cumulative rejections across all stages ─────────────────────
@@ -354,6 +373,7 @@ async function triggerHold(db, jobCardId, stageNo, rejQty, userId) {
   if (jc) {
     await logActivity(jc.order_id, jobCardId, 'status_changed',
       `Job card ${jc.job_card_no} ON HOLD — ${rejQty} rejections at Stage ${stageNo}`, userId);
+    await syncOrderStatus(db, jc.order_id, userId);
   }
 }
 
@@ -633,6 +653,7 @@ router.put('/:id/hold/approve', authenticate, authorize('owner', 'admin'), async
   await db.run("UPDATE job_cards SET status='in_progress' WHERE id=$1", [req.params.id]);
   await logActivity(jc.order_id, jc.id, 'status_changed',
     `Job card ${jc.job_card_no} hold approved by ${req.user.name} — work resumed`, req.user.id);
+  await syncOrderStatus(db, jc.order_id, req.user.id);
 
   res.json({ message: 'Hold approved, work resumed' });
 });
