@@ -3,6 +3,26 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadQC } = require('../middleware/upload');
 
+// Recompute order status from all its job cards
+async function syncOrderStatus(db, orderId, userId) {
+  const cards = await db.all('SELECT status FROM job_cards WHERE order_id=$1', [orderId]);
+  if (!cards.length) return;
+  const statuses = cards.map(c => c.status);
+  let newOrderStatus;
+  if (statuses.every(s => s === 'dispatched'))                          newOrderStatus = 'dispatched';
+  else if (statuses.some(s => s === 'qc_approved'))                     newOrderStatus = 'qc_approved';
+  else if (statuses.some(s => s === 'qc_pending'))                      newOrderStatus = 'qc_pending';
+  else if (statuses.some(s => s === 'in_progress' || s === 'on_hold'))  newOrderStatus = 'in_progress';
+  else                                                                   newOrderStatus = 'job_card_created';
+  const order = await db.get('SELECT status FROM orders WHERE id=$1', [orderId]);
+  if (!order || order.status === newOrderStatus) return;
+  const locked = ['pending_approval', 'approved', 'rejected'];
+  if (locked.includes(order.status)) return;
+  await db.run('UPDATE orders SET status=$1 WHERE id=$2', [newOrderStatus, orderId]);
+  await logActivity(orderId, null, 'status_changed',
+    `Order status updated to ${newOrderStatus.replace(/_/g, ' ')}`, userId);
+}
+
 router.get('/', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
   const cards = await getDB().all(
     `SELECT jc.*, o.order_code, o.order_type, c.customer_code, c.name as customer_name,
@@ -150,6 +170,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
       await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
       await logActivity(jc.order_id, jc.id, 'status_changed',
         `Job card ${jc.job_card_no} QC Approved — ${qty} units added to Finished Goods`, req.user.id);
+      await syncOrderStatus(db, jc.order_id, req.user.id);
       return res.json({ message: 'QC Approved', route: 'finished_goods', finished_good_id: fgId, qty });
     }
 
@@ -165,28 +186,29 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
       await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
       await logActivity(jc.order_id, jc.id, 'status_changed',
         `Job card ${jc.job_card_no} QC Approved — ${parsedFgQty} units to Finished Goods, ${parsedDispQty} to dispatch`, req.user.id);
+      await syncOrderStatus(db, jc.order_id, req.user.id);
       return res.json({ message: 'QC Approved', route: 'both', finished_good_id: fgId, io_qty: parsedFgQty, dispatch_qty: parsedDispQty });
     }
 
     // Default: dispatch
     await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
     await logActivity(jc.order_id, jc.id, 'status_changed', `Job card ${jc.job_card_no} QC Approved — going to dispatch`, req.user.id);
+    await syncOrderStatus(db, jc.order_id, req.user.id);
     return res.json({ message: 'QC Approved', route: 'dispatch' });
   }
 
   if (orderType === 'inventory_order') {
-    // Full qty goes to Finished Goods
     const qty = io_qty != null ? parseInt(io_qty) : netQty;
     if (!qty || qty <= 0) return res.status(400).json({ error: 'IO quantity must be greater than 0' });
     const fgId = await createFinishedGoodsEntry(qty);
     await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
     await logActivity(jc.order_id, jc.id, 'status_changed',
       `Job card ${jc.job_card_no} QC Approved — ${qty} units added to Finished Goods`, req.user.id);
+    await syncOrderStatus(db, jc.order_id, req.user.id);
     return res.json({ message: 'QC Approved', route: 'finished_goods', finished_good_id: fgId, qty });
   }
 
   if (orderType === 'io_export_he' || orderType === 'io_local_he') {
-    // Split: some to IO (Finished Goods), rest to Dispatch
     const parsedIoQty = parseInt(io_qty);
     const parsedDispatchQty = parseInt(dispatch_qty);
     if (!parsedIoQty || parsedIoQty <= 0) return res.status(400).json({ error: 'IO quantity is required' });
@@ -198,12 +220,14 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
     await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
     await logActivity(jc.order_id, jc.id, 'status_changed',
       `Job card ${jc.job_card_no} QC Approved — ${parsedIoQty} units to Finished Goods, ${parsedDispatchQty} to dispatch`, req.user.id);
+    await syncOrderStatus(db, jc.order_id, req.user.id);
     return res.json({ message: 'QC Approved', route: 'split', finished_good_id: fgId, io_qty: parsedIoQty, dispatch_qty: parsedDispatchQty });
   }
 
   // Fallback
   await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
   await logActivity(jc.order_id, jc.id, 'status_changed', `Job card ${jc.job_card_no} QC Approved`, req.user.id);
+  await syncOrderStatus(db, jc.order_id, req.user.id);
   res.json({ message: 'QC Approved', route: 'dispatch' });
 });
 
@@ -217,6 +241,7 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
   await db.run("UPDATE job_cards SET status='in_progress' WHERE id=$1", [req.params.id]);
   await logActivity(jc.order_id, jc.id, 'status_changed',
     `Job card ${jc.job_card_no} QC Rejected — returned to production. ${notes || ''}`, req.user.id);
+  await syncOrderStatus(db, jc.order_id, req.user.id);
   res.json({ message: 'QC rejected, returned to production' });
 });
 
