@@ -274,28 +274,78 @@ function OwnerAdminDashboard() {
           {hasJobCards && onHold.length > 0 && (
             <SectionCard title="Job Cards On Hold — Approval Required" icon={AlertTriangle} iconColor="text-red-500">
               <div className="divide-y divide-gray-50">
-                {onHold.map(jc => (
-                  <div key={jc.id} className="flex items-center justify-between px-5 py-3.5 hover:bg-red-50/30 transition-colors gap-3">
-                    <Link to={`/job-cards/${jc.id}`} className="flex items-center gap-2 min-w-0 flex-1">
-                      <span className="font-semibold text-sm text-gray-900">{jc.job_card_no}</span>
-                      <span className="text-gray-400">·</span>
-                      <span className="text-sm text-gray-600">{jc.customer_code}</span>
-                    </Link>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <StatusBadge status={jc.status} />
-                      {user.role === 'owner' && (
-                        <button
-                          className="btn-primary btn-sm flex items-center gap-1 text-xs py-1 px-2.5"
-                          onClick={(e) => handleApproveHold(jc, e)}
-                          disabled={approvingHold === jc.id}
-                        >
-                          <CheckCircle size={12} />
-                          {approvingHold === jc.id ? 'Approving...' : 'Approve to Resume'}
-                        </button>
+                {onHold.map(jc => {
+                  // Find matching rejection record for this job card
+                  const rej = rejections.find(r => r.job_card_no === jc.job_card_no);
+                  const stageName = rej ? (PRODUCTION_STAGES.find(s => s.no === rej.stage_no)?.name || '') : '';
+                  return (
+                    <div key={jc.id} className="px-5 py-4 bg-red-50/30 hover:bg-red-50/50 transition-colors">
+                      {/* Top row: card id + approve button */}
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <Link to={`/job-cards/${jc.id}`} className="flex items-center gap-2 min-w-0 flex-1">
+                          <span className="font-semibold text-sm text-gray-900">{jc.job_card_no}</span>
+                          <span className="text-gray-400">·</span>
+                          <span className="text-sm text-gray-600">{jc.customer_code}</span>
+                          <StatusBadge status={jc.status} />
+                        </Link>
+                        {user.role === 'owner' && (
+                          <button
+                            className="btn-primary btn-sm flex items-center gap-1 text-xs py-1 px-2.5 flex-shrink-0"
+                            onClick={(e) => handleApproveHold(jc, e)}
+                            disabled={approvingHold === jc.id}
+                          >
+                            <CheckCircle size={12} />
+                            {approvingHold === jc.id ? 'Approving...' : 'Approve to Resume'}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Rejection detail row */}
+                      {rej && (
+                        <div className="flex items-start gap-4 mt-1 ml-0.5">
+                          {/* Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-semibold text-red-700">
+                                {rej.rejection_qty} pieces rejected
+                              </span>
+                              <span className="text-xs text-gray-400">at</span>
+                              <span className="text-xs text-gray-700 font-medium">
+                                Stage {rej.stage_no}: {stageName}
+                              </span>
+                              {rej.remade_qty > 0 && (
+                                <span className="text-xs text-gray-500">· Remade: {rej.remade_qty}</span>
+                              )}
+                            </div>
+                            {rej.done_at && (
+                              <div className="text-xs text-gray-400 mt-0.5">
+                                Reported: {fmtDateTime(rej.done_at)}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Rejection photo thumbnail */}
+                          {rej.rejection_photo_file && (
+                            <a
+                              href={`/uploads/rejection-photos/${rej.rejection_photo_file}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              className="flex-shrink-0"
+                              title="View rejection photo"
+                            >
+                              <img
+                                src={`/uploads/rejection-photos/${rej.rejection_photo_file}`}
+                                alt="Rejection"
+                                className="w-14 h-14 object-cover rounded-lg border-2 border-red-200 hover:border-red-400 transition-colors"
+                              />
+                            </a>
+                          )}
+                        </div>
                       )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </SectionCard>
           )}
