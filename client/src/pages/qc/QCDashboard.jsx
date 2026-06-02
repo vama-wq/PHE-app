@@ -147,7 +147,16 @@ export default function QCDashboard() {
                           {jc.order_code}
                         </Link>
                         {' · '}{jc.customer_code}
-                        {jc.qty && <span className="text-gray-400"> · Qty: {jc.qty}</span>}
+                        {jc.qty && (
+                          <span className="text-gray-400">
+                            {' · '}Qty: {jc.qty}
+                            {jc.net_qty != null && jc.net_qty < jc.qty && (
+                              <span className="ml-1 text-orange-600 font-medium">
+                                → {jc.net_qty} dispatchable ⚠️
+                              </span>
+                            )}
+                          </span>
+                        )}
                       </div>
                       <div className={`text-sm font-medium ${isOverdue ? 'text-red-600' : isUrgent ? 'text-orange-500' : 'text-gray-500'}`}>
                         {isOverdue
@@ -626,10 +635,35 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   return (
     <Modal open title="QC Approval — Where are these heaters going?" onClose={onClose} size="sm">
       <div className="space-y-4">
-        {/* Job card info */}
-        <div className="bg-green-50 border border-green-100 rounded-lg p-3 text-sm">
-          <p className="font-semibold text-green-800">{card.job_card_no} · {card.order_code}</p>
-          <p className="text-green-700 mt-0.5">{card.customer_name || card.customer_code} · Qty: {card.qty || '—'}</p>
+        {/* Job card info + qty summary */}
+        <div className={`border rounded-lg p-3 text-sm ${card.net_qty < card.qty ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-100'}`}>
+          <p className={`font-semibold ${card.net_qty < card.qty ? 'text-orange-800' : 'text-green-800'}`}>{card.job_card_no} · {card.order_code}</p>
+          <p className={`mt-0.5 ${card.net_qty < card.qty ? 'text-orange-700' : 'text-green-700'}`}>{card.customer_name || card.customer_code}</p>
+          <div className={`mt-2 pt-2 border-t space-y-1 ${card.net_qty < card.qty ? 'border-orange-200' : 'border-green-200'}`}>
+            <div className="flex justify-between text-xs">
+              <span className="text-gray-600">Original Qty</span>
+              <span className="font-medium">{card.qty} pcs</span>
+            </div>
+            {(card.total_rejected > 0) && (
+              <div className="flex justify-between text-xs text-red-600">
+                <span>Rejections</span>
+                <span className="font-medium">− {card.total_rejected} pcs</span>
+              </div>
+            )}
+            {(card.total_remade > 0) && (
+              <div className="flex justify-between text-xs text-green-600">
+                <span>Remade</span>
+                <span className="font-medium">+ {card.total_remade} pcs</span>
+              </div>
+            )}
+            <div className={`flex justify-between text-xs font-semibold border-t pt-1 ${card.net_qty < card.qty ? 'border-orange-200 text-orange-700' : 'border-green-200 text-green-700'}`}>
+              <span>Final Dispatchable Qty</span>
+              <span>{card.net_qty ?? card.qty} pcs</span>
+            </div>
+          </div>
+          {card.net_qty < card.qty && (
+            <p className="text-xs text-orange-600 mt-1.5">⚠️ Qty is short by {card.qty - card.net_qty} piece{card.qty - card.net_qty !== 1 ? 's' : ''} due to production rejections.</p>
+          )}
         </div>
 
         {/* Destination selector */}
@@ -669,7 +703,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
             <label className="label">Qty → Finished Goods <span className="text-red-500">*</span></label>
             <input className="input" type="number" min="1"
               value={fgQty} onChange={e => setFgQty(e.target.value)}
-              placeholder="Units going into Finished Goods store" />
+              placeholder={`Dispatchable: ${card.net_qty ?? card.qty} pcs`} />
           </div>
         )}
         {destination === 'both' && (
@@ -677,7 +711,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
             <label className="label">Qty → Dispatch <span className="text-red-500">*</span></label>
             <input className="input" type="number" min="1"
               value={dispatchQty} onChange={e => setDispatchQty(e.target.value)}
-              placeholder="Units going to dispatch" />
+              placeholder={`Remaining after Finished Goods`} />
           </div>
         )}
 

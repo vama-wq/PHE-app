@@ -708,6 +708,62 @@ function HvTestBlock({ label, result, failCount, failReason, isDone, doneResult,
   );
 }
 
+// ── Qty Mismatch Confirmation Modal (shown before Stage 29 / QC trigger) ─────
+function QtyMismatchModal({ originalQty, netQty, breakdown, onConfirm, onCancel }) {
+  const diff = originalQty - netQty;
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0">
+            <AlertTriangle size={20} className="text-orange-600" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-gray-900">Qty Mismatch — Confirm Before QC</h3>
+            <p className="text-sm text-gray-500">Final dispatchable qty does not match the job card qty</p>
+          </div>
+        </div>
+
+        <div className="bg-orange-50 rounded-xl border border-orange-200 p-4 mb-4 space-y-2 text-sm">
+          <div className="flex justify-between">
+            <span className="text-gray-600">Original Job Card Qty</span>
+            <span className="font-semibold text-gray-900">{originalQty} pcs</span>
+          </div>
+          <div className="flex justify-between text-red-600">
+            <span>Total Rejections (all stages)</span>
+            <span className="font-semibold">− {breakdown.totalRejected} pcs</span>
+          </div>
+          {breakdown.totalRemade > 0 && (
+            <div className="flex justify-between text-green-600">
+              <span>Remade / Recovered</span>
+              <span className="font-semibold">+ {breakdown.totalRemade} pcs</span>
+            </div>
+          )}
+          <div className="flex justify-between border-t border-orange-200 pt-2 mt-2">
+            <span className="font-semibold text-gray-700">Final Dispatchable Qty</span>
+            <span className={`font-bold text-lg ${netQty < originalQty ? 'text-orange-700' : 'text-green-700'}`}>{netQty} pcs</span>
+          </div>
+          <div className="text-xs text-orange-700 mt-1">
+            ⚠️ {diff} piece{diff !== 1 ? 's' : ''} short of original order qty. This will be visible on the QC report.
+          </div>
+        </div>
+
+        <p className="text-sm text-gray-600 mb-5">
+          Sending this job card to QC with a reduced qty. The QC inspector will see this breakdown when approving.
+          Confirm to proceed, or go back and update the rejection / remade counts.
+        </p>
+
+        <div className="flex gap-3">
+          <button className="btn-ghost flex-1" onClick={onCancel}>Go Back</button>
+          <button className="btn-primary flex-1 bg-orange-600 border-orange-600 hover:bg-orange-700" onClick={onConfirm}>
+            Confirm &amp; Send to QC
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Stage Detail View (inline within ChecklistModal) ──────────────────────────
 function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved }) {
   const { user } = useAuthStore();
@@ -725,6 +781,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [uploadingStagePhoto, setUploadingStagePhoto] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [qtyMismatchModal, setQtyMismatchModal] = useState(null); // { originalQty, netQty, breakdown }
 
   const needsWorker = WORKER_NAME_STAGES.has(stageDef.no);
   const hasScrap = SCRAP_VALUE_STAGES.has(stageDef.no);
@@ -870,7 +927,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     }
   };
 
-  const handleMarkDone = async () => {
+  const doMarkDone = async () => {
     setSaving(true);
     setError('');
     try {
@@ -889,6 +946,21 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       setError(e.response?.data?.error || 'Failed to save');
       setSaving(false);
     }
+  };
+
+  const handleMarkDone = () => {
+    // Stage 29 (QC trigger): check if net qty matches original qty
+    if (stageDef.no === 29) {
+      const originalQty = parseInt(card.qty, 10) || 0;
+      const totalRejected = Object.values(stageMap).reduce((sum, s) => sum + (parseInt(s.rejection_qty, 10) || 0), 0);
+      const totalRemade   = Object.values(stageMap).reduce((sum, s) => sum + (parseInt(s.remade_qty,   10) || 0), 0);
+      const netQty = Math.max(originalQty - totalRejected + totalRemade, 0);
+      if (netQty !== originalQty) {
+        setQtyMismatchModal({ originalQty, netQty, breakdown: { totalRejected, totalRemade } });
+        return;
+      }
+    }
+    doMarkDone();
   };
 
   const handleUndo = async () => {
@@ -912,6 +984,15 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
 
   return (
     <div>
+      {/* Qty mismatch confirmation modal for QC trigger */}
+      {qtyMismatchModal && (
+        <QtyMismatchModal
+          {...qtyMismatchModal}
+          onConfirm={() => { setQtyMismatchModal(null); doMarkDone(); }}
+          onCancel={() => setQtyMismatchModal(null)}
+        />
+      )}
+
       {/* Back link */}
       <button
         className="flex items-center gap-1 text-sm text-brand-600 hover:text-brand-800 mb-4"
@@ -942,6 +1023,32 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
           </p>
         </div>
       )}
+
+      {/* Stage 29: show final qty summary so production can review before triggering QC */}
+      {stageDef.no === 29 && (() => {
+        const originalQty  = parseInt(card.qty, 10) || 0;
+        const totalRejected = Object.values(stageMap).reduce((sum, s) => sum + (parseInt(s.rejection_qty, 10) || 0), 0);
+        const totalRemade   = Object.values(stageMap).reduce((sum, s) => sum + (parseInt(s.remade_qty,   10) || 0), 0);
+        const netQty = Math.max(originalQty - totalRejected + totalRemade, 0);
+        const isShort = netQty < originalQty;
+        return (
+          <div className={`mb-4 p-3 rounded-xl border text-sm ${isShort ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-200'}`}>
+            <div className={`font-semibold mb-2 flex items-center gap-2 ${isShort ? 'text-orange-700' : 'text-green-700'}`}>
+              {isShort ? <AlertTriangle size={15} /> : <CheckCircle size={15} />}
+              Final Dispatchable Qty Summary
+            </div>
+            <div className="space-y-1 text-xs">
+              <div className="flex justify-between"><span className="text-gray-600">Original Job Card Qty</span><span className="font-medium">{originalQty} pcs</span></div>
+              {totalRejected > 0 && <div className="flex justify-between text-red-600"><span>Total Rejections</span><span className="font-medium">− {totalRejected} pcs</span></div>}
+              {totalRemade   > 0 && <div className="flex justify-between text-green-600"><span>Remade / Recovered</span><span className="font-medium">+ {totalRemade} pcs</span></div>}
+              <div className={`flex justify-between border-t pt-1 mt-1 font-semibold ${isShort ? 'border-orange-200 text-orange-700' : 'border-green-200 text-green-700'}`}>
+                <span>Final Dispatchable Qty</span><span>{netQty} pcs</span>
+              </div>
+              {isShort && <div className="text-orange-600 mt-1">⚠️ You will be asked to confirm this difference before sending to QC.</div>}
+            </div>
+          </div>
+        );
+      })()}
 
       {stageDef.no === 30 && !isDone && card.status !== 'qc_approved' && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl">

@@ -8,7 +8,15 @@ router.get('/', authenticate, authorize('design', 'owner', 'admin'), async (req,
     `SELECT jc.*, o.order_code, o.order_type, c.customer_code, c.name as customer_name,
        u.name as uploaded_by_name,
        (SELECT COUNT(*) FROM qc_reports WHERE job_card_id = jc.id) as report_count,
-       (jc.dispatch_date::date - CURRENT_DATE) as days_until_dispatch
+       (jc.dispatch_date::date - CURRENT_DATE) as days_until_dispatch,
+       GREATEST(
+         jc.qty
+           - COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
+           + COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0),
+         0
+       ) as net_qty,
+       COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0) as total_rejected,
+       COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0) as total_remade
      FROM job_cards jc
      JOIN orders o ON jc.order_id = o.id
      JOIN customers c ON o.customer_id = c.id
