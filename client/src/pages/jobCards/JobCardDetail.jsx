@@ -115,6 +115,44 @@ export default function JobCardDetail() {
         </div>
       </div>
 
+      {/* Qty Summary Bar */}
+      {jc.qty != null && (
+        (() => {
+          const originalQty = parseInt(jc.qty, 10) || 0;
+          const rejected    = parseInt(jc.total_rejected, 10) || 0;
+          const remade      = parseInt(jc.total_remade,   10) || 0;
+          const netQty      = jc.net_qty ?? Math.max(originalQty - rejected + remade, 0);
+          const isShort     = netQty < originalQty;
+          return (
+            <div className={`mb-5 rounded-xl border px-5 py-3 flex items-center gap-6 flex-wrap text-sm ${
+              isShort ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-200'
+            }`}>
+              <div className="flex items-center gap-1.5 text-gray-600">
+                <span className="text-xs uppercase tracking-wide font-semibold text-gray-500">Original Qty</span>
+                <span className="font-bold text-gray-900 ml-1">{originalQty}</span>
+              </div>
+              {rejected > 0 && (
+                <div className="flex items-center gap-1.5 text-red-600">
+                  <span className="text-xs uppercase tracking-wide font-semibold">Rejections</span>
+                  <span className="font-bold ml-1">− {rejected}</span>
+                </div>
+              )}
+              {remade > 0 && (
+                <div className="flex items-center gap-1.5 text-green-600">
+                  <span className="text-xs uppercase tracking-wide font-semibold">Remade</span>
+                  <span className="font-bold ml-1">+ {remade}</span>
+                </div>
+              )}
+              <div className={`flex items-center gap-1.5 ${isShort ? 'text-orange-700' : 'text-green-700'}`}>
+                <span className="text-xs uppercase tracking-wide font-semibold">Dispatchable Qty</span>
+                <span className="font-bold text-lg ml-1">{netQty}</span>
+                {isShort && <span className="text-xs font-normal text-orange-500 ml-0.5">({originalQty - netQty} short)</span>}
+              </div>
+            </div>
+          );
+        })()
+      )}
+
       {/* Tabs */}
       <div className="flex gap-1 mb-5 bg-gray-100 p-1 rounded-lg overflow-x-auto no-print">
         {tabs.map(t => (
@@ -181,6 +219,12 @@ export default function JobCardDetail() {
 }
 
 function OverviewTab({ jc }) {
+  const originalQty = parseInt(jc.qty, 10) || 0;
+  const rejected    = parseInt(jc.total_rejected, 10) || 0;
+  const remade      = parseInt(jc.total_remade,   10) || 0;
+  const netQty      = jc.net_qty ?? Math.max(originalQty - rejected + remade, 0);
+  const isShort     = netQty < originalQty;
+
   return (
     <div className="card p-5">
       <h2 className="section-title mb-4">Job Card Details</h2>
@@ -190,7 +234,6 @@ function OverviewTab({ jc }) {
           ['Product', jc.product_name || '—'],
           ['Drawing No', jc.drawing_no || '—'],
           ['Punching', jc.punching || '—'],
-          ['Quantity', jc.qty + ' Nos'],
           ['Dispatch Date', fmtDate(jc.dispatch_date)],
           ['Order', jc.order_code],
           ['Customer Code', jc.customer_code],
@@ -200,6 +243,18 @@ function OverviewTab({ jc }) {
             <dd className="text-sm font-medium text-gray-900 mt-1">{v}</dd>
           </div>
         ))}
+        {/* Qty breakdown */}
+        <div className="col-span-2 md:col-span-3">
+          <dt className="text-xs text-gray-500 uppercase tracking-wide mb-2">Quantity</dt>
+          <div className="flex items-center gap-4 flex-wrap text-sm">
+            <span className="text-gray-700">Original: <strong>{originalQty} Nos</strong></span>
+            {rejected > 0 && <span className="text-red-600">Rejected: <strong>− {rejected}</strong></span>}
+            {remade   > 0 && <span className="text-green-600">Remade: <strong>+ {remade}</strong></span>}
+            <span className={`font-semibold px-2 py-0.5 rounded-full text-xs ${isShort ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
+              Dispatchable: {netQty} Nos{isShort ? ` (${originalQty - netQty} short)` : ''}
+            </span>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -101,6 +101,18 @@ router.get('/:id', authenticate, async (req, res) => {
     ORDER BY pr.report_date DESC, pr.created_at DESC
   `, [req.params.id]);
 
+  // Qty summary from production checklist
+  const qtySummary = await db.get(`
+    SELECT
+      COALESCE(SUM(rejection_qty), 0) as total_rejected,
+      COALESCE(SUM(remade_qty),    0) as total_remade
+    FROM production_checklist
+    WHERE job_card_id = $1
+  `, [req.params.id]);
+  jc.total_rejected = parseInt(qtySummary?.total_rejected || 0, 10);
+  jc.total_remade   = parseInt(qtySummary?.total_remade   || 0, 10);
+  jc.net_qty        = Math.max((parseInt(jc.qty, 10) || 0) - jc.total_rejected + jc.total_remade, 0);
+
   res.json(jc);
 });
 
