@@ -640,6 +640,9 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const hasScrap = SCRAP_VALUE_STAGES.has(stageDef.no);
 
   const isDone = stageData.done === 1;
+  // After 6pm: require a photo for any stage completion
+  const isAfter6pm = new Date().getHours() >= 18;
+  const requiresPhoto = stageDef.photo || isAfter6pm; // always true for stages 24/29, also true after 6pm
   const rejQtyInt = parseInt(rejQty, 10) || 0;
   const canManage = ['production', 'owner', 'admin'].includes(user.role);
 
@@ -659,7 +662,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (!value1.trim()) return false;
       if (stageDef.fields.length > 1 && !value2.trim()) return false;
     }
-    if (stageDef.photo) return false; // photo stages use upload button
+    if (requiresPhoto) return false; // photo required — use upload button
     if (rejQtyInt > 2 && !rejPhoto) return false;
     if (stageDef.no === 28 && mandatoryMissing.length > 0) return false;
     if (stageDef.no === 29 && card.status !== 'qc_approved') return false;
@@ -694,6 +697,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     fd.append('remade_qty', remadeQty || '0');
     if (workerName) fd.append('worker_name', workerName);
     if (scrapValue) fd.append('scrap_value', scrapValue);
+    if (value1) fd.append('value1', value1);
+    if (value2) fd.append('value2', value2);
     if (stageDef.no === 29) fd.append('dispatched_qty', dispatchedQty || '0');
     try {
       await api.post(`/job-cards/${card.id}/checklist/${stageDef.no}/photo`, fd);
@@ -873,12 +878,14 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         </div>
       )}
 
-      {/* Stage photo (required for stages 24, 29) */}
-      {stageDef.photo && (
+      {/* Stage photo — always required for stages 24/29, and for any stage after 6pm */}
+      {requiresPhoto && (
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Stage Photo <span className="text-red-500">*</span>
-            <span className="text-xs text-gray-400 font-normal ml-2">(required to mark done)</span>
+            <span className="text-xs text-gray-400 font-normal ml-2">
+              {isAfter6pm && !stageDef.photo ? '(required after 6pm to mark done)' : '(required to mark done)'}
+            </span>
           </label>
           {stageData.photo_file ? (
             <div className="flex items-center gap-3">
@@ -1000,7 +1007,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               Undo Stage
             </button>
           )}
-          {!isDone && canManage && !stageDef.photo && (
+          {!isDone && canManage && !requiresPhoto && (
             <button
               className="btn-primary"
               onClick={handleMarkDone}

@@ -441,12 +441,11 @@ router.post('/:id/checklist/:stage/rejection-photo', authenticate, authorize('pr
   }
 );
 
-// ── POST upload stage photo (stages 24 = Cleaning, 29 = Dispatch) ─────────────
+// ── POST upload stage photo (any stage — required after 6pm, mandatory for stages 24 & 29) ──
 router.post('/:id/checklist/:stage/photo', authenticate, authorize('production', 'owner', 'admin'),
   ...uploadChecklistPhoto, async (req, res) => {
     const jobCardId = parseInt(req.params.id, 10);
     const stageNo   = parseInt(req.params.stage, 10);
-    if (![24, 29].includes(stageNo)) return res.status(400).json({ error: 'Only stages 24 and 29 support stage photos' });
     if (!req.file) return res.status(400).json({ error: 'File required' });
 
     const db = getDB();
@@ -467,6 +466,8 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
     const remQty = parseInt(req.body.remade_qty, 10) || 0;
     const workerName = req.body.worker_name || null;
     const scrapVal = req.body.scrap_value || null;
+    const value1 = req.body.value1 || null;
+    const value2 = req.body.value2 || null;
 
     if (rejQty > 2) {
       const existing = await db.get(
@@ -490,8 +491,8 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
 
     await db.run(`
       INSERT INTO production_checklist
-        (job_card_id, stage_no, done, photo_file, photo_original_name, rejection_qty, remade_qty, dispatched_qty, worker_name, scrap_value, done_at, updated_by, updated_at)
-      VALUES ($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+        (job_card_id, stage_no, done, photo_file, photo_original_name, rejection_qty, remade_qty, dispatched_qty, worker_name, scrap_value, value1, value2, done_at, updated_by, updated_at)
+      VALUES ($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
       ON CONFLICT(job_card_id, stage_no) DO UPDATE SET
         photo_file          = EXCLUDED.photo_file,
         photo_original_name = EXCLUDED.photo_original_name,
@@ -500,11 +501,13 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
         dispatched_qty      = EXCLUDED.dispatched_qty,
         worker_name         = EXCLUDED.worker_name,
         scrap_value         = EXCLUDED.scrap_value,
+        value1              = COALESCE(EXCLUDED.value1, production_checklist.value1),
+        value2              = COALESCE(EXCLUDED.value2, production_checklist.value2),
         done                = 1,
         done_at             = COALESCE(production_checklist.done_at, EXCLUDED.done_at),
         updated_by          = EXCLUDED.updated_by,
         updated_at          = NOW()
-    `, [jobCardId, stageNo, req.file.filename, req.file.originalname, rejQty, remQty, dispatchedQty, workerName, scrapVal, now, req.user.id]);
+    `, [jobCardId, stageNo, req.file.filename, req.file.originalname, rejQty, remQty, dispatchedQty, workerName, scrapVal, value1, value2, now, req.user.id]);
 
     if (rejQty > 2) {
       await triggerHold(db, jobCardId, stageNo, rejQty, req.user.id);
