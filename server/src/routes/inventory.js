@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadItemDrawing, deleteFromStorage } = require('../middleware/upload');
+const { consumeFIFO, createFIFOLot } = require('../lib/fifo');
 
 router.get('/', authenticate, async (req, res) => {
   res.json(await getDB().all('SELECT * FROM inventory_items ORDER BY category, item_code'));
@@ -104,11 +105,22 @@ router.post('/:id/transactions', authenticate, authorize('accounts', 'owner'), a
     if (newStock < 0) return res.status(400).json({ error: 'Insufficient stock' });
   }
 
+  // FIFO: consume lots on outbound; create lot on inbound (purchase_in, opening_stock)
+  let unitCostFifo = 0, totalCost = 0;
+  if (!isInbound) {
+    ({ unitCostFifo, totalCost } = await consumeFIFO(db, req.params.id, quantity));
+  } else if (['purchase_in', 'opening_stock'].includes(transaction_type)) {
+    const unitCostVal = parseFloat(req.body.unit_cost) || item.unit_cost || 0;
+    await createFIFOLot(db, req.params.id, quantity, unitCostVal);
+    unitCostFifo = unitCostVal;
+    totalCost = parseFloat(quantity) * unitCostVal;
+  }
+
   const r = await db.insert(
     `INSERT INTO inventory_transactions
-       (item_id, transaction_type, quantity, balance_after, job_card_id, supplier_name, po_number, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [req.params.id, transaction_type, quantity, newStock,
+       (item_id, transaction_type, quantity, balance_after, unit_cost_fifo, total_cost, job_card_id, supplier_name, po_number, notes, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [req.params.id, transaction_type, quantity, newStock, unitCostFifo, totalCost,
      job_card_id||null, supplier_name||null, po_number||null, notes||null, req.user.id]
   );
 

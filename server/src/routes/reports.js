@@ -243,4 +243,60 @@ router.delete('/templates/:id', authenticate, async (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// ── COGS Report ───────────────────────────────────────────────────────────────
+// GET /api/reports/cogs?year=2026
+// Returns monthly COGS grouped by month, with per-item breakdown
+router.get('/cogs', authenticate, async (req, res) => {
+  const db = getDB();
+  const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+
+  // Monthly summary
+  const monthly = await db.all(`
+    SELECT
+      TO_CHAR(t.created_at, 'YYYY-MM') AS month,
+      TO_CHAR(t.created_at, 'Mon YYYY') AS month_label,
+      SUM(t.total_cost) AS cogs,
+      COUNT(*) AS transactions,
+      SUM(t.quantity) AS total_qty
+    FROM inventory_transactions t
+    WHERE t.transaction_type = 'dispatch_to_production'
+      AND EXTRACT(YEAR FROM t.created_at) = $1
+      AND t.total_cost > 0
+    GROUP BY TO_CHAR(t.created_at, 'YYYY-MM'), TO_CHAR(t.created_at, 'Mon YYYY')
+    ORDER BY month ASC
+  `, [year]);
+
+  // Per-item breakdown for the year
+  const byItem = await db.all(`
+    SELECT
+      ii.item_code, ii.name, ii.unit,
+      TO_CHAR(t.created_at, 'YYYY-MM') AS month,
+      SUM(t.quantity) AS qty_consumed,
+      AVG(t.unit_cost_fifo) AS avg_unit_cost,
+      SUM(t.total_cost) AS item_cogs
+    FROM inventory_transactions t
+    JOIN inventory_items ii ON ii.id = t.item_id
+    WHERE t.transaction_type = 'dispatch_to_production'
+      AND EXTRACT(YEAR FROM t.created_at) = $1
+      AND t.total_cost > 0
+    GROUP BY ii.item_code, ii.name, ii.unit, TO_CHAR(t.created_at, 'YYYY-MM')
+    ORDER BY TO_CHAR(t.created_at, 'YYYY-MM') ASC, item_cogs DESC
+  `, [year]);
+
+  // Current FIFO lot value (inventory on hand at cost)
+  const inventoryValue = await db.get(`
+    SELECT COALESCE(SUM(qty_remaining * unit_cost), 0) AS total_value
+    FROM inventory_fifo_lots
+    WHERE qty_remaining > 0
+  `);
+
+  res.json({
+    year,
+    monthly,
+    byItem,
+    inventory_value: inventoryValue?.total_value || 0,
+    total_cogs: monthly.reduce((s, m) => s + parseFloat(m.cogs || 0), 0),
+  });
+});
+
 module.exports = router;

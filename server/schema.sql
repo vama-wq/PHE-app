@@ -196,6 +196,8 @@ CREATE TABLE IF NOT EXISTS inventory_transactions (
   )),
   quantity DOUBLE PRECISION NOT NULL,
   balance_after DOUBLE PRECISION NOT NULL,
+  unit_cost_fifo DOUBLE PRECISION DEFAULT 0,
+  total_cost DOUBLE PRECISION DEFAULT 0,
   job_card_id INTEGER REFERENCES job_cards(id),
   supplier_name TEXT,
   po_number TEXT,

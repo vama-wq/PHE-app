@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, deleteFromStorage } = require('../middleware/upload');
+const { consumeFIFO } = require('../lib/fifo');
 
 // ── Mentions ──────────────────────────────────────────────────────────────────
 router.get('/my-mentions', authenticate, async (req, res) => {
@@ -331,14 +332,20 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
     for (const sel of invSelections) {
       const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
       if (invItem) {
-        const newStock = Math.max((invItem.current_stock || 0) - parseFloat(sel.qty || 0), 0);
+        const qtyToConsume = parseFloat(sel.qty || 0);
+        const newStock = Math.max((invItem.current_stock || 0) - qtyToConsume, 0);
         await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+
+        // FIFO consumption — consume from oldest lots, get cost
+        const { unitCostFifo, totalCost } = await consumeFIFO(db, sel.inventory_item_id, qtyToConsume);
+
         const noteParts = [`Order: ${orderInfo?.order_code || req.params.id}`];
         if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
         await db.insert(
-          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-           VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
-          [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, noteParts.join(' | '), req.user.id]
+          `INSERT INTO inventory_transactions
+             (item_id, transaction_type, quantity, balance_after, unit_cost_fifo, total_cost, notes, created_by)
+           VALUES ($1,'dispatch_to_production',$2,$3,$4,$5,$6,$7)`,
+          [sel.inventory_item_id, qtyToConsume, newStock, unitCostFifo, totalCost, noteParts.join(' | '), req.user.id]
         );
       }
     }
