@@ -17,7 +17,13 @@ router.get('/', authenticate, async (req, res) => {
     SELECT jc.*, o.order_code, c.customer_code, u.name as uploaded_by_name,
       (jc.dispatch_date::date - CURRENT_DATE) as days_until_dispatch,
       (SELECT COUNT(*) FROM production_daily_reports WHERE job_card_id = jc.id) as report_count,
-      EXISTS(SELECT 1 FROM production_day_picks WHERE job_card_id = jc.id AND pick_date = $1) as picked_today
+      EXISTS(SELECT 1 FROM production_day_picks WHERE job_card_id = jc.id AND pick_date = $1) as picked_today,
+      GREATEST(
+        jc.qty
+          - COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
+          + COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0),
+        0
+      ) as net_qty
     FROM job_cards jc
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
