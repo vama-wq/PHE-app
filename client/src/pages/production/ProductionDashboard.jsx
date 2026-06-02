@@ -713,6 +713,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [remadeQty, setRemadeQty] = useState(String(stageData.remade_qty || 0));
   const [dispatchedQty, setDispatchedQty] = useState(String(stageData.dispatched_qty || ''));
   const [rejPhoto, setRejPhoto] = useState(stageData.rejection_photo_file || null);
+  // stagePhotoFile tracks the uploaded photo locally so the form stays open after upload
+  const [stagePhotoFile, setStagePhotoFile] = useState(stageData.photo_file || null);
   const [uploadingRejPhoto, setUploadingRejPhoto] = useState(false);
   const [uploadingStagePhoto, setUploadingStagePhoto] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -756,7 +758,12 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const isDone = stageData.done === 1;
   // After 6pm: require a photo for any stage completion
   const isAfter6pm = new Date().getHours() >= 18;
-  const requiresPhoto = stageDef.photo || isAfter6pm; // always true for stages 24/29, also true after 6pm
+  // photoAlwaysRequired: stages where upload IS the done action (Cleaning, Dispatch)
+  const photoAlwaysRequired = !!stageDef.photo;
+  // photoRequiredAfter6pm: after 6pm, photo needed but form stays open so rejection can be entered
+  const photoRequiredAfter6pm = isAfter6pm && !stageDef.photo;
+  // legacy alias used by UI below
+  const requiresPhoto = photoAlwaysRequired || photoRequiredAfter6pm;
   const rejQtyInt = parseInt(rejQty, 10) || 0;
   const canManage = ['production', 'owner', 'admin'].includes(user.role);
 
@@ -784,7 +791,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (!value1.trim()) return false;
       if (stageDef.fields.length > 1 && !value2.trim()) return false;
     }
-    if (requiresPhoto) return false; // photo required — use upload button
+    if (photoAlwaysRequired) return false; // photo upload IS the done action for these stages
+    if (photoRequiredAfter6pm && !stagePhotoFile) return false; // need photo first, then Mark Done
     if (rejQtyInt > 2 && !rejPhoto) return false;
     if (stageDef.no === 29 && mandatoryMissing.length > 0) return false;
     if (stageDef.no === 30 && card.status !== 'qc_approved') return false;
@@ -837,9 +845,19 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     if (v1) fd.append('value1', v1);
     if (v2) fd.append('value2', v2);
     if (stageDef.no === 30) fd.append('dispatched_qty', dispatchedQty || '0');
+    // For always-photo stages (Cleaning/Dispatch): upload = mark done immediately
+    // For after-6pm-only: just save the photo, keep form open so rejection can be filled
+    fd.append('mark_done', photoAlwaysRequired ? 'true' : 'false');
     try {
-      await api.post(`/job-cards/${card.id}/checklist/${stageDef.no}/photo`, fd);
-      await onSaved();
+      const r = await api.post(`/job-cards/${card.id}/checklist/${stageDef.no}/photo`, fd);
+      if (photoAlwaysRequired) {
+        // Upload IS the done action — navigate away
+        await onSaved();
+      } else {
+        // After-6pm: photo saved, stay on form so rejection qty can be entered
+        setStagePhotoFile(r.data.file_name);
+        setUploadingStagePhoto(false);
+      }
     } catch (e) {
       setError(e.response?.data?.error || 'Failed to upload photo');
       setUploadingStagePhoto(false);
@@ -1177,22 +1195,25 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         </div>
       )}
 
-      {/* Stage photo — always required for stages 24/29, and for any stage after 6pm */}
+      {/* Stage photo */}
       {requiresPhoto && (
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Stage Photo <span className="text-red-500">*</span>
             <span className="text-xs text-gray-400 font-normal ml-2">
-              {isAfter6pm && !stageDef.photo ? '(required after 6pm to mark done)' : '(required to mark done)'}
+              {photoRequiredAfter6pm
+                ? stagePhotoFile ? '✓ Photo uploaded — fill in rejection details below then Mark Done'
+                                 : '(upload photo first, then Mark Done)'
+                : '(required to mark done)'}
             </span>
           </label>
-          {stageData.photo_file ? (
+          {stagePhotoFile ? (
             <div className="flex items-center gap-3">
-              <a href={`/uploads/checklist-photos/${stageData.photo_file}`} target="_blank" rel="noopener noreferrer">
-                <img src={`/uploads/checklist-photos/${stageData.photo_file}`}
+              <a href={`/uploads/checklist-photos/${stagePhotoFile}`} target="_blank" rel="noopener noreferrer">
+                <img src={`/uploads/checklist-photos/${stagePhotoFile}`}
                   alt="stage photo" className="w-16 h-16 object-cover rounded-lg border border-green-200 hover:opacity-90" />
               </a>
-              {canManage && (
+              {canManage && !isDone && (
                 <label className="btn-secondary btn-sm text-xs cursor-pointer">
                   Replace
                   <input type="file" accept=".jpg,.jpeg,.png,.webp" className="hidden"
@@ -1202,7 +1223,12 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
             </div>
           ) : canManage ? (
             <label className={`inline-flex items-center gap-2 btn-secondary cursor-pointer ${uploadingStagePhoto ? 'opacity-50 pointer-events-none' : ''}`}>
-              <ImageIcon size={15} /> {uploadingStagePhoto ? 'Uploading...' : 'Upload Photo to Mark Done'}
+              <ImageIcon size={15} />
+              {uploadingStagePhoto
+                ? 'Uploading...'
+                : photoRequiredAfter6pm
+                  ? 'Upload Photo (required after 6pm)'
+                  : 'Upload Photo to Mark Done'}
               <input type="file" accept=".jpg,.jpeg,.png,.webp" className="hidden"
                 onChange={e => e.target.files[0] && uploadStagePhoto(e.target.files[0])} />
             </label>
@@ -1306,7 +1332,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               Undo Stage
             </button>
           )}
-          {!isDone && canManage && !requiresPhoto && (
+          {!isDone && canManage && (!requiresPhoto || (photoRequiredAfter6pm && stagePhotoFile)) && (
             <button
               className="btn-primary"
               onClick={handleMarkDone}

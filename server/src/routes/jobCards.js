@@ -454,12 +454,14 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
       });
     }
 
-    const rejQty = parseInt(req.body.rejection_qty, 10) || 0;
-    const remQty = parseInt(req.body.remade_qty, 10) || 0;
+    const rejQty    = parseInt(req.body.rejection_qty, 10) || 0;
+    const remQty    = parseInt(req.body.remade_qty, 10) || 0;
     const workerName = req.body.worker_name || null;
-    const scrapVal = req.body.scrap_value || null;
-    const value1 = req.body.value1 || null;
-    const value2 = req.body.value2 || null;
+    const scrapVal  = req.body.scrap_value || null;
+    const value1    = req.body.value1 || null;
+    const value2    = req.body.value2 || null;
+    // mark_done=false means: just save the photo, keep stage incomplete (used for after-6pm flow)
+    const markDone  = req.body.mark_done !== 'false';
 
     if (rejQty > 2) {
       const existing = await db.get(
@@ -484,7 +486,7 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
     await db.run(`
       INSERT INTO production_checklist
         (job_card_id, stage_no, done, photo_file, photo_original_name, rejection_qty, remade_qty, dispatched_qty, worker_name, scrap_value, value1, value2, done_at, updated_by, updated_at)
-      VALUES ($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+      VALUES ($1,$2,CASE WHEN $14 THEN 1 ELSE 0 END,$3,$4,$5,$6,$7,$8,$9,$10,$11,CASE WHEN $14 THEN $12 ELSE NULL END,$13,NOW())
       ON CONFLICT(job_card_id, stage_no) DO UPDATE SET
         photo_file          = EXCLUDED.photo_file,
         photo_original_name = EXCLUDED.photo_original_name,
@@ -495,19 +497,21 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
         scrap_value         = EXCLUDED.scrap_value,
         value1              = COALESCE(EXCLUDED.value1, production_checklist.value1),
         value2              = COALESCE(EXCLUDED.value2, production_checklist.value2),
-        done                = 1,
-        done_at             = COALESCE(production_checklist.done_at, EXCLUDED.done_at),
+        done                = CASE WHEN $14 THEN 1 ELSE production_checklist.done END,
+        done_at             = CASE WHEN $14 AND production_checklist.done_at IS NULL THEN EXCLUDED.done_at ELSE production_checklist.done_at END,
         updated_by          = EXCLUDED.updated_by,
         updated_at          = NOW()
-    `, [jobCardId, stageNo, req.file.filename, req.file.originalname, rejQty, remQty, dispatchedQty, workerName, scrapVal, value1, value2, now, req.user.id]);
+    `, [jobCardId, stageNo, req.file.filename, req.file.originalname, rejQty, remQty, dispatchedQty, workerName, scrapVal, value1, value2, now, req.user.id, markDone]);
 
-    if (rejQty > 2) {
-      await triggerHold(db, jobCardId, stageNo, rejQty, req.user.id);
-      return res.json({ file_name: req.file.filename, on_hold: true });
+    if (markDone) {
+      if (rejQty > 2) {
+        await triggerHold(db, jobCardId, stageNo, rejQty, req.user.id);
+        return res.json({ file_name: req.file.filename, on_hold: true });
+      }
+      await updateJobCardAfterStageChange(db, jobCardId, req.user.id);
     }
 
-    await updateJobCardAfterStageChange(db, jobCardId, req.user.id);
-    res.json({ file_name: req.file.filename, original_name: req.file.originalname });
+    res.json({ file_name: req.file.filename, original_name: req.file.originalname, marked_done: markDone });
   }
 );
 
