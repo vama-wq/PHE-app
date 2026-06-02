@@ -18,7 +18,7 @@ export default function QCDashboard() {
   const [loading, setLoading] = useState(true);
   const [reportModal, setReportModal] = useState(null); // card to upload report for
   const [rejectModal, setRejectModal] = useState(null); // card to reject
-  const [approveModal, setApproveModal] = useState(null); // card to approve (IO split)
+  const [approveModal, setApproveModal] = useState(null); // card to approve (destination modal)
   const [expandedId, setExpandedId] = useState(null);
 
   // Purchase material QC
@@ -42,17 +42,8 @@ export default function QCDashboard() {
   useEffect(() => { load(); }, []);
 
   const handleApprove = (card) => {
-    // IO types need a split modal; pure HE types just confirm
-    if (card.order_type === 'inventory_order' ||
-        card.order_type === 'io_export_he' ||
-        card.order_type === 'io_local_he') {
-      setApproveModal(card);
-    } else {
-      if (!window.confirm('Approve QC for this job card? It will proceed to dispatch.')) return;
-      api.put(`/qc/${card.id}/approve`)
-        .then(() => load())
-        .catch(e => alert(e.response?.data?.error || 'Failed to approve'));
-    }
+    // Always show the destination modal — ask where the heaters are going
+    setApproveModal(card);
   };
 
   return (
@@ -242,7 +233,7 @@ export default function QCDashboard() {
       )}
 
       {approveModal && (
-        <IOApproveModal
+        <ApproveDestinationModal
           card={approveModal}
           onClose={() => setApproveModal(null)}
           onSaved={() => { setApproveModal(null); load(); }}
@@ -589,26 +580,35 @@ function MaterialQCModal({ po, onClose, onSaved }) {
   );
 }
 
-// ── IO Approve Modal ──────────────────────────────────────────────────────────
-function IOApproveModal({ card, onClose, onSaved }) {
-  const isSplit = card.order_type === 'io_export_he' || card.order_type === 'io_local_he';
-  const isIO    = card.order_type === 'inventory_order';
-  const [ioQty,       setIoQty]       = useState('');
-  const [dispatchQty, setDispatchQty] = useState('');
-  const [saving,      setSaving]      = useState(false);
-  const [error,       setError]       = useState('');
+// ── Approve Destination Modal (all order types) ───────────────────────────────
+function ApproveDestinationModal({ card, onClose, onSaved }) {
+  // Default destination based on order type
+  const defaultDest = () => {
+    if (card.order_type === 'inventory_order') return 'finished_goods';
+    if (card.order_type === 'io_export_he' || card.order_type === 'io_local_he') return 'both';
+    return 'dispatch'; // local_he, export_he, etc.
+  };
 
-  const dispatchLabel = card.order_type === 'io_export_he' ? 'Export HE Dispatch' : 'Local HE Dispatch';
+  const [destination, setDestination] = useState(defaultDest);
+  const [fgQty,        setFgQty]       = useState('');
+  const [dispatchQty,  setDispatchQty] = useState('');
+  const [saving,       setSaving]      = useState(false);
+  const [error,        setError]       = useState('');
 
   const handleSubmit = async () => {
     setError('');
-    if (!ioQty || parseInt(ioQty) <= 0) return setError('IO quantity is required');
-    if (isSplit && (!dispatchQty || parseInt(dispatchQty) <= 0)) return setError('Dispatch quantity is required');
+    if (destination === 'finished_goods' && (!fgQty || parseInt(fgQty) <= 0))
+      return setError('Finished Goods quantity is required');
+    if (destination === 'both') {
+      if (!fgQty || parseInt(fgQty) <= 0) return setError('Finished Goods quantity is required');
+      if (!dispatchQty || parseInt(dispatchQty) <= 0) return setError('Dispatch quantity is required');
+    }
     setSaving(true);
     try {
       await api.put(`/qc/${card.id}/approve`, {
-        io_qty:       parseInt(ioQty),
-        dispatch_qty: isSplit ? parseInt(dispatchQty) : undefined,
+        heater_destination: destination,
+        io_qty:       (destination === 'finished_goods' || destination === 'both') ? parseInt(fgQty) : undefined,
+        dispatch_qty: destination === 'both' ? parseInt(dispatchQty) : undefined,
       });
       onSaved();
     } catch (e) {
@@ -617,39 +617,67 @@ function IOApproveModal({ card, onClose, onSaved }) {
     }
   };
 
+  const destinations = [
+    { key: 'dispatch',       label: '🚚 Dispatch',       desc: 'Heaters go directly to customer dispatch' },
+    { key: 'finished_goods', label: '📦 Finished Goods', desc: 'Heaters go to the Finished Goods store' },
+    { key: 'both',           label: '↕️ Both',            desc: 'Split — some to Finished Goods, some to Dispatch' },
+  ];
+
   return (
-    <Modal open title="QC Approval — IO Routing" onClose={onClose} size="sm">
+    <Modal open title="QC Approval — Where are these heaters going?" onClose={onClose} size="sm">
       <div className="space-y-4">
-        <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-sm">
-          <p className="font-semibold text-amber-800">{card.job_card_no} · {card.order_code}</p>
-          <p className="text-amber-700 mt-0.5">
-            {isIO
-              ? 'This is an Inventory Order — all finished goods will go to the Finished Goods store.'
-              : `This order is split — specify how many go to Finished Goods (IO) and how many go to ${dispatchLabel}.`}
-          </p>
+        {/* Job card info */}
+        <div className="bg-green-50 border border-green-100 rounded-lg p-3 text-sm">
+          <p className="font-semibold text-green-800">{card.job_card_no} · {card.order_code}</p>
+          <p className="text-green-700 mt-0.5">{card.customer_name || card.customer_code} · Qty: {card.qty || '—'}</p>
         </div>
 
+        {/* Destination selector */}
         <div>
-          <label className="label">Qty → Finished Goods (IO) <span className="text-red-500">*</span></label>
-          <input
-            className="input"
-            type="number" min="1"
-            value={ioQty}
-            onChange={e => setIoQty(e.target.value)}
-            placeholder="Units going into Finished Goods store"
-          />
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Heater Destination <span className="text-red-500">*</span>
+          </label>
+          <div className="space-y-2">
+            {destinations.map(d => (
+              <button
+                key={d.key}
+                type="button"
+                onClick={() => setDestination(d.key)}
+                className={`w-full flex items-start gap-3 px-4 py-3 rounded-xl border-2 text-left transition-colors ${
+                  destination === d.key
+                    ? 'bg-brand-50 border-brand-500'
+                    : 'border-gray-200 hover:border-brand-300'
+                }`}
+              >
+                <div className={`w-4 h-4 rounded-full border-2 mt-0.5 flex-shrink-0 ${
+                  destination === d.key ? 'border-brand-600 bg-brand-600' : 'border-gray-300'
+                }`} />
+                <div>
+                  <div className={`text-sm font-semibold ${destination === d.key ? 'text-brand-700' : 'text-gray-700'}`}>
+                    {d.label}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5">{d.desc}</div>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
 
-        {isSplit && (
+        {/* Qty inputs for FG / Both */}
+        {(destination === 'finished_goods' || destination === 'both') && (
           <div>
-            <label className="label">Qty → {dispatchLabel} <span className="text-red-500">*</span></label>
-            <input
-              className="input"
-              type="number" min="1"
-              value={dispatchQty}
-              onChange={e => setDispatchQty(e.target.value)}
-              placeholder="Units going to dispatch"
-            />
+            <label className="label">Qty → Finished Goods <span className="text-red-500">*</span></label>
+            <input className="input" type="number" min="1"
+              value={fgQty} onChange={e => setFgQty(e.target.value)}
+              placeholder="Units going into Finished Goods store" />
+          </div>
+        )}
+        {destination === 'both' && (
+          <div>
+            <label className="label">Qty → Dispatch <span className="text-red-500">*</span></label>
+            <input className="input" type="number" min="1"
+              value={dispatchQty} onChange={e => setDispatchQty(e.target.value)}
+              placeholder="Units going to dispatch" />
           </div>
         )}
 
