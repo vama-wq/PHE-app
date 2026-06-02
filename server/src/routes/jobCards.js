@@ -275,7 +275,13 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   await db.run('UPDATE job_cards SET current_stage=$1, status=$2 WHERE id=$3', [maxStage, newStatus, jobCardId]);
 
   if (newStatus !== jc.status) {
-    if (newStatus === 'qc_pending') {
+    if (newStatus === 'in_progress') {
+      // Move order to in_progress as soon as any job card starts production
+      await db.run(
+        "UPDATE orders SET status='in_progress' WHERE id=$1 AND status IN ('approved','job_card_created')",
+        [jc.order_id]
+      );
+    } else if (newStatus === 'qc_pending') {
       await logActivity(jc.order_id, jobCardId, 'status_changed',
         `Job card ${jc.job_card_no} moved to QC Pending`, userId);
     } else if (newStatus === 'dispatched') {
