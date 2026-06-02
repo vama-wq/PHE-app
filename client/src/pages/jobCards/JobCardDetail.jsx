@@ -36,14 +36,6 @@ export default function JobCardDetail() {
   if (!jc) return <div className="p-8 text-center text-red-500">Job card not found</div>;
 
   const days = daysUntil(jc.dispatch_date);
-
-  // Qty summary — computed once, used in summary bar + overview tab
-  const originalQty   = parseInt(jc.qty, 10) || 0;
-  const totalRejected = parseInt(jc.total_rejected, 10) || 0;
-  const totalRemade   = parseInt(jc.total_remade,   10) || 0;
-  const netQty        = jc.net_qty != null ? parseInt(jc.net_qty, 10) : Math.max(originalQty - totalRejected + totalRemade, 0);
-  const isQtyShort    = netQty < originalQty;
-
   const canAddAssembly = user.role === 'owner';
   const canUploadDrawing = ['design', 'owner'].includes(user.role);
   const canUpdateRawMaterial = ['accounts', 'owner'].includes(user.role);
@@ -123,33 +115,6 @@ export default function JobCardDetail() {
         </div>
       </div>
 
-      {/* Qty Summary Bar */}
-      <div className={`mb-5 rounded-xl border px-5 py-3 flex items-center gap-6 flex-wrap text-sm ${
-        isQtyShort ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-200'
-      }`}>
-        <div className="flex items-center gap-2 text-gray-600">
-          <span className="text-xs uppercase tracking-wide font-semibold text-gray-500">Original Qty</span>
-          <span className="font-bold text-gray-900">{originalQty}</span>
-        </div>
-        {totalRejected > 0 && (
-          <div className="flex items-center gap-2 text-red-600">
-            <span className="text-xs uppercase tracking-wide font-semibold">Rejections</span>
-            <span className="font-bold">− {totalRejected}</span>
-          </div>
-        )}
-        {totalRemade > 0 && (
-          <div className="flex items-center gap-2 text-green-600">
-            <span className="text-xs uppercase tracking-wide font-semibold">Remade</span>
-            <span className="font-bold">+ {totalRemade}</span>
-          </div>
-        )}
-        <div className={`flex items-center gap-2 ${isQtyShort ? 'text-orange-700' : 'text-green-700'}`}>
-          <span className="text-xs uppercase tracking-wide font-semibold">Dispatchable Qty</span>
-          <span className="font-bold text-lg">{netQty}</span>
-          {isQtyShort && <span className="text-xs font-normal text-orange-500">({originalQty - netQty} short)</span>}
-        </div>
-      </div>
-
       {/* Tabs */}
       <div className="flex gap-1 mb-5 bg-gray-100 p-1 rounded-lg overflow-x-auto no-print">
         {tabs.map(t => (
@@ -163,7 +128,7 @@ export default function JobCardDetail() {
       </div>
 
       {/* Tab Content */}
-      {activeTab === 'overview' && <OverviewTab jc={jc} originalQty={originalQty} totalRejected={totalRejected} totalRemade={totalRemade} netQty={netQty} isQtyShort={isQtyShort} />}
+      {activeTab === 'overview' && <OverviewTab jc={jc} />}
       {activeTab === 'assemblies' && (
         <AssembliesTab jc={jc} canAdd={canAddAssembly} canEdit={canAddAssembly || canUpdateRawMaterial}
           userRole={user.role} onAdd={() => setShowAssemblyModal(true)}
@@ -215,7 +180,7 @@ export default function JobCardDetail() {
   );
 }
 
-function OverviewTab({ jc, originalQty, totalRejected, totalRemade, netQty, isQtyShort }) {
+function OverviewTab({ jc }) {
   return (
     <div className="card p-5">
       <h2 className="section-title mb-4">Job Card Details</h2>
@@ -225,6 +190,7 @@ function OverviewTab({ jc, originalQty, totalRejected, totalRemade, netQty, isQt
           ['Product', jc.product_name || '—'],
           ['Drawing No', jc.drawing_no || '—'],
           ['Punching', jc.punching || '—'],
+          ['Quantity', jc.qty + ' Nos'],
           ['Dispatch Date', fmtDate(jc.dispatch_date)],
           ['Order', jc.order_code],
           ['Customer Code', jc.customer_code],
@@ -234,18 +200,6 @@ function OverviewTab({ jc, originalQty, totalRejected, totalRemade, netQty, isQt
             <dd className="text-sm font-medium text-gray-900 mt-1">{v}</dd>
           </div>
         ))}
-        {/* Qty breakdown */}
-        <div className="col-span-2 md:col-span-3">
-          <dt className="text-xs text-gray-500 uppercase tracking-wide mb-2">Quantity</dt>
-          <div className="flex items-center gap-4 flex-wrap text-sm">
-            <span className="text-gray-700">Original: <strong>{originalQty} Nos</strong></span>
-            {totalRejected > 0 && <span className="text-red-600">Rejected: <strong>− {totalRejected}</strong></span>}
-            {totalRemade   > 0 && <span className="text-green-600">Remade: <strong>+ {totalRemade}</strong></span>}
-            <span className={`font-semibold px-2 py-0.5 rounded-full text-xs ${isQtyShort ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
-              Dispatchable: {netQty} Nos{isQtyShort ? ` (${originalQty - netQty} short)` : ''}
-            </span>
-          </div>
-        </div>
       </div>
     </div>
   );
