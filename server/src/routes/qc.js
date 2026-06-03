@@ -217,7 +217,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
       const qty = io_qty != null ? parseInt(io_qty) : netQty;
       if (!qty || qty <= 0) return res.status(400).json({ error: 'Finished Goods quantity must be greater than 0' });
       const fgId = await createFinishedGoodsEntry(qty);
-      await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
+      await db.run("UPDATE job_cards SET status='qc_approved', qc_route='finished_goods', qc_fg_qty=$1, qc_dispatch_qty=0 WHERE id=$2", [qty, req.params.id]);
       await logActivity(jc.order_id, jc.id, 'status_changed',
         `Job card ${jc.job_card_no} QC Approved — ${qty} units added to Finished Goods`, req.user.id);
       await syncOrderStatus(db, jc.order_id, req.user.id);
@@ -233,25 +233,26 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
         return res.status(400).json({ error: `Total (${parsedFgQty + parsedDispQty}) exceeds net finished qty (${netQty})` });
       }
       const fgId = await createFinishedGoodsEntry(parsedFgQty, `Split: ${parsedFgQty} Finished Goods + ${parsedDispQty} dispatch`);
-      await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
+      await db.run("UPDATE job_cards SET status='qc_approved', qc_route='both', qc_fg_qty=$1, qc_dispatch_qty=$2 WHERE id=$3", [parsedFgQty, parsedDispQty, req.params.id]);
       await logActivity(jc.order_id, jc.id, 'status_changed',
         `Job card ${jc.job_card_no} QC Approved — ${parsedFgQty} units to Finished Goods, ${parsedDispQty} to dispatch`, req.user.id);
       await syncOrderStatus(db, jc.order_id, req.user.id);
       return res.json({ message: 'QC Approved', route: 'both', finished_good_id: fgId, io_qty: parsedFgQty, dispatch_qty: parsedDispQty });
     }
 
-    // Default: dispatch
-    await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
-    await logActivity(jc.order_id, jc.id, 'status_changed', `Job card ${jc.job_card_no} QC Approved — going to dispatch`, req.user.id);
+    // Default: dispatch — entire net qty goes to dispatch
+    const dispQty = parseInt(dispatch_qty) > 0 ? parseInt(dispatch_qty) : netQty;
+    await db.run("UPDATE job_cards SET status='qc_approved', qc_route='dispatch', qc_dispatch_qty=$1, qc_fg_qty=0 WHERE id=$2", [dispQty, req.params.id]);
+    await logActivity(jc.order_id, jc.id, 'status_changed', `Job card ${jc.job_card_no} QC Approved — ${dispQty} units going to dispatch`, req.user.id);
     await syncOrderStatus(db, jc.order_id, req.user.id);
-    return res.json({ message: 'QC Approved', route: 'dispatch' });
+    return res.json({ message: 'QC Approved', route: 'dispatch', dispatch_qty: dispQty });
   }
 
   if (orderType === 'inventory_order') {
     const qty = io_qty != null ? parseInt(io_qty) : netQty;
     if (!qty || qty <= 0) return res.status(400).json({ error: 'IO quantity must be greater than 0' });
     const fgId = await createFinishedGoodsEntry(qty);
-    await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
+    await db.run("UPDATE job_cards SET status='qc_approved', qc_route='finished_goods', qc_fg_qty=$1, qc_dispatch_qty=0 WHERE id=$2", [qty, req.params.id]);
     await logActivity(jc.order_id, jc.id, 'status_changed',
       `Job card ${jc.job_card_no} QC Approved — ${qty} units added to Finished Goods`, req.user.id);
     await syncOrderStatus(db, jc.order_id, req.user.id);
@@ -267,7 +268,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
       return res.status(400).json({ error: `Total (${parsedIoQty + parsedDispatchQty}) exceeds net finished qty (${netQty})` });
     }
     const fgId = await createFinishedGoodsEntry(parsedIoQty, `Split: ${parsedIoQty} IO + ${parsedDispatchQty} dispatch`);
-    await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
+    await db.run("UPDATE job_cards SET status='qc_approved', qc_route='split', qc_fg_qty=$1, qc_dispatch_qty=$2 WHERE id=$3", [parsedIoQty, parsedDispatchQty, req.params.id]);
     await logActivity(jc.order_id, jc.id, 'status_changed',
       `Job card ${jc.job_card_no} QC Approved — ${parsedIoQty} units to Finished Goods, ${parsedDispatchQty} to dispatch`, req.user.id);
     await syncOrderStatus(db, jc.order_id, req.user.id);
@@ -275,7 +276,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   }
 
   // Fallback
-  await db.run("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [req.params.id]);
+  await db.run("UPDATE job_cards SET status='qc_approved', qc_route='dispatch', qc_dispatch_qty=$1, qc_fg_qty=0 WHERE id=$2", [netQty, req.params.id]);
   await logActivity(jc.order_id, jc.id, 'status_changed', `Job card ${jc.job_card_no} QC Approved`, req.user.id);
   await syncOrderStatus(db, jc.order_id, req.user.id);
   res.json({ message: 'QC Approved', route: 'dispatch' });
