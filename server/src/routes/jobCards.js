@@ -259,9 +259,12 @@ async function syncOrderStatus(db, orderId, userId) {
   const statuses = cards.map(c => c.status);
   let newOrderStatus;
 
+  const nonDispatched = statuses.filter(s => s !== 'dispatched');
+
   if (statuses.every(s => s === 'dispatched')) {
     newOrderStatus = 'dispatched';
-  } else if (statuses.some(s => s === 'qc_approved')) {
+  } else if (nonDispatched.length > 0 && nonDispatched.every(s => s === 'qc_approved')) {
+    // All remaining (non-dispatched) cards must be qc_approved
     newOrderStatus = 'qc_approved';
   } else if (statuses.some(s => s === 'qc_pending')) {
     newOrderStatus = 'qc_pending';
