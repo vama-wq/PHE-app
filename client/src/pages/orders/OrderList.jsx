@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
@@ -25,28 +25,43 @@ function validateItem(f) {
 export default function OrderList() {
   const { user } = useAuthStore();
   const [orders, setOrders] = useState([]);
-  const [filtered, setFiltered] = useState([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [clientFilter, setClientFilter] = useState('');
+  const [productFilter, setProductFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => { load(); }, []);
-  useEffect(() => {
+
+  // Derive unique client codes and product codes from loaded orders
+  const clientOptions = useMemo(() => [...new Set(orders.map(o => o.customer_code).filter(Boolean))].sort(), [orders]);
+  const productOptions = useMemo(() => {
+    const all = orders.flatMap(o => (o.product_codes || '').split(',').map(p => p.trim()).filter(Boolean));
+    return [...new Set(all)].sort();
+  }, [orders]);
+
+  const filtered = useMemo(() => {
     let r = orders;
-    if (search) r = r.filter(o =>
-      o.order_code.toLowerCase().includes(search.toLowerCase()) ||
-      o.customer_code.toLowerCase().includes(search.toLowerCase()) ||
-      (o.customer_name && o.customer_name.toLowerCase().includes(search.toLowerCase()))
-    );
+    if (search) {
+      const s = search.toLowerCase();
+      r = r.filter(o =>
+        o.order_code.toLowerCase().includes(s) ||
+        o.customer_code.toLowerCase().includes(s) ||
+        (o.customer_name && o.customer_name.toLowerCase().includes(s)) ||
+        (o.product_codes && o.product_codes.toLowerCase().includes(s))
+      );
+    }
     if (statusFilter) r = r.filter(o => o.status === statusFilter);
-    setFiltered(r);
-  }, [orders, search, statusFilter]);
+    if (clientFilter) r = r.filter(o => o.customer_code === clientFilter);
+    if (productFilter) r = r.filter(o => (o.product_codes || '').split(',').map(p => p.trim()).includes(productFilter));
+    return r;
+  }, [orders, search, statusFilter, clientFilter, productFilter]);
 
   async function load() {
     setLoading(true);
-    try { const r = await api.get('/orders'); setOrders(r.data); setFiltered(r.data); }
+    try { const r = await api.get('/orders'); setOrders(r.data); }
     finally { setLoading(false); }
   }
 
@@ -75,13 +90,21 @@ export default function OrderList() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3 mb-5">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex flex-wrap gap-3 mb-5">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
-          <input className="input pl-9" placeholder="Search order code, customer..." value={search}
+          <input className="input pl-9" placeholder="Search order code, customer, product..." value={search}
             onChange={e => setSearch(e.target.value)} />
         </div>
-        <select className="input max-w-[200px]" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+        <select className="input max-w-[180px]" value={clientFilter} onChange={e => setClientFilter(e.target.value)}>
+          <option value="">All Clients</option>
+          {clientOptions.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select className="input max-w-[200px]" value={productFilter} onChange={e => setProductFilter(e.target.value)}>
+          <option value="">All Products</option>
+          {productOptions.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <select className="input max-w-[180px]" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
           <option value="">All Statuses</option>
           <option value="pending_approval">Pending Approval</option>
           <option value="approved">Approved</option>
@@ -93,6 +116,12 @@ export default function OrderList() {
           <option value="dispatched">Dispatched</option>
           <option value="rejected">Rejected</option>
         </select>
+        {(search || clientFilter || productFilter || statusFilter) && (
+          <button className="btn-ghost text-sm flex items-center gap-1 text-gray-500"
+            onClick={() => { setSearch(''); setClientFilter(''); setProductFilter(''); setStatusFilter(''); }}>
+            <X size={14} /> Clear
+          </button>
+        )}
       </div>
 
       {/* Table */}
