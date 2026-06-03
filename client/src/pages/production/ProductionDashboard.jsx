@@ -819,6 +819,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [rejQty, setRejQty] = useState(String(stageData.rejection_qty || 0));
   const [remadeQty, setRemadeQty] = useState(String(stageData.remade_qty || 0));
   const [dispatchedQty, setDispatchedQty] = useState(String(stageData.dispatched_qty || ''));
+  const [dispatchRemadeQty, setDispatchRemadeQty] = useState(String(stageData.remade_qty || ''));
+  const [dispatchRemadeReason, setDispatchRemadeReason] = useState(stageData.value1 || '');
   const [rejPhoto, setRejPhoto] = useState(stageData.rejection_photo_file || null);
   // stagePhotoFile tracks the uploaded photo locally so the form stays open after upload
   const [stagePhotoFile, setStagePhotoFile] = useState(stageData.photo_file || null);
@@ -904,7 +906,10 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     if (rejQtyInt > 2 && !rejPhoto) return false;
     if (stageDef.no === 29 && mandatoryMissing.length > 0) return false;
     if (stageDef.no === 30 && card.status !== 'qc_approved') return false;
-    if (stageDef.no === 30 && !(parseInt(dispatchedQty, 10) > 0)) return false;
+    const dQty = parseInt(dispatchedQty, 10);
+    if (stageDef.no === 30 && !(dQty > 0)) return false;
+    if (stageDef.no === 30 && dQty > (card.net_qty ?? card.qty ?? Infinity)) return false;
+    if (stageDef.no === 30 && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim()) return false;
     return true;
   };
 
@@ -977,14 +982,16 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     setError('');
     try {
       const { v1, v2 } = buildValues();
+      const isDispatch = stageDef.no === 30;
       await api.put(`/job-cards/${card.id}/checklist/${stageDef.no}`, {
         done: true,
-        value1: v1,
-        value2: v2,
-        rejection_qty: rejQtyInt,
-        remade_qty: parseInt(remadeQty, 10) || 0,
+        value1: isDispatch ? (dispatchRemadeReason || null) : v1,
+        value2: isDispatch ? null : v2,
+        rejection_qty: isDispatch ? 0 : rejQtyInt,
+        remade_qty: isDispatch ? (parseInt(dispatchRemadeQty, 10) || 0) : (parseInt(remadeQty, 10) || 0),
         worker_name: workerName || null,
         scrap_value: scrapValue || null,
+        ...(isDispatch ? { dispatched_qty: parseInt(dispatchedQty, 10) } : {}),
       });
       await onSaved();
     } catch (e) {
@@ -1107,23 +1114,71 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         </div>
       )}
 
-      {/* Dispatched quantity (stage 29 only) */}
+      {/* Dispatch fields (stage 30) */}
       {stageDef.no === 30 && (
-        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-xl">
-          <label className="block text-sm font-semibold text-blue-800 mb-1.5">
-            Final Dispatched Quantity <span className="text-red-500">*</span>
-          </label>
-          <input
-            className="input w-full"
-            type="number"
-            min="1"
-            placeholder={`Planned qty: ${card.qty || '—'}`}
-            value={dispatchedQty}
-            onChange={e => setDispatchedQty(e.target.value)}
-            disabled={isDone}
-          />
-          {isDone && stageData.dispatched_qty && (
-            <p className="text-xs text-blue-600 mt-1">Dispatched: <strong>{stageData.dispatched_qty} units</strong></p>
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-xl space-y-3">
+          <div>
+            <label className="block text-sm font-semibold text-blue-800 mb-1.5">
+              Final Dispatched Quantity <span className="text-red-500">*</span>
+            </label>
+            <input
+              className="input w-full"
+              type="number"
+              min="1"
+              max={card.net_qty ?? card.qty}
+              placeholder={`Max dispatchable: ${card.net_qty ?? card.qty ?? '—'}`}
+              value={dispatchedQty}
+              onChange={e => setDispatchedQty(e.target.value)}
+              disabled={isDone}
+            />
+            {!isDone && (
+              <p className="text-xs text-blue-600 mt-1">
+                Dispatchable qty: <strong>{card.net_qty ?? card.qty}</strong>
+                {card.net_qty != null && card.net_qty < card.qty && (
+                  <span className="text-orange-600 ml-1">(original: {card.qty})</span>
+                )}
+              </p>
+            )}
+            {isDone && stageData.dispatched_qty && (
+              <p className="text-xs text-blue-600 mt-1">Dispatched: <strong>{stageData.dispatched_qty} units</strong></p>
+            )}
+          </div>
+
+          {/* Remade qty at dispatch */}
+          <div>
+            <label className="block text-sm font-semibold text-blue-800 mb-1.5">
+              Remade Qty at Dispatch <span className="text-gray-400 font-normal text-xs">(optional)</span>
+            </label>
+            <input
+              className="input w-full"
+              type="number"
+              min="0"
+              placeholder="0"
+              value={dispatchRemadeQty}
+              onChange={e => setDispatchRemadeQty(e.target.value)}
+              disabled={isDone}
+            />
+          </div>
+
+          {parseInt(dispatchRemadeQty, 10) > 0 && (
+            <div>
+              <label className="block text-sm font-semibold text-blue-800 mb-1.5">
+                Reason for Remade <span className="text-red-500">*</span>
+              </label>
+              {isDone ? (
+                <div className="text-sm text-gray-700 bg-white px-3 py-2 rounded-lg border border-blue-200">
+                  {stageData.value1 || '—'}
+                </div>
+              ) : (
+                <input
+                  className="input w-full"
+                  placeholder="e.g. replaced broken elements before dispatch"
+                  value={dispatchRemadeReason}
+                  onChange={e => setDispatchRemadeReason(e.target.value)}
+                  disabled={isDone}
+                />
+              )}
+            </div>
           )}
         </div>
       )}
@@ -1396,8 +1451,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         </div>
       )}
 
-      {/* Rejection section */}
-      <div className="mt-2 pt-4 border-t border-gray-100">
+      {/* Rejection section — hidden for stage 30 (post-QC dispatch, no rejections allowed) */}
+      {stageDef.no !== 30 && <div className="mt-2 pt-4 border-t border-gray-100">
         <p className="text-sm font-medium text-gray-700 mb-3">Rejection at this stage</p>
 
         <div className="flex items-center gap-3 mb-3">
@@ -1469,7 +1524,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
             )}
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Error */}
       {error && (
@@ -1499,6 +1554,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
                 mandatoryMissing.length > 0 ? 'Complete all mandatory stages first' :
                 rejQtyInt > 2 && !rejPhoto ? 'Upload rejection photo first' :
                 stageDef.no === 30 && card.status !== 'qc_approved' ? 'QC must be approved before dispatch' :
+                stageDef.no === 30 && parseInt(dispatchedQty, 10) > (card.net_qty ?? card.qty ?? Infinity) ? `Cannot exceed dispatchable qty (${card.net_qty ?? card.qty})` :
+                stageDef.no === 30 && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim() ? 'Enter reason for remade qty' :
                 ''
               }
             >
