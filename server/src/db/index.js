@@ -79,6 +79,21 @@ async function initDB(retries = 10, delayMs = 3000) {
       // Widen stage_no check constraint to include stage 30 (Dispatch)
       await pool.query(`ALTER TABLE production_checklist DROP CONSTRAINT IF EXISTS production_checklist_stage_no_check`);
       await pool.query(`ALTER TABLE production_checklist ADD CONSTRAINT production_checklist_stage_no_check CHECK (stage_no BETWEEN 1 AND 30)`);
+      // Fix job cards stuck at qc_pending that were actually QC-approved
+      // (stage 29 done + an approved QC hold record = should be qc_approved)
+      await pool.query(`
+        UPDATE job_cards SET status = 'qc_approved'
+        WHERE status = 'qc_pending'
+          AND id IN (
+            SELECT DISTINCT jc.id FROM job_cards jc
+            JOIN production_checklist pc ON pc.job_card_id = jc.id AND pc.stage_no = 29 AND pc.done = 1
+            WHERE NOT EXISTS (
+              SELECT 1 FROM job_card_holds
+              WHERE job_card_id = jc.id AND status = 'pending'
+            )
+            AND jc.qc_rejected IS NOT TRUE
+          )
+      `);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');

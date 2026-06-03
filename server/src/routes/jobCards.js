@@ -305,14 +305,15 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
     [jobCardId]
   ))?.done;
 
-  let newStatus;
-  if (stage30)       newStatus = 'dispatched';
-  else if (stage29)  newStatus = 'qc_pending';
-  else if (maxStage) newStatus = 'in_progress';
-  else               newStatus = 'pending';
-
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
   if (!jc) return;
+
+  let newStatus;
+  if (stage30)                        newStatus = 'dispatched';
+  else if (jc.status === 'qc_approved') newStatus = 'qc_approved'; // preserve QC approval
+  else if (stage29)                   newStatus = 'qc_pending';
+  else if (maxStage)                  newStatus = 'in_progress';
+  else                                newStatus = 'pending';
 
   await db.run('UPDATE job_cards SET current_stage=$1, status=$2 WHERE id=$3', [maxStage, newStatus, jobCardId]);
 
