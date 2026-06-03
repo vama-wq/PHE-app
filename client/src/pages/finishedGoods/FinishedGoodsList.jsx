@@ -100,10 +100,10 @@ export default function FinishedGoodsList() {
         <table className="w-full">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              <th className="table-header text-left">Order Code</th>
-              <th className="table-header text-left">Type</th>
-              <th className="table-header text-left">Customer</th>
               <th className="table-header text-left">Drawing No.</th>
+              <th className="table-header text-left">Type</th>
+              <th className="table-header text-left">Original Customer</th>
+              <th className="table-header text-left">Order Code</th>
               <th className="table-header text-left">Tube Material</th>
               <th className="table-header text-right">Wattage</th>
               <th className="table-header text-right">Voltage</th>
@@ -119,7 +119,12 @@ export default function FinishedGoodsList() {
               <tr><td colSpan={10} className="table-cell text-center text-gray-400 py-12">No finished goods yet</td></tr>
             ) : filtered.map(fg => (
               <tr key={fg.id} className="hover:bg-gray-50">
-                <td className="table-cell font-semibold text-brand-700">{fg.order_code}</td>
+                <td className="table-cell">
+                  <div className="font-semibold text-brand-700">{fg.base_drawing_no || fg.drawing_no || '—'}</div>
+                  {fg.drawing_no && fg.base_drawing_no && fg.drawing_no !== fg.base_drawing_no && (
+                    <div className="text-xs text-gray-400">{fg.drawing_no}</div>
+                  )}
+                </td>
                 <td className="table-cell">
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${ORDER_TYPE_COLOR[fg.order_type] || 'bg-gray-100 text-gray-600'}`}>
                     {ORDER_TYPE_LABEL[fg.order_type] || fg.order_type}
@@ -129,7 +134,7 @@ export default function FinishedGoodsList() {
                   <div className="font-medium text-sm">{fg.customer_code}</div>
                   <div className="text-xs text-gray-400">{fg.customer_name}</div>
                 </td>
-                <td className="table-cell text-sm text-gray-700">{fg.drawing_no || '—'}</td>
+                <td className="table-cell text-sm text-gray-500">{fg.order_code}</td>
                 <td className="table-cell text-sm text-gray-700">{fg.tube_material || '—'}</td>
                 <td className="table-cell text-right text-sm">{fg.wattage ? `${fg.wattage} W` : '—'}</td>
                 <td className="table-cell text-right text-sm">{fg.voltage ? `${fg.voltage} V` : '—'}</td>
@@ -180,18 +185,32 @@ export default function FinishedGoodsList() {
 }
 
 function OutwardModal({ fg, onClose, onDone }) {
-  const [qty, setQty]         = useState('');
-  const [reference, setRef]   = useState('');
-  const [notes, setNotes]     = useState('');
-  const [saving, setSaving]   = useState(false);
-  const [error, setError]     = useState('');
+  const [qty, setQty]               = useState('');
+  const [outwardType, setOutwardType] = useState('dispatch');
+  const [clientCode, setClientCode] = useState('');
+  const [clientName, setClientName] = useState('');
+  const [reason, setReason]         = useState('');
+  const [reference, setRef]         = useState('');
+  const [notes, setNotes]           = useState('');
+  const [saving, setSaving]         = useState(false);
+  const [error, setError]           = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!qty || parseInt(qty) <= 0) return setError('Enter a valid quantity');
+    if (!clientName.trim()) return setError('Client name is required');
+    if (outwardType === 'sampling' && !reason.trim()) return setError('Reason is required for sampling');
     setSaving(true);
     try {
-      await api.post(`/finished-goods/${fg.id}/outward`, { qty: parseInt(qty), reference, notes });
+      await api.post(`/finished-goods/${fg.id}/outward`, {
+        qty: parseInt(qty),
+        outward_type: outwardType,
+        client_code: clientCode,
+        client_name: clientName,
+        reason: outwardType === 'sampling' ? reason : undefined,
+        reference,
+        notes,
+      });
       onDone();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to record outward');
@@ -203,12 +222,51 @@ function OutwardModal({ fg, onClose, onDone }) {
     <Modal open title="Record Outward" onClose={onClose} size="sm">
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="bg-gray-50 rounded-lg p-3 text-sm">
-          <p className="font-semibold text-gray-800">{fg.order_code}</p>
-          <p className="text-gray-500">{fg.customer_code} · {fg.customer_name}</p>
+          <p className="font-semibold text-gray-800">{fg.drawing_no || fg.order_code}</p>
+          <p className="text-gray-500">{fg.tube_material} · {fg.wattage ? `${fg.wattage}W` : ''} {fg.voltage ? `${fg.voltage}V` : ''}</p>
           <p className="text-green-600 font-medium mt-1">{fg.qty_available} units available</p>
         </div>
+
+        {/* Outward type */}
         <div>
-          <label className="label">Quantity to dispatch <span className="text-red-500">*</span></label>
+          <label className="label">Outward Type <span className="text-red-500">*</span></label>
+          <div className="flex gap-3">
+            {['dispatch', 'sampling'].map(t => (
+              <button key={t} type="button"
+                onClick={() => setOutwardType(t)}
+                className={`flex-1 py-2 rounded-xl border-2 text-sm font-semibold transition-colors capitalize ${
+                  outwardType === t
+                    ? t === 'dispatch' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-amber-50 border-amber-500 text-amber-700'
+                    : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                }`}>
+                {t === 'dispatch' ? '📦 Dispatch' : '🧪 Sampling'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Client */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Client Code <span className="text-gray-400 font-normal">(optional)</span></label>
+            <input className="input" placeholder="e.g. PSI" value={clientCode} onChange={e => setClientCode(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Client Name <span className="text-red-500">*</span></label>
+            <input className="input" placeholder="Client / company name" value={clientName} onChange={e => setClientName(e.target.value)} required />
+          </div>
+        </div>
+
+        {/* Sampling reason */}
+        {outwardType === 'sampling' && (
+          <div>
+            <label className="label">Sampling Reason <span className="text-red-500">*</span></label>
+            <input className="input" placeholder="e.g. New product trial, quality test..." value={reason} onChange={e => setReason(e.target.value)} />
+          </div>
+        )}
+
+        <div>
+          <label className="label">Quantity <span className="text-red-500">*</span></label>
           <input className="input" type="number" min="1" max={fg.qty_available} value={qty} onChange={e => setQty(e.target.value)} required />
         </div>
         <div>

@@ -35,21 +35,30 @@ router.get('/:id', authenticate, async (req, res) => {
   res.json({ ...fg, log });
 });
 
-// ── Manual outward (dispatch from finished goods) ─────────────────────────────
+// ── Manual outward (dispatch / sampling from finished goods) ──────────────────
 router.post('/:id/outward', authenticate, authorize('owner', 'admin'), async (req, res) => {
-  const { qty, reference, notes } = req.body;
-  if (!qty || qty <= 0) return res.status(400).json({ error: 'Valid quantity required' });
+  const { qty, outward_type, client_code, client_name, reason, reference, notes } = req.body;
+  if (!qty || parseInt(qty) <= 0) return res.status(400).json({ error: 'Valid quantity required' });
+  if (!outward_type || !['dispatch', 'sampling'].includes(outward_type))
+    return res.status(400).json({ error: 'Outward type must be dispatch or sampling' });
+  if (!client_name || !client_name.trim())
+    return res.status(400).json({ error: 'Client name is required' });
+  if (outward_type === 'sampling' && !reason?.trim())
+    return res.status(400).json({ error: 'Reason is required for sampling outward' });
 
   const db = getDB();
   const fg = await db.get('SELECT * FROM finished_goods WHERE id=$1', [req.params.id]);
   if (!fg) return res.status(404).json({ error: 'Not found' });
-  if (fg.qty_available < qty) return res.status(400).json({ error: `Only ${fg.qty_available} units available` });
+  const parsedQty = parseInt(qty);
+  if (fg.qty_available < parsedQty) return res.status(400).json({ error: `Only ${fg.qty_available} units available` });
 
-  await db.run('UPDATE finished_goods SET qty_available = qty_available - $1 WHERE id=$2', [qty, fg.id]);
+  await db.run('UPDATE finished_goods SET qty_available = qty_available - $1 WHERE id=$2', [parsedQty, fg.id]);
   await db.insert(
-    `INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, reference, notes, created_by)
-     VALUES ($1,'outward',$2,$3,$4,$5)`,
-    [fg.id, qty, reference || null, notes || null, req.user.id]
+    `INSERT INTO finished_goods_log
+       (finished_good_id, movement_type, qty, outward_type, client_code, client_name, reason, reference, notes, created_by)
+     VALUES ($1,'outward',$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [fg.id, parsedQty, outward_type, client_code || null, client_name.trim(),
+     reason || null, reference || null, notes || null, req.user.id]
   );
 
   res.json({ message: 'Outward recorded' });

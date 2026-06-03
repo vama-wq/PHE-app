@@ -145,18 +145,51 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
     [req.params.id]
   );
 
-  // Helper: create a finished goods entry
+  // Helper: strip trailing -N suffix to get the base drawing number for grouping
+  // e.g. "PT-UTYPE-12U-500W-1" → "PT-UTYPE-12U-500W"
+  function baseDrawingNo(drawingNo) {
+    if (!drawingNo) return null;
+    return drawingNo.replace(/-\d+$/, '');
+  }
+
+  // Helper: create or add to a finished goods entry grouped by base drawing number
   async function createFinishedGoodsEntry(qty, notes) {
+    const baseNo = baseDrawingNo(jc.drawing_no);
+
+    // Check if an existing FG entry matches this base drawing number
+    const existing = baseNo
+      ? await db.get(
+          `SELECT id, qty_in, qty_available FROM finished_goods WHERE base_drawing_no = $1 LIMIT 1`,
+          [baseNo]
+        )
+      : null;
+
+    if (existing) {
+      // Add to existing entry
+      await db.run(
+        `UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1 WHERE id = $2`,
+        [qty, existing.id]
+      );
+      await db.insert(
+        `INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, reference, notes, created_by)
+         VALUES ($1,'inward',$2,$3,$4,$5)`,
+        [existing.id, qty, jc.job_card_no, `Added from QC approval — ${jc.job_card_no}${notes ? ` · ${notes}` : ''}`, req.user.id]
+      );
+      return existing.id;
+    }
+
+    // Create new entry
     const fg = await db.insert(`
       INSERT INTO finished_goods
         (job_card_id, order_id, order_code, order_type, customer_code, customer_name,
-         drawing_no, tube_material, tube_diameter, wattage, voltage, plating_instructions,
+         drawing_no, base_drawing_no, tube_material, tube_diameter, wattage, voltage, plating_instructions,
          qty_in, qty_available, notes, created_by)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,$14,$15)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,$16)
     `, [
       jc.id, jc.order_id, jc.order_code, jc.order_type,
       jc.customer_code, jc.customer_name,
       jc.drawing_no || null,
+      baseNo,
       asm?.tube_material || null,
       asm?.tube_diameter_mm || null,
       asm?.wattage_actual || null,

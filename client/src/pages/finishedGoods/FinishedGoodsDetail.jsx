@@ -95,9 +95,9 @@ export default function FinishedGoodsDetail() {
             <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
                 <th className="table-header text-left">Type</th>
-                <th className="table-header text-left">Reference</th>
+                <th className="table-header text-left">Client</th>
                 <th className="table-header text-center">Qty</th>
-                <th className="table-header text-left">Notes</th>
+                <th className="table-header text-left">Reference / Reason</th>
                 <th className="table-header text-left">By</th>
                 <th className="table-header text-left">Date</th>
               </tr>
@@ -106,15 +106,37 @@ export default function FinishedGoodsDetail() {
               {fg.log.map(l => (
                 <tr key={l.id} className="hover:bg-gray-50">
                   <td className="table-cell">
-                    <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${l.movement_type === 'inward' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                      {l.movement_type === 'inward'
-                        ? <><ArrowDownCircle size={11} /> Inward</>
-                        : <><ArrowUpCircle size={11} /> Outward</>}
-                    </span>
+                    {l.movement_type === 'inward' ? (
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">
+                        <ArrowDownCircle size={11} /> Inward
+                      </span>
+                    ) : l.outward_type === 'sampling' ? (
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">
+                        <ArrowUpCircle size={11} /> Sampling
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">
+                        <ArrowUpCircle size={11} /> Dispatch
+                      </span>
+                    )}
                   </td>
-                  <td className="table-cell text-sm text-gray-700">{l.reference || '—'}</td>
+                  <td className="table-cell text-sm">
+                    {l.movement_type === 'outward' ? (
+                      <div>
+                        <div className="font-medium text-gray-800">{l.client_name || '—'}</div>
+                        {l.client_code && <div className="text-xs text-gray-400">{l.client_code}</div>}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 text-xs">—</span>
+                    )}
+                  </td>
                   <td className="table-cell text-center font-semibold text-sm">{l.qty}</td>
-                  <td className="table-cell text-sm text-gray-500">{l.notes || '—'}</td>
+                  <td className="table-cell text-sm text-gray-500">
+                    {l.reason && <div className="text-amber-700 font-medium">{l.reason}</div>}
+                    {l.reference && <div>{l.reference}</div>}
+                    {l.notes && <div className="text-gray-400">{l.notes}</div>}
+                    {!l.reason && !l.reference && !l.notes && '—'}
+                  </td>
                   <td className="table-cell text-sm text-gray-600">{l.created_by_name || '—'}</td>
                   <td className="table-cell text-sm text-gray-500">{fmtDate(l.created_at)}</td>
                 </tr>
