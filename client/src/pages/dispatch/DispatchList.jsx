@@ -346,8 +346,26 @@ function ChecklistSummaryModal({ jc, onClose }) {
                       </div>
                       {/* Values + worker */}
                       <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
-                        {s.value1 && <span className="text-xs text-gray-500">{def?.fields?.[0]?.label || 'Value 1'}: <span className="text-gray-700">{s.value1}</span></span>}
-                        {s.value2 && <span className="text-xs text-gray-500">{def?.fields?.[1]?.label || 'Value 2'}: <span className="text-gray-700">{s.value2}</span></span>}
+                        {def?.hvLight && s.value1 ? (() => {
+                          let d = {};
+                          try { d = JSON.parse(s.value1); } catch { d = { light: s.value1 }; }
+                          return (
+                            <>
+                              <span className={`text-xs font-medium ${d.hv === 'pass' ? 'text-green-600' : d.hv === 'fail' ? 'text-red-600' : 'text-gray-400'}`}>
+                                HV {d.hv === 'pass' ? '✅' : d.hv === 'fail' ? `❌ (${d.hvCount || ''} — ${d.hvReason || ''})` : '—'}
+                              </span>
+                              <span className={`text-xs font-medium ${d.light === 'pass' ? 'text-green-600' : d.light === 'fail' ? 'text-red-600' : 'text-gray-400'}`}>
+                                Light {d.light === 'pass' ? '✅' : d.light === 'fail' ? `❌ (${d.lightCount || ''} — ${d.lightReason || ''})` : '—'}
+                              </span>
+                              {d.ohms && <span className="text-xs text-gray-500">Ohms: <span className="text-gray-700">{d.ohms}</span></span>}
+                            </>
+                          );
+                        })() : (
+                          <>
+                            {s.value1 && <span className="text-xs text-gray-500">{def?.fields?.[0]?.label || 'Value 1'}: <span className="text-gray-700">{s.value1}</span></span>}
+                            {s.value2 && <span className="text-xs text-gray-500">{def?.fields?.[1]?.label || 'Value 2'}: <span className="text-gray-700">{s.value2}</span></span>}
+                          </>
+                        )}
                         {s.worker_name && <span className="text-xs text-gray-500">Worker: <span className="text-gray-700">{s.worker_name}</span></span>}
                         {s.done_at && <span className="text-xs text-gray-400">{fmtDateTime(s.done_at)}</span>}
                         {s.stage_no === 29 && s.dispatched_qty != null && (
