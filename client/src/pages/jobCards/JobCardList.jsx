@@ -65,10 +65,9 @@ export default function JobCardList() {
             <tr>
               <th className="table-header text-left">Job Card</th>
               <th className="table-header text-left">Order / Customer</th>
-              <th className="table-header text-right">Qty</th>
+              <th className="table-header text-right">Dispatchable Qty</th>
               <th className="table-header text-left">Dispatch Date</th>
               <th className="table-header text-left">Status</th>
-              <th className="table-header text-right">Dispatchable Qty</th>
               <th className="table-header text-center">File</th>
               {user.role === 'owner' && <th className="table-header" />}
             </tr>
@@ -97,7 +96,16 @@ export default function JobCardList() {
                     </Link>
                     <div className="text-xs text-gray-400">{jc.customer_code}</div>
                   </td>
-                  <td className="table-cell text-right font-medium">{jc.qty ?? '—'}</td>
+                  <td className="table-cell text-right">
+                    {jc.net_qty != null && jc.net_qty < jc.qty ? (
+                      <div>
+                        <span className="font-semibold text-orange-600">{jc.net_qty}</span>
+                        <div className="text-xs text-gray-400">of {jc.qty}</div>
+                      </div>
+                    ) : (
+                      <span className="font-semibold text-gray-700">{jc.net_qty ?? jc.qty ?? '—'}</span>
+                    )}
+                  </td>
                   <td className="table-cell">
                     <div className="text-sm">{fmtDate(jc.dispatch_date)}</div>
                     {jc.status !== 'dispatched' && days !== null && (
@@ -110,16 +118,6 @@ export default function JobCardList() {
                     <StatusBadge status={jc.status} />
                     {jc.status === 'in_progress' && jc.current_stage > 0 && (
                       <div className="text-xs text-gray-400 mt-0.5">{getStageLabel(jc.current_stage)}</div>
-                    )}
-                  </td>
-                  <td className="table-cell text-right">
-                    {jc.net_qty != null && jc.net_qty < jc.qty ? (
-                      <div>
-                        <span className="font-semibold text-orange-600">{jc.net_qty}</span>
-                        <div className="text-xs text-gray-400">of {jc.qty}</div>
-                      </div>
-                    ) : (
-                      <span className="font-semibold text-gray-700">{jc.net_qty ?? jc.qty ?? '—'}</span>
                     )}
                   </td>
                   <td className="table-cell text-center">
