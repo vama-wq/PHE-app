@@ -468,6 +468,15 @@ function ChecklistModal({ card, onClose, onSave }) {
     return m;
   }, [data]);
 
+  // Compute net_qty live from checklist stages (always fresh, not stale list data)
+  const liveNetQty = useMemo(() => {
+    if (!data?.stages) return card.net_qty ?? card.qty;
+    // Exclude stage 30 remade from pre-dispatch calculation (that's added at dispatch time)
+    const totalRejected = data.stages.reduce((s, st) => s + (parseInt(st.rejection_qty, 10) || 0), 0);
+    const totalRemade   = data.stages.filter(st => st.stage_no !== 30).reduce((s, st) => s + (parseInt(st.remade_qty, 10) || 0), 0);
+    return Math.max((parseInt(card.qty, 10) || 0) - totalRejected + totalRemade, 0);
+  }, [data, card.qty]);
+
   const approveHold = async () => {
     setApprovingHold(true);
     try {
@@ -506,9 +515,9 @@ function ChecklistModal({ card, onClose, onSave }) {
           {card.qty && (
             <span>
               {' · '}
-              {card.net_qty != null && card.net_qty < card.qty
-                ? <><span className="text-orange-600 font-medium">{card.net_qty} dispatchable</span> <span className="text-gray-400 text-xs">(of {card.qty})</span></>
-                : <>Qty: {card.net_qty ?? card.qty}</>
+              {liveNetQty != null && liveNetQty < card.qty
+                ? <><span className="text-orange-600 font-medium">{liveNetQty} dispatchable</span> <span className="text-gray-400 text-xs">(of {card.qty})</span></>
+                : <>Qty: {liveNetQty ?? card.qty}</>
               }
             </span>
           )}
@@ -675,7 +684,7 @@ function ChecklistModal({ card, onClose, onSave }) {
         /* Stage detail view */
         selectedDef && (
           <StageDetailView
-            card={card}
+            card={{ ...card, net_qty: liveNetQty }}
             stageDef={selectedDef}
             stageData={stageMap[selectedDef.no] || { done: 0, value1: null, value2: null, photo_file: null, rejection_qty: 0, remade_qty: 0, rejection_photo_file: null }}
             stageMap={stageMap}
