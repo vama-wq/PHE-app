@@ -68,7 +68,14 @@ export default function DispatchList() {
                 </td>
                 <td className="table-cell">{jc.customer_code}</td>
                 <td className="table-cell text-gray-600">{jc.product_code}</td>
-                <td className="table-cell text-right">{jc.qty}</td>
+                <td className="table-cell text-right">
+                  {jc.status === 'dispatched' && jc.dispatched_qty
+                    ? <span className="font-semibold text-gray-800">{jc.dispatched_qty}</span>
+                    : jc.net_qty != null && jc.net_qty !== jc.qty
+                      ? <span><span className="font-semibold text-orange-600">{jc.net_qty}</span> <span className="text-xs text-gray-400">of {jc.qty}</span></span>
+                      : <span className="font-semibold text-gray-800">{jc.qty}</span>
+                  }
+                </td>
                 <td className="table-cell">{fmtDate(jc.dispatch_date)}</td>
                 <td className="table-cell"><StatusBadge status={jc.status} /></td>
                 {canManage && (

@@ -906,9 +906,6 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     if (rejQtyInt > 2 && !rejPhoto) return false;
     if (stageDef.no === 29 && mandatoryMissing.length > 0) return false;
     if (stageDef.no === 30 && card.status !== 'qc_approved') return false;
-    const dQty = parseInt(dispatchedQty, 10);
-    if (stageDef.no === 30 && !(dQty > 0)) return false;
-    if (stageDef.no === 30 && dQty > (card.net_qty ?? card.qty ?? Infinity)) return false;
     if (stageDef.no === 30 && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim()) return false;
     return true;
   };
@@ -983,15 +980,17 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     try {
       const { v1, v2 } = buildValues();
       const isDispatch = stageDef.no === 30;
+      const remadeAtDispatch = parseInt(dispatchRemadeQty, 10) || 0;
+      const finalDispatchQty = (card.net_qty ?? card.qty ?? 0) + remadeAtDispatch;
       await api.put(`/job-cards/${card.id}/checklist/${stageDef.no}`, {
         done: true,
         value1: isDispatch ? (dispatchRemadeReason || null) : v1,
         value2: isDispatch ? null : v2,
         rejection_qty: isDispatch ? 0 : rejQtyInt,
-        remade_qty: isDispatch ? (parseInt(dispatchRemadeQty, 10) || 0) : (parseInt(remadeQty, 10) || 0),
+        remade_qty: isDispatch ? remadeAtDispatch : (parseInt(remadeQty, 10) || 0),
         worker_name: workerName || null,
         scrap_value: scrapValue || null,
-        ...(isDispatch ? { dispatched_qty: parseInt(dispatchedQty, 10) } : {}),
+        ...(isDispatch ? { dispatched_qty: finalDispatchQty } : {}),
       });
       await onSaved();
     } catch (e) {
@@ -1115,73 +1114,73 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       )}
 
       {/* Dispatch fields (stage 30) */}
-      {stageDef.no === 30 && (
-        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-xl space-y-3">
-          <div>
-            <label className="block text-sm font-semibold text-blue-800 mb-1.5">
-              Final Dispatched Quantity <span className="text-red-500">*</span>
-            </label>
-            <input
-              className="input w-full"
-              type="number"
-              min="1"
-              max={card.net_qty ?? card.qty}
-              placeholder={`Max dispatchable: ${card.net_qty ?? card.qty ?? '—'}`}
-              value={dispatchedQty}
-              onChange={e => setDispatchedQty(e.target.value)}
-              disabled={isDone}
-            />
-            {!isDone && (
-              <p className="text-xs text-blue-600 mt-1">
-                Dispatchable qty: <strong>{card.net_qty ?? card.qty}</strong>
-                {card.net_qty != null && card.net_qty < card.qty && (
-                  <span className="text-orange-600 ml-1">(original: {card.qty})</span>
-                )}
-              </p>
-            )}
-            {isDone && stageData.dispatched_qty && (
-              <p className="text-xs text-blue-600 mt-1">Dispatched: <strong>{stageData.dispatched_qty} units</strong></p>
-            )}
-          </div>
-
-          {/* Remade qty at dispatch */}
-          <div>
-            <label className="block text-sm font-semibold text-blue-800 mb-1.5">
-              Remade Qty at Dispatch <span className="text-gray-400 font-normal text-xs">(optional)</span>
-            </label>
-            <input
-              className="input w-full"
-              type="number"
-              min="0"
-              placeholder="0"
-              value={dispatchRemadeQty}
-              onChange={e => setDispatchRemadeQty(e.target.value)}
-              disabled={isDone}
-            />
-          </div>
-
-          {parseInt(dispatchRemadeQty, 10) > 0 && (
+      {stageDef.no === 30 && (() => {
+        const preDispatchQty  = card.net_qty ?? card.qty ?? 0;
+        const remadeAtDispatch = parseInt(dispatchRemadeQty, 10) || 0;
+        const finalQty = preDispatchQty + remadeAtDispatch;
+        return (
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-xl space-y-3">
+            {/* Remade qty at dispatch */}
             <div>
               <label className="block text-sm font-semibold text-blue-800 mb-1.5">
-                Reason for Remade <span className="text-red-500">*</span>
+                Remade Qty at Dispatch <span className="text-gray-400 font-normal text-xs">(optional)</span>
               </label>
               {isDone ? (
                 <div className="text-sm text-gray-700 bg-white px-3 py-2 rounded-lg border border-blue-200">
-                  {stageData.value1 || '—'}
+                  {stageData.remade_qty || 0}
                 </div>
               ) : (
                 <input
                   className="input w-full"
-                  placeholder="e.g. replaced broken elements before dispatch"
-                  value={dispatchRemadeReason}
-                  onChange={e => setDispatchRemadeReason(e.target.value)}
-                  disabled={isDone}
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  value={dispatchRemadeQty}
+                  onChange={e => setDispatchRemadeQty(e.target.value)}
                 />
               )}
             </div>
-          )}
-        </div>
-      )}
+
+            {(parseInt(dispatchRemadeQty, 10) > 0 || (isDone && stageData.value1)) && (
+              <div>
+                <label className="block text-sm font-semibold text-blue-800 mb-1.5">
+                  Reason for Remade <span className="text-red-500">*</span>
+                </label>
+                {isDone ? (
+                  <div className="text-sm text-gray-700 bg-white px-3 py-2 rounded-lg border border-blue-200">
+                    {stageData.value1 || '—'}
+                  </div>
+                ) : (
+                  <input
+                    className="input w-full"
+                    placeholder="e.g. replaced broken elements before dispatch"
+                    value={dispatchRemadeReason}
+                    onChange={e => setDispatchRemadeReason(e.target.value)}
+                  />
+                )}
+              </div>
+            )}
+
+            {/* Auto-calculated final dispatched qty */}
+            <div className="pt-2 border-t border-blue-200">
+              <p className="text-xs text-blue-600 mb-1">Final Dispatched Quantity (auto-calculated)</p>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-bold text-blue-800">{isDone ? stageData.dispatched_qty : finalQty}</span>
+                <span className="text-xs text-blue-500">units</span>
+              </div>
+              {!isDone && (
+                <p className="text-xs text-gray-500 mt-1">
+                  {preDispatchQty} pre-dispatch
+                  {remadeAtDispatch > 0 && <span className="text-green-600"> + {remadeAtDispatch} remade</span>}
+                  {card.net_qty != null && card.net_qty < card.qty && (
+                    <span className="text-orange-500"> (original {card.qty} − {card.qty - card.net_qty} rejected)</span>
+                  )}
+                </p>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Worker Name (all production stages up to QC) */}
       {needsWorker && (
@@ -1554,7 +1553,6 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
                 mandatoryMissing.length > 0 ? 'Complete all mandatory stages first' :
                 rejQtyInt > 2 && !rejPhoto ? 'Upload rejection photo first' :
                 stageDef.no === 30 && card.status !== 'qc_approved' ? 'QC must be approved before dispatch' :
-                stageDef.no === 30 && parseInt(dispatchedQty, 10) > (card.net_qty ?? card.qty ?? Infinity) ? `Cannot exceed dispatchable qty (${card.net_qty ?? card.qty})` :
                 stageDef.no === 30 && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim() ? 'Enter reason for remade qty' :
                 ''
               }

@@ -23,7 +23,8 @@ router.get('/', authenticate, async (req, res) => {
           - COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
           + COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0),
         0
-      ) as net_qty
+      ) as net_qty,
+      (SELECT dispatched_qty FROM production_checklist WHERE job_card_id = jc.id AND stage_no = 30 LIMIT 1) as dispatched_qty
     FROM job_cards jc
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
