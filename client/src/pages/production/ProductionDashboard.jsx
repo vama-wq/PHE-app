@@ -568,13 +568,13 @@ function ChecklistModal({ card, onClose, onSave }) {
           )}
 
           {/* QC Rejection banner */}
-          {card.qc_rejected && (
+          {data?.qc_rejected && (
             <div className="mb-4 rounded-xl bg-orange-50 border border-orange-300 p-4">
               <div className="font-semibold text-orange-700 flex items-center gap-2">
                 <AlertTriangle size={16} /> QC Rejected — Rework Required
               </div>
-              {card.qc_rejection_notes && (
-                <div className="text-sm text-orange-600 mt-1">"{card.qc_rejection_notes}"</div>
+              {data?.qc_rejection_notes && (
+                <div className="text-sm text-orange-600 mt-1">"{data.qc_rejection_notes}"</div>
               )}
               <div className="text-xs text-orange-500 mt-1">
                 Fix the issues, then re-complete Stage 29 to re-submit for QC approval.

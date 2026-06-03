@@ -401,7 +401,11 @@ router.get('/:id/checklist', authenticate, async (req, res) => {
     rejection_photo_file: null, rejection_photo_original_name: null,
     worker_name: null, scrap_value: null,
   });
-  res.json({ stages, hold: activeHold || null });
+  const jcInfo = await db.get(
+    'SELECT qc_rejected, qc_rejection_notes FROM job_cards WHERE id=$1',
+    [req.params.id]
+  );
+  res.json({ stages, hold: activeHold || null, qc_rejected: jcInfo?.qc_rejected || false, qc_rejection_notes: jcInfo?.qc_rejection_notes || null });
 });
 
 // ── PUT update a checklist stage ──────────────────────────────────────────────
