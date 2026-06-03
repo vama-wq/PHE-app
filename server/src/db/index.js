@@ -68,6 +68,8 @@ async function initDB() {
   try {
     // Run idempotent migrations
     await pool.query(`ALTER TABLE job_card_holds ADD COLUMN IF NOT EXISTS notes TEXT`);
+    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS qc_rejected BOOLEAN DEFAULT FALSE`);
+    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS qc_rejection_notes TEXT`);
 
     // Seed default users only on first run (empty table)
     const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');

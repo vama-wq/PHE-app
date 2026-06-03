@@ -182,13 +182,26 @@ function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore }) {
                       <AlertTriangle size={11} /> Awaiting Owner Approval
                     </span>
                   )}
+                  {jc.qc_rejected && (
+                    <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                      <AlertTriangle size={11} /> QC Rejected — Rework Required
+                    </span>
+                  )}
                 </div>
                 <div className="text-sm text-gray-600 mb-1">
                   <Link to={`/orders/${jc.order_id}`} className="text-brand-600 hover:underline font-medium">
                     {jc.order_code}
                   </Link>
                   {' · '}{jc.customer_code}
-                  {jc.qty && <span className="text-gray-400"> · Qty: {jc.qty}</span>}
+                  {jc.qty && (
+                    <span className="text-gray-400">
+                      {' · '}
+                      {jc.net_qty != null && jc.net_qty < jc.qty
+                        ? <><span className="text-orange-500 font-medium">{jc.net_qty} dispatchable</span> <span className="text-xs">(of {jc.qty})</span></>
+                        : <>Qty: {jc.net_qty ?? jc.qty}</>
+                      }
+                    </span>
+                  )}
                 </div>
                 <div className={`text-sm font-semibold ${
                   isOverdue ? 'text-red-600' : isUrgent ? 'text-orange-500' : 'text-gray-500'
@@ -243,7 +256,7 @@ function AllCardsTab({ cards, todayPickIds, canManage, onPick, onUnpick, onCheck
           <tr>
             <th className="table-header text-left">Job Card</th>
             <th className="table-header text-left">Order / Customer</th>
-            <th className="table-header text-right">Qty</th>
+            <th className="table-header text-right">Dispatchable Qty</th>
             <th className="table-header text-left">Dispatch Date</th>
             <th className="table-header text-left">Status / Stage</th>
             {canManage && <th className="table-header text-center">Today</th>}
@@ -279,7 +292,16 @@ function AllCardsTab({ cards, todayPickIds, canManage, onPick, onUnpick, onCheck
                   </Link>
                   <div className="text-xs text-gray-400">{jc.customer_code}</div>
                 </td>
-                <td className="table-cell text-right font-medium">{jc.qty ?? '—'}</td>
+                <td className="table-cell text-right">
+                  {jc.net_qty != null && jc.net_qty < jc.qty ? (
+                    <div>
+                      <span className="font-semibold text-orange-600">{jc.net_qty}</span>
+                      <div className="text-xs text-gray-400">of {jc.qty}</div>
+                    </div>
+                  ) : (
+                    <span className="font-semibold text-gray-700">{jc.net_qty ?? jc.qty ?? '—'}</span>
+                  )}
+                </td>
                 <td className="table-cell">
                   <div className="text-sm">{fmtDate(jc.dispatch_date)}</div>
                   <div className={`text-xs font-medium ${
@@ -481,7 +503,15 @@ function ChecklistModal({ card, onClose, onSave }) {
             {card.order_code}
           </Link>
           {' · '}{card.customer_code}
-          {card.qty && <span> · Qty: {card.qty}</span>}
+          {card.qty && (
+            <span>
+              {' · '}
+              {card.net_qty != null && card.net_qty < card.qty
+                ? <><span className="text-orange-600 font-medium">{card.net_qty} dispatchable</span> <span className="text-gray-400 text-xs">(of {card.qty})</span></>
+                : <>Qty: {card.net_qty ?? card.qty}</>
+              }
+            </span>
+          )}
           {' · '}Dispatch: <span className="font-medium text-gray-700">{fmtDate(card.dispatch_date)}</span>
         </div>
         <div className="flex items-center gap-2">
@@ -533,6 +563,21 @@ function ChecklistModal({ card, onClose, onSave }) {
                     {approvingHold ? 'Approving...' : 'Approve to Resume'}
                   </button>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* QC Rejection banner */}
+          {card.qc_rejected && (
+            <div className="mb-4 rounded-xl bg-orange-50 border border-orange-300 p-4">
+              <div className="font-semibold text-orange-700 flex items-center gap-2">
+                <AlertTriangle size={16} /> QC Rejected — Rework Required
+              </div>
+              {card.qc_rejection_notes && (
+                <div className="text-sm text-orange-600 mt-1">"{card.qc_rejection_notes}"</div>
+              )}
+              <div className="text-xs text-orange-500 mt-1">
+                Fix the issues, then re-complete Stage 29 to re-submit for QC approval.
               </div>
             </div>
           )}

@@ -238,7 +238,18 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
   if (!jc) return res.status(404).json({ error: 'Not found' });
   if (jc.status !== 'qc_pending') return res.status(400).json({ error: 'Job card is not in QC Pending state' });
 
-  await db.run("UPDATE job_cards SET status='in_progress' WHERE id=$1", [req.params.id]);
+  // Reset stage 29 so production can re-submit to QC after fixing
+  await db.run(
+    `UPDATE production_checklist SET done=0, done_at=NULL WHERE job_card_id=$1 AND stage_no=29`,
+    [req.params.id]
+  );
+
+  // Set status back to in_progress and flag the rejection for production to see
+  await db.run(
+    `UPDATE job_cards SET status='in_progress', qc_rejected=TRUE, qc_rejection_notes=$1 WHERE id=$2`,
+    [notes || null, req.params.id]
+  );
+
   await logActivity(jc.order_id, jc.id, 'status_changed',
     `Job card ${jc.job_card_no} QC Rejected — returned to production. ${notes || ''}`, req.user.id);
   await syncOrderStatus(db, jc.order_id, req.user.id);

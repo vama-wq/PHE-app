@@ -491,6 +491,14 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   `, [jobCardId, stageNo, done ? 1 : 0, value1 ?? null, value2 ?? null, rejQty, remQty,
     worker_name || null, scrap_value || null, done ? now : null, req.user.id]);
 
+  // When stage 29 is re-submitted to QC, clear the QC rejection flag
+  if (stageNo === 29 && done) {
+    await db.run(
+      `UPDATE job_cards SET qc_rejected=FALSE, qc_rejection_notes=NULL WHERE id=$1`,
+      [jobCardId]
+    );
+  }
+
   if (done && rejQty > 2) {
     await triggerHold(db, jobCardId, stageNo, rejQty, req.user.id);
     return res.json({ message: 'Stage updated. Job card placed on hold.', on_hold: true });
