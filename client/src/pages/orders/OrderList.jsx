@@ -149,7 +149,7 @@ export default function OrderList() {
                     ? <span className="text-brand-600 font-medium text-xs">{o.job_card_no}</span>
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
-                <td className="table-cell"><StatusBadge status={o.status} /></td>
+                <td className="table-cell"><StatusBadge status={o.card_status || o.status} /></td>
                 <td className="table-cell text-gray-500 text-xs">{o.created_by_name}</td>
                 {user.role === 'owner' && (
                   <td className="table-cell" onClick={e => e.stopPropagation()}>

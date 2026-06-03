@@ -69,7 +69,7 @@ router.get('/', authenticate, async (req, res) => {
     `SELECT o.*, c.customer_code,
        ${canSeeNames ? 'c.name as customer_name,' : ''}
        u.name as created_by_name,
-       jc.job_card_no,
+       jc.job_card_no, jc.id as job_card_id, jc.status as card_status,
        (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) as item_count
      FROM orders o
      JOIN customers c ON o.customer_id = c.id
