@@ -407,6 +407,10 @@ export default function OrderDetail() {
                         {jc.notes && <div className="text-xs text-gray-400 mt-0.5 italic">{jc.notes}</div>}
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <Link to={`/job-cards/${jc.id}`}
+                          className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1">
+                          <ClipboardList size={12} /> Checklist
+                        </Link>
                         {jc.file_name && (
                           <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
                             className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1">
