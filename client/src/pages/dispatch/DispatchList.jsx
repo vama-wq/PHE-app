@@ -376,14 +376,14 @@ function ChecklistSummaryModal({ jc, onClose }) {
                       {hasPhoto && (
                         <div className="flex gap-1.5 mt-1.5 flex-wrap">
                           {s.photo_file && (
-                            <a href={`/uploads/${s.photo_file}`} target="_blank" rel="noreferrer">
-                              <img src={`/uploads/${s.photo_file}`} alt="stage"
+                            <a href={`/uploads/checklist-photos/${s.photo_file}`} target="_blank" rel="noreferrer">
+                              <img src={`/uploads/checklist-photos/${s.photo_file}`} alt="stage"
                                 className="w-12 h-12 object-cover rounded border border-gray-200 hover:opacity-80 transition-opacity" />
                             </a>
                           )}
                           {s.rejection_photo_file && (
-                            <a href={`/uploads/${s.rejection_photo_file}`} target="_blank" rel="noreferrer">
-                              <img src={`/uploads/${s.rejection_photo_file}`} alt="rejection"
+                            <a href={`/uploads/rejection-photos/${s.rejection_photo_file}`} target="_blank" rel="noreferrer">
+                              <img src={`/uploads/rejection-photos/${s.rejection_photo_file}`} alt="rejection"
                                 className="w-12 h-12 object-cover rounded border border-red-200 hover:opacity-80 transition-opacity" />
                             </a>
                           )}
