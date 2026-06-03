@@ -33,7 +33,7 @@ export const PRODUCTION_STAGES = [
   { no: 26, name: 'Nut Washer' },
   { no: 27, name: 'HV + Light Check',   hvLight: true },
   { no: 28, name: 'Ohms + Meggar',      fields: [{ key: 'value1', label: 'Remark' }] },
-  { no: 29, name: 'Dispatch',            triggerQC: true, isDispatch: true },
+  { no: 29, name: 'Ready in Production', triggerQC: true, isDispatch: true },
 ];
 
 // Stages that must be completed before Stage 29 (QC) can be triggered.
