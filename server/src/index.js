@@ -1,4 +1,7 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+// Force IPv4 DNS resolution — Railway/Node 22 defaults to IPv6 which can't reach Supabase
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
