@@ -471,9 +471,9 @@ function ChecklistModal({ card, onClose, onSave }) {
   // Compute net_qty live from checklist stages (always fresh, not stale list data)
   const liveNetQty = useMemo(() => {
     if (!data?.stages) return card.net_qty ?? card.qty;
-    // Exclude stage 30 remade from pre-dispatch calculation (that's added at dispatch time)
+    // Exclude dispatch stage (29) remade from pre-dispatch net — that's added at dispatch time
     const totalRejected = data.stages.reduce((s, st) => s + (parseInt(st.rejection_qty, 10) || 0), 0);
-    const totalRemade   = data.stages.filter(st => st.stage_no !== 30).reduce((s, st) => s + (parseInt(st.remade_qty, 10) || 0), 0);
+    const totalRemade   = data.stages.filter(st => st.stage_no !== 29 && st.stage_no !== 30).reduce((s, st) => s + (parseInt(st.remade_qty, 10) || 0), 0);
     return Math.max((parseInt(card.qty, 10) || 0) - totalRejected + totalRemade, 0);
   }, [data, card.qty]);
 
@@ -915,7 +915,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     if (rejQtyInt > 2 && !rejPhoto) return false;
     if (stageDef.no === 29 && mandatoryMissing.length > 0) return false;
     if (stageDef.no === 30 && card.status !== 'qc_approved') return false;
-    if (stageDef.no === 30 && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim()) return false;
+    if (stageDef.isDispatch && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim()) return false;
     return true;
   };
 
@@ -956,7 +956,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     setError('');
     const fd = new FormData();
     fd.append('file', file);
-    const isDispatchStage = stageDef.no === 30;
+    const isDispatchStage = !!stageDef.isDispatch;
     const remadeAtDispatch = parseInt(dispatchRemadeQty, 10) || 0;
     const finalDispatchQtyForPhoto = (card.net_qty ?? card.qty ?? 0) + remadeAtDispatch;
     fd.append('rejection_qty', isDispatchStage ? '0' : String(rejQtyInt));
@@ -991,7 +991,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     setError('');
     try {
       const { v1, v2 } = buildValues();
-      const isDispatch = stageDef.no === 30;
+      const isDispatch = !!stageDef.isDispatch;
       const remadeAtDispatch = parseInt(dispatchRemadeQty, 10) || 0;
       const finalDispatchQty = (card.net_qty ?? card.qty ?? 0) + remadeAtDispatch;
       await api.put(`/job-cards/${card.id}/checklist/${stageDef.no}`, {
@@ -1114,19 +1114,19 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       })()}
 
       {stageDef.no === 30 && !isDone && card.status !== 'qc_approved' && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl">
-          <div className="text-red-700 font-semibold text-sm flex items-center gap-2 mb-1">
-            <AlertTriangle size={15} /> Dispatch blocked
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <div className="text-amber-700 font-semibold text-sm flex items-center gap-2 mb-1">
+            <AlertTriangle size={15} /> Awaiting QC Approval
           </div>
-          <p className="text-xs text-red-600">
-            QC inspection must be completed and approved by the QC inspector before dispatch.
+          <p className="text-xs text-amber-600">
+            QC must approve this job card before confirming dispatch.
             Current status: <strong>{card.status?.replace(/_/g, ' ')}</strong>
           </p>
         </div>
       )}
 
-      {/* Dispatch fields (stage 30) */}
-      {stageDef.no === 30 && (() => {
+      {/* Dispatch fields (stage 29 — Dispatch Preparation, triggers QC) */}
+      {stageDef.isDispatch && (() => {
         const preDispatchQty  = card.net_qty ?? card.qty ?? 0;
         const remadeAtDispatch = parseInt(dispatchRemadeQty, 10) || 0;
         const finalQty = preDispatchQty + remadeAtDispatch;
@@ -1462,8 +1462,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         </div>
       )}
 
-      {/* Rejection section — hidden for stage 30 (post-QC dispatch, no rejections allowed) */}
-      {stageDef.no !== 30 && <div className="mt-2 pt-4 border-t border-gray-100">
+      {/* Rejection section — hidden for dispatch stage (no rejections at dispatch) */}
+      {!stageDef.isDispatch && stageDef.no !== 30 && <div className="mt-2 pt-4 border-t border-gray-100">
         <p className="text-sm font-medium text-gray-700 mb-3">Rejection at this stage</p>
 
         <div className="flex items-center gap-3 mb-3">
@@ -1564,8 +1564,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               title={
                 mandatoryMissing.length > 0 ? 'Complete all mandatory stages first' :
                 rejQtyInt > 2 && !rejPhoto ? 'Upload rejection photo first' :
-                stageDef.no === 30 && card.status !== 'qc_approved' ? 'QC must be approved before dispatch' :
-                stageDef.no === 30 && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim() ? 'Enter reason for remade qty' :
+                stageDef.no === 30 && card.status !== 'qc_approved' ? 'QC must be approved before confirming dispatch' :
+                stageDef.isDispatch && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim() ? 'Enter reason for remade qty' :
                 ''
               }
             >

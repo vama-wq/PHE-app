@@ -24,7 +24,10 @@ router.get('/', authenticate, async (req, res) => {
           + COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0),
         0
       ) as net_qty,
-      (SELECT dispatched_qty FROM production_checklist WHERE job_card_id = jc.id AND stage_no = 30 LIMIT 1) as dispatched_qty
+      COALESCE(
+        (SELECT dispatched_qty FROM production_checklist WHERE job_card_id = jc.id AND stage_no = 29 LIMIT 1),
+        (SELECT dispatched_qty FROM production_checklist WHERE job_card_id = jc.id AND stage_no = 30 LIMIT 1)
+      ) as dispatched_qty
     FROM job_cards jc
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
@@ -295,6 +298,8 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   );
   const maxStage = maxRow?.m || 0;
 
+  // Stage 29 = Dispatch Preparation → triggers QC
+  // Stage 30 = Confirm Dispatch → after QC approval, marks dispatched
   const stage29 = (await db.get(
     'SELECT done FROM production_checklist WHERE job_card_id=$1 AND stage_no=29',
     [jobCardId]
@@ -309,11 +314,11 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   if (!jc) return;
 
   let newStatus;
-  if (stage30)                        newStatus = 'dispatched';
+  if (stage30)                          newStatus = 'dispatched';
   else if (jc.status === 'qc_approved') newStatus = 'qc_approved'; // preserve QC approval
-  else if (stage29)                   newStatus = 'qc_pending';
-  else if (maxStage)                  newStatus = 'in_progress';
-  else                                newStatus = 'pending';
+  else if (stage29)                     newStatus = 'qc_pending';  // dispatch prep done → awaiting QC
+  else if (maxStage)                    newStatus = 'in_progress';
+  else                                  newStatus = 'pending';
 
   await db.run('UPDATE job_cards SET current_stage=$1, status=$2 WHERE id=$3', [maxStage, newStatus, jobCardId]);
 
@@ -447,10 +452,10 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
         code: 'ON_HOLD'
       });
     }
-    // Gate stage 29 (Dispatch): QC must be approved first
+    // Gate stage 30 (Confirm Dispatch): QC must be approved first
     if (stageNo === 30 && jcStatus !== 'qc_approved') {
       return res.status(400).json({
-        error: 'Cannot dispatch — QC must be approved by the QC inspector first.',
+        error: 'Cannot confirm dispatch — QC must be approved first.',
         code: 'QC_NOT_APPROVED'
       });
     }
@@ -459,7 +464,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   const rejQty = parseInt(rejection_qty, 10) || 0;
   const remQty = parseInt(remade_qty, 10) || 0;
 
-  // Gate stage 29 (QC): all mandatory stages must be complete
+  // Gate stage 29 (Dispatch Preparation → triggers QC): all mandatory stages must be complete
   if (stageNo === 29 && done) {
     const mandatory = [...MANDATORY_STAGES];
     const doneRows = await db.all(
@@ -611,9 +616,10 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
 
     const now = new Date().toISOString();
 
-    const dispatchedQty = stageNo === 30 ? (parseInt(req.body.dispatched_qty, 10) || null) : null;
-    if (stageNo === 30 && markDone && !dispatchedQty) {
-      return res.status(400).json({ error: 'Dispatched quantity is required for dispatch stage.' });
+    // Stage 29 = Dispatch Preparation — stores dispatched_qty. Stage 30 = Confirm Dispatch (photo only).
+    const dispatchedQty = (stageNo === 29 || stageNo === 30) ? (parseInt(req.body.dispatched_qty, 10) || null) : null;
+    if (stageNo === 29 && markDone && !dispatchedQty) {
+      return res.status(400).json({ error: 'Dispatched quantity is required for dispatch preparation.' });
     }
 
     if (markDone) {
