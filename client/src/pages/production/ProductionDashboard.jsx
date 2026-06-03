@@ -956,14 +956,17 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     setError('');
     const fd = new FormData();
     fd.append('file', file);
-    fd.append('rejection_qty', String(rejQtyInt));
-    fd.append('remade_qty', remadeQty || '0');
+    const isDispatchStage = stageDef.no === 30;
+    const remadeAtDispatch = parseInt(dispatchRemadeQty, 10) || 0;
+    const finalDispatchQtyForPhoto = (card.net_qty ?? card.qty ?? 0) + remadeAtDispatch;
+    fd.append('rejection_qty', isDispatchStage ? '0' : String(rejQtyInt));
+    fd.append('remade_qty', isDispatchStage ? String(remadeAtDispatch) : (remadeQty || '0'));
     if (workerName) fd.append('worker_name', workerName);
     if (scrapValue) fd.append('scrap_value', scrapValue);
     const { v1, v2 } = buildValues();
-    if (v1) fd.append('value1', v1);
-    if (v2) fd.append('value2', v2);
-    if (stageDef.no === 30) fd.append('dispatched_qty', dispatchedQty || '0');
+    fd.append('value1', isDispatchStage ? (dispatchRemadeReason || '') : (v1 || ''));
+    if (!isDispatchStage && v2) fd.append('value2', v2);
+    if (isDispatchStage) fd.append('dispatched_qty', String(finalDispatchQtyForPhoto));
     // For always-photo stages (Cleaning/Dispatch): upload = mark done immediately
     // For after-6pm-only: just save the photo, keep form open so rejection can be filled
     fd.append('mark_done', photoAlwaysRequired ? 'true' : 'false');

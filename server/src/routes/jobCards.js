@@ -601,7 +601,7 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
     const now = new Date().toISOString();
 
     const dispatchedQty = stageNo === 30 ? (parseInt(req.body.dispatched_qty, 10) || null) : null;
-    if (stageNo === 30 && !dispatchedQty) {
+    if (stageNo === 30 && markDone && !dispatchedQty) {
       return res.status(400).json({ error: 'Dispatched quantity is required for dispatch stage.' });
     }
 
