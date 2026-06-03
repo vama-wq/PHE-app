@@ -21,7 +21,7 @@ router.get('/', authenticate, async (req, res) => {
       GREATEST(
         jc.qty
           - COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
-          + COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0),
+          + COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id AND stage_no != 29), 0),
         0
       ) as net_qty,
       (SELECT dispatched_qty FROM production_checklist WHERE job_card_id = jc.id AND stage_no = 29 LIMIT 1) as dispatched_qty
@@ -112,7 +112,7 @@ router.get('/:id', authenticate, async (req, res) => {
   const qtySummary = await db.get(`
     SELECT
       COALESCE(SUM(rejection_qty), 0) as total_rejected,
-      COALESCE(SUM(remade_qty),    0) as total_remade
+      COALESCE(SUM(CASE WHEN stage_no != 29 THEN remade_qty ELSE 0 END), 0) as total_remade
     FROM production_checklist
     WHERE job_card_id = $1
   `, [req.params.id]);

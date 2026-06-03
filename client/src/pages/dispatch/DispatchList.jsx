@@ -109,12 +109,19 @@ function DispatchDocModal({ jcId, onClose, onSave }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!f.shipping_carrier.trim()) { setError('Shipping carrier is required'); return; }
+    if (!f.tracking_number.trim()) { setError('Tracking number is required'); return; }
     setSaving(true);
+    setError('');
     const fd = new FormData();
     fd.append('job_card_id', jcId);
     Object.entries(f).forEach(([k, v]) => fd.append(k, v));
     if (file) fd.append('file', file);
-    try { await api.post('/dispatch', fd); onSave(); }
+    try {
+      await api.post('/dispatch', fd);
+      await api.put(`/dispatch/${jcId}/mark-dispatched`);
+      onSave();
+    }
     catch (err) { setError(err.response?.data?.error || 'Failed'); setSaving(false); }
   };
 
@@ -133,8 +140,8 @@ function DispatchDocModal({ jcId, onClose, onSave }) {
         </div>
         <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select document (optional)" />
         <div className="grid grid-cols-2 gap-4">
-          <div><label className="label">Shipping Carrier</label><input className="input" placeholder="e.g. DTDC" value={f.shipping_carrier} onChange={set('shipping_carrier')} /></div>
-          <div><label className="label">Tracking No</label><input className="input" value={f.tracking_number} onChange={set('tracking_number')} /></div>
+          <div><label className="label">Shipping Carrier <span className="text-red-500">*</span></label><input className="input" placeholder="e.g. DTDC" value={f.shipping_carrier} onChange={set('shipping_carrier')} required /></div>
+          <div><label className="label">Tracking No <span className="text-red-500">*</span></label><input className="input" value={f.tracking_number} onChange={set('tracking_number')} required /></div>
           <div><label className="label">Dispatch Date</label><input className="input" type="date" value={f.dispatch_date} onChange={set('dispatch_date')} /></div>
           <div><label className="label">Notes</label><input className="input" value={f.notes} onChange={set('notes')} /></div>
         </div>
