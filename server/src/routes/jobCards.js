@@ -326,7 +326,8 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
 }
 
 // ── Helper: check cumulative rejections across all stages ─────────────────────
-// If total > 4 and card is not already on hold, put it on hold (stage_no=0 sentinel)
+// If total > 4 and card is not already on hold, put it on hold (stage_no=0 sentinel).
+// If a cumulative hold was previously approved at some total N, only re-flag when total > N.
 async function checkCumulativeRejections(db, jobCardId, userId) {
   const jcRow = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);
   if (!jcRow || jcRow.status === 'on_hold') return; // already on hold, skip
@@ -338,12 +339,21 @@ async function checkCumulativeRejections(db, jobCardId, userId) {
   const total = parseInt(totRow?.total || 0, 10);
   if (total <= 4) return;
 
-  // Check if a cumulative hold already exists (stage_no=0) that's still pending
-  const existing = await db.get(
+  // Don't re-flag if a pending cumulative hold already exists
+  const pending = await db.get(
     "SELECT id FROM job_card_holds WHERE job_card_id=$1 AND stage_no=0 AND status='pending'",
     [jobCardId]
   );
-  if (existing) return; // already flagged
+  if (pending) return;
+
+  // Find the highest rejection_qty from previously approved cumulative holds.
+  // Only re-flag if current total exceeds that approved watermark.
+  const approvedRow = await db.get(
+    "SELECT COALESCE(MAX(rejection_qty), 0) AS max_approved FROM job_card_holds WHERE job_card_id=$1 AND stage_no=0 AND status='approved'",
+    [jobCardId]
+  );
+  const approvedWatermark = parseInt(approvedRow?.max_approved || 0, 10);
+  if (total <= approvedWatermark) return; // no new rejections beyond what was already approved
 
   await db.insert(`
     INSERT INTO job_card_holds (job_card_id, stage_no, rejection_qty, notes, created_by)
