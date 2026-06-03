@@ -39,6 +39,29 @@ router.put('/my-mentions/read-all', authenticate, async (req, res) => {
   res.json({ message: 'All marked as read' });
 });
 
+// ── Next order code ───────────────────────────────────────────────────────────
+router.get('/next-code', authenticate, async (req, res) => {
+  const db = getDB();
+  const yy = String(new Date().getFullYear()).slice(-2);
+  const prefix = `ORD-`;
+  const suffix = `-${yy}`;
+  // Find the highest sequence number used this year
+  const rows = await db.all(
+    `SELECT order_code FROM orders WHERE order_code LIKE $1`,
+    [`ORD-%-${yy}`]
+  );
+  let max = 0;
+  for (const row of rows) {
+    const match = row.order_code.match(/^ORD-(\d+)-\d{2}$/i);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  const next = String(max + 1).padStart(3, '0');
+  res.json({ code: `${prefix}${next}${suffix}` });
+});
+
 router.get('/', authenticate, async (req, res) => {
   const db = getDB();
   const canSeeNames = withCustomerVisibility(req);

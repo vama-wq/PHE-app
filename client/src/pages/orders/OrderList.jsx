@@ -505,6 +505,7 @@ function NewOrderModal({ onClose, onSave }) {
   useEffect(() => {
     api.get('/customers').then(r => setCustomers(r.data)).catch(() => {});
     api.get('/orders/inquiries/all').then(r => setInquiries(r.data)).catch(() => {});
+    api.get('/orders/next-code').then(r => setForm(f => ({ ...f, order_code: r.data.code }))).catch(() => {});
   }, []);
 
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
@@ -590,7 +591,7 @@ function NewOrderModal({ onClose, onSave }) {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Order Code <span className="text-red-500">*</span></label>
-                <input className="input" placeholder="e.g. ORD-2026-001" value={form.order_code} onChange={set('order_code')} required />
+                <input className="input" placeholder="Auto-generating..." value={form.order_code} onChange={set('order_code')} required />
               </div>
               <div>
                 <label className="label">Order Type <span className="text-red-500">*</span></label>
