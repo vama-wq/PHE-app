@@ -4,7 +4,7 @@
   "description": "Peena Heat Elements - Management App Server",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node --dns-result-order=ipv4first src/index.js",
     "dev": "nodemon src/index.js"
   },
   "dependencies": {
