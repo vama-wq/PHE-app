@@ -327,7 +327,7 @@ CREATE TABLE IF NOT EXISTS message_mentions (
 CREATE TABLE IF NOT EXISTS production_checklist (
   id SERIAL PRIMARY KEY,
   job_card_id INTEGER NOT NULL REFERENCES job_cards(id) ON DELETE CASCADE,
-  stage_no INTEGER NOT NULL CHECK(stage_no BETWEEN 1 AND 29),
+  stage_no INTEGER NOT NULL CHECK(stage_no BETWEEN 1 AND 30),
   done INTEGER DEFAULT 0,
   value1 TEXT,
   value2 TEXT,
