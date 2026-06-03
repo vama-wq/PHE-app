@@ -41,7 +41,17 @@ router.get('/', authenticate, authorize('design', 'owner', 'admin'), async (req,
      JOIN orders o ON jc.order_id = o.id
      JOIN customers c ON o.customer_id = c.id
      LEFT JOIN users u ON jc.uploaded_by = u.id
-     WHERE jc.status = 'qc_pending'
+     WHERE (
+       jc.status = 'qc_pending'
+       OR (
+         -- Catch stuck cards: stage 29 done but status didn't update correctly
+         jc.status = 'in_progress'
+         AND EXISTS (
+           SELECT 1 FROM production_checklist
+           WHERE job_card_id = jc.id AND stage_no = 29 AND done = 1
+         )
+       )
+     )
      ORDER BY jc.dispatch_date ASC`
   );
   res.json(cards);
@@ -101,7 +111,14 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   `, [req.params.id]);
 
   if (!jc) return res.status(404).json({ error: 'Not found' });
-  if (jc.status !== 'qc_pending') return res.status(400).json({ error: 'Job card is not in QC Pending state' });
+  // Accept both qc_pending and in_progress+stage29done (stuck cards)
+  const stage29Done = await db.get(
+    'SELECT 1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=29 AND done=1',
+    [req.params.id]
+  );
+  if (jc.status !== 'qc_pending' && !(jc.status === 'in_progress' && stage29Done)) {
+    return res.status(400).json({ error: 'Job card is not in QC Pending state' });
+  }
 
   const reportRow = await db.get('SELECT COUNT(*) AS c FROM qc_reports WHERE job_card_id=$1', [req.params.id]);
   if (parseInt(reportRow.c, 10) === 0) return res.status(400).json({ error: 'Upload a QC report before approving' });
@@ -236,7 +253,13 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
   const db = getDB();
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.id]);
   if (!jc) return res.status(404).json({ error: 'Not found' });
-  if (jc.status !== 'qc_pending') return res.status(400).json({ error: 'Job card is not in QC Pending state' });
+  const stage29DoneR = await db.get(
+    'SELECT 1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=29 AND done=1',
+    [req.params.id]
+  );
+  if (jc.status !== 'qc_pending' && !(jc.status === 'in_progress' && stage29DoneR)) {
+    return res.status(400).json({ error: 'Job card is not in QC Pending state' });
+  }
 
   // Reset stage 29 so production can re-submit to QC after fixing
   await db.run(
