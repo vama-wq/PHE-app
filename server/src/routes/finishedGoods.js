@@ -2,6 +2,23 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 
+// ── Global movement log (all inward + outward across all FG items) ────────────
+router.get('/logs', authenticate, async (req, res) => {
+  const rows = await getDB().all(`
+    SELECT
+      fgl.*,
+      fg.drawing_no, fg.base_drawing_no, fg.order_code, fg.customer_code AS original_customer_code,
+      fg.tube_material, fg.wattage, fg.voltage,
+      u.name AS created_by_name
+    FROM finished_goods_log fgl
+    JOIN finished_goods fg ON fgl.finished_good_id = fg.id
+    LEFT JOIN users u ON fgl.created_by = u.id
+    ORDER BY fgl.created_at DESC
+    LIMIT 500
+  `);
+  res.json(rows);
+});
+
 // ── List all finished goods ───────────────────────────────────────────────────
 router.get('/', authenticate, async (req, res) => {
   const rows = await getDB().all(`
