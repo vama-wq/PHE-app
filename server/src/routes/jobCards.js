@@ -401,11 +401,16 @@ router.get('/:id/checklist', authenticate, async (req, res) => {
     rejection_photo_file: null, rejection_photo_original_name: null,
     worker_name: null, scrap_value: null,
   });
-  const jcInfo = await db.get(
-    'SELECT qc_rejected, qc_rejection_notes FROM job_cards WHERE id=$1',
-    [req.params.id]
-  );
-  res.json({ stages, hold: activeHold || null, qc_rejected: jcInfo?.qc_rejected || false, qc_rejection_notes: jcInfo?.qc_rejection_notes || null });
+  let qcRejected = false, qcRejectionNotes = null;
+  try {
+    const jcInfo = await db.get(
+      'SELECT qc_rejected, qc_rejection_notes FROM job_cards WHERE id=$1',
+      [req.params.id]
+    );
+    qcRejected = jcInfo?.qc_rejected || false;
+    qcRejectionNotes = jcInfo?.qc_rejection_notes || null;
+  } catch (_) { /* columns may not exist yet */ }
+  res.json({ stages, hold: activeHold || null, qc_rejected: qcRejected, qc_rejection_notes: qcRejectionNotes });
 });
 
 // ── PUT update a checklist stage ──────────────────────────────────────────────
@@ -497,10 +502,12 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
 
   // When stage 29 is re-submitted to QC, clear the QC rejection flag
   if (stageNo === 29 && done) {
-    await db.run(
-      `UPDATE job_cards SET qc_rejected=FALSE, qc_rejection_notes=NULL WHERE id=$1`,
-      [jobCardId]
-    );
+    try {
+      await db.run(
+        `UPDATE job_cards SET qc_rejected=FALSE, qc_rejection_notes=NULL WHERE id=$1`,
+        [jobCardId]
+      );
+    } catch (_) { /* column may not exist yet — ignore */ }
   }
 
   if (done && rejQty > 2) {

@@ -244,11 +244,16 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
     [req.params.id]
   );
 
-  // Set status back to in_progress and flag the rejection for production to see
-  await db.run(
-    `UPDATE job_cards SET status='in_progress', qc_rejected=TRUE, qc_rejection_notes=$1 WHERE id=$2`,
-    [notes || null, req.params.id]
-  );
+  // Set status back to in_progress
+  await db.run(`UPDATE job_cards SET status='in_progress' WHERE id=$1`, [req.params.id]);
+
+  // Flag the rejection for production to see (graceful — columns may not exist on first deploy)
+  try {
+    await db.run(
+      `UPDATE job_cards SET qc_rejected=TRUE, qc_rejection_notes=$1 WHERE id=$2`,
+      [notes || null, req.params.id]
+    );
+  } catch (_) { /* column may not exist yet — ignore, core flow already done */ }
 
   await logActivity(jc.order_id, jc.id, 'status_changed',
     `Job card ${jc.job_card_no} QC Rejected — returned to production. ${notes || ''}`, req.user.id);
