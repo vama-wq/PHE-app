@@ -914,7 +914,6 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     if (photoRequiredAfter6pm && !stagePhotoFile) return false; // need photo first, then Mark Done
     if (rejQtyInt > 2 && !rejPhoto) return false;
     if (stageDef.no === 29 && mandatoryMissing.length > 0) return false;
-    if (stageDef.no === 30 && card.status !== 'qc_approved') return false;
     if (stageDef.isDispatch && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim()) return false;
     return true;
   };
@@ -1113,17 +1112,6 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         );
       })()}
 
-      {stageDef.no === 30 && !isDone && card.status !== 'qc_approved' && (
-        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
-          <div className="text-amber-700 font-semibold text-sm flex items-center gap-2 mb-1">
-            <AlertTriangle size={15} /> Awaiting QC Approval
-          </div>
-          <p className="text-xs text-amber-600">
-            QC must approve this job card before confirming dispatch.
-            Current status: <strong>{card.status?.replace(/_/g, ' ')}</strong>
-          </p>
-        </div>
-      )}
 
       {/* Dispatch fields (stage 29 — Dispatch Preparation, triggers QC) */}
       {stageDef.isDispatch && (() => {
@@ -1463,7 +1451,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       )}
 
       {/* Rejection section — hidden for dispatch stage (no rejections at dispatch) */}
-      {!stageDef.isDispatch && stageDef.no !== 30 && <div className="mt-2 pt-4 border-t border-gray-100">
+      {!stageDef.isDispatch && <div className="mt-2 pt-4 border-t border-gray-100">
         <p className="text-sm font-medium text-gray-700 mb-3">Rejection at this stage</p>
 
         <div className="flex items-center gap-3 mb-3">
@@ -1564,7 +1552,6 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               title={
                 mandatoryMissing.length > 0 ? 'Complete all mandatory stages first' :
                 rejQtyInt > 2 && !rejPhoto ? 'Upload rejection photo first' :
-                stageDef.no === 30 && card.status !== 'qc_approved' ? 'QC must be approved before confirming dispatch' :
                 stageDef.isDispatch && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim() ? 'Enter reason for remade qty' :
                 ''
               }
