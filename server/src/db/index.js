@@ -64,38 +64,46 @@ function getDB() {
   return db;
 }
 
-async function initDB() {
-  try {
-    // Run idempotent migrations
-    await pool.query(`ALTER TABLE job_card_holds ADD COLUMN IF NOT EXISTS notes TEXT`);
-    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS qc_rejected BOOLEAN DEFAULT FALSE`);
-    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS qc_rejection_notes TEXT`);
+async function initDB(retries = 10, delayMs = 3000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      // Run idempotent migrations
+      await pool.query(`ALTER TABLE job_card_holds ADD COLUMN IF NOT EXISTS notes TEXT`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS qc_rejected BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS qc_rejection_notes TEXT`);
 
-    // Seed default users only on first run (empty table)
-    const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
-    if (parseInt(rows[0].c, 10) === 0) {
-      const hash = bcrypt.hashSync('PHE@2024', 10);
-      const seeds = [
-        ['Mitesh / Vama Shah', 'owner',      hash, 'owner'],
-        ['Admin',              'admin',       hash, 'admin'],
-        ['Accounts Manager',   'accounts',    hash, 'accounts'],
-        ['Design / QC',        'design',      hash, 'design'],
-        ['Production Manager', 'production',  hash, 'production'],
-      ];
-      for (const [name, username, password_hash, role] of seeds) {
-        await pool.query(
-          `INSERT INTO users (name, username, password_hash, role, force_password_change)
-           VALUES ($1, $2, $3, $4, 1)
-           ON CONFLICT (username) DO NOTHING`,
-          [name, username, password_hash, role]
-        );
+      // Seed default users only on first run (empty table)
+      const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
+      if (parseInt(rows[0].c, 10) === 0) {
+        const hash = bcrypt.hashSync('PHE@2024', 10);
+        const seeds = [
+          ['Mitesh / Vama Shah', 'owner',      hash, 'owner'],
+          ['Admin',              'admin',       hash, 'admin'],
+          ['Accounts Manager',   'accounts',    hash, 'accounts'],
+          ['Design / QC',        'design',      hash, 'design'],
+          ['Production Manager', 'production',  hash, 'production'],
+        ];
+        for (const [name, username, password_hash, role] of seeds) {
+          await pool.query(
+            `INSERT INTO users (name, username, password_hash, role, force_password_change)
+             VALUES ($1, $2, $3, $4, 1)
+             ON CONFLICT (username) DO NOTHING`,
+            [name, username, password_hash, role]
+          );
+        }
+        console.log('Default users seeded. Password: PHE@2024 (all users must change on first login)');
       }
-      console.log('Default users seeded. Password: PHE@2024 (all users must change on first login)');
+      console.log('Database connected');
+      return; // success
+    } catch (err) {
+      console.error(`initDB attempt ${attempt}/${retries} failed: ${err.message}`);
+      if (attempt === retries) {
+        console.error('Failed to connect to database after all retries');
+        throw err;
+      }
+      console.log(`Retrying in ${delayMs / 1000}s...`);
+      await new Promise(res => setTimeout(res, delayMs));
     }
-    console.log('Database connected');
-  } catch (err) {
-    console.error('initDB error:', err.message);
-    throw err;
   }
 }
 
