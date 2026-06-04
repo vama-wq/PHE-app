@@ -135,6 +135,18 @@ async function initDB(retries = 10, delayMs = 3000) {
             GROUP BY base_drawing_no
           )
       `);
+      // 5. Backfill job_card_no from reference field for old log entries created before
+      //    the job_card_no column existed (reference was set to the job card number).
+      //    Only update where reference actually matches a real job card.
+      await pool.query(`
+        UPDATE finished_goods_log fgl
+        SET job_card_no = fgl.reference
+        FROM job_cards jc
+        WHERE fgl.movement_type = 'inward'
+          AND fgl.job_card_no IS NULL
+          AND fgl.reference IS NOT NULL
+          AND jc.job_card_no = fgl.reference
+      `);
       // Widen stage_no check constraint to include stage 30 (Dispatch)
       await pool.query(`ALTER TABLE production_checklist DROP CONSTRAINT IF EXISTS production_checklist_stage_no_check`);
       await pool.query(`ALTER TABLE production_checklist ADD CONSTRAINT production_checklist_stage_no_check CHECK (stage_no BETWEEN 1 AND 30)`);
