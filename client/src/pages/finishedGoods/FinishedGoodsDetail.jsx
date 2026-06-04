@@ -3,15 +3,16 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
 import { ArrowLeft, ArrowDownCircle, ArrowUpCircle, Package, BarChart2,
-         CheckCircle, Circle, AlertTriangle, ArrowRight } from 'lucide-react';
+         CheckCircle, Circle, AlertTriangle, ArrowRight, Plus } from 'lucide-react';
 import { fmtDateTime, fmtDate, PRODUCTION_STAGES } from '../../lib/utils';
 
 export default function FinishedGoodsDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [data, setData]       = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [summaryJc, setSummaryJc] = useState(null); // job card object for summary modal
+  const [data, setData]         = useState(null);
+  const [loading, setLoading]   = useState(true);
+  const [summaryJc, setSummaryJc]   = useState(null);
+  const [showOutward, setShowOutward] = useState(false);
 
   const load = () => {
     api.get(`/finished-goods/${id}`)
@@ -29,11 +30,19 @@ export default function FinishedGoodsDetail() {
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
-      {/* Back */}
-      <button onClick={() => navigate('/finished-goods')}
-        className="flex items-center gap-2 text-sm text-gray-500 hover:text-brand-600 transition-colors">
-        <ArrowLeft size={16} /> Back to Finished Goods
-      </button>
+      {/* Back + Record Outward */}
+      <div className="flex items-center justify-between">
+        <button onClick={() => navigate('/finished-goods')}
+          className="flex items-center gap-2 text-sm text-gray-500 hover:text-brand-600 transition-colors">
+          <ArrowLeft size={16} /> Back to Finished Goods
+        </button>
+        {fg.qty_available > 0 && (
+          <button className="btn-primary flex items-center gap-1.5 text-sm"
+            onClick={() => setShowOutward(true)}>
+            <Plus size={15} /> Record Outward
+          </button>
+        )}
+      </div>
 
       {/* Product header */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
@@ -218,11 +227,120 @@ export default function FinishedGoodsDetail() {
         )}
       </div>
 
+      {/* Outward modal */}
+      {showOutward && (
+        <OutwardModal
+          fg={fg}
+          onClose={() => setShowOutward(false)}
+          onDone={() => { setShowOutward(false); load(); }}
+        />
+      )}
+
       {/* Checklist summary modal */}
       {summaryJc && (
         <ChecklistSummaryModal jc={summaryJc} onClose={() => setSummaryJc(null)} />
       )}
     </div>
+  );
+}
+
+// ── Outward Modal ─────────────────────────────────────────────────────────────
+function OutwardModal({ fg, onClose, onDone }) {
+  const [qty, setQty]                 = useState('');
+  const [outwardType, setOutwardType] = useState('dispatch');
+  const [customerId, setCustomerId]   = useState('');
+  const [reason, setReason]           = useState('');
+  const [reference, setRef]           = useState('');
+  const [notes, setNotes]             = useState('');
+  const [saving, setSaving]           = useState(false);
+  const [error, setError]             = useState('');
+  const [customers, setCustomers]     = useState([]);
+
+  useEffect(() => { api.get('/customers').then(r => setCustomers(r.data)).catch(() => {}); }, []);
+
+  const selectedCustomer = customers.find(c => String(c.id) === String(customerId));
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!qty || parseInt(qty) <= 0) return setError('Enter a valid quantity');
+    if (!customerId) return setError('Select a client');
+    if (outwardType === 'sampling' && !reason.trim()) return setError('Reason required for sampling');
+    setSaving(true);
+    try {
+      await api.post(`/finished-goods/${fg.id}/outward`, {
+        qty: parseInt(qty),
+        outward_type: outwardType,
+        client_code: selectedCustomer?.customer_code || '',
+        client_name: selectedCustomer?.name || '',
+        reason: outwardType === 'sampling' ? reason : undefined,
+        reference, notes,
+      });
+      onDone();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title="Record Outward" onClose={onClose} size="sm">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="bg-gray-50 rounded-xl p-3 text-sm">
+          <p className="font-bold text-gray-900">{fg.base_drawing_no || fg.drawing_no}</p>
+          <p className="text-gray-500 text-xs mt-0.5">
+            {[fg.tube_material, fg.wattage ? `${fg.wattage}W` : null, fg.voltage ? `${fg.voltage}V` : null].filter(Boolean).join(' · ')}
+          </p>
+          <p className="text-green-600 font-semibold mt-1">{fg.qty_available} Nos available</p>
+        </div>
+        <div>
+          <label className="label">Outward Type *</label>
+          <div className="flex gap-3">
+            {['dispatch', 'sampling'].map(t => (
+              <button key={t} type="button" onClick={() => setOutwardType(t)}
+                className={`flex-1 py-2 rounded-xl border-2 text-sm font-semibold transition-colors ${
+                  outwardType === t
+                    ? t === 'dispatch' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-amber-50 border-amber-500 text-amber-700'
+                    : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                }`}>
+                {t === 'dispatch' ? '📦 Dispatch' : '🧪 Sampling'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="label">Client *</label>
+          <select className="input" value={customerId} onChange={e => setCustomerId(e.target.value)} required>
+            <option value="">— Select customer —</option>
+            {customers.map(c => <option key={c.id} value={c.id}>{c.customer_code} · {c.name}</option>)}
+          </select>
+        </div>
+        {outwardType === 'sampling' && (
+          <div>
+            <label className="label">Sampling Reason *</label>
+            <input className="input" placeholder="e.g. New product trial..." value={reason} onChange={e => setReason(e.target.value)} />
+          </div>
+        )}
+        <div>
+          <label className="label">Quantity *</label>
+          <input className="input" type="number" min="1" max={fg.qty_available} value={qty} onChange={e => setQty(e.target.value)} required />
+        </div>
+        <div>
+          <label className="label">Reference <span className="text-gray-400 font-normal">(optional)</span></label>
+          <input className="input" placeholder="e.g. Order ref, dispatch note..." value={reference} onChange={e => setRef(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
+          <textarea className="input h-16 resize-none" value={notes} onChange={e => setNotes(e.target.value)} />
+        </div>
+        {error && <p className="text-red-600 text-sm">{error}</p>}
+        <div className="flex gap-3 pt-1">
+          <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving}>
+            {saving ? 'Saving...' : 'Record Outward'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
