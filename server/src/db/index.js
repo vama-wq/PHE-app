@@ -83,6 +83,58 @@ async function initDB(retries = 10, delayMs = 3000) {
       await pool.query(`ALTER TABLE finished_goods_log ADD COLUMN IF NOT EXISTS job_card_no TEXT`);
       await pool.query(`ALTER TABLE finished_goods_log ADD COLUMN IF NOT EXISTS order_code TEXT`);
       await pool.query(`ALTER TABLE finished_goods_log ADD COLUMN IF NOT EXISTS customer_code TEXT`);
+
+      // ── Consolidate finished_goods: one row per base_drawing_no ──────────────
+      // 1. Fill base_drawing_no by stripping trailing job-card suffix (-1, -2, etc.)
+      await pool.query(`
+        UPDATE finished_goods
+        SET base_drawing_no = regexp_replace(drawing_no, '-[0-9]+$', '')
+        WHERE drawing_no IS NOT NULL
+      `);
+      // 2. Re-point log entries from duplicate rows to the canonical (lowest id) row
+      await pool.query(`
+        UPDATE finished_goods_log fgl
+        SET finished_good_id = canonical.id
+        FROM (
+          SELECT base_drawing_no, MIN(id) AS id
+          FROM finished_goods
+          WHERE base_drawing_no IS NOT NULL
+          GROUP BY base_drawing_no
+        ) canonical
+        JOIN finished_goods fg
+          ON fg.base_drawing_no = canonical.base_drawing_no AND fg.id != canonical.id
+        WHERE fgl.finished_good_id = fg.id
+      `);
+      // 3. Aggregate qty_in + qty_available into the canonical row
+      await pool.query(`
+        UPDATE finished_goods fg
+        SET qty_in        = totals.sum_in,
+            qty_available = totals.sum_avail
+        FROM (
+          SELECT base_drawing_no,
+                 SUM(qty_in)        AS sum_in,
+                 SUM(qty_available) AS sum_avail
+          FROM finished_goods
+          WHERE base_drawing_no IS NOT NULL
+          GROUP BY base_drawing_no
+          HAVING COUNT(*) > 1
+        ) totals
+        WHERE fg.base_drawing_no = totals.base_drawing_no
+          AND fg.id = (
+            SELECT MIN(id) FROM finished_goods
+            WHERE base_drawing_no = fg.base_drawing_no
+          )
+      `);
+      // 4. Delete non-canonical duplicate rows (log entries already moved)
+      await pool.query(`
+        DELETE FROM finished_goods
+        WHERE base_drawing_no IS NOT NULL
+          AND id NOT IN (
+            SELECT MIN(id) FROM finished_goods
+            WHERE base_drawing_no IS NOT NULL
+            GROUP BY base_drawing_no
+          )
+      `);
       // Widen stage_no check constraint to include stage 30 (Dispatch)
       await pool.query(`ALTER TABLE production_checklist DROP CONSTRAINT IF EXISTS production_checklist_stage_no_check`);
       await pool.query(`ALTER TABLE production_checklist ADD CONSTRAINT production_checklist_stage_no_check CHECK (stage_no BETWEEN 1 AND 30)`);
