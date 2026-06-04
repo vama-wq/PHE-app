@@ -60,9 +60,20 @@ router.get('/:id', authenticate, async (req, res) => {
   if (!fg) return res.status(404).json({ error: 'Not found' });
 
   const log = await db.all(`
-    SELECT fgl.*, u.name as created_by_name
+    SELECT fgl.*,
+      u.name AS created_by_name,
+      -- join job_cards to get drawing_no, job card id, and customer for each inward
+      jc.id          AS job_card_id,
+      jc.drawing_no  AS jc_drawing_no,
+      jc.product_name,
+      o.order_code   AS jc_order_code,
+      c.customer_code AS jc_customer_code,
+      c.name          AS jc_customer_name
     FROM finished_goods_log fgl
     LEFT JOIN users u ON fgl.created_by = u.id
+    LEFT JOIN job_cards jc ON jc.job_card_no = fgl.job_card_no
+    LEFT JOIN orders o ON o.id = jc.order_id
+    LEFT JOIN customers c ON c.id = o.customer_id
     WHERE fgl.finished_good_id = $1
     ORDER BY fgl.created_at DESC
   `, [req.params.id]);

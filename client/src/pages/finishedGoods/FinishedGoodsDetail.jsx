@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../../lib/api';
-import { ArrowLeft, ArrowDownCircle, ArrowUpCircle, Package } from 'lucide-react';
-import { fmtDateTime } from '../../lib/utils';
+import Modal from '../../components/ui/Modal';
+import { ArrowLeft, ArrowDownCircle, ArrowUpCircle, Package, BarChart2,
+         CheckCircle, Circle, AlertTriangle, ArrowRight } from 'lucide-react';
+import { fmtDateTime, fmtDate, PRODUCTION_STAGES } from '../../lib/utils';
 
 export default function FinishedGoodsDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [data, setData] = useState(null);
+  const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
+  const [summaryJc, setSummaryJc] = useState(null); // job card object for summary modal
 
   const load = () => {
     api.get(`/finished-goods/${id}`)
@@ -42,71 +45,28 @@ export default function FinishedGoodsDetail() {
             <h1 className="text-xl font-bold text-gray-900">
               {fg.base_drawing_no || fg.drawing_no || '—'}
             </h1>
-            <div className="flex flex-wrap gap-2 mt-1">
-              {fg.tube_material && (
-                <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full font-medium">
-                  {fg.tube_material}
-                </span>
-              )}
-              {fg.tube_diameter && (
-                <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full font-medium">
-                  ⌀ {fg.tube_diameter} mm
-                </span>
-              )}
-              {fg.wattage && (
-                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
-                  {fg.wattage} W
-                </span>
-              )}
-              {fg.voltage && (
-                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
-                  {fg.voltage} V
-                </span>
-              )}
-              {fg.plating_instructions && (
-                <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">
-                  {fg.plating_instructions}
-                </span>
-              )}
+            <div className="flex flex-wrap gap-2 mt-1.5">
+              {fg.tube_material      && <Chip color="gray">{fg.tube_material}</Chip>}
+              {fg.tube_diameter      && <Chip color="gray">⌀ {fg.tube_diameter} mm</Chip>}
+              {fg.wattage            && <Chip color="amber">{fg.wattage} W</Chip>}
+              {fg.voltage            && <Chip color="blue">{fg.voltage} V</Chip>}
+              {fg.plating_instructions && <Chip color="purple">{fg.plating_instructions}</Chip>}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Stock summary */}
+      {/* Stock cards */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="bg-green-50 border border-green-100 rounded-xl p-4 flex items-center gap-3">
-          <ArrowDownCircle size={22} className="text-green-600" />
-          <div>
-            <p className="text-xs text-green-700">Total Inward</p>
-            <p className="text-2xl font-bold text-green-800">{fg.qty_in}</p>
-            <p className="text-xs text-green-600 mt-0.5">{inwardLog.length} batch{inwardLog.length !== 1 ? 'es' : ''}</p>
-          </div>
-        </div>
-        <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex items-center gap-3">
-          <ArrowUpCircle size={22} className="text-red-500" />
-          <div>
-            <p className="text-xs text-red-700">Total Outward</p>
-            <p className="text-2xl font-bold text-red-800">{totalOutward}</p>
-            <p className="text-xs text-red-600 mt-0.5">{outwardLog.length} movement{outwardLog.length !== 1 ? 's' : ''}</p>
-          </div>
-        </div>
-        <div className={`border rounded-xl p-4 flex items-center gap-3 ${
-          fg.qty_available === 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-100'
-        }`}>
-          <Package size={22} className={fg.qty_available === 0 ? 'text-red-500' : 'text-blue-600'} />
-          <div>
-            <p className={`text-xs ${fg.qty_available === 0 ? 'text-red-600' : 'text-blue-700'}`}>
-              Available Stock
-            </p>
-            <p className={`text-2xl font-bold ${fg.qty_available === 0 ? 'text-red-700' : 'text-blue-800'}`}>
-              {fg.qty_available}
-            </p>
-          </div>
-        </div>
+        <StatCard icon={ArrowDownCircle} color="green" label="Total Inward" value={fg.qty_in}
+          sub={`${inwardLog.length} batch${inwardLog.length !== 1 ? 'es' : ''}`} />
+        <StatCard icon={ArrowUpCircle} color="red" label="Total Outward" value={totalOutward}
+          sub={`${outwardLog.length} movement${outwardLog.length !== 1 ? 's' : ''}`} />
+        <StatCard icon={Package} color={fg.qty_available === 0 ? 'red' : 'blue'}
+          label="Available Stock" value={fg.qty_available} sub="Nos" />
       </div>
 
-      {/* Inward batches — which job cards contributed stock */}
+      {/* ── Inward Batches ── */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 bg-green-50 flex items-center gap-2">
           <ArrowDownCircle size={15} className="text-green-600" />
@@ -114,41 +74,83 @@ export default function FinishedGoodsDetail() {
             Inward Batches — Production History
           </h2>
         </div>
+
         {inwardLog.length === 0 ? (
-          <p className="text-center text-gray-400 text-sm py-8">No inward batches recorded</p>
+          <p className="text-center text-gray-400 text-sm py-8">No inward batches yet</p>
         ) : (
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
-                <th className="table-header text-left">Job Card</th>
+                <th className="table-header text-left">Drawing No (Job Card)</th>
                 <th className="table-header text-left">Order</th>
                 <th className="table-header text-left">Customer</th>
                 <th className="table-header text-center">Qty</th>
-                <th className="table-header text-left">Notes</th>
                 <th className="table-header text-left">Date</th>
+                <th className="table-header text-right">Checklist</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {inwardLog.map(l => (
                 <tr key={l.id} className="hover:bg-gray-50">
+                  {/* Drawing number from job card + job card no as sub-label */}
                   <td className="table-cell">
-                    {l.job_card_no
-                      ? <Link to={`/job-cards/${l.job_card_no}`}
-                          className="font-semibold text-brand-700 hover:underline text-sm">
-                          {l.job_card_no}
-                        </Link>
-                      : <span className="text-gray-400 text-sm">{l.reference || '—'}</span>
+                    <div className="font-semibold text-brand-700 text-sm">
+                      {l.jc_drawing_no || l.job_card_no || '—'}
+                    </div>
+                    {l.jc_drawing_no && l.job_card_no && (
+                      <div className="text-xs text-gray-400">{l.job_card_no}</div>
+                    )}
+                  </td>
+
+                  {/* Order */}
+                  <td className="table-cell text-sm text-gray-700 font-medium">
+                    {l.jc_order_code || l.order_code || '—'}
+                  </td>
+
+                  {/* Customer */}
+                  <td className="table-cell text-sm">
+                    {l.jc_customer_code
+                      ? <>
+                          <div className="font-medium text-gray-800">{l.jc_customer_code}</div>
+                          {l.jc_customer_name && (
+                            <div className="text-xs text-gray-400">{l.jc_customer_name}</div>
+                          )}
+                        </>
+                      : <span className="text-gray-400">—</span>
                     }
                   </td>
-                  <td className="table-cell text-sm text-gray-600">{l.order_code || l.reference || '—'}</td>
-                  <td className="table-cell text-sm text-gray-600">{l.customer_code || '—'}</td>
+
+                  {/* Qty */}
                   <td className="table-cell text-center">
                     <span className="inline-flex items-center gap-1 text-sm font-semibold text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
                       +{l.qty}
                     </span>
                   </td>
-                  <td className="table-cell text-sm text-gray-400">{l.notes || '—'}</td>
-                  <td className="table-cell text-sm text-gray-500">{fmtDateTime(l.created_at)}</td>
+
+                  {/* Date */}
+                  <td className="table-cell text-sm text-gray-500">
+                    {fmtDate(l.created_at)}
+                  </td>
+
+                  {/* Checklist summary button */}
+                  <td className="table-cell text-right">
+                    {l.job_card_id ? (
+                      <button
+                        onClick={() => setSummaryJc({
+                          id: l.job_card_id,
+                          job_card_no: l.job_card_no,
+                          drawing_no: l.jc_drawing_no,
+                          qty: null, net_qty: null,
+                          qc_route: null, qc_dispatch_qty: null, qc_fg_qty: null,
+                        })}
+                        className="btn-secondary btn-sm flex items-center gap-1 text-xs py-1 px-2 ml-auto"
+                      >
+                        <BarChart2 size={12} /> Summary
+                      </button>
+                    ) : (
+                      <span className="text-gray-300 text-xs">—</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -156,12 +158,12 @@ export default function FinishedGoodsDetail() {
         )}
       </div>
 
-      {/* Outward movements */}
+      {/* ── Outward Movements ── */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 bg-red-50 flex items-center gap-2">
           <ArrowUpCircle size={15} className="text-red-500" />
           <h2 className="text-sm font-semibold text-red-700 uppercase tracking-wide">
-            Outward Movements — Dispatch & Sampling
+            Outward Movements — Dispatch &amp; Sampling
           </h2>
         </div>
         {outwardLog.length === 0 ? (
@@ -202,19 +204,228 @@ export default function FinishedGoodsDetail() {
                     </span>
                   </td>
                   <td className="table-cell text-sm text-gray-500">
-                    {l.reason && <div className="text-amber-700 font-medium">{l.reason}</div>}
+                    {l.reason    && <div className="text-amber-700 font-medium">{l.reason}</div>}
                     {l.reference && <div>{l.reference}</div>}
-                    {l.notes && <div className="text-gray-400">{l.notes}</div>}
+                    {l.notes     && <div className="text-gray-400">{l.notes}</div>}
                     {!l.reason && !l.reference && !l.notes && '—'}
                   </td>
                   <td className="table-cell text-sm text-gray-600">{l.created_by_name || '—'}</td>
-                  <td className="table-cell text-sm text-gray-500">{fmtDateTime(l.created_at)}</td>
+                  <td className="table-cell text-sm text-gray-500">{fmtDate(l.created_at)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* Checklist summary modal */}
+      {summaryJc && (
+        <ChecklistSummaryModal jc={summaryJc} onClose={() => setSummaryJc(null)} />
+      )}
     </div>
+  );
+}
+
+// ── Small helpers ─────────────────────────────────────────────────────────────
+function Chip({ children, color }) {
+  const colors = {
+    gray:   'bg-gray-100 text-gray-700',
+    amber:  'bg-amber-100 text-amber-700',
+    blue:   'bg-blue-100 text-blue-700',
+    purple: 'bg-purple-100 text-purple-700',
+    green:  'bg-green-100 text-green-700',
+    red:    'bg-red-100 text-red-700',
+  };
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${colors[color] || colors.gray}`}>
+      {children}
+    </span>
+  );
+}
+
+function StatCard({ icon: Icon, color, label, value, sub }) {
+  const styles = {
+    green: { bg: 'bg-green-50 border-green-100', icon: 'text-green-600', val: 'text-green-800', sub: 'text-green-600' },
+    red:   { bg: 'bg-red-50 border-red-100',     icon: 'text-red-500',   val: 'text-red-700',   sub: 'text-red-500'   },
+    blue:  { bg: 'bg-blue-50 border-blue-100',   icon: 'text-blue-600',  val: 'text-blue-800',  sub: 'text-blue-600'  },
+  };
+  const s = styles[color] || styles.blue;
+  return (
+    <div className={`border rounded-xl p-4 flex items-center gap-3 ${s.bg}`}>
+      <Icon size={22} className={s.icon} />
+      <div>
+        <p className={`text-xs ${s.sub}`}>{label}</p>
+        <p className={`text-2xl font-bold ${s.val}`}>{value}</p>
+        {sub && <p className={`text-xs ${s.sub} mt-0.5`}>{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
+// ── Checklist Summary Modal (same as in DispatchList) ─────────────────────────
+function ChecklistSummaryModal({ jc, onClose }) {
+  const [data, setData]     = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.all([
+      api.get(`/job-cards/${jc.id}/checklist`),
+      api.get(`/qc/${jc.id}/reports`),
+    ]).then(([cl, qcR]) => {
+      setData({ checklist: cl.data, qcReports: qcR.data });
+    }).finally(() => setLoading(false));
+  }, [jc.id]);
+
+  const stages    = data?.checklist?.stages || [];
+  const doneStages = stages.filter(s => s.done);
+  const qcReport  = data?.qcReports?.[0];
+  const totalRejected = stages.reduce((a, s) => a + (parseInt(s.rejection_qty, 10) || 0), 0);
+  const totalRemade   = stages.filter(s => s.stage_no !== 29)
+                               .reduce((a, s) => a + (parseInt(s.remade_qty, 10) || 0), 0);
+
+  return (
+    <Modal open title={`Checklist — ${jc.drawing_no || jc.job_card_no}`} onClose={onClose} size="xl">
+      {loading ? (
+        <div className="py-12 text-center text-gray-400">Loading...</div>
+      ) : (
+        <div className="space-y-5">
+
+          {/* Stats */}
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { label: 'Original Qty', value: jc.qty ?? '—',     color: 'text-gray-800' },
+              { label: 'Rejected',     value: totalRejected,       color: totalRejected > 0 ? 'text-red-600' : 'text-gray-800' },
+              { label: 'Remade',       value: totalRemade,          color: totalRemade > 0 ? 'text-amber-600' : 'text-gray-800' },
+              { label: 'Net Qty',      value: jc.net_qty ?? '—',  color: 'text-green-700' },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="bg-gray-50 rounded-xl p-3 text-center border border-gray-100">
+                <div className={`text-2xl font-bold ${color}`}>{value}</div>
+                <div className="text-xs text-gray-500 mt-0.5">{label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* QC report */}
+          {qcReport && (
+            <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 text-sm space-y-1">
+              <div className="font-semibold text-blue-800 flex items-center gap-1.5">
+                QC Report
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${
+                  qcReport.result === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                }`}>{qcReport.result}</span>
+              </div>
+              {qcReport.observations && (
+                <div className="text-gray-600"><span className="font-medium">Observations: </span>{qcReport.observations}</div>
+              )}
+              {qcReport.product_weight && (
+                <div className="text-gray-600"><span className="font-medium">Product Weight: </span>{qcReport.product_weight} kg</div>
+              )}
+            </div>
+          )}
+
+          {/* Stage progress */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold text-gray-700">Production Stages</h3>
+              <span className="text-xs text-gray-500">{doneStages.length} / {stages.length} completed</span>
+            </div>
+            <div className="w-full bg-gray-100 rounded-full h-1.5 mb-3">
+              <div className="bg-brand-600 h-1.5 rounded-full"
+                style={{ width: `${stages.length ? (doneStages.length / stages.length) * 100 : 0}%` }} />
+            </div>
+
+            <div className="divide-y divide-gray-100 border border-gray-200 rounded-xl overflow-hidden max-h-[400px] overflow-y-auto">
+              {stages.map(s => {
+                const def = PRODUCTION_STAGES.find(p => p.no === s.stage_no);
+                const hasRej   = (parseInt(s.rejection_qty, 10) || 0) > 0;
+                const hasRemade = (parseInt(s.remade_qty, 10)   || 0) > 0;
+                const hasPhoto  = s.photo_file || s.rejection_photo_file;
+                return (
+                  <div key={s.stage_no}
+                    className={`flex items-start gap-3 px-3 py-2 text-sm ${!s.done ? 'bg-gray-50 text-gray-400' : 'bg-white'}`}>
+                    <div className="flex-shrink-0 mt-0.5">
+                      {s.done
+                        ? <CheckCircle size={15} className="text-green-500" />
+                        : <Circle      size={15} className="text-gray-300" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`font-medium ${s.done ? 'text-gray-800' : 'text-gray-400'}`}>
+                          {s.stage_no}. {def?.name || `Stage ${s.stage_no}`}
+                        </span>
+                        {hasRej && (
+                          <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
+                            <AlertTriangle size={10} /> Rej: {s.rejection_qty}
+                          </span>
+                        )}
+                        {hasRemade && (
+                          <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
+                            Remade: {s.remade_qty}
+                          </span>
+                        )}
+                        {s.scrap_value && (
+                          <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full">
+                            Scrap: {s.scrap_value}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
+                        {def?.hvLight && s.value1 ? (() => {
+                          let d = {};
+                          try { d = JSON.parse(s.value1); } catch { d = { light: s.value1 }; }
+                          return (
+                            <>
+                              <span className={`text-xs font-medium ${d.hv === 'pass' ? 'text-green-600' : d.hv === 'fail' ? 'text-red-600' : 'text-gray-400'}`}>
+                                HV {d.hv === 'pass' ? '✅' : d.hv === 'fail' ? `❌ (${d.hvCount || ''} — ${d.hvReason || ''})` : '—'}
+                              </span>
+                              <span className={`text-xs font-medium ${d.light === 'pass' ? 'text-green-600' : d.light === 'fail' ? 'text-red-600' : 'text-gray-400'}`}>
+                                Light {d.light === 'pass' ? '✅' : d.light === 'fail' ? `❌ (${d.lightCount || ''} — ${d.lightReason || ''})` : '—'}
+                              </span>
+                              {d.ohms && <span className="text-xs text-gray-500">Ohms: <span className="text-gray-700">{d.ohms}</span></span>}
+                            </>
+                          );
+                        })() : (
+                          <>
+                            {s.value1 && <span className="text-xs text-gray-500">{def?.fields?.[0]?.label || 'Value 1'}: <span className="text-gray-700">{s.value1}</span></span>}
+                            {s.value2 && <span className="text-xs text-gray-500">{def?.fields?.[1]?.label || 'Value 2'}: <span className="text-gray-700">{s.value2}</span></span>}
+                          </>
+                        )}
+                        {s.worker_name && <span className="text-xs text-gray-500">Worker: <span className="text-gray-700">{s.worker_name}</span></span>}
+                        {s.done_at && <span className="text-xs text-gray-400">{fmtDateTime(s.done_at)}</span>}
+                      </div>
+                      {hasPhoto && (
+                        <div className="flex gap-1.5 mt-1.5 flex-wrap">
+                          {s.photo_file && (
+                            <a href={`/uploads/checklist-photos/${s.photo_file}`} target="_blank" rel="noreferrer">
+                              <img src={`/uploads/checklist-photos/${s.photo_file}`} alt="stage"
+                                className="w-12 h-12 object-cover rounded border border-gray-200 hover:opacity-80" />
+                            </a>
+                          )}
+                          {s.rejection_photo_file && (
+                            <a href={`/uploads/rejection-photos/${s.rejection_photo_file}`} target="_blank" rel="noreferrer">
+                              <img src={`/uploads/rejection-photos/${s.rejection_photo_file}`} alt="rejection"
+                                className="w-12 h-12 object-cover rounded border border-red-200 hover:opacity-80" />
+                            </a>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex justify-between items-center pt-1">
+            <Link to={`/job-cards/${jc.id}`}
+              className="text-sm text-brand-600 hover:underline flex items-center gap-1"
+              onClick={onClose}>
+              Open full checklist <ArrowRight size={13} />
+            </Link>
+            <button className="btn-secondary" onClick={onClose}>Close</button>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
