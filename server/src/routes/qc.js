@@ -152,61 +152,62 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
     return drawingNo.replace(/-\d+$/, '');
   }
 
-  // Helper: create or add to a finished goods entry grouped by base drawing number
-  async function createFinishedGoodsEntry(qty, notes) {
+  // Helper: create or add to a finished goods entry grouped by base drawing number.
+  // One row per unique base_drawing_no — works like inventory stock.
+  async function createFinishedGoodsEntry(qty, splitNotes) {
     const baseNo = baseDrawingNo(jc.drawing_no);
 
-    // Check if an existing FG entry matches this base drawing number
+    // Check if a product entry already exists for this base drawing number
     const existing = baseNo
       ? await db.get(
-          `SELECT id, qty_in, qty_available FROM finished_goods WHERE base_drawing_no = $1 LIMIT 1`,
+          `SELECT id FROM finished_goods WHERE base_drawing_no = $1 LIMIT 1`,
           [baseNo]
         )
       : null;
 
+    let fgId;
     if (existing) {
-      // Add to existing entry
+      // Add stock to the existing product entry
       await db.run(
         `UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1 WHERE id = $2`,
         [qty, existing.id]
       );
-      await db.insert(
-        `INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, reference, notes, created_by)
-         VALUES ($1,'inward',$2,$3,$4,$5)`,
-        [existing.id, qty, jc.job_card_no, `Added from QC approval — ${jc.job_card_no}${notes ? ` · ${notes}` : ''}`, req.user.id]
-      );
-      return existing.id;
+      fgId = existing.id;
+    } else {
+      // Create the product master row (product-centric, not order-centric)
+      const fg = await db.insert(`
+        INSERT INTO finished_goods
+          (job_card_id, order_id, order_code, order_type, customer_code, customer_name,
+           drawing_no, base_drawing_no, tube_material, tube_diameter, wattage, voltage, plating_instructions,
+           qty_in, qty_available, notes, created_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,$16)
+      `, [
+        jc.id, jc.order_id, jc.order_code, jc.order_type,
+        jc.customer_code, jc.customer_name,
+        jc.drawing_no || null, baseNo,
+        asm?.tube_material || null, asm?.tube_diameter_mm || null,
+        asm?.wattage_actual || null, asm?.voltage_actual || null,
+        asm?.plating_description || null,
+        qty, null, req.user.id,
+      ]);
+      fgId = fg.lastInsertRowid;
     }
 
-    // Create new entry
-    const fg = await db.insert(`
-      INSERT INTO finished_goods
-        (job_card_id, order_id, order_code, order_type, customer_code, customer_name,
-         drawing_no, base_drawing_no, tube_material, tube_diameter, wattage, voltage, plating_instructions,
-         qty_in, qty_available, notes, created_by)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,$16)
-    `, [
-      jc.id, jc.order_id, jc.order_code, jc.order_type,
-      jc.customer_code, jc.customer_name,
-      jc.drawing_no || null,
-      baseNo,
-      asm?.tube_material || null,
-      asm?.tube_diameter_mm || null,
-      asm?.wattage_actual || null,
-      asm?.voltage_actual || null,
-      asm?.plating_description || null,
-      qty,
-      notes || null,
-      req.user.id,
-    ]);
+    // Log this inward batch with full traceability (job card + order + customer)
+    await db.insert(
+      `INSERT INTO finished_goods_log
+         (finished_good_id, movement_type, qty, job_card_no, order_code, customer_code, reference, notes, created_by)
+       VALUES ($1,'inward',$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        fgId, qty,
+        jc.job_card_no, jc.order_code, jc.customer_code,
+        jc.job_card_no,   // reference = job card number for easy lookup
+        splitNotes || null,
+        req.user.id,
+      ]
+    );
 
-    // Log the inward movement
-    await db.insert(`
-      INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, reference, notes, created_by)
-      VALUES ($1,'inward',$2,$3,$4,$5)
-    `, [fg.lastInsertRowid, qty, jc.job_card_no, `Auto-created from QC approval`, req.user.id]);
-
-    return fg.lastInsertRowid;
+    return fgId;
   }
 
   // ── Route based on order type + heater_destination ────────────────────────

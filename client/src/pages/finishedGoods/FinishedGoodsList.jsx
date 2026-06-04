@@ -1,30 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api from '../../lib/api';
-import { Package, TrendingDown, Search, Eye, ArrowDownCircle, ArrowUpCircle, ClipboardList } from 'lucide-react';
+import { Package, TrendingDown, Search, Eye, ArrowUpCircle, ArrowDownCircle, ClipboardList, X } from 'lucide-react';
 import Modal from '../../components/ui/Modal';
-
-const ORDER_TYPE_LABEL = {
-  local_he:        'Local HE',
-  export_he:       'Export HE',
-  inventory_order: 'IO',
-  io_export_he:    'IO + Export HE',
-  io_local_he:     'IO + Local HE',
-};
-const ORDER_TYPE_COLOR = {
-  local_he:        'bg-blue-50 text-blue-700',
-  export_he:       'bg-purple-100 text-purple-700',
-  inventory_order: 'bg-amber-100 text-amber-700',
-  io_export_he:    'bg-orange-100 text-orange-700',
-  io_local_he:     'bg-teal-100 text-teal-700',
-};
 
 export default function FinishedGoodsList() {
   const navigate = useNavigate();
-  const [items, setItems]   = useState([]);
+  const [items, setItems]     = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [outwardModal, setOutwardModal] = useState(null); // finished good object
+  const [search, setSearch]   = useState('');
+  const [outwardModal, setOutwardModal] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -33,23 +18,29 @@ export default function FinishedGoodsList() {
 
   useEffect(() => { load(); }, []);
 
-  const filtered = items.filter(fg =>
-    (fg.order_code || '').toLowerCase().includes(search.toLowerCase()) ||
-    (fg.customer_code || '').toLowerCase().includes(search.toLowerCase()) ||
-    (fg.customer_name || '').toLowerCase().includes(search.toLowerCase()) ||
-    (fg.drawing_no || '').toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = useMemo(() => {
+    if (!search) return items;
+    const s = search.toLowerCase();
+    return items.filter(fg =>
+      (fg.base_drawing_no || '').toLowerCase().includes(s) ||
+      (fg.drawing_no || '').toLowerCase().includes(s) ||
+      (fg.tube_material || '').toLowerCase().includes(s) ||
+      String(fg.wattage || '').includes(s) ||
+      String(fg.voltage || '').includes(s)
+    );
+  }, [items, search]);
 
-  const totalIn  = items.reduce((s, i) => s + (i.qty_in || 0), 0);
+  const totalIn    = items.reduce((s, i) => s + (i.qty_in || 0), 0);
   const totalAvail = items.reduce((s, i) => s + (i.qty_available || 0), 0);
+  const lowStock   = items.filter(i => (i.qty_available || 0) === 0).length;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Finished Goods</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Inventory of completed production items</p>
+          <p className="text-sm text-gray-500 mt-0.5">Stock of completed production items — one entry per product</p>
         </div>
         <Link to="/finished-goods/logs" className="btn-secondary flex items-center gap-1.5 text-sm">
           <ClipboardList size={15} /> Movement Log
@@ -57,34 +48,23 @@ export default function FinishedGoodsList() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-3">
-          <div className="w-10 h-10 bg-amber-50 rounded-lg flex items-center justify-center">
-            <Package size={20} className="text-amber-600" />
+      <div className="grid grid-cols-4 gap-4">
+        {[
+          { label: 'Products', value: items.length, icon: Package, bg: 'bg-amber-50', icon_color: 'text-amber-600' },
+          { label: 'Total Inward', value: totalIn, icon: ArrowDownCircle, bg: 'bg-green-50', icon_color: 'text-green-600' },
+          { label: 'Available Stock', value: totalAvail, icon: TrendingDown, bg: 'bg-blue-50', icon_color: 'text-blue-600' },
+          { label: 'Out of Stock', value: lowStock, icon: X, bg: 'bg-red-50', icon_color: 'text-red-500' },
+        ].map(({ label, value, icon: Icon, bg, icon_color }) => (
+          <div key={label} className="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-3">
+            <div className={`w-10 h-10 ${bg} rounded-lg flex items-center justify-center flex-shrink-0`}>
+              <Icon size={20} className={icon_color} />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">{label}</p>
+              <p className="text-xl font-bold text-gray-900">{value}</p>
+            </div>
           </div>
-          <div>
-            <p className="text-xs text-gray-500">Total Entries</p>
-            <p className="text-xl font-bold text-gray-900">{items.length}</p>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-3">
-          <div className="w-10 h-10 bg-green-50 rounded-lg flex items-center justify-center">
-            <ArrowDownCircle size={20} className="text-green-600" />
-          </div>
-          <div>
-            <p className="text-xs text-gray-500">Total Inward</p>
-            <p className="text-xl font-bold text-gray-900">{totalIn}</p>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-3">
-          <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center">
-            <TrendingDown size={20} className="text-blue-600" />
-          </div>
-          <div>
-            <p className="text-xs text-gray-500">Available Stock</p>
-            <p className="text-xl font-bold text-gray-900">{totalAvail}</p>
-          </div>
-        </div>
+        ))}
       </div>
 
       {/* Search */}
@@ -92,7 +72,7 @@ export default function FinishedGoodsList() {
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
         <input
           className="input pl-9 text-sm"
-          placeholder="Search order, customer, drawing..."
+          placeholder="Search drawing no, material, wattage..."
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
@@ -103,49 +83,52 @@ export default function FinishedGoodsList() {
         <table className="w-full">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              <th className="table-header text-left">Drawing No.</th>
-              <th className="table-header text-left">Type</th>
-              <th className="table-header text-left">Original Customer</th>
-              <th className="table-header text-left">Order Code</th>
+              <th className="table-header text-left">Product (Base Drawing No.)</th>
               <th className="table-header text-left">Tube Material</th>
               <th className="table-header text-right">Wattage</th>
               <th className="table-header text-right">Voltage</th>
-              <th className="table-header text-center">Qty In</th>
+              <th className="table-header text-left">Plating</th>
+              <th className="table-header text-center">Batches In</th>
+              <th className="table-header text-center">Total Inward</th>
               <th className="table-header text-center">Available</th>
               <th className="table-header" />
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={10} className="table-cell text-center text-gray-400 py-12">Loading...</td></tr>
+              <tr><td colSpan={9} className="table-cell text-center text-gray-400 py-12">Loading...</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={10} className="table-cell text-center text-gray-400 py-12">No finished goods yet</td></tr>
+              <tr><td colSpan={9} className="table-cell text-center text-gray-400 py-12">No finished goods yet</td></tr>
             ) : filtered.map(fg => (
               <tr key={fg.id} className="hover:bg-gray-50">
                 <td className="table-cell">
                   <div className="font-semibold text-brand-700">{fg.base_drawing_no || fg.drawing_no || '—'}</div>
-                  {fg.drawing_no && fg.base_drawing_no && fg.drawing_no !== fg.base_drawing_no && (
-                    <div className="text-xs text-gray-400">{fg.drawing_no}</div>
+                  {fg.tube_diameter && (
+                    <div className="text-xs text-gray-400">⌀ {fg.tube_diameter} mm</div>
                   )}
                 </td>
-                <td className="table-cell">
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${ORDER_TYPE_COLOR[fg.order_type] || 'bg-gray-100 text-gray-600'}`}>
-                    {ORDER_TYPE_LABEL[fg.order_type] || fg.order_type}
-                  </span>
-                </td>
-                <td className="table-cell">
-                  <div className="font-medium text-sm">{fg.customer_code}</div>
-                  <div className="text-xs text-gray-400">{fg.customer_name}</div>
-                </td>
-                <td className="table-cell text-sm text-gray-500">{fg.order_code}</td>
                 <td className="table-cell text-sm text-gray-700">{fg.tube_material || '—'}</td>
                 <td className="table-cell text-right text-sm">{fg.wattage ? `${fg.wattage} W` : '—'}</td>
                 <td className="table-cell text-right text-sm">{fg.voltage ? `${fg.voltage} V` : '—'}</td>
+                <td className="table-cell text-sm text-gray-600 max-w-[140px] truncate" title={fg.plating_instructions}>
+                  {fg.plating_instructions || '—'}
+                </td>
+                <td className="table-cell text-center">
+                  <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                    {fg.inward_batches ?? 0}
+                  </span>
+                </td>
                 <td className="table-cell text-center">
                   <span className="text-sm font-medium text-gray-800">{fg.qty_in}</span>
                 </td>
                 <td className="table-cell text-center">
-                  <span className={`text-sm font-semibold ${fg.qty_available === 0 ? 'text-red-500' : 'text-green-600'}`}>
+                  <span className={`text-sm font-bold px-2 py-0.5 rounded-full ${
+                    fg.qty_available === 0
+                      ? 'bg-red-100 text-red-600'
+                      : fg.qty_available <= 5
+                        ? 'bg-amber-100 text-amber-700'
+                        : 'bg-green-100 text-green-700'
+                  }`}>
                     {fg.qty_available}
                   </span>
                 </td>
@@ -154,7 +137,7 @@ export default function FinishedGoodsList() {
                     <button
                       onClick={() => navigate(`/finished-goods/${fg.id}`)}
                       className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-brand-600 transition-colors"
-                      title="View details & log"
+                      title="View details & movement log"
                     >
                       <Eye size={15} />
                     </button>
@@ -162,7 +145,7 @@ export default function FinishedGoodsList() {
                       <button
                         onClick={() => setOutwardModal(fg)}
                         className="p-1.5 rounded-lg hover:bg-red-50 text-gray-500 hover:text-red-600 transition-colors"
-                        title="Record outward"
+                        title="Record outward (dispatch / sampling)"
                       >
                         <ArrowUpCircle size={15} />
                       </button>
@@ -175,7 +158,6 @@ export default function FinishedGoodsList() {
         </table>
       </div>
 
-      {/* Outward modal */}
       {outwardModal && (
         <OutwardModal
           fg={outwardModal}
@@ -230,13 +212,15 @@ function OutwardModal({ fg, onClose, onDone }) {
   return (
     <Modal open title="Record Outward" onClose={onClose} size="sm">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="bg-gray-50 rounded-lg p-3 text-sm">
-          <p className="font-semibold text-gray-800">{fg.base_drawing_no || fg.drawing_no || fg.order_code}</p>
-          <p className="text-gray-500">{fg.tube_material} · {fg.wattage ? `${fg.wattage}W` : ''} {fg.voltage ? `${fg.voltage}V` : ''}</p>
-          <p className="text-green-600 font-medium mt-1">{fg.qty_available} units available</p>
+        <div className="bg-gray-50 rounded-xl p-3 text-sm">
+          <p className="font-bold text-gray-900">{fg.base_drawing_no || fg.drawing_no}</p>
+          <p className="text-gray-500 text-xs mt-0.5">
+            {[fg.tube_material, fg.wattage ? `${fg.wattage}W` : null, fg.voltage ? `${fg.voltage}V` : null]
+              .filter(Boolean).join(' · ')}
+          </p>
+          <p className="text-green-600 font-semibold mt-1">{fg.qty_available} units available</p>
         </div>
 
-        {/* Outward type */}
         <div>
           <label className="label">Outward Type <span className="text-red-500">*</span></label>
           <div className="flex gap-3">
@@ -254,7 +238,6 @@ function OutwardModal({ fg, onClose, onDone }) {
           </div>
         </div>
 
-        {/* Client dropdown */}
         <div>
           <label className="label">Client <span className="text-red-500">*</span></label>
           <select className="input" value={customerId} onChange={e => setCustomerId(e.target.value)} required>
@@ -265,7 +248,6 @@ function OutwardModal({ fg, onClose, onDone }) {
           </select>
         </div>
 
-        {/* Sampling reason */}
         {outwardType === 'sampling' && (
           <div>
             <label className="label">Sampling Reason <span className="text-red-500">*</span></label>
@@ -279,12 +261,13 @@ function OutwardModal({ fg, onClose, onDone }) {
         </div>
         <div>
           <label className="label">Reference <span className="text-gray-400 font-normal">(optional)</span></label>
-          <input className="input" placeholder="e.g. Dispatch note / order ref" value={reference} onChange={e => setRef(e.target.value)} />
+          <input className="input" placeholder="e.g. Dispatch note, order ref..." value={reference} onChange={e => setRef(e.target.value)} />
         </div>
         <div>
           <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
           <textarea className="input h-16 resize-none" value={notes} onChange={e => setNotes(e.target.value)} />
         </div>
+
         {error && <p className="text-red-600 text-sm">{error}</p>}
         <div className="flex gap-3 pt-1">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>

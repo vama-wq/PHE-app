@@ -7,7 +7,7 @@ router.get('/logs', authenticate, async (req, res) => {
   const rows = await getDB().all(`
     SELECT
       fgl.*,
-      fg.drawing_no, fg.base_drawing_no, fg.order_code, fg.customer_code AS original_customer_code,
+      fg.base_drawing_no, fg.drawing_no,
       fg.tube_material, fg.wattage, fg.voltage,
       u.name AS created_by_name
     FROM finished_goods_log fgl
@@ -19,10 +19,28 @@ router.get('/logs', authenticate, async (req, res) => {
   res.json(rows);
 });
 
-// ── List all finished goods ───────────────────────────────────────────────────
+// ── List all finished goods (one row per product / base_drawing_no) ───────────
 router.get('/', authenticate, async (req, res) => {
+  // Group by base_drawing_no so duplicate rows (from old schema) collapse correctly.
+  // Use first-created row's specs for product display.
   const rows = await getDB().all(`
-    SELECT fg.*, u.name as created_by_name
+    SELECT
+      fg.id,
+      COALESCE(fg.base_drawing_no, fg.drawing_no) AS base_drawing_no,
+      fg.drawing_no,
+      fg.tube_material,
+      fg.tube_diameter,
+      fg.wattage,
+      fg.voltage,
+      fg.plating_instructions,
+      fg.qty_in,
+      fg.qty_available,
+      fg.notes,
+      fg.created_at,
+      u.name AS created_by_name,
+      -- Count distinct job cards that have contributed inward stock
+      (SELECT COUNT(*) FROM finished_goods_log fgl
+       WHERE fgl.finished_good_id = fg.id AND fgl.movement_type = 'inward') AS inward_batches
     FROM finished_goods fg
     LEFT JOIN users u ON fg.created_by = u.id
     ORDER BY fg.created_at DESC
@@ -30,7 +48,7 @@ router.get('/', authenticate, async (req, res) => {
   res.json(rows);
 });
 
-// ── Single finished good with log ─────────────────────────────────────────────
+// ── Single finished good with enriched log ────────────────────────────────────
 router.get('/:id', authenticate, async (req, res) => {
   const db = getDB();
   const fg = await db.get(`
@@ -53,7 +71,7 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // ── Manual outward (dispatch / sampling from finished goods) ──────────────────
-router.post('/:id/outward', authenticate, authorize('owner', 'admin'), async (req, res) => {
+router.post('/:id/outward', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const { qty, outward_type, client_code, client_name, reason, reference, notes } = req.body;
   if (!qty || parseInt(qty) <= 0) return res.status(400).json({ error: 'Valid quantity required' });
   if (!outward_type || !['dispatch', 'sampling'].includes(outward_type))
@@ -67,9 +85,13 @@ router.post('/:id/outward', authenticate, authorize('owner', 'admin'), async (re
   const fg = await db.get('SELECT * FROM finished_goods WHERE id=$1', [req.params.id]);
   if (!fg) return res.status(404).json({ error: 'Not found' });
   const parsedQty = parseInt(qty);
-  if (fg.qty_available < parsedQty) return res.status(400).json({ error: `Only ${fg.qty_available} units available` });
+  if (fg.qty_available < parsedQty)
+    return res.status(400).json({ error: `Only ${fg.qty_available} units available` });
 
-  await db.run('UPDATE finished_goods SET qty_available = qty_available - $1 WHERE id=$2', [parsedQty, fg.id]);
+  await db.run(
+    'UPDATE finished_goods SET qty_available = qty_available - $1 WHERE id=$2',
+    [parsedQty, fg.id]
+  );
   await db.insert(
     `INSERT INTO finished_goods_log
        (finished_good_id, movement_type, qty, outward_type, client_code, client_name, reason, reference, notes, created_by)
