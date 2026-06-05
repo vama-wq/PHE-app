@@ -409,4 +409,96 @@ router.post('/inventory', authenticate, authorize('accounts', 'owner'), upload.s
   res.json({ imported, skipped, errors, total: rows.length });
 });
 
+// ─── FINISHED GOODS ───────────────────────────────────────────────────────────
+
+router.get('/finished-goods/template', authenticate, (req, res) => {
+  sendTemplate(res,
+    ['drawing_no', 'tube_material', 'tube_diameter_mm', 'wattage_w', 'voltage_v', 'plating_instructions', 'qty_available', 'notes'],
+    'finished_goods_template.xlsx');
+});
+
+router.post('/finished-goods', authenticate, authorize('owner', 'admin'), upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const db = getDB();
+  let rows;
+  try { ({ rows } = parseRows(req.file.buffer)); } catch { return res.status(400).json({ error: 'Invalid Excel file' }); }
+  if (!rows.length) return res.json({ imported: 0, skipped: 0, errors: [], total: 0 });
+
+  let imported = 0, skipped = 0;
+  const errors = [];
+
+  for (const [i, row] of rows.entries()) {
+    const rowNum = i + 2;
+    const drawingNo = str(row.drawing_no);
+    if (!drawingNo) { errors.push(`Row ${rowNum}: drawing_no is required`); skipped++; continue; }
+    const qty = parseInt(row.qty_available);
+    if (!qty || qty <= 0) { errors.push(`Row ${rowNum}: qty_available must be a positive number`); skipped++; continue; }
+
+    // Strip trailing job-card suffix to get base drawing no
+    const baseDrawingNo = drawingNo.replace(/-\d+$/, '');
+
+    try {
+      // Check if a FG entry already exists for this base drawing no
+      let fg = await db.get('SELECT * FROM finished_goods WHERE base_drawing_no=$1', [baseDrawingNo]);
+
+      if (fg) {
+        // Update specs if provided, add to qty
+        await db.run(`
+          UPDATE finished_goods SET
+            tube_material        = COALESCE($1, tube_material),
+            tube_diameter        = COALESCE($2, tube_diameter),
+            wattage              = COALESCE($3, wattage),
+            voltage              = COALESCE($4, voltage),
+            plating_instructions = COALESCE($5, plating_instructions),
+            notes                = COALESCE($6, notes),
+            qty_in               = qty_in + $7,
+            qty_available        = qty_available + $7
+          WHERE id=$8
+        `, [
+          strOrNull(row.tube_material),
+          strOrNull(row.tube_diameter_mm),
+          strOrNull(row.wattage_w),
+          strOrNull(row.voltage_v),
+          strOrNull(row.plating_instructions),
+          strOrNull(row.notes),
+          qty, fg.id,
+        ]);
+      } else {
+        // Create new FG entry
+        const { lastInsertRowid } = await db.insert(`
+          INSERT INTO finished_goods
+            (drawing_no, base_drawing_no, tube_material, tube_diameter, wattage, voltage,
+             plating_instructions, qty_in, qty_available, notes, created_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        `, [
+          baseDrawingNo, baseDrawingNo,
+          strOrNull(row.tube_material),
+          strOrNull(row.tube_diameter_mm),
+          strOrNull(row.wattage_w),
+          strOrNull(row.voltage_v),
+          strOrNull(row.plating_instructions),
+          qty, qty,
+          strOrNull(row.notes),
+          req.user.id,
+        ]);
+        fg = { id: lastInsertRowid };
+      }
+
+      // Log the inward movement as Opening Stock
+      await db.insert(`
+        INSERT INTO finished_goods_log
+          (finished_good_id, movement_type, qty, reference, notes, created_by)
+        VALUES ($1,'inward',$2,'Opening Stock',$3,$4)
+      `, [fg.id, qty, strOrNull(row.notes), req.user.id]);
+
+      imported++;
+    } catch (e) {
+      errors.push(`Row ${rowNum}: ${e.message}`);
+      skipped++;
+    }
+  }
+
+  res.json({ imported, skipped, errors, total: rows.length });
+});
+
 module.exports = router;

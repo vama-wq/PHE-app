@@ -71,6 +71,24 @@ const CONFIGS = {
     ],
     updateKey: 'item_code',
   },
+  'finished-goods': {
+    title: 'Import Finished Goods',
+    templateUrl: '/api/import/finished-goods/template',
+    templateName: 'finished_goods_template.xlsx',
+    importPath: '/import/finished-goods',
+    columns: [
+      { name: 'drawing_no', required: true },
+      { name: 'tube_material', required: false },
+      { name: 'tube_diameter_mm', required: false },
+      { name: 'wattage_w', required: false },
+      { name: 'voltage_v', required: false },
+      { name: 'plating_instructions', required: false },
+      { name: 'qty_available', required: true },
+      { name: 'notes', required: false },
+    ],
+    updateKey: 'drawing_no',
+    note: 'drawing_no will be auto-grouped by base code (strips trailing job-card suffix e.g. -1, -2). qty_available is added as an opening stock inward movement.',
+  },
 };
 
 export default function ImportModal({ type, onClose, onDone }) {

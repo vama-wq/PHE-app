@@ -3,7 +3,8 @@ import { useNavigate, Link } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
-import { Search, AlertTriangle, ClipboardList } from 'lucide-react';
+import ImportModal from '../../components/ui/ImportModal';
+import { Search, AlertTriangle, ClipboardList, Upload } from 'lucide-react';
 
 export default function FinishedGoodsList() {
   const navigate  = useNavigate();
@@ -13,6 +14,7 @@ export default function FinishedGoodsList() {
   const [search, setSearch]   = useState('');
   const [filterZero, setFilterZero] = useState(false);
   const [outwardModal, setOutwardModal] = useState(null);
+  const [showImport, setShowImport] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -51,10 +53,19 @@ export default function FinishedGoodsList() {
             {items.length} products · {outOfStock} out of stock
           </p>
         </div>
-        <Link to="/finished-goods/logs"
-          className="btn-secondary flex items-center gap-1.5 text-sm">
-          <ClipboardList size={15} /> Movement Log
-        </Link>
+        <div className="flex items-center gap-2">
+          {canManage && (
+            <button
+              className="btn-secondary flex items-center gap-1.5 text-sm"
+              onClick={() => setShowImport(true)}>
+              <Upload size={15} /> Import Excel
+            </button>
+          )}
+          <Link to="/finished-goods/logs"
+            className="btn-secondary flex items-center gap-1.5 text-sm">
+            <ClipboardList size={15} /> Movement Log
+          </Link>
+        </div>
       </div>
 
       {/* Search + filter */}
@@ -154,6 +165,14 @@ export default function FinishedGoodsList() {
           </tbody>
         </table>
       </div>
+
+      {showImport && (
+        <ImportModal
+          type="finished-goods"
+          onClose={() => setShowImport(false)}
+          onDone={() => { setShowImport(false); load(); }}
+        />
+      )}
 
       {outwardModal && (
         <OutwardModal
