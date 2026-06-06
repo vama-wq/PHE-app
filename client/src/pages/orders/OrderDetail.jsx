@@ -41,6 +41,7 @@ export default function OrderDetail() {
   const [showItemModal, setShowItemModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [showDrawingModal, setShowDrawingModal] = useState(false);
+  const [drawingUploadItemId, setDrawingUploadItemId] = useState(null); // null = order-level upload
   const [deletingJobCard, setDeletingJobCard] = useState(null);
 
   const load = () =>
@@ -301,7 +302,7 @@ export default function OrderDetail() {
             )}
           </div>
 
-          {/* ── Reference Drawings (Design team uploads before job card) ── */}
+          {/* ── Reference Drawings (per item) ── */}
           <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -310,55 +311,127 @@ export default function OrderDetail() {
                   Reference Drawings
                 </h2>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Uploaded by Design team · <strong className="text-red-500">required before Owner can approve</strong>
+                  One drawing per item · <strong className="text-red-500">required before Owner can approve</strong>
                 </p>
               </div>
-              {canUploadDrawing && (
-                <button className="btn-secondary btn-sm" onClick={() => setShowDrawingModal(true)}>
-                  <Upload size={14} /> Upload Drawing
-                </button>
-              )}
             </div>
 
-            {!hasDrawings ? (
-              <div className={`text-sm rounded-xl px-4 py-3 ${
-                ['pending', 'pending_approval'].includes(order.status)
-                  ? 'bg-amber-50 border border-amber-200 text-amber-700'
-                  : 'text-gray-400'
-              }`}>
+            {/* Overall no-drawing warning */}
+            {!hasDrawings && ['pending', 'pending_approval'].includes(order.status) && (
+              <div className="mb-4 text-sm rounded-xl px-4 py-3 bg-amber-50 border border-amber-200 text-amber-700">
                 {canUploadDrawing
-                  ? '⚠️ Upload a reference drawing before the Owner can approve this order.'
-                  : '⚠️ Waiting for Design team to upload a reference drawing. The Owner cannot approve until it is uploaded.'}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {order.order_drawings.map(d => (
-                  <div key={d.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
-                    {isImage(d.file_name)
-                      ? <img src={`/uploads/order-drawings/${d.file_name}`} alt=""
-                          className="w-12 h-12 object-cover rounded-lg flex-shrink-0 border border-gray-200" />
-                      : <div className="w-12 h-12 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0">
-                          <FileText size={22} className="text-red-500" />
-                        </div>
-                    }
-                    <div className="flex-1 min-w-0">
-                      <a href={`/uploads/order-drawings/${d.file_name}`} target="_blank" rel="noopener noreferrer"
-                        className="text-sm font-medium text-brand-600 hover:underline block truncate">
-                        {d.original_name || d.file_name}
-                      </a>
-                      <div className="text-xs text-gray-400 mt-0.5">{d.uploaded_by_name} · {fmtDate(d.created_at)}</div>
-                      {d.notes && <div className="text-xs text-gray-500 mt-0.5 italic">{d.notes}</div>}
-                    </div>
-                    {canUploadDrawing && (
-                      <button className="btn-ghost btn-sm p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 flex-shrink-0"
-                        onClick={() => handleDeleteDrawing(d.id)} title="Delete drawing">
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                  ? '⚠️ Upload reference drawings for each item below. The Owner cannot approve until at least one drawing is uploaded.'
+                  : '⚠️ Waiting for Design team to upload reference drawings. The Owner cannot approve until drawings are uploaded.'}
               </div>
             )}
+
+            {/* Per-item drawing rows */}
+            <div className="space-y-3">
+              {(order.items || []).map((item, idx) => {
+                const itemDrawings = (order.order_drawings || []).filter(d => d.item_id === item.id);
+                const hasItemDrawing = itemDrawings.length > 0;
+                return (
+                  <div key={item.id} className={`rounded-xl border ${hasItemDrawing ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'}`}>
+                    {/* Item header row */}
+                    <div className="flex items-center justify-between px-4 py-2.5">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${
+                          hasItemDrawing ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'
+                        }`}>
+                          Item {idx + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <span className="text-sm font-semibold text-gray-800 font-mono">
+                            {item.drawing_number || <span className="text-gray-400 font-sans font-normal italic">No drawing no.</span>}
+                          </span>
+                          {item.product_code && (
+                            <span className="ml-2 text-xs text-gray-400">{item.product_code}</span>
+                          )}
+                          <div className="text-xs text-gray-400 mt-0.5">
+                            {[item.tube_material, item.wattage ? `${item.wattage}W` : null, item.voltage ? `${item.voltage}V` : null]
+                              .filter(Boolean).join(' · ') || 'No specs'}
+                            {' · '}{item.quantity} Nos
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {hasItemDrawing
+                          ? <span className="text-xs text-green-600 font-medium flex items-center gap-1">
+                              <CheckCircle size={12} /> {itemDrawings.length} file{itemDrawings.length !== 1 ? 's' : ''}
+                            </span>
+                          : <span className="text-xs text-amber-600 font-medium">Missing</span>
+                        }
+                        {canUploadDrawing && (
+                          <button
+                            className="btn-secondary btn-sm py-1 px-2 text-xs"
+                            onClick={() => { setDrawingUploadItemId(item.id); setShowDrawingModal(true); }}
+                          >
+                            <Upload size={11} /> Upload
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Uploaded drawings for this item */}
+                    {itemDrawings.length > 0 && (
+                      <div className="border-t border-green-200 divide-y divide-green-100">
+                        {itemDrawings.map(d => (
+                          <div key={d.id} className="flex items-center gap-3 px-4 py-2">
+                            {isImage(d.file_name)
+                              ? <img src={`/uploads/order-drawings/${d.file_name}`} alt=""
+                                  className="w-9 h-9 object-cover rounded-lg flex-shrink-0 border border-green-200" />
+                              : <div className="w-9 h-9 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0 border border-red-100">
+                                  <FileText size={16} className="text-red-400" />
+                                </div>
+                            }
+                            <div className="flex-1 min-w-0">
+                              <a href={`/uploads/order-drawings/${d.file_name}`} target="_blank" rel="noopener noreferrer"
+                                className="text-xs font-medium text-brand-600 hover:underline block truncate">
+                                {d.original_name || d.file_name}
+                              </a>
+                              <div className="text-xs text-gray-400">{d.uploaded_by_name} · {fmtDate(d.created_at)}</div>
+                            </div>
+                            {canUploadDrawing && (
+                              <button className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded flex-shrink-0"
+                                onClick={() => handleDeleteDrawing(d.id)} title="Delete drawing">
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Order-level drawings (not tied to a specific item) */}
+              {(order.order_drawings || []).filter(d => !d.item_id).map(d => (
+                <div key={d.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
+                  {isImage(d.file_name)
+                    ? <img src={`/uploads/order-drawings/${d.file_name}`} alt=""
+                        className="w-12 h-12 object-cover rounded-lg flex-shrink-0 border border-gray-200" />
+                    : <div className="w-12 h-12 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <FileText size={22} className="text-red-500" />
+                      </div>
+                  }
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-gray-400 mb-0.5">General drawing (not linked to a specific item)</div>
+                    <a href={`/uploads/order-drawings/${d.file_name}`} target="_blank" rel="noopener noreferrer"
+                      className="text-sm font-medium text-brand-600 hover:underline block truncate">
+                      {d.original_name || d.file_name}
+                    </a>
+                    <div className="text-xs text-gray-400 mt-0.5">{d.uploaded_by_name} · {fmtDate(d.created_at)}</div>
+                  </div>
+                  {canUploadDrawing && (
+                    <button className="btn-ghost btn-sm p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 flex-shrink-0"
+                      onClick={() => handleDeleteDrawing(d.id)} title="Delete drawing">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* ── Job Cards ── */}
@@ -522,8 +595,9 @@ export default function OrderDetail() {
       )}
       {showDrawingModal && (
         <DrawingUploadModal orderId={id}
-          onClose={() => setShowDrawingModal(false)}
-          onSave={() => { setShowDrawingModal(false); load(); }}
+          itemId={drawingUploadItemId}
+          onClose={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); }}
+          onSave={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); load(); }}
         />
       )}
       {showJobCardModal && (
@@ -941,7 +1015,7 @@ function ItemModal({ item, orderId, onClose, onSave }) {
 }
 
 // ── Drawing Upload Modal ──────────────────────────────────────────────────────
-function DrawingUploadModal({ orderId, onClose, onSave }) {
+function DrawingUploadModal({ orderId, itemId, onClose, onSave }) {
   const [file, setFile] = useState(null);
   const [notes, setNotes] = useState('');
   const [error, setError] = useState('');
@@ -953,6 +1027,7 @@ function DrawingUploadModal({ orderId, onClose, onSave }) {
     const fd = new FormData();
     fd.append('file', file);
     if (notes) fd.append('notes', notes);
+    if (itemId) fd.append('item_id', itemId);
     try {
       await api.post(`/orders/${orderId}/drawings`, fd);
       onSave();
@@ -965,7 +1040,12 @@ function DrawingUploadModal({ orderId, onClose, onSave }) {
   return (
     <Modal open title="Upload Reference Drawing" onClose={onClose} size="sm">
       <div className="space-y-4">
-        <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select drawing (PDF or Image)" />
+        {itemId && (
+          <div className="bg-blue-50 border border-blue-100 text-blue-700 text-xs rounded-lg px-3 py-2">
+            This drawing will be linked to the selected item.
+          </div>
+        )}
+        <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png,.dwg,.dxf" label="Select drawing (PDF, Image, DWG, DXF)" />
         <div>
           <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
           <textarea className="input h-20 resize-none" value={notes}

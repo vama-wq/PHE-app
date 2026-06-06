@@ -73,11 +73,15 @@ router.get('/drawings/pending', authenticate, async (req, res) => {
       (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count,
       (SELECT COUNT(*) FROM order_drawings od WHERE od.order_id = o.id) AS drawing_count,
       (SELECT json_agg(json_build_object('id', od2.id, 'file_name', od2.file_name,
-              'original_name', od2.original_name, 'notes', od2.notes,
+              'original_name', od2.original_name, 'notes', od2.notes, 'item_id', od2.item_id,
               'created_at', od2.created_at, 'uploaded_by_name', u2.name))
        FROM order_drawings od2
        LEFT JOIN users u2 ON u2.id = od2.uploaded_by
-       WHERE od2.order_id = o.id) AS drawings
+       WHERE od2.order_id = o.id) AS drawings,
+      (SELECT json_agg(json_build_object('id', oi3.id, 'drawing_number', oi3.drawing_number,
+              'product_code', oi3.product_code, 'quantity', oi3.quantity,
+              'tube_material', oi3.tube_material, 'wattage', oi3.wattage, 'voltage', oi3.voltage))
+       FROM order_items oi3 WHERE oi3.order_id = o.id) AS items
     FROM orders o
     JOIN customers c ON c.id = o.customer_id
     LEFT JOIN users u ON u.id = o.created_by
@@ -137,9 +141,11 @@ router.get('/:id', authenticate, async (req, res) => {
   })));
 
   order.order_drawings = await db.all(
-    `SELECT od.*, u.name as uploaded_by_name
-     FROM order_drawings od LEFT JOIN users u ON od.uploaded_by = u.id
-     WHERE od.order_id = $1 ORDER BY od.created_at ASC`,
+    `SELECT od.*, u.name as uploaded_by_name, oi.drawing_number as item_drawing_number
+     FROM order_drawings od
+     LEFT JOIN users u ON od.uploaded_by = u.id
+     LEFT JOIN order_items oi ON oi.id = od.item_id
+     WHERE od.order_id = $1 ORDER BY od.item_id NULLS LAST, od.created_at ASC`,
     [order.id]
   );
 
@@ -301,12 +307,12 @@ router.get('/:id/drawings', authenticate, async (req, res) => {
 
 router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner'), ...uploadOrderDrawing, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'File required' });
-  const { notes } = req.body;
+  const { notes, item_id } = req.body;
   const db = getDB();
   const r = await db.insert(
-    `INSERT INTO order_drawings (order_id, file_path, file_name, original_name, notes, uploaded_by)
-     VALUES ($1,$2,$3,$4,$5,$6)`,
-    [req.params.id, req.file.storagePath, req.file.filename, req.file.originalname, notes||null, req.user.id]
+    `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [req.params.id, item_id ? parseInt(item_id) : null, req.file.storagePath, req.file.filename, req.file.originalname, notes||null, req.user.id]
   );
   await logActivity(req.params.id, null, 'drawing_uploaded', `Reference drawing uploaded: ${req.file.originalname}`, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid, file_name: req.file.filename, original_name: req.file.originalname });

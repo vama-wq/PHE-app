@@ -193,16 +193,36 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
         <div className="text-xs text-gray-400">{order.created_by_name}</div>
       </td>
 
-      {/* Status */}
-      <td className="table-cell text-center">
+      {/* Status + item drawing numbers */}
+      <td className="table-cell">
         {parseInt(order.drawing_count) === 0 ? (
-          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium mb-1.5">
             <AlertTriangle size={10} /> No Drawing
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
+          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium mb-1.5">
             <CheckCircle2 size={10} /> {order.drawing_count} file{order.drawing_count !== 1 ? 's' : ''}
           </span>
+        )}
+        {/* Item drawing numbers needed */}
+        {Array.isArray(order.items) && order.items.length > 0 && (
+          <div className="flex flex-col gap-0.5 mt-1">
+            {order.items.map((item, i) => {
+              const itemDrawings = (drawings).filter(d => d.item_id === item.id);
+              const done = itemDrawings.length > 0;
+              return (
+                <div key={item.id} className="flex items-center gap-1.5">
+                  {done
+                    ? <CheckCircle2 size={10} className="text-green-500 flex-shrink-0" />
+                    : <AlertTriangle size={10} className="text-amber-500 flex-shrink-0" />
+                  }
+                  <span className={`text-xs font-mono ${done ? 'text-green-700' : 'text-gray-600'}`}>
+                    {item.drawing_number || `Item ${i + 1}`}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         )}
       </td>
 
