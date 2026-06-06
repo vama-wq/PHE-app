@@ -62,6 +62,31 @@ router.get('/next-code', authenticate, async (req, res) => {
   res.json({ code: `${prefix}${next}${suffix}` });
 });
 
+// ── Drawings pending status (for sidebar badge + drawings page) ───────────────
+router.get('/drawings/pending', authenticate, async (req, res) => {
+  const db = getDB();
+  const rows = await db.all(`
+    SELECT
+      o.id, o.order_code, o.status, o.created_at, o.order_date,
+      c.customer_code, c.name AS customer_name,
+      u.name AS created_by_name,
+      (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count,
+      (SELECT COUNT(*) FROM order_drawings od WHERE od.order_id = o.id) AS drawing_count,
+      (SELECT json_agg(json_build_object('id', od2.id, 'file_name', od2.file_name,
+              'original_name', od2.original_name, 'notes', od2.notes,
+              'created_at', od2.created_at, 'uploaded_by_name', u2.name))
+       FROM order_drawings od2
+       LEFT JOIN users u2 ON u2.id = od2.uploaded_by
+       WHERE od2.order_id = o.id) AS drawings
+    FROM orders o
+    JOIN customers c ON c.id = o.customer_id
+    LEFT JOIN users u ON u.id = o.created_by
+    WHERE o.status IN ('pending', 'pending_approval', 'approved')
+    ORDER BY o.created_at DESC
+  `);
+  res.json(rows);
+});
+
 router.get('/', authenticate, async (req, res) => {
   const db = getDB();
   const canSeeNames = withCustomerVisibility(req);
@@ -341,6 +366,12 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
   const order = await db.get('SELECT status FROM orders WHERE id=$1', [req.params.id]);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.status === 'approved') return res.status(409).json({ error: 'Order already approved' });
+
+  // Gate: reference drawing must be uploaded before approval
+  const drawingCount = await db.get('SELECT COUNT(*) as c FROM order_drawings WHERE order_id=$1', [req.params.id]);
+  if (parseInt(drawingCount?.c ?? 0, 10) === 0) {
+    return res.status(400).json({ error: 'A reference drawing must be uploaded before this order can be approved.' });
+  }
 
   await db.run(
     "UPDATE orders SET status='approved', approved_by=$1, approved_at=NOW() WHERE id=$2",

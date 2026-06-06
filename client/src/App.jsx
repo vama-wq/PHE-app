@@ -25,6 +25,7 @@ import ReportsDashboard from './pages/reports/ReportsDashboard';
 import FinishedGoodsList from './pages/finishedGoods/FinishedGoodsList';
 import FinishedGoodsDetail from './pages/finishedGoods/FinishedGoodsDetail';
 import FinishedGoodsLog from './pages/finishedGoods/FinishedGoodsLog';
+import DrawingsList from './pages/drawings/DrawingsList';
 
 // ── Module permission helper ──────────────────────────────────────────────────
 // null permitted_modules = full role-based access. Owner always has full access.
@@ -127,6 +128,12 @@ export default function App() {
           <Route path="finished-goods" element={<ModuleRoute module="finished-goods"><FinishedGoodsList /></ModuleRoute>} />
           <Route path="finished-goods/logs" element={<ModuleRoute module="finished-goods"><FinishedGoodsLog /></ModuleRoute>} />
           <Route path="finished-goods/:id" element={<ModuleRoute module="finished-goods"><FinishedGoodsDetail /></ModuleRoute>} />
+
+          <Route path="drawings" element={
+            <ProtectedRoute roles={['owner','admin','design']}>
+              <DrawingsList />
+            </ProtectedRoute>
+          } />
 
           <Route path="reports" element={<ModuleRoute module="reports"><ReportsDashboard /></ModuleRoute>} />
 

@@ -1,26 +1,29 @@
+import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { ROLE_LABELS } from '../../lib/utils';
+import api from '../../lib/api';
 import {
   LayoutDashboard, ClipboardList, FileText, Package,
   Users, Box, Wrench, Truck, LogOut, FlaskConical,
-  Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse
+  Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse, PenLine
 } from 'lucide-react';
 
 const NAV = [
-  { id: 'dashboard',  to: '/',           icon: LayoutDashboard, label: 'Dashboard',      roles: null },
-  { id: 'orders',     to: '/orders',     icon: ClipboardList,   label: 'Orders',          roles: null },
-  { id: 'job-cards',  to: '/job-cards',  icon: FileText,        label: 'Job Cards',       roles: null },
-  { id: 'production', to: '/production', icon: Wrench,          label: 'Production',      roles: null },
-  { id: 'qc',         to: '/qc',         icon: FlaskConical,    label: 'Quality Check',   roles: ['design','owner','admin'] },
-  { id: 'dispatch',        to: '/dispatch',        icon: Truck,      label: 'Dispatch',        roles: null },
-  { id: 'finished-goods', to: '/finished-goods',  icon: Warehouse,  label: 'Finished Goods',  roles: ['owner','admin','production'] },
-  { id: 'inventory',  to: '/inventory',  icon: Package,         label: 'Inventory',       roles: ['owner','admin','accounts','design'] },
-  { id: 'purchases',  to: '/purchases',  icon: ShoppingCart,    label: 'Purchases',       roles: ['owner','admin','accounts'] },
-  { id: 'suppliers',  to: '/suppliers',  icon: Building2,       label: 'Suppliers',       roles: ['owner','admin','accounts'] },
-  { id: 'customers',  to: '/customers',  icon: Users,           label: 'Customers',       roles: ['admin','owner'] },
-  { id: 'products',   to: '/products',   icon: Box,             label: 'Products',        roles: null },
-  { id: 'reports',    to: '/reports',    icon: BarChart2,       label: 'Reports',         roles: null },
+  { id: 'dashboard',     to: '/',              icon: LayoutDashboard, label: 'Dashboard',      roles: null },
+  { id: 'orders',        to: '/orders',        icon: ClipboardList,   label: 'Orders',          roles: null },
+  { id: 'drawings',      to: '/drawings',      icon: PenLine,         label: 'Drawings',        roles: ['owner','admin','design'], badge: 'drawingsPending' },
+  { id: 'job-cards',     to: '/job-cards',     icon: FileText,        label: 'Job Cards',       roles: null },
+  { id: 'production',    to: '/production',    icon: Wrench,          label: 'Production',      roles: null },
+  { id: 'qc',            to: '/qc',            icon: FlaskConical,    label: 'Quality Check',   roles: ['design','owner','admin'] },
+  { id: 'dispatch',      to: '/dispatch',      icon: Truck,           label: 'Dispatch',        roles: null },
+  { id: 'finished-goods',to: '/finished-goods',icon: Warehouse,       label: 'Finished Goods',  roles: ['owner','admin','production'] },
+  { id: 'inventory',     to: '/inventory',     icon: Package,         label: 'Inventory',       roles: ['owner','admin','accounts','design'] },
+  { id: 'purchases',     to: '/purchases',     icon: ShoppingCart,    label: 'Purchases',       roles: ['owner','admin','accounts'] },
+  { id: 'suppliers',     to: '/suppliers',     icon: Building2,       label: 'Suppliers',       roles: ['owner','admin','accounts'] },
+  { id: 'customers',     to: '/customers',     icon: Users,           label: 'Customers',       roles: ['admin','owner'] },
+  { id: 'products',      to: '/products',      icon: Box,             label: 'Products',        roles: null },
+  { id: 'reports',       to: '/reports',       icon: BarChart2,       label: 'Reports',         roles: null },
 ];
 
 const ROLE_DOT = {
@@ -34,6 +37,21 @@ const ROLE_DOT = {
 export default function Sidebar() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
+  const [drawingsPending, setDrawingsPending] = useState(0);
+
+  // Fetch pending drawings count for badge (design/admin/owner only)
+  useEffect(() => {
+    if (!['owner', 'admin', 'design'].includes(user?.role)) return;
+    const fetch = () =>
+      api.get('/orders/drawings/pending')
+        .then(r => setDrawingsPending(r.data.filter(o => parseInt(o.drawing_count) === 0).length))
+        .catch(() => {});
+    fetch();
+    const t = setInterval(fetch, 60000); // refresh every minute
+    return () => clearInterval(t);
+  }, [user?.role]);
+
+  const badges = { drawingsPending };
 
   const handleLogout = async () => {
     await logout();
@@ -73,32 +91,40 @@ export default function Sidebar() {
           if (user?.role !== 'owner' && user?.permitted_modules) {
             try {
               const allowed = JSON.parse(user.permitted_modules);
-              if (!allowed.includes(item.id)) return false;
+              // 'drawings' is not a module-gated item — always allow for allowed roles
+              if (item.id !== 'drawings' && !allowed.includes(item.id)) return false;
             } catch {}
           }
           return true;
-        }).map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-100 ${
-                isActive
-                  ? 'sidebar-link-active text-white'
-                  : 'text-slate-400 hover:text-white hover:bg-white/8'
-              }`
-            }
-            style={({ isActive }) => isActive ? {} : {}}
-          >
-            {({ isActive }) => (
-              <>
-                <Icon size={17} className={isActive ? 'text-phe-400' : ''} />
-                {label}
-              </>
-            )}
-          </NavLink>
-        ))}
+        }).map(({ to, icon: Icon, label, badge }) => {
+          const badgeCount = badge ? (badges[badge] || 0) : 0;
+          return (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/'}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-100 ${
+                  isActive
+                    ? 'sidebar-link-active text-white'
+                    : 'text-slate-400 hover:text-white hover:bg-white/8'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <Icon size={17} className={isActive ? 'text-phe-400' : ''} />
+                  <span className="flex-1">{label}</span>
+                  {badgeCount > 0 && (
+                    <span className="ml-auto text-xs font-bold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center leading-none">
+                      {badgeCount}
+                    </span>
+                  )}
+                </>
+              )}
+            </NavLink>
+          );
+        })}
       </nav>
 
       {/* Divider */}

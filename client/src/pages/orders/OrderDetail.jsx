@@ -125,9 +125,20 @@ export default function OrderDetail() {
               <button className="btn-danger btn-sm" onClick={() => setShowRejectModal(true)}>
                 <XCircle size={15} /> Reject
               </button>
-              <button className="btn-primary" onClick={() => setShowApproveModal(true)}>
-                <CheckCircle size={15} /> Approve Order
-              </button>
+              <div className="relative group">
+                <button
+                  className={`btn-primary ${!hasDrawings ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  onClick={() => hasDrawings && setShowApproveModal(true)}
+                  disabled={!hasDrawings}
+                >
+                  <CheckCircle size={15} /> Approve Order
+                </button>
+                {!hasDrawings && (
+                  <div className="absolute right-0 top-full mt-1.5 w-64 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg z-10 hidden group-hover:block">
+                    ⚠️ A reference drawing must be uploaded before this order can be approved.
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -299,7 +310,7 @@ export default function OrderDetail() {
                   Reference Drawings
                 </h2>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Uploaded by Design team · required before job card creation
+                  Uploaded by Design team · <strong className="text-red-500">required before Owner can approve</strong>
                 </p>
               </div>
               {canUploadDrawing && (
@@ -311,15 +322,13 @@ export default function OrderDetail() {
 
             {!hasDrawings ? (
               <div className={`text-sm rounded-xl px-4 py-3 ${
-                order.status === 'approved' && canUploadDrawing
+                ['pending', 'pending_approval'].includes(order.status)
                   ? 'bg-amber-50 border border-amber-200 text-amber-700'
                   : 'text-gray-400'
               }`}>
-                {order.status === 'approved' && canUploadDrawing
-                  ? '⚠️ Please upload reference drawings. The Owner cannot create a job card until drawings are available.'
-                  : order.status === 'approved' && !canUploadDrawing
-                    ? '⚠️ Waiting for Design team to upload reference drawings.'
-                    : 'No drawings uploaded yet.'}
+                {canUploadDrawing
+                  ? '⚠️ Upload a reference drawing before the Owner can approve this order.'
+                  : '⚠️ Waiting for Design team to upload a reference drawing. The Owner cannot approve until it is uploaded.'}
               </div>
             ) : (
               <div className="space-y-2">
@@ -493,7 +502,7 @@ export default function OrderDetail() {
       {showApproveModal && (
         <ConfirmModal
           title="Approve Order"
-          message={`Approve order ${order.order_code}? The Owner can then create a job card once drawings are uploaded.`}
+          message={`Approve order ${order.order_code}? Reference drawing is uploaded and ready. Job cards can be created after approval.`}
           confirmLabel="Approve"
           onClose={() => setShowApproveModal(false)}
           onConfirm={async () => { await api.put(`/orders/${id}/approve`); setShowApproveModal(false); load(); }}
