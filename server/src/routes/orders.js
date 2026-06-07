@@ -67,7 +67,8 @@ router.get('/drawings/pending', authenticate, async (req, res) => {
   const db = getDB();
   const rows = await db.all(`
     SELECT
-      o.id, o.order_code, o.status, o.created_at, o.order_date,
+      o.id, o.order_code, o.status, o.drawing_status, o.drawing_rejection_reason,
+      o.created_at, o.order_date,
       c.customer_code, c.name AS customer_name,
       u.name AS created_by_name,
       (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count,
@@ -314,8 +315,35 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [req.params.id, item_id ? parseInt(item_id) : null, req.file.storagePath, req.file.filename, req.file.originalname, notes||null, req.user.id]
   );
+  // Mark order drawing as pending review for owner to approve
+  await db.run(
+    `UPDATE orders SET drawing_status='pending_review', drawing_rejection_reason=NULL WHERE id=$1`,
+    [req.params.id]
+  );
   await logActivity(req.params.id, null, 'drawing_uploaded', `Reference drawing uploaded: ${req.file.originalname}`, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid, file_name: req.file.filename, original_name: req.file.originalname });
+});
+
+// ── Drawing review: owner approves or rejects drawings ────────────────────────
+router.put('/:id/drawings/approve', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const count = await db.get('SELECT COUNT(*) as c FROM order_drawings WHERE order_id=$1', [req.params.id]);
+  if (parseInt(count?.c ?? 0) === 0) return res.status(400).json({ error: 'No drawings to approve' });
+  await db.run(`UPDATE orders SET drawing_status='approved', drawing_rejection_reason=NULL WHERE id=$1`, [req.params.id]);
+  await logActivity(req.params.id, null, 'drawing_approved', 'Reference drawings approved by owner', req.user.id);
+  res.json({ message: 'Drawings approved' });
+});
+
+router.put('/:id/drawings/reject', authenticate, authorize('owner'), async (req, res) => {
+  const { reason } = req.body;
+  if (!reason?.trim()) return res.status(400).json({ error: 'Rejection reason is required' });
+  const db = getDB();
+  await db.run(
+    `UPDATE orders SET drawing_status='rejected', drawing_rejection_reason=$1 WHERE id=$2`,
+    [reason.trim(), req.params.id]
+  );
+  await logActivity(req.params.id, null, 'drawing_rejected', `Reference drawings rejected: ${reason}`, req.user.id);
+  res.json({ message: 'Drawings rejected' });
 });
 
 router.delete('/:id/drawings/:drawingId', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
@@ -324,6 +352,14 @@ router.delete('/:id/drawings/:drawingId', authenticate, authorize('design', 'adm
   if (!d) return res.status(404).json({ error: 'Not found' });
   await deleteFromStorage(d.file_path);
   await db.run('DELETE FROM order_drawings WHERE id=$1', [req.params.drawingId]);
+  // If no drawings remain, reset drawing status so design must re-upload
+  const remaining = await db.get('SELECT COUNT(*) as c FROM order_drawings WHERE order_id=$1', [req.params.id]);
+  if (parseInt(remaining?.c ?? 0) === 0) {
+    await db.run(`UPDATE orders SET drawing_status=NULL, drawing_rejection_reason=NULL WHERE id=$1`, [req.params.id]);
+  } else {
+    // Drawings still exist — put back to pending_review so owner can re-evaluate
+    await db.run(`UPDATE orders SET drawing_status='pending_review', drawing_rejection_reason=NULL WHERE id=$1`, [req.params.id]);
+  }
   res.json({ message: 'Deleted' });
 });
 
@@ -373,10 +409,15 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.status === 'approved') return res.status(409).json({ error: 'Order already approved' });
 
-  // Gate: reference drawing must be uploaded before approval
-  const drawingCount = await db.get('SELECT COUNT(*) as c FROM order_drawings WHERE order_id=$1', [req.params.id]);
-  if (parseInt(drawingCount?.c ?? 0, 10) === 0) {
-    return res.status(400).json({ error: 'A reference drawing must be uploaded before this order can be approved.' });
+  // Gate: drawings must be uploaded AND approved by owner before order approval
+  const orderForGate = await db.get('SELECT drawing_status FROM orders WHERE id=$1', [req.params.id]);
+  if (orderForGate?.drawing_status !== 'approved') {
+    if (!orderForGate?.drawing_status)
+      return res.status(400).json({ error: 'Reference drawings must be uploaded and approved before this order can be approved.' });
+    if (orderForGate.drawing_status === 'pending_review')
+      return res.status(400).json({ error: 'Reference drawings are awaiting your approval before the order can be approved.' });
+    if (orderForGate.drawing_status === 'rejected')
+      return res.status(400).json({ error: 'Reference drawings were rejected. Design team must upload new drawings before approval.' });
   }
 
   await db.run(

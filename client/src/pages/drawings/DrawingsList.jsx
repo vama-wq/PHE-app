@@ -4,7 +4,7 @@ import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import {
   PenLine, CheckCircle2, Clock, AlertTriangle, Upload,
-  FileImage, ExternalLink, ChevronRight, RefreshCw
+  FileImage, ExternalLink, ChevronRight, RefreshCw, XCircle
 } from 'lucide-react';
 
 function fmtDate(d) {
@@ -28,10 +28,20 @@ export default function DrawingsList() {
 
   const canUpload = ['design', 'admin', 'owner'].includes(user?.role);
 
-  const pendingOrders = orders.filter(o => parseInt(o.drawing_count) === 0);
-  const readyOrders   = orders.filter(o => parseInt(o.drawing_count) > 0);
+  // Tabs: needs drawing, awaiting owner review, rejected, approved
+  const needsDrawing   = orders.filter(o => !o.drawing_status);
+  const awaitingReview = orders.filter(o => o.drawing_status === 'pending_review');
+  const rejectedOrders = orders.filter(o => o.drawing_status === 'rejected');
+  const approvedOrders = orders.filter(o => o.drawing_status === 'approved');
 
-  const displayed = tab === 'pending' ? pendingOrders : readyOrders;
+  // backward compat aliases for displayed
+  const pendingOrders = needsDrawing;
+  const readyOrders   = approvedOrders;
+
+  const displayed = tab === 'pending' ? needsDrawing
+    : tab === 'review' ? awaitingReview
+    : tab === 'rejected' ? rejectedOrders
+    : approvedOrders;
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -52,44 +62,35 @@ export default function DrawingsList() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <div
-          className={`card p-4 cursor-pointer border-2 transition-colors ${tab === 'pending' ? 'border-red-400 bg-red-50' : 'border-transparent hover:border-gray-200'}`}
-          onClick={() => setTab('pending')}
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center">
-              <AlertTriangle size={18} className="text-red-600" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-red-700">{loading ? '…' : pendingOrders.length}</p>
-              <p className="text-sm text-red-600 font-medium">Awaiting Drawing</p>
-              <p className="text-xs text-gray-400">Cannot be approved yet</p>
-            </div>
-          </div>
-        </div>
-
-        <div
-          className={`card p-4 cursor-pointer border-2 transition-colors ${tab === 'ready' ? 'border-green-400 bg-green-50' : 'border-transparent hover:border-gray-200'}`}
-          onClick={() => setTab('ready')}
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center">
-              <CheckCircle2 size={18} className="text-green-600" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-green-700">{loading ? '…' : readyOrders.length}</p>
-              <p className="text-sm text-green-600 font-medium">Drawing Uploaded</p>
-              <p className="text-xs text-gray-400">Ready for owner approval</p>
+      <div className="grid grid-cols-4 gap-3 mb-6">
+        {[
+          { key: 'pending',  count: needsDrawing.length,   label: 'Needs Drawing',     sub: 'No drawing uploaded',          color: 'red',   Icon: AlertTriangle },
+          { key: 'review',   count: awaitingReview.length, label: 'Awaiting Review',   sub: 'Owner must approve',           color: 'blue',  Icon: Clock },
+          { key: 'rejected', count: rejectedOrders.length, label: 'Rejected',           sub: 'Design must revise',           color: 'amber', Icon: XCircle },
+          { key: 'ready',    count: approvedOrders.length, label: 'Approved',           sub: 'Ready for order approval',     color: 'green', Icon: CheckCircle2 },
+        ].map(({ key, count, label, sub, color, Icon }) => (
+          <div key={key}
+            className={`card p-3 cursor-pointer border-2 transition-colors ${tab === key ? `border-${color}-400 bg-${color}-50` : 'border-transparent hover:border-gray-200'}`}
+            onClick={() => setTab(key)}
+          >
+            <div className="flex items-center gap-2.5">
+              <div className={`w-9 h-9 rounded-xl bg-${color}-100 flex items-center justify-center flex-shrink-0`}>
+                <Icon size={16} className={`text-${color}-600`} />
+              </div>
+              <div>
+                <p className={`text-xl font-bold text-${color}-700`}>{loading ? '…' : count}</p>
+                <p className={`text-xs font-medium text-${color}-600`}>{label}</p>
+                <p className="text-xs text-gray-400">{sub}</p>
+              </div>
             </div>
           </div>
-        </div>
+        ))}
       </div>
 
       {/* Tab label */}
       <div className="flex items-center gap-2 mb-3">
         <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-          {tab === 'pending' ? 'Orders Awaiting Drawing' : 'Orders With Drawings'}
+          {tab === 'pending' ? 'Orders Needing Drawings' : tab === 'review' ? 'Awaiting Owner Review' : tab === 'rejected' ? 'Rejected — Needs Revision' : 'Approved Drawings'}
         </h2>
         <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
           tab === 'pending' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'

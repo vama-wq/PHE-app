@@ -601,11 +601,13 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   const [destination, setDestination] = useState(defaultDest);
   const [fgQty,        setFgQty]       = useState('');
   const [dispatchQty,  setDispatchQty] = useState('');
+  const [qcPhoto,      setQcPhoto]     = useState(null); // required image of approved material
   const [saving,       setSaving]      = useState(false);
   const [error,        setError]       = useState('');
 
   const handleSubmit = async () => {
     setError('');
+    if (!qcPhoto) return setError('A photo of the approved material is required');
     if (destination === 'finished_goods' && (!fgQty || parseInt(fgQty) <= 0))
       return setError('Finished Goods quantity is required');
     if (destination === 'both') {
@@ -614,11 +616,12 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
     }
     setSaving(true);
     try {
-      await api.put(`/qc/${card.id}/approve`, {
-        heater_destination: destination,
-        io_qty:       (destination === 'finished_goods' || destination === 'both') ? parseInt(fgQty) : undefined,
-        dispatch_qty: destination === 'both' ? parseInt(dispatchQty) : undefined,
-      });
+      const fd = new FormData();
+      fd.append('file', qcPhoto);  // field name 'file' matches uploadChecklistPhoto middleware
+      fd.append('heater_destination', destination);
+      if (destination === 'finished_goods' || destination === 'both') fd.append('io_qty', parseInt(fgQty));
+      if (destination === 'both') fd.append('dispatch_qty', parseInt(dispatchQty));
+      await api.put(`/qc/${card.id}/approve`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSaved();
     } catch (e) {
       setError(e.response?.data?.error || 'Failed to approve');
@@ -715,11 +718,37 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
           </div>
         )}
 
+        {/* Required material photo */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Material Photo <span className="text-red-500">*</span>
+            <span className="text-xs text-gray-400 font-normal ml-1">(photo of approved heaters)</span>
+          </label>
+          {qcPhoto ? (
+            <div className="flex items-center gap-3">
+              <img src={URL.createObjectURL(qcPhoto)} alt="QC"
+                className="w-16 h-16 object-cover rounded-lg border-2 border-green-300" />
+              <div>
+                <p className="text-xs font-medium text-green-700">{qcPhoto.name}</p>
+                <button className="text-xs text-red-500 hover:underline mt-0.5"
+                  onClick={() => setQcPhoto(null)}>Remove</button>
+              </div>
+            </div>
+          ) : (
+            <label className="flex items-center gap-2 cursor-pointer border-2 border-dashed border-gray-300 rounded-xl px-4 py-3 hover:border-brand-400 transition-colors">
+              <Upload size={16} className="text-gray-400" />
+              <span className="text-sm text-gray-500">Click to upload photo</span>
+              <input type="file" accept=".jpg,.jpeg,.png,.webp" className="hidden"
+                onChange={e => setQcPhoto(e.target.files[0] || null)} />
+            </label>
+          )}
+        </div>
+
         {error && <p className="text-red-600 text-sm">{error}</p>}
 
         <div className="flex gap-3 pt-1">
           <button className="btn-secondary flex-1" onClick={onClose} disabled={saving}>Cancel</button>
-          <button className="btn-primary flex-1" onClick={handleSubmit} disabled={saving}>
+          <button className="btn-primary flex-1" onClick={handleSubmit} disabled={saving || !qcPhoto}>
             {saving ? 'Approving...' : 'Confirm & Approve'}
           </button>
         </div>

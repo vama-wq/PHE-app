@@ -29,6 +29,8 @@ export default function OrderList() {
   const [statusFilter, setStatusFilter] = useState('');
   const [clientFilter, setClientFilter] = useState('');
   const [productFilter, setProductFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo]     = useState('');
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const navigate = useNavigate();
@@ -56,8 +58,10 @@ export default function OrderList() {
     if (statusFilter) r = r.filter(o => o.status === statusFilter);
     if (clientFilter) r = r.filter(o => o.customer_code === clientFilter);
     if (productFilter) r = r.filter(o => (o.product_codes || '').split(',').map(p => p.trim()).includes(productFilter));
+    if (dateFrom) r = r.filter(o => o.order_date && o.order_date >= dateFrom);
+    if (dateTo)   r = r.filter(o => o.order_date && o.order_date <= dateTo);
     return r;
-  }, [orders, search, statusFilter, clientFilter, productFilter]);
+  }, [orders, search, statusFilter, clientFilter, productFilter, dateFrom, dateTo]);
 
   async function load() {
     setLoading(true);
@@ -116,9 +120,13 @@ export default function OrderList() {
           <option value="dispatched">Dispatched</option>
           <option value="rejected">Rejected</option>
         </select>
-        {(search || clientFilter || productFilter || statusFilter) && (
+        <input type="date" className="input w-[140px]" value={dateFrom}
+          onChange={e => setDateFrom(e.target.value)} title="Order date from" />
+        <input type="date" className="input w-[140px]" value={dateTo}
+          onChange={e => setDateTo(e.target.value)} title="Order date to" />
+        {(search || clientFilter || productFilter || statusFilter || dateFrom || dateTo) && (
           <button className="btn-ghost text-sm flex items-center gap-1 text-gray-500"
-            onClick={() => { setSearch(''); setClientFilter(''); setProductFilter(''); setStatusFilter(''); }}>
+            onClick={() => { setSearch(''); setClientFilter(''); setProductFilter(''); setStatusFilter(''); setDateFrom(''); setDateTo(''); }}>
             <X size={14} /> Clear
           </button>
         )}

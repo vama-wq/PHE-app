@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { uploadQC } = require('../middleware/upload');
+const { uploadQC, uploadChecklistPhoto } = require('../middleware/upload');
 
 // Recompute order status from all its job cards
 async function syncOrderStatus(db, orderId, userId) {
@@ -97,8 +97,8 @@ router.post('/:id/report', authenticate, authorize('design', 'owner', 'admin'),
 // ── Approve ───────────────────────────────────────────────────────────────────
 // Body for Local HE / Export HE:    {}
 // Body for IO:                       { io_qty: N }
-// Body for IO+Export/IO+Local:       { io_qty: N, dispatch_qty: N }
-router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
+// Body for IO+Export/IO+Local:       { io_qty: N, dispatch_qty: N } + required qc_photo (field: file)
+router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), ...uploadChecklistPhoto, async (req, res) => {
   const db = getDB();
 
   // Fetch job card with order + customer info
@@ -111,6 +111,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   `, [req.params.id]);
 
   if (!jc) return res.status(404).json({ error: 'Not found' });
+  if (!req.file) return res.status(400).json({ error: 'A photo of the approved material is required' });
   // Accept both qc_pending and in_progress+stage29done (stuck cards)
   const stage29Done = await db.get(
     'SELECT 1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=29 AND done=1',

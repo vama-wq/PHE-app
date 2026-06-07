@@ -44,7 +44,13 @@ export default function Sidebar() {
     if (!['owner', 'admin', 'design'].includes(user?.role)) return;
     const fetch = () =>
       api.get('/orders/drawings/pending')
-        .then(r => setDrawingsPending(r.data.filter(o => parseInt(o.drawing_count) === 0).length))
+        .then(r => {
+          // Badge shows: orders needing drawing + orders awaiting owner review + rejected
+          const actionable = r.data.filter(o =>
+            !o.drawing_status || o.drawing_status === 'pending_review' || o.drawing_status === 'rejected'
+          ).length;
+          setDrawingsPending(actionable);
+        })
         .catch(() => {});
     fetch();
     const t = setInterval(fetch, 60000); // refresh every minute

@@ -1,40 +1,63 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { fmtDate, daysUntil, getStageLabel, downloadExcel } from '../../lib/utils';
-import { Search, ExternalLink, FileText, Download, Trash2 } from 'lucide-react';
+import { Search, ExternalLink, Download, Trash2, X } from 'lucide-react';
 
 export default function JobCardList() {
   const { user } = useAuthStore();
-  const [cards, setCards] = useState([]);
-  const [filtered, setFiltered] = useState([]);
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [cards, setCards]     = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    api.get('/job-cards').then(r => { setCards(r.data); setFiltered(r.data); }).finally(() => setLoading(false));
-  }, []);
+  // Filters
+  const [search, setSearch]         = useState('');
+  const [statusFilter, setStatus]   = useState('');
+  const [clientFilter, setClient]   = useState('');
+  const [productFilter, setProduct] = useState('');
+  const [dateFrom, setDateFrom]     = useState('');
+  const [dateTo, setDateTo]         = useState('');
 
   useEffect(() => {
+    api.get('/job-cards').then(r => setCards(r.data)).finally(() => setLoading(false));
+  }, []);
+
+  // Unique options
+  const clientOptions  = useMemo(() => [...new Set(cards.map(c => c.customer_code).filter(Boolean))].sort(), [cards]);
+  const productOptions = useMemo(() => [...new Set(cards.map(c => c.product_name || c.drawing_no).filter(Boolean))].sort(), [cards]);
+
+  const filtered = useMemo(() => {
     let r = cards;
-    if (search) r = r.filter(jc =>
-      jc.job_card_no.toLowerCase().includes(search.toLowerCase()) ||
-      jc.order_code.toLowerCase().includes(search.toLowerCase()) ||
-      jc.customer_code.toLowerCase().includes(search.toLowerCase())
-    );
+    if (search) {
+      const s = search.toLowerCase();
+      r = r.filter(jc =>
+        (jc.job_card_no || '').toLowerCase().includes(s) ||
+        (jc.order_code  || '').toLowerCase().includes(s) ||
+        (jc.customer_code || '').toLowerCase().includes(s) ||
+        (jc.drawing_no  || '').toLowerCase().includes(s) ||
+        (jc.product_name|| '').toLowerCase().includes(s)
+      );
+    }
     if (statusFilter) r = r.filter(jc => jc.status === statusFilter);
-    setFiltered(r);
-  }, [cards, search, statusFilter]);
+    if (clientFilter) r = r.filter(jc => jc.customer_code === clientFilter);
+    if (productFilter) r = r.filter(jc =>
+      (jc.product_name || jc.drawing_no) === productFilter
+    );
+    if (dateFrom) r = r.filter(jc => jc.dispatch_date && jc.dispatch_date >= dateFrom);
+    if (dateTo)   r = r.filter(jc => jc.dispatch_date && jc.dispatch_date <= dateTo);
+    return r;
+  }, [cards, search, statusFilter, clientFilter, productFilter, dateFrom, dateTo]);
+
+  const hasFilters = search || statusFilter || clientFilter || productFilter || dateFrom || dateTo;
+  const clearFilters = () => { setSearch(''); setStatus(''); setClient(''); setProduct(''); setDateFrom(''); setDateTo(''); };
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Job Cards</h1>
-          <p className="text-gray-500 text-sm mt-0.5">{cards.length} total · sorted by dispatch date</p>
+          <p className="text-gray-500 text-sm mt-0.5">{filtered.length} of {cards.length} · sorted by dispatch date</p>
         </div>
         {['admin','owner','accounts','production'].includes(user.role) && (
           <button className="btn-secondary flex items-center gap-1.5 text-sm"
@@ -44,19 +67,39 @@ export default function JobCardList() {
         )}
       </div>
 
-      <div className="flex gap-3 mb-5">
-        <div className="relative flex-1 max-w-sm">
-          <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search size={15} className="absolute left-3 top-2.5 text-gray-400" />
           <input className="input pl-9" placeholder="Search job card, order, customer..."
             value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-        <select className="input max-w-[180px]" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+        <select className="input w-[150px]" value={statusFilter} onChange={e => setStatus(e.target.value)}>
           <option value="">All Statuses</option>
           <option value="pending">Pending</option>
           <option value="in_progress">In Progress</option>
+          <option value="qc_pending">QC Pending</option>
+          <option value="qc_approved">QC Approved</option>
           <option value="completed">Completed</option>
           <option value="dispatched">Dispatched</option>
         </select>
+        <select className="input w-[150px]" value={clientFilter} onChange={e => setClient(e.target.value)}>
+          <option value="">All Clients</option>
+          {clientOptions.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select className="input w-[170px]" value={productFilter} onChange={e => setProduct(e.target.value)}>
+          <option value="">All Products</option>
+          {productOptions.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <input type="date" className="input w-[145px]" value={dateFrom}
+          onChange={e => setDateFrom(e.target.value)} title="Dispatch date from" />
+        <input type="date" className="input w-[145px]" value={dateTo}
+          onChange={e => setDateTo(e.target.value)} title="Dispatch date to" />
+        {hasFilters && (
+          <button className="btn-secondary flex items-center gap-1 text-xs" onClick={clearFilters}>
+            <X size={13} /> Clear
+          </button>
+        )}
       </div>
 
       <div className="card overflow-hidden">
@@ -82,12 +125,12 @@ export default function JobCardList() {
               return (
                 <tr key={jc.id} className="hover:bg-gray-50">
                   <td className="table-cell">
-                    <span className="font-semibold text-brand-700">{jc.job_card_no}</span>
-                    {jc.picked_today ? (
-                      <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">
-                        Today
-                      </span>
-                    ) : null}
+                    <Link to={`/job-cards/${jc.id}`} className="font-semibold text-brand-700 hover:underline">
+                      {jc.job_card_no}
+                    </Link>
+                    {jc.picked_today && (
+                      <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">Today</span>
+                    )}
                   </td>
                   <td className="table-cell">
                     <Link to={`/orders/${jc.order_id}`} className="text-brand-600 hover:underline text-sm font-medium"

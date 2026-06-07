@@ -13,15 +13,15 @@ export const PRODUCTION_STAGES = [
   { no: 5,  name: 'Tube Cutting',       fields: [{ key: 'value1', label: 'Value' }] },
   { no: 6,  name: 'Filling' },
   { no: 7,  name: 'HV + Light Check',   hvLight: true },
-  { no: 8,  name: 'Draw',               fields: [{ key: 'value1', label: 'Ohms Value' }, { key: 'value2', label: 'Total Length' }] },
+  { no: 8,  name: 'Draw',               fields: [{ key: 'value1', label: 'Total Length' }] },
   { no: 9,  name: 'HV + Light Check',   hvLight: true },
   { no: 10, name: 'Straightening' },
   { no: 11, name: 'Trimming' },
   { no: 12, name: 'Spot Annealing or Furnace Annealing' },
   { no: 14, name: 'Bending',            heaterAdjust: true },
   { no: 15, name: 'Brazing',            optional: true, brazing: true },
-  { no: 16, name: 'In Plating' },
-  { no: 17, name: 'Plating Completed' },
+  { no: 16, name: 'In Plating',          optional: true },
+  { no: 17, name: 'Plating Completed',  optional: true },
   { no: 18, name: 'Heater Cleaning',    note: 'Use Alcohol and Thinner', fields: [{ key: 'value1', label: 'Remark' }] },
   { no: 19, name: 'Overnight Oven' },
   { no: 20, name: 'HV + Light Check',   hvLight: true },
@@ -33,12 +33,13 @@ export const PRODUCTION_STAGES = [
   { no: 26, name: 'Nut Washer' },
   { no: 27, name: 'HV + Light Check',   hvLight: true },
   { no: 28, name: 'Ohms + Meggar',      fields: [{ key: 'value1', label: 'Remark' }] },
-  { no: 29, name: 'Ready in Production', triggerQC: true, isDispatch: true },
+  { no: 29, name: 'Ready in Production', triggerQC: true, isDispatch: true, photoRequired: true },
 ];
 
 // Stages that must be completed before Stage 29 (QC) can be triggered.
 // Optional stages excluded: 2 (Coil+Tube), 15 (Brazing), 18 (Heater Cleaning), 21 (Nipple Press), 22 (3hrs Oven).
-export const MANDATORY_STAGE_NOS = [1,3,4,5,6,7,8,9,10,11,12,14,16,17,19,20,23,24,25,26,27,28];
+// Optional stages excluded: 2 (Coil+Tube), 15 (Brazing), 16 (In Plating), 17 (Plating Completed), 18 (Heater Cleaning), 21 (Nipple Press), 22 (3hrs Oven).
+export const MANDATORY_STAGE_NOS = [1,3,4,5,6,7,8,9,10,11,12,14,19,20,23,24,25,26,27,28];
 
 export function getStageLabel(stageNo) {
   if (!stageNo) return null;

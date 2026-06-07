@@ -879,10 +879,12 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const isAfter6pm = new Date().getHours() >= 18;
   // photoAlwaysRequired: stages where upload IS the done action (Cleaning, Dispatch)
   const photoAlwaysRequired = !!stageDef.photo;
+  // photoRequiredForStage: stages that always need a photo before marking done (e.g. stage 29)
+  const photoRequiredForStage = !!stageDef.photoRequired;
   // photoRequiredAfter6pm: after 6pm, photo needed but form stays open so rejection can be entered
-  const photoRequiredAfter6pm = isAfter6pm && !stageDef.photo;
+  const photoRequiredAfter6pm = isAfter6pm && !stageDef.photo && !stageDef.photoRequired;
   // legacy alias used by UI below
-  const requiresPhoto = photoAlwaysRequired || photoRequiredAfter6pm;
+  const requiresPhoto = photoAlwaysRequired || photoRequiredAfter6pm || photoRequiredForStage;
   const rejQtyInt = parseInt(rejQty, 10) || 0;
   const canManage = ['production', 'owner', 'admin'].includes(user.role);
 
@@ -911,6 +913,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (stageDef.fields.length > 1 && !value2.trim()) return false;
     }
     if (photoAlwaysRequired) return false; // photo upload IS the done action for these stages
+    if (photoRequiredForStage && !stagePhotoFile) return false; // stage requires photo before marking done
     if (photoRequiredAfter6pm && !stagePhotoFile) return false; // need photo first, then Mark Done
     if (rejQtyInt > 2 && !rejPhoto) return false;
     if (stageDef.no === 29 && mandatoryMissing.length > 0) return false;
@@ -1413,10 +1416,13 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Stage Photo <span className="text-red-500">*</span>
             <span className="text-xs text-gray-400 font-normal ml-2">
-              {photoRequiredAfter6pm
-                ? stagePhotoFile ? '✓ Photo uploaded — fill in rejection details below then Mark Done'
-                                 : '(upload photo first, then Mark Done)'
-                : '(required to mark done)'}
+              {photoRequiredForStage
+                ? stagePhotoFile ? '✓ Photo uploaded — you can now mark done'
+                                 : '(photo of heater required before sending to QC)'
+                : photoRequiredAfter6pm
+                  ? stagePhotoFile ? '✓ Photo uploaded — fill in rejection details below then Mark Done'
+                                   : '(upload photo first, then Mark Done)'
+                  : '(required to mark done)'}
             </span>
           </label>
           {stagePhotoFile ? (

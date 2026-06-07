@@ -30,6 +30,8 @@ export default function DispatchList() {
   const [clientFilter, setClientFilter] = useState('');
   const [productFilter, setProductFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo]     = useState('');
 
   const load = () => api.get('/job-cards').then(r => {
     const relevant = r.data.filter(jc =>
@@ -62,12 +64,14 @@ export default function DispatchList() {
       (jc.product_name || jc.drawing_no) === productFilter
     );
     if (statusFilter) r = r.filter(jc => jc.status === statusFilter);
+    if (dateFrom) r = r.filter(jc => jc.dispatch_date && jc.dispatch_date >= dateFrom);
+    if (dateTo)   r = r.filter(jc => jc.dispatch_date && jc.dispatch_date <= dateTo);
     return r;
-  }, [cards, search, clientFilter, productFilter, statusFilter]);
+  }, [cards, search, clientFilter, productFilter, statusFilter, dateFrom, dateTo]);
 
-  const hasFilters = search || clientFilter || productFilter || statusFilter;
+  const hasFilters = search || clientFilter || productFilter || statusFilter || dateFrom || dateTo;
   const clearFilters = () => {
-    setSearch(''); setClientFilter(''); setProductFilter(''); setStatusFilter('');
+    setSearch(''); setClientFilter(''); setProductFilter(''); setStatusFilter(''); setDateFrom(''); setDateTo('');
   };
 
   const canManage = ['accounts', 'owner'].includes(user.role);
@@ -111,6 +115,10 @@ export default function DispatchList() {
           <option value="packaging">Packaging</option>
           <option value="dispatched">Dispatched</option>
         </select>
+        <input type="date" className="input w-[140px]" value={dateFrom}
+          onChange={e => setDateFrom(e.target.value)} title="Dispatch date from" />
+        <input type="date" className="input w-[140px]" value={dateTo}
+          onChange={e => setDateTo(e.target.value)} title="Dispatch date to" />
         {hasFilters && (
           <button className="btn-ghost text-sm flex items-center gap-1 text-gray-500"
             onClick={clearFilters}>
