@@ -53,6 +53,7 @@ export default function OrderDetail() {
   if (loading) return <div className="p-8 text-center text-gray-400">Loading order...</div>;
   if (!order) return <div className="p-8 text-center text-red-500">Order not found</div>;
 
+  const restrictedRole     = ['design', 'qc', 'production'].includes(user.role);
   const canApprove         = user.role === 'owner' && order.status === 'pending_approval';
   const hasDrawings        = order.order_drawings?.length > 0;
   const drawingStatus      = order.drawing_status; // null | 'pending_review' | 'approved' | 'rejected'
@@ -61,7 +62,7 @@ export default function OrderDetail() {
   const canUploadJobCard   = ['admin', 'owner'].includes(user.role) &&
     !['pending_approval', 'rejected'].includes(order.status) && hasDrawings;
   const canManageItems     = ['admin', 'owner'].includes(user.role);
-  const canUploadQuotation = ['admin', 'owner'].includes(user.role);
+  const canUploadQuotation = ['admin', 'owner'].includes(user.role) && !restrictedRole;
   const canUploadDrawing   = ['design', 'admin', 'owner'].includes(user.role);
 
   const handleDeleteItem = async (itemId) => {
@@ -121,12 +122,12 @@ export default function OrderDetail() {
           </p>
         </div>
         <div className="flex gap-2">
-          {user.role === 'owner' && (
+          {user.role === 'owner' && !restrictedRole && (
             <button className="btn-danger btn-sm" onClick={handleDeleteOrder} title="Delete this order">
               <Trash2 size={15} /> Delete Order
             </button>
           )}
-          {canApprove && (
+          {canApprove && !restrictedRole && (
             <>
               <button className="btn-danger btn-sm" onClick={() => setShowRejectModal(true)}>
                 <XCircle size={15} /> Reject
@@ -588,8 +589,8 @@ export default function OrderDetail() {
             )}
           </div>
 
-          {/* ── Quotations ── */}
-          <div className="card p-5">
+          {/* ── Quotations ── (hidden from design/qc/production) */}
+          {!restrictedRole && <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="section-title">Quotations</h2>
               {canUploadQuotation && (
@@ -610,7 +611,7 @@ export default function OrderDetail() {
                 </div>
               </div>
             ))}
-          </div>
+          </div>}
         </div>
 
         {/* ═══════════════ RIGHT SIDEBAR ═══════════════ */}
