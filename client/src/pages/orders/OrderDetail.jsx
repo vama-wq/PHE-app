@@ -738,6 +738,7 @@ function ChatPanel({ orderId, currentUser }) {
   const [users, setUsers] = useState([]);
   const [mentionQuery, setMentionQuery] = useState(null); // string after @ or null
   const [mentionPos, setMentionPos] = useState(0);        // caret position where @ was typed
+  const [mentionedIds, setMentionedIds] = useState([]);   // user IDs mentioned in current draft
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -790,6 +791,8 @@ function ChatPanel({ orderId, currentUser }) {
     const next = before + inserted + after;
     setNewMsg(next);
     setMentionQuery(null);
+    // Track this user's ID so server doesn't need to parse the name
+    setMentionedIds(prev => prev.includes(user.id) ? prev : [...prev, user.id]);
     setTimeout(() => {
       textareaRef.current?.focus();
       const pos = before.length + inserted.length;
@@ -801,9 +804,10 @@ function ChatPanel({ orderId, currentUser }) {
     if (!newMsg.trim() || sending) return;
     setSending(true);
     try {
-      await api.post(`/orders/${orderId}/messages`, { message: newMsg });
+      await api.post(`/orders/${orderId}/messages`, { message: newMsg, mentionIds: mentionedIds });
       setNewMsg('');
       setMentionQuery(null);
+      setMentionedIds([]);
       await loadMessages();
     } finally {
       setSending(false);

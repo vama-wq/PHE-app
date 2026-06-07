@@ -373,7 +373,7 @@ router.get('/:id/messages', authenticate, async (req, res) => {
 });
 
 router.post('/:id/messages', authenticate, async (req, res) => {
-  const { message } = req.body;
+  const { message, mentionIds } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: 'Message cannot be empty' });
   const db = getDB();
   const r = await db.insert(
@@ -382,17 +382,13 @@ router.post('/:id/messages', authenticate, async (req, res) => {
   );
   const messageId = r.lastInsertRowid;
 
-  // Parse @mentions and notify mentioned users
-  const mentionMatches = [...message.matchAll(/@([^\s@][^@]*?)(?=\s|@|$)/g)];
-  if (mentionMatches.length) {
-    const allUsers = await db.all('SELECT id, name FROM users');
-    for (const match of mentionMatches) {
-      const mentionedName = match[1].trim();
-      const found = allUsers.find(u => u.name.toLowerCase() === mentionedName.toLowerCase());
-      if (found && found.id !== req.user.id) {
+  // Insert mentions using client-supplied user IDs (avoids regex parsing of names with spaces/slashes)
+  if (Array.isArray(mentionIds) && mentionIds.length) {
+    for (const userId of mentionIds) {
+      if (userId !== req.user.id) {
         await db.run(
           'INSERT INTO message_mentions (message_id, order_id, mentioned_user_id) VALUES ($1,$2,$3)',
-          [messageId, req.params.id, found.id]
+          [messageId, req.params.id, userId]
         );
       }
     }
