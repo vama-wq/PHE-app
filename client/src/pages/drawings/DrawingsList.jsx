@@ -142,7 +142,8 @@ export default function DrawingsList() {
   );
 }
 
-function OrderRow({ order, tab, canUpload, onUploaded }) {
+// ── Per-item upload button ─────────────────────────────────────────────────────
+function ItemUploadBtn({ orderId, item, onUploaded }) {
   const fileRef = useRef(null);
   const [uploading, setUploading] = useState(false);
 
@@ -153,7 +154,8 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      await uploadApi.post(`/orders/${order.id}/drawings`, fd, {
+      fd.append('item_id', item.id);
+      await uploadApi.post(`/orders/${orderId}/drawings`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       onUploaded();
@@ -165,10 +167,45 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
     }
   };
 
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        className="btn-primary text-xs px-2.5 py-1 flex items-center gap-1"
+        onClick={() => fileRef.current?.click()}
+        disabled={uploading}
+        title={`Upload drawing for ${item.drawing_number || 'item'}`}
+      >
+        {uploading
+          ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+          : <Upload size={11} />
+        }
+        {uploading ? 'Uploading…' : 'Upload'}
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.dwg,.dxf"
+        className="hidden"
+        onChange={handleUpload}
+      />
+    </div>
+  );
+}
+
+function OrderRow({ order, tab, canUpload, onUploaded }) {
   const drawings = Array.isArray(order.drawings) ? order.drawings : [];
+  const items    = Array.isArray(order.items)    ? order.items    : [];
+
+  // All items with their drawing status
+  const itemRows = items.map((item, i) => {
+    const itemDrawings = drawings.filter(d => d.item_id === item.id);
+    return { item, idx: i, itemDrawings, hasDrw: itemDrawings.length > 0 };
+  });
+
+  const allDone = itemRows.length > 0 && itemRows.every(r => r.hasDrw);
 
   return (
-    <tr className="hover:bg-gray-50">
+    <tr className="hover:bg-gray-50 align-top">
       {/* Order code */}
       <td className="table-cell">
         <Link to={`/orders/${order.id}`} className="font-semibold text-brand-700 hover:underline">
@@ -183,7 +220,7 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
         <div className="text-xs text-gray-400">{order.customer_name}</div>
       </td>
 
-      {/* Items */}
+      {/* Items count */}
       <td className="table-cell text-sm text-gray-600">
         {order.item_count} item{order.item_count !== 1 ? 's' : ''}
       </td>
@@ -194,40 +231,46 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
         <div className="text-xs text-gray-400">{order.created_by_name}</div>
       </td>
 
-      {/* Status + item drawing numbers */}
+      {/* Status: per-item drawing checklist */}
       <td className="table-cell">
-        {parseInt(order.drawing_count) === 0 ? (
+        {/* Overall badge */}
+        {allDone ? (
+          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium mb-1.5">
+            <CheckCircle2 size={10} /> All drawings uploaded
+          </span>
+        ) : (
           <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium mb-1.5">
             <AlertTriangle size={10} /> No Drawing
           </span>
-        ) : (
-          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium mb-1.5">
-            <CheckCircle2 size={10} /> {order.drawing_count} file{order.drawing_count !== 1 ? 's' : ''}
-          </span>
         )}
-        {/* Item drawing numbers needed */}
-        {Array.isArray(order.items) && order.items.length > 0 && (
-          <div className="flex flex-col gap-0.5 mt-1">
-            {order.items.map((item, i) => {
-              const itemDrawings = (drawings).filter(d => d.item_id === item.id);
-              const done = itemDrawings.length > 0;
-              return (
-                <div key={item.id} className="flex items-center gap-1.5">
-                  {done
-                    ? <CheckCircle2 size={10} className="text-green-500 flex-shrink-0" />
-                    : <AlertTriangle size={10} className="text-amber-500 flex-shrink-0" />
-                  }
-                  <span className={`text-xs font-mono ${done ? 'text-green-700' : 'text-gray-600'}`}>
-                    {item.drawing_number || `Item ${i + 1}`}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        {/* Per-item row */}
+        <div className="flex flex-col gap-0.5 mt-1">
+          {itemRows.map(({ item, idx, itemDrawings, hasDrw }) => (
+            <div key={item.id} className="flex items-center gap-1.5">
+              {hasDrw
+                ? <CheckCircle2 size={10} className="text-green-500 flex-shrink-0" />
+                : <AlertTriangle size={10} className="text-amber-500 flex-shrink-0" />
+              }
+              <span className={`text-xs font-mono ${hasDrw ? 'text-green-700' : 'text-gray-600'}`}>
+                {item.drawing_number || `Item ${idx + 1}`}
+              </span>
+              {hasDrw && itemDrawings[0] && (
+                <a
+                  href={`/uploads/order-drawings/${itemDrawings[0].file_name}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-brand-500 hover:text-brand-700"
+                  title="View uploaded drawing"
+                >
+                  <ExternalLink size={10} />
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
       </td>
 
-      {/* Drawings list (ready tab) */}
+      {/* Drawings list (ready/approved tab) */}
       {tab === 'ready' && (
         <td className="table-cell">
           <div className="flex flex-col gap-1">
@@ -248,30 +291,25 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
         </td>
       )}
 
-      {/* Action */}
-      <td className="table-cell text-center">
+      {/* Action column: per-item upload buttons OR view link */}
+      <td className="table-cell">
         {tab === 'pending' && canUpload ? (
-          <>
-            <button
-              className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 mx-auto"
-              onClick={() => fileRef.current?.click()}
-              disabled={uploading}
-            >
-              {uploading ? (
-                <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <Upload size={12} />
-              )}
-              {uploading ? 'Uploading…' : 'Upload Drawing'}
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".pdf,.jpg,.jpeg,.png,.dwg,.dxf"
-              className="hidden"
-              onChange={handleUpload}
-            />
-          </>
+          <div className="flex flex-col gap-1.5">
+            {itemRows.map(({ item, idx, hasDrw }) => (
+              <div key={item.id} className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-500 font-mono min-w-0 truncate max-w-[120px]" title={item.drawing_number}>
+                  {item.drawing_number || `Item ${idx + 1}`}
+                </span>
+                {hasDrw ? (
+                  <span className="text-xs text-green-600 font-medium flex items-center gap-0.5">
+                    <CheckCircle2 size={11} /> Done
+                  </span>
+                ) : (
+                  <ItemUploadBtn orderId={order.id} item={item} onUploaded={onUploaded} />
+                )}
+              </div>
+            ))}
+          </div>
         ) : (
           <Link
             to={`/orders/${order.id}`}
