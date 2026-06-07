@@ -5,7 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
-import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS } from '../../lib/utils';
+import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati } from '../../lib/utils';
 import {
   ArrowLeft, CheckCircle, XCircle, FileText, Plus, Upload,
   ExternalLink, Trash2, Edit2, Package, PenLine, MessageSquare,
@@ -42,6 +42,7 @@ export default function OrderDetail() {
   const [editingItem, setEditingItem] = useState(null);
   const [showDrawingModal, setShowDrawingModal] = useState(false);
   const [drawingUploadItemId, setDrawingUploadItemId] = useState(null); // null = order-level upload
+  const [drawingUploadItem, setDrawingUploadItem]     = useState(null); // full item object for modal title
   const [showDrawingRejectModal, setShowDrawingRejectModal] = useState(false);
   const [deletingJobCard, setDeletingJobCard] = useState(null);
 
@@ -418,7 +419,7 @@ export default function OrderDetail() {
                         {canUploadDrawing && (
                           <button
                             className="btn-secondary btn-sm py-1 px-2 text-xs"
-                            onClick={() => { setDrawingUploadItemId(item.id); setShowDrawingModal(true); }}
+                            onClick={() => { setDrawingUploadItemId(item.id); setDrawingUploadItem(item); setShowDrawingModal(true); }}
                           >
                             <Upload size={11} /> Upload
                           </button>
@@ -650,8 +651,9 @@ export default function OrderDetail() {
       {showDrawingModal && (
         <DrawingUploadModal orderId={id}
           itemId={drawingUploadItemId}
-          onClose={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); }}
-          onSave={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); load(); }}
+          item={drawingUploadItem}
+          onClose={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); }}
+          onSave={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); load(); }}
         />
       )}
       {showDrawingRejectModal && (
@@ -923,7 +925,7 @@ function TimelinePanel({ activity }) {
 // ── Item modal (add / edit on existing order) ────────────────────────────────
 function ItemModal({ item, orderId, onClose, onSave }) {
   const blank = {
-    drawing_number: '', tube_material: '', tube_diameter: '',
+    product_code: '', drawing_number: '', tube_material: '', tube_diameter: '',
     wattage: '', voltage: '', plating_instructions: '', quantity: '', remark: ''
   };
   const [f, setF] = useState(item ? { ...item } : blank);
@@ -979,9 +981,34 @@ function ItemModal({ item, orderId, onClose, onSave }) {
   return (
     <Modal open title={item?.id ? 'Edit Item' : 'Add Item'} onClose={onClose} size="lg">
       <div className="grid grid-cols-2 gap-4">
-        <div className="col-span-2">
+        <div>
+          <label className="label">Product Code <span className="text-gray-400 font-normal">(optional)</span></label>
+          <input className="input" placeholder="e.g. PT-Utype-12U-500W" value={f.product_code ?? ''} onChange={set('product_code')} />
+        </div>
+        <div>
           <label className="label">Drawing Number <span className="text-red-500">*</span></label>
           <input className="input" placeholder="e.g. PT-FlangeHe-QU-2Kw-Cop" value={f.drawing_number} onChange={set('drawing_number')} />
+          {f.drawing_number && (
+            <div className="mt-1.5 space-y-0.5">
+              {[
+                { lang: 'ગુ', text: transliterateGujarati(f.drawing_number) },
+                { lang: 'हि', text: transliterateHindi(f.drawing_number) },
+              ].map(({ lang, text }) => (
+                <div key={lang} className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <span className="text-gray-400 font-medium w-5 flex-shrink-0">{lang}:</span>
+                  <span className="font-mono">{text}</span>
+                  <button
+                    type="button"
+                    className="ml-1 text-gray-400 hover:text-brand-600 transition-colors"
+                    title="Copy"
+                    onClick={() => navigator.clipboard.writeText(text)}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         <div>
           <label className="label">Tube Material <span className="text-red-500">*</span></label>
@@ -1113,7 +1140,7 @@ function DrawingRejectModal({ onClose, onConfirm }) {
   );
 }
 
-function DrawingUploadModal({ orderId, itemId, onClose, onSave }) {
+function DrawingUploadModal({ orderId, itemId, item, onClose, onSave }) {
   const [file, setFile] = useState(null);
   const [notes, setNotes] = useState('');
   const [error, setError] = useState('');
@@ -1135,12 +1162,21 @@ function DrawingUploadModal({ orderId, itemId, onClose, onSave }) {
     }
   };
 
+  const modalTitle = item
+    ? `Upload Drawing — ${item.drawing_number || item.product_code || 'Item'}`
+    : 'Upload Reference Drawing';
+
   return (
-    <Modal open title="Upload Reference Drawing" onClose={onClose} size="sm">
+    <Modal open title={modalTitle} onClose={onClose} size="sm">
       <div className="space-y-4">
-        {itemId && (
+        {item && (
           <div className="bg-blue-50 border border-blue-100 text-blue-700 text-xs rounded-lg px-3 py-2">
-            This drawing will be linked to the selected item.
+            <span className="font-semibold">For: </span>
+            {item.drawing_number && <span className="font-mono">{item.drawing_number}</span>}
+            {item.product_code && <span className="ml-1 text-blue-500">({item.product_code})</span>}
+            <div className="mt-0.5 text-blue-500">
+              {[item.tube_material, item.wattage && `${item.wattage}W`, item.voltage && `${item.voltage}V`, item.quantity && `Qty: ${item.quantity}`].filter(Boolean).join(' · ')}
+            </div>
           </div>
         )}
         <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png,.dwg,.dxf" label="Select drawing (PDF, Image, DWG, DXF)" />

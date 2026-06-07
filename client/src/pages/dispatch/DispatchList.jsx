@@ -422,7 +422,7 @@ function ChecklistSummaryModal({ jc, onClose }) {
 // ── Dispatch Doc Modal ─────────────────────────────────────────────────────────
 function DispatchDocModal({ jc, onClose, onSave }) {
   const [f, setF] = useState({
-    doc_type: 'delivery_challan', shipping_carrier: '', tracking_number: '',
+    doc_type: 'invoice', shipping_carrier: '', tracking_number: '',
     dispatch_date: new Date().toISOString().split('T')[0], notes: ''
   });
   const [file, setFile] = useState(null);
@@ -435,6 +435,7 @@ function DispatchDocModal({ jc, onClose, onSave }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!file)                      { setError('Invoice / dispatch document is required — please upload a file'); return; }
     if (!f.shipping_carrier.trim()) { setError('Shipping carrier is required'); return; }
     if (!f.tracking_number.trim())  { setError('Tracking number is required'); return; }
     setSaving(true);
@@ -473,7 +474,7 @@ function DispatchDocModal({ jc, onClose, onSave }) {
             <option value="other">Other</option>
           </select>
         </div>
-        <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select document (optional)" />
+        <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Upload Invoice / Document *" />
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="label">Shipping Carrier <span className="text-red-500">*</span></label>

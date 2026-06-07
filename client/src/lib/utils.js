@@ -138,6 +138,78 @@ export const ACTIVITY_ICONS = {
   status_changed:         '🔄',
 };
 
+// ── Phonetic transliteration: Latin → Hindi (Devanagari) ─────────────────────
+export function transliterateHindi(text) {
+  if (!text) return '';
+  const map = [
+    // Digraphs first
+    ['sh','श'],['kh','ख'],['gh','घ'],['ch','च'],['jh','झ'],
+    ['th','थ'],['dh','ध'],['ph','फ'],['bh','भ'],['rh','ड़'],
+    ['aa','आ'],['ee','ई'],['oo','ऊ'],
+    // Singles
+    ['a','अ'],['b','ब'],['c','क'],['d','द'],['e','ए'],
+    ['f','फ'],['g','ग'],['h','ह'],['i','इ'],['j','ज'],
+    ['k','क'],['l','ल'],['m','म'],['n','न'],['o','ओ'],
+    ['p','प'],['q','क'],['r','र'],['s','स'],['t','त'],
+    ['u','उ'],['v','व'],['w','व'],['x','क्स'],['y','य'],['z','ज़'],
+    // Digits → Devanagari
+    ['0','०'],['1','१'],['2','२'],['3','३'],['4','४'],
+    ['5','५'],['6','६'],['7','७'],['8','८'],['9','९'],
+  ];
+  let result = '';
+  let i = 0;
+  const lower = text.toLowerCase();
+  while (i < lower.length) {
+    let matched = false;
+    for (const [from, to] of map) {
+      if (lower.startsWith(from, i)) {
+        result += to;
+        i += from.length;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) { result += text[i]; i++; }
+  }
+  return result;
+}
+
+// ── Phonetic transliteration: Latin → Gujarati ────────────────────────────────
+export function transliterateGujarati(text) {
+  if (!text) return '';
+  const map = [
+    // Digraphs first
+    ['sh','શ'],['kh','ખ'],['gh','ઘ'],['ch','ચ'],['jh','ઝ'],
+    ['th','થ'],['dh','ધ'],['ph','ફ'],['bh','ભ'],
+    ['aa','આ'],['ee','ઈ'],['oo','ઊ'],
+    // Singles
+    ['a','અ'],['b','બ'],['c','ક'],['d','દ'],['e','એ'],
+    ['f','ફ'],['g','ગ'],['h','હ'],['i','ઈ'],['j','જ'],
+    ['k','ક'],['l','લ'],['m','મ'],['n','ન'],['o','ઓ'],
+    ['p','પ'],['q','ક'],['r','ર'],['s','સ'],['t','ત'],
+    ['u','ઉ'],['v','વ'],['w','વ'],['x','ક્સ'],['y','ય'],['z','ઝ'],
+    // Digits → Gujarati
+    ['0','૦'],['1','૧'],['2','૨'],['3','૩'],['4','૪'],
+    ['5','૫'],['6','૬'],['7','૭'],['8','૮'],['9','૯'],
+  ];
+  let result = '';
+  let i = 0;
+  const lower = text.toLowerCase();
+  while (i < lower.length) {
+    let matched = false;
+    for (const [from, to] of map) {
+      if (lower.startsWith(from, i)) {
+        result += to;
+        i += from.length;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) { result += text[i]; i++; }
+  }
+  return result;
+}
+
 export async function downloadExcel(exportType, filename) {
   // Uses fetch directly to avoid circular import with api.js
   const r = await fetch(`/api/export/${exportType}`, { credentials: 'include' });
