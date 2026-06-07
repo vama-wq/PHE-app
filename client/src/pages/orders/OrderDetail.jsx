@@ -239,8 +239,28 @@ export default function OrderDetail() {
                           <span className="w-6 h-6 rounded-full bg-brand-100 text-brand-700 text-xs font-bold flex items-center justify-center flex-shrink-0">
                             {idx + 1}
                           </span>
-                          <span className="font-semibold text-gray-900 text-sm">{item.drawing_number}</span>
-                          <span className="ml-auto text-sm font-semibold text-gray-700 bg-gray-100 px-2 py-0.5 rounded-full">
+                          <div className="flex flex-col min-w-0">
+                            <span className="font-semibold text-gray-900 text-sm">{item.drawing_number}</span>
+                            {item.drawing_number && (
+                              <div className="flex gap-3 mt-0.5">
+                                {[
+                                  { lang: 'ગુ', text: transliterateGujarati(item.drawing_number) },
+                                  { lang: 'हि', text: transliterateHindi(item.drawing_number) },
+                                ].map(({ lang, text }) => (
+                                  <span key={lang} className="flex items-center gap-1 text-xs text-gray-400">
+                                    <span className="font-medium">{lang}:</span>
+                                    <span className="font-mono">{text}</span>
+                                    <button type="button" title="Copy"
+                                      className="text-gray-300 hover:text-brand-500 transition-colors"
+                                      onClick={() => navigator.clipboard.writeText(text)}>
+                                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <span className="ml-auto text-sm font-semibold text-gray-700 bg-gray-100 px-2 py-0.5 rounded-full flex-shrink-0">
                             Qty: {item.quantity}
                           </span>
                         </div>
@@ -1032,23 +1052,6 @@ function ItemModal({ item, orderId, onClose, onSave }) {
         <div className="col-span-2">
           <label className="label">Drawing Number <span className="text-red-500">*</span></label>
           <input className="input" placeholder="e.g. PT-FlangeHe-QU-2Kw-Cop" value={f.drawing_number} onChange={set('drawing_number')} />
-          {f.drawing_number && (
-            <div className="mt-1.5 space-y-0.5">
-              {[
-                { lang: 'ગુ', text: transliterateGujarati(f.drawing_number) },
-                { lang: 'हि', text: transliterateHindi(f.drawing_number) },
-              ].map(({ lang, text }) => (
-                <div key={lang} className="flex items-center gap-1.5 text-xs text-gray-500">
-                  <span className="text-gray-400 font-medium w-5 flex-shrink-0">{lang}:</span>
-                  <span className="font-mono">{text}</span>
-                  <button type="button" className="ml-1 text-gray-400 hover:text-brand-600 transition-colors" title="Copy"
-                    onClick={() => navigator.clipboard.writeText(text)}>
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Tube */}
