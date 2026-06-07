@@ -936,6 +936,21 @@ function ItemModal({ item, orderId, onClose, onSave }) {
   const imgRef = useRef();
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
+  // Product code searchable dropdown
+  const [products, setProducts] = useState([]);
+  const [productSearch, setProductSearch] = useState(item?.product_code || '');
+  const [showProductDropdown, setShowProductDropdown] = useState(false);
+  useEffect(() => { api.get('/products').then(r => setProducts(r.data)).catch(() => {}); }, []);
+  const filteredProducts = products.filter(p =>
+    (p.product_code || '').toLowerCase().includes(productSearch.toLowerCase()) ||
+    (p.name || '').toLowerCase().includes(productSearch.toLowerCase())
+  ).slice(0, 8);
+  const selectProduct = (p) => {
+    setF(prev => ({ ...prev, product_code: p.product_code }));
+    setProductSearch(p.product_code);
+    setShowProductDropdown(false);
+  };
+
   const addFiles = (e) => {
     const files = Array.from(e.target.files);
     setNewFiles(prev => [...prev, ...files]);
@@ -981,11 +996,40 @@ function ItemModal({ item, orderId, onClose, onSave }) {
   return (
     <Modal open title={item?.id ? 'Edit Item' : 'Add Item'} onClose={onClose} size="lg">
       <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="label">Product Code <span className="text-gray-400 font-normal">(optional)</span></label>
-          <input className="input" placeholder="e.g. PT-Utype-12U-500W" value={f.product_code ?? ''} onChange={set('product_code')} />
+
+        {/* Product Code — searchable dropdown */}
+        <div className="col-span-2 relative">
+          <label className="label">Product Code <span className="text-red-500">*</span></label>
+          <input
+            className="input"
+            placeholder="Search by product code or name..."
+            value={productSearch}
+            onChange={e => { setProductSearch(e.target.value); setShowProductDropdown(true); setF(p => ({ ...p, product_code: e.target.value })); }}
+            onFocus={() => setShowProductDropdown(true)}
+            onBlur={() => setTimeout(() => setShowProductDropdown(false), 150)}
+            autoComplete="off"
+          />
+          {showProductDropdown && filteredProducts.length > 0 && (
+            <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
+              {filteredProducts.map(p => (
+                <button key={p.id} type="button"
+                  className="w-full text-left px-4 py-2.5 hover:bg-brand-50 flex items-center gap-3 border-b border-gray-50 last:border-0"
+                  onMouseDown={() => selectProduct(p)}>
+                  {p.photo_file
+                    ? <img src={`/uploads/${p.photo_file}`} alt={p.name} className="w-8 h-8 object-cover rounded-md border border-gray-200 flex-shrink-0" />
+                    : <div className="w-8 h-8 rounded-md bg-gray-100 flex-shrink-0" />}
+                  <div>
+                    <p className="text-sm font-semibold text-brand-700">{p.product_code}</p>
+                    <p className="text-xs text-gray-500">{p.name}{p.category ? ` · ${p.category}` : ''}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-        <div>
+
+        {/* Drawing Number */}
+        <div className="col-span-2">
           <label className="label">Drawing Number <span className="text-red-500">*</span></label>
           <input className="input" placeholder="e.g. PT-FlangeHe-QU-2Kw-Cop" value={f.drawing_number} onChange={set('drawing_number')} />
           {f.drawing_number && (
@@ -997,12 +1041,8 @@ function ItemModal({ item, orderId, onClose, onSave }) {
                 <div key={lang} className="flex items-center gap-1.5 text-xs text-gray-500">
                   <span className="text-gray-400 font-medium w-5 flex-shrink-0">{lang}:</span>
                   <span className="font-mono">{text}</span>
-                  <button
-                    type="button"
-                    className="ml-1 text-gray-400 hover:text-brand-600 transition-colors"
-                    title="Copy"
-                    onClick={() => navigator.clipboard.writeText(text)}
-                  >
+                  <button type="button" className="ml-1 text-gray-400 hover:text-brand-600 transition-colors" title="Copy"
+                    onClick={() => navigator.clipboard.writeText(text)}>
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
                   </button>
                 </div>
@@ -1010,14 +1050,29 @@ function ItemModal({ item, orderId, onClose, onSave }) {
             </div>
           )}
         </div>
+
+        {/* Tube */}
         <div>
           <label className="label">Tube Material <span className="text-red-500">*</span></label>
-          <input className="input" placeholder="e.g. Copper, SS 304" value={f.tube_material} onChange={set('tube_material')} />
+          <select className="input" value={f.tube_material} onChange={set('tube_material')}>
+            <option value="">— Select material —</option>
+            <option value="SS 304">SS 304</option>
+            <option value="SS 316">SS 316</option>
+            <option value="Incoloy">Incoloy</option>
+            <option value="Copper">Copper</option>
+            <option value="Titanium">Titanium</option>
+          </select>
         </div>
         <div>
           <label className="label">Tube Diameter (mm) <span className="text-red-500">*</span></label>
-          <input className="input" type="number" step="any" placeholder="e.g. 8" value={f.tube_diameter ?? ''} onChange={set('tube_diameter')} />
+          <select className="input" value={f.tube_diameter ?? ''} onChange={set('tube_diameter')}>
+            <option value="">— Select diameter —</option>
+            <option value="8">8mm</option>
+            <option value="11">11mm</option>
+          </select>
         </div>
+
+        {/* Electrical */}
         <div>
           <label className="label">Wattage (W) <span className="text-red-500">*</span></label>
           <input className="input" type="number" step="any" placeholder="e.g. 2000" value={f.wattage ?? ''} onChange={set('wattage')} />
