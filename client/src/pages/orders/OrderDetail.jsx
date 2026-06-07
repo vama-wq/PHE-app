@@ -960,7 +960,20 @@ function ItemModal({ item, orderId, onClose, onSave }) {
   const [products, setProducts] = useState([]);
   const [productSearch, setProductSearch] = useState(item?.product_code || '');
   const [showProductDropdown, setShowProductDropdown] = useState(false);
-  useEffect(() => { api.get('/products').then(r => setProducts(r.data)).catch(() => {}); }, []);
+
+  // Inventory selection
+  const [inventoryItems, setInventoryItems] = useState([]);
+  const [selectedInventory, setSelectedInventory] = useState(
+    Object.fromEntries((item?.inventory_items || []).map(i => [i.id, i.qty || '']))
+  );
+  const [invSearch, setInvSearch] = useState('');
+  const [showInvDropdown, setShowInvDropdown] = useState(false);
+
+  useEffect(() => {
+    api.get('/products').then(r => setProducts(r.data)).catch(() => {});
+    api.get('/inventory').then(r => setInventoryItems(r.data)).catch(() => {});
+  }, []);
+
   const filteredProducts = products.filter(p =>
     (p.product_code || '').toLowerCase().includes(productSearch.toLowerCase()) ||
     (p.name || '').toLowerCase().includes(productSearch.toLowerCase())
@@ -971,6 +984,18 @@ function ItemModal({ item, orderId, onClose, onSave }) {
     setShowProductDropdown(false);
   };
 
+  const filteredInventory = inventoryItems.filter(i =>
+    (i.item_code || '').toLowerCase().includes(invSearch.toLowerCase()) ||
+    (i.name || '').toLowerCase().includes(invSearch.toLowerCase()) ||
+    (i.category || '').toLowerCase().includes(invSearch.toLowerCase())
+  ).slice(0, 10);
+  const toggleInventory = (id) => setSelectedInventory(prev => {
+    if (id in prev) { const n = { ...prev }; delete n[id]; return n; }
+    return { ...prev, [id]: '' };
+  });
+  const setInvQty = (id, qty) => setSelectedInventory(prev => ({ ...prev, [id]: qty }));
+  const selectedInventoryItems = inventoryItems.filter(i => i.id in selectedInventory);
+
   const addFiles = (e) => {
     const files = Array.from(e.target.files);
     setNewFiles(prev => [...prev, ...files]);
@@ -979,21 +1004,24 @@ function ItemModal({ item, orderId, onClose, onSave }) {
 
   const handleSave = async () => {
     const missing = validateItem(f);
-    if (missing.length) {
-      setError(`Required fields missing: ${missing.join(', ')}`);
-      return;
-    }
+    if (missing.length) { setError(`Required fields missing: ${missing.join(', ')}`); return; }
+    const invIds = Object.keys(selectedInventory);
+    if (invIds.length === 0) { setError('Please select at least one inventory item'); return; }
+    const missingQty = invIds.filter(id => !selectedInventory[id] || parseFloat(selectedInventory[id]) <= 0);
+    if (missingQty.length) { setError('Please enter a quantity for all selected inventory items'); return; }
+    const inventory_item_ids = invIds.map(id => ({ id: parseInt(id), qty: parseFloat(selectedInventory[id]) }));
+    const payload = { ...f, inventory_item_ids };
     setSaving(true);
     try {
       if (item?.id) {
-        await api.put(`/orders/${orderId}/items/${item.id}`, f);
+        await api.put(`/orders/${orderId}/items/${item.id}`, payload);
         if (newFiles.length) {
           const fd = new FormData();
           newFiles.forEach(file => fd.append('images', file));
           await api.post(`/orders/${orderId}/items/${item.id}/images`, fd);
         }
       } else {
-        const res = await api.post(`/orders/${orderId}/items`, f);
+        const res = await api.post(`/orders/${orderId}/items`, payload);
         if (newFiles.length) {
           const fd = new FormData();
           newFiles.forEach(file => fd.append('images', file));
@@ -1095,6 +1123,62 @@ function ItemModal({ item, orderId, onClose, onSave }) {
         <div>
           <label className="label">Remark <span className="text-gray-400 font-normal">(optional)</span></label>
           <input className="input" placeholder="Any remarks..." value={f.remark ?? ''} onChange={set('remark')} />
+        </div>
+
+        {/* Inventory Items */}
+        <div className="col-span-2 relative">
+          <label className="label">
+            Inventory Items <span className="text-red-500">*</span>
+            <span className="text-gray-400 font-normal ml-1">(select all raw materials needed)</span>
+          </label>
+          {selectedInventoryItems.length > 0 && (
+            <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-2">
+              {selectedInventoryItems.map(i => (
+                <div key={i.id} className="flex items-center gap-3 px-3 py-2">
+                  <span className="text-sm font-semibold text-brand-700 flex-1">{i.item_code}</span>
+                  <input
+                    type="number" min="0.01" step="any"
+                    placeholder={`Qty (${i.unit})`}
+                    value={selectedInventory[i.id] || ''}
+                    onChange={e => setInvQty(i.id, e.target.value)}
+                    className="input w-32 text-sm py-1"
+                    onClick={e => e.stopPropagation()}
+                  />
+                  <span className="text-xs text-gray-400 w-8">{i.unit}</span>
+                  <button type="button" onClick={() => toggleInventory(i.id)} className="text-gray-300 hover:text-red-500 transition-colors">
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <input
+            className="input"
+            placeholder="Search inventory by code, name or category..."
+            value={invSearch}
+            onChange={e => { setInvSearch(e.target.value); setShowInvDropdown(true); }}
+            onFocus={() => setShowInvDropdown(true)}
+            onBlur={() => setTimeout(() => setShowInvDropdown(false), 150)}
+            autoComplete="off"
+          />
+          {showInvDropdown && filteredInventory.length > 0 && (
+            <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
+              {filteredInventory.map(i => {
+                const selected = i.id in selectedInventory;
+                return (
+                  <button key={i.id} type="button"
+                    className={`w-full text-left px-4 py-2 flex items-center gap-3 border-b border-gray-50 last:border-0 transition-colors ${selected ? 'bg-brand-50' : 'hover:bg-gray-50'}`}
+                    onMouseDown={() => { toggleInventory(i.id); setInvSearch(''); }}>
+                    <div className={`w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center ${selected ? 'bg-brand-600 border-brand-600' : 'border-gray-300'}`}>
+                      {selected && <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 4l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                    </div>
+                    <span className="text-sm font-semibold text-gray-800">{i.item_code}</span>
+                    <span className="text-xs text-gray-400 ml-auto">{i.unit}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Reference Images */}
