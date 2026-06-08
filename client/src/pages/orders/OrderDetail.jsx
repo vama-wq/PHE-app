@@ -488,26 +488,25 @@ export default function OrderDetail() {
               <div className="space-y-2 mb-3">
                 {(order.items || []).map((item, idx) => {
                   const itemApproved = itemDrawingStatus[item.id] === 'approved';
-                  const existingJCs = (order.job_cards || []).filter(jc =>
+                  const hasJC = (order.job_cards || []).some(jc =>
                     item.drawing_number && jc.drawing_no === item.drawing_number
                   );
                   return (
                     <div key={item.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${
-                      itemApproved ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'
+                      hasJC ? 'border-gray-200 bg-gray-50' : itemApproved ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'
                     }`}>
                       <div>
-                        <span className="font-medium text-gray-800">{item.drawing_number || `Item ${idx + 1}`}</span>
+                        <span className={`font-medium ${hasJC ? 'text-gray-500' : 'text-gray-800'}`}>{item.drawing_number || `Item ${idx + 1}`}</span>
                         {item.product_code && <span className="ml-2 text-xs text-gray-400">{item.product_code}</span>}
-                        {existingJCs.length > 0 && (
-                          <span className="ml-2 text-xs text-green-600 font-medium">
-                            ({existingJCs.length} JC uploaded)
-                          </span>
-                        )}
                       </div>
-                      {itemApproved ? (
+                      {hasJC ? (
+                        <span className="text-xs text-gray-500 font-medium flex items-center gap-1">
+                          <CheckCircle2 size={11} className="text-green-500" /> Job Card Uploaded
+                        </span>
+                      ) : itemApproved ? (
                         <button className="btn-primary btn-sm py-1 px-2 text-xs"
                           onClick={() => { setShowJobCardModal(true); }}>
-                          <Upload size={12} /> {existingJCs.length > 0 ? 'Add Another JC' : 'Upload Job Card'}
+                          <Upload size={12} /> Upload Job Card
                         </button>
                       ) : (
                         <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
@@ -1410,9 +1409,10 @@ function UploadJobCardModal({ orderId, defaultDispatchDate, items, jobCards, ite
   const [saving, setSaving] = useState(false);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  // Only show items whose drawing is approved
+  // Only show items whose drawing is approved AND don't already have a job card
+  const takenDrawings = new Set(jobCards.map(jc => jc.drawing_no).filter(Boolean));
   const availableItems = items.filter(item =>
-    itemDrawingStatus[item.id] === 'approved'
+    itemDrawingStatus[item.id] === 'approved' && !takenDrawings.has(item.drawing_number)
   );
 
   // The selected item object
@@ -1454,7 +1454,7 @@ function UploadJobCardModal({ orderId, defaultDispatchDate, items, jobCards, ite
           <label className="label">Select Item <span className="text-red-500">*</span></label>
           {availableItems.length === 0 ? (
             <div className="input bg-gray-50 text-gray-400 text-sm flex items-center">
-              No items with approved drawings available for job card upload
+              ✅ All approved items already have a job card uploaded
             </div>
           ) : (
             <select
