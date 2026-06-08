@@ -56,7 +56,7 @@ export default function OrderDetail() {
   const restrictedRole       = ['design', 'qc', 'production'].includes(user.role);
   // Step 1: Owner approves the order (business approval — no drawing gate)
   const canApprove           = user.role === 'owner' && order.status === 'pending_approval';
-  const orderApproved        = ['approved', 'job_card_created', 'in_production', 'completed', 'dispatched'].includes(order.status);
+  const orderApproved        = !['pending_approval', 'rejected'].includes(order.status);
   const hasDrawings          = order.order_drawings?.length > 0;
   // Per-item drawing status (computed server-side)
   const itemDrawingStatus    = order.item_drawing_status || {};
