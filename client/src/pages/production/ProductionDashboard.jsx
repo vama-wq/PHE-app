@@ -1550,7 +1550,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               Undo Stage
             </button>
           )}
-          {!isDone && canManage && (!requiresPhoto || (photoRequiredAfter6pm && stagePhotoFile)) && (
+          {!isDone && canManage && (!requiresPhoto || (photoRequiredAfter6pm && stagePhotoFile) || (photoRequiredForStage && stagePhotoFile)) && (
             <button
               className="btn-primary"
               onClick={handleMarkDone}
