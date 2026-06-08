@@ -488,34 +488,44 @@ export default function OrderDetail() {
               <div className="space-y-2 mb-3">
                 {(order.items || []).map((item, idx) => {
                   const drawingStatus = itemDrawingStatus[item.id]; // 'approved'|'pending_review'|'rejected'|null
-                  const hasDrawing = !!drawingStatus;
                   const hasJC = (order.job_cards || []).some(jc =>
                     item.drawing_number && jc.drawing_no === item.drawing_number
                   );
-                  // Only show items that have a drawing but no job card yet
-                  if (!hasDrawing || hasJC) return null;
+                  const rowColor = hasJC
+                    ? 'border-gray-200 bg-gray-50'
+                    : drawingStatus === 'approved'
+                    ? 'border-green-200 bg-green-50'
+                    : drawingStatus === 'pending_review'
+                    ? 'border-blue-200 bg-blue-50'
+                    : drawingStatus === 'rejected'
+                    ? 'border-red-200 bg-red-50'
+                    : 'border-gray-200 bg-gray-50';
                   return (
-                    <div key={item.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${
-                      drawingStatus === 'approved' ? 'border-green-200 bg-green-50'
-                      : drawingStatus === 'pending_review' ? 'border-amber-200 bg-amber-50'
-                      : 'border-red-200 bg-red-50'
-                    }`}>
+                    <div key={item.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${rowColor}`}>
                       <div>
-                        <span className="font-medium text-gray-800">{item.drawing_number || `Item ${idx + 1}`}</span>
+                        <span className={`font-medium ${hasJC ? 'text-gray-500' : 'text-gray-800'}`}>{item.drawing_number || `Item ${idx + 1}`}</span>
                         {item.product_code && <span className="ml-2 text-xs text-gray-400">{item.product_code}</span>}
                       </div>
-                      {drawingStatus === 'approved' ? (
+                      {hasJC ? (
+                        <span className="text-xs text-gray-500 font-medium flex items-center gap-1">
+                          <CheckCircle2 size={11} className="text-green-500" /> Job Card Uploaded
+                        </span>
+                      ) : drawingStatus === 'approved' ? (
                         <button className="btn-primary btn-sm py-1 px-2 text-xs"
                           onClick={() => { setShowJobCardModal(true); }}>
                           <Upload size={12} /> Upload Job Card
                         </button>
                       ) : drawingStatus === 'pending_review' ? (
-                        <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
-                          <Clock size={11} /> Job Card Pending — Drawing Awaiting Approval
+                        <span className="text-xs text-blue-600 font-medium flex items-center gap-1">
+                          <Clock size={11} /> Drawing awaiting approval
+                        </span>
+                      ) : drawingStatus === 'rejected' ? (
+                        <span className="text-xs text-red-600 font-medium flex items-center gap-1">
+                          <XCircle size={11} /> Drawing rejected — needs revision
                         </span>
                       ) : (
-                        <span className="text-xs text-red-600 font-medium flex items-center gap-1">
-                          <XCircle size={11} /> Job Card Pending — Drawing Rejected
+                        <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
+                          <AlertTriangle size={11} /> No drawing uploaded
                         </span>
                       )}
                     </div>
