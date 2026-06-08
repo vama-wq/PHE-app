@@ -529,13 +529,13 @@ export default function OrderDetail() {
                 {order.job_cards.map(jc => {
                   const isImg = /\.(jpg|jpeg|png|gif|webp)$/i.test(jc.file_name || '');
                   return (
-                    <div key={jc.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
-                      <div className="w-10 h-10 rounded-lg bg-brand-50 flex items-center justify-center flex-shrink-0">
-                        <FileText size={20} className="text-brand-500" />
+                    <div key={jc.id} className="flex items-center gap-3 p-3 rounded-xl border bg-gray-50 border-gray-200">
+                      <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
+                        <FileText size={20} className="text-gray-400" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold text-gray-900 text-sm">{jc.job_card_no}</span>
+                          <span className="font-semibold text-sm text-gray-600">{jc.job_card_no}</span>
                           <StatusBadge status={jc.status} />
                         </div>
                         <div className="text-xs text-gray-500 mt-0.5">
@@ -661,6 +661,7 @@ export default function OrderDetail() {
           defaultDispatchDate={order.dispatch_date || ''}
           items={order.items || []}
           jobCards={order.job_cards || []}
+          itemDrawingStatus={itemDrawingStatus}
           onClose={() => setShowJobCardModal(false)}
           onSave={() => { setShowJobCardModal(false); load(); }}
         />
@@ -1398,7 +1399,7 @@ function QuotationModal({ orderId, onClose, onSave }) {
   );
 }
 
-function UploadJobCardModal({ orderId, defaultDispatchDate, items, jobCards, onClose, onSave }) {
+function UploadJobCardModal({ orderId, defaultDispatchDate, items, jobCards, itemDrawingStatus = {}, onClose, onSave }) {
   const [selectedItemId, setSelectedItemId] = useState('');
   const [form, setForm] = useState({
     qty: '', dispatch_date: defaultDispatchDate || '',
@@ -1409,10 +1410,9 @@ function UploadJobCardModal({ orderId, defaultDispatchDate, items, jobCards, onC
   const [saving, setSaving] = useState(false);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  // Items that already have a job card uploaded (matched by drawing_number → job_card_no / drawing_no)
-  const takenDrawings = new Set(jobCards.flatMap(jc => [jc.job_card_no, jc.drawing_no].filter(Boolean)));
+  // Only show items whose drawing is approved
   const availableItems = items.filter(item =>
-    !takenDrawings.has(item.drawing_number) && !takenDrawings.has(item.product_code)
+    itemDrawingStatus[item.id] === 'approved'
   );
 
   // The selected item object
@@ -1454,7 +1454,7 @@ function UploadJobCardModal({ orderId, defaultDispatchDate, items, jobCards, onC
           <label className="label">Select Item <span className="text-red-500">*</span></label>
           {availableItems.length === 0 ? (
             <div className="input bg-gray-50 text-gray-400 text-sm flex items-center">
-              ✅ All items already have a job card uploaded
+              No items with approved drawings available for job card upload
             </div>
           ) : (
             <select
