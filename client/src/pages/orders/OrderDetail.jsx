@@ -53,21 +53,21 @@ export default function OrderDetail() {
   if (loading) return <div className="p-8 text-center text-gray-400">Loading order...</div>;
   if (!order) return <div className="p-8 text-center text-red-500">Order not found</div>;
 
-  const restrictedRole     = ['design', 'qc', 'production'].includes(user.role);
-  const canApprove         = user.role === 'owner' && order.status === 'pending_approval';
-  const hasDrawings        = order.order_drawings?.length > 0;
+  const restrictedRole       = ['design', 'qc', 'production'].includes(user.role);
+  // Step 1: Owner approves the order (business approval — no drawing gate)
+  const canApprove           = user.role === 'owner' && order.status === 'pending_approval';
+  const orderApproved        = order.status === 'approved';
+  const hasDrawings          = order.order_drawings?.length > 0;
   // Per-item drawing status (computed server-side)
-  const itemDrawingStatus  = order.item_drawing_status || {};
-  // All items approved = every item has an entry with 'approved'
-  const allItemsApproved   = (order.items || []).length > 0 &&
+  const itemDrawingStatus    = order.item_drawing_status || {};
+  const allItemsApproved     = (order.items || []).length > 0 &&
     (order.items || []).every(it => itemDrawingStatus[it.id] === 'approved');
-  const drawingsApproved   = allItemsApproved; // order can be approved when all items' drawings approved
-  const canManageItems     = ['admin', 'owner'].includes(user.role);
-  const canUploadQuotation = ['admin', 'owner'].includes(user.role) && !restrictedRole;
-  const canUploadDrawing   = ['design', 'admin', 'owner'].includes(user.role);
-  // Job card: admin/owner can upload if order is approved AND item has an approved drawing
-  const canUploadJobCardBase = ['admin', 'owner'].includes(user.role) &&
-    !['pending_approval', 'rejected'].includes(order.status);
+  const canManageItems       = ['admin', 'owner'].includes(user.role);
+  const canUploadQuotation   = ['admin', 'owner'].includes(user.role) && !restrictedRole;
+  // Step 2: Design can upload drawings only after order is approved
+  const canUploadDrawing     = ['design', 'admin', 'owner'].includes(user.role) && orderApproved;
+  // Step 3: Job card uploadable only if order approved AND item's drawing is individually approved
+  const canUploadJobCardBase = ['admin', 'owner'].includes(user.role) && orderApproved;
 
   const handleDeleteItem = async (itemId) => {
     if (!window.confirm('Remove this item?')) return;
@@ -136,20 +136,9 @@ export default function OrderDetail() {
               <button className="btn-danger btn-sm" onClick={() => setShowRejectModal(true)}>
                 <XCircle size={15} /> Reject
               </button>
-              <div className="relative group">
-                <button
-                  className={`btn-primary ${!drawingsApproved ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  onClick={() => drawingsApproved && setShowApproveModal(true)}
-                  disabled={!drawingsApproved}
-                >
-                  <CheckCircle size={15} /> Approve Order
-                </button>
-                {!drawingsApproved && (
-                  <div className="absolute right-0 top-full mt-1.5 w-72 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg z-10 hidden group-hover:block">
-                    ⚠️ All item drawings must be individually approved before the order can be approved.
-                  </div>
-                )}
-              </div>
+              <button className="btn-primary" onClick={() => setShowApproveModal(true)}>
+                <CheckCircle size={15} /> Approve Order
+              </button>
             </>
           )}
         </div>
@@ -344,17 +333,22 @@ export default function OrderDetail() {
               </p>
             </div>
 
-            {/* Overall approval banner */}
-            {allItemsApproved && (
-              <div className="mb-4 flex items-center gap-2 text-sm rounded-xl px-4 py-3 bg-green-50 border border-green-200 text-green-700">
-                <CheckCircle size={15} /> All item drawings approved. Order can now be approved.
+            {/* Gate: drawings only relevant after order is approved */}
+            {!orderApproved && (
+              <div className="mb-4 text-sm rounded-xl px-4 py-3 bg-gray-50 border border-gray-200 text-gray-500">
+                🔒 Order must be approved first. Once approved, the Design team will be required to upload reference drawings for each item.
               </div>
             )}
-            {!hasDrawings && ['pending', 'pending_approval'].includes(order.status) && (
+            {orderApproved && allItemsApproved && (
+              <div className="mb-4 flex items-center gap-2 text-sm rounded-xl px-4 py-3 bg-green-50 border border-green-200 text-green-700">
+                <CheckCircle size={15} /> All item drawings approved. Job cards can be created for all items.
+              </div>
+            )}
+            {orderApproved && !hasDrawings && (
               <div className="mb-4 text-sm rounded-xl px-4 py-3 bg-amber-50 border border-amber-200 text-amber-700">
                 {canUploadDrawing
-                  ? '⚠️ Upload reference drawings for each item below. Owner must approve each before order can be approved.'
-                  : '⚠️ Waiting for Design team to upload reference drawings.'}
+                  ? '⚠️ Upload reference drawings for each item below. Owner must approve each before job cards can be created.'
+                  : '⚠️ Waiting for Design team to upload reference drawings for each item.'}
               </div>
             )}
 

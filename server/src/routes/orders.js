@@ -87,7 +87,7 @@ router.get('/drawings/pending', authenticate, async (req, res) => {
     FROM orders o
     JOIN customers c ON c.id = o.customer_id
     LEFT JOIN users u ON u.id = o.created_by
-    WHERE o.status IN ('pending', 'pending_approval', 'approved')
+    WHERE o.status = 'approved'
     ORDER BY o.created_at DESC
   `);
   res.json(rows);
@@ -407,21 +407,7 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.status === 'approved') return res.status(409).json({ error: 'Order already approved' });
 
-  // Gate: all items must have an approved drawing before order can be approved
-  const allItems = await db.all('SELECT id, drawing_number FROM order_items WHERE order_id=$1', [req.params.id]);
-  if (allItems.length === 0) return res.status(400).json({ error: 'Order has no items.' });
-  for (const item of allItems) {
-    const approvedDrw = await db.get(
-      `SELECT id FROM order_drawings WHERE order_id=$1 AND item_id=$2 AND drawing_status='approved' LIMIT 1`,
-      [req.params.id, item.id]
-    );
-    if (!approvedDrw) {
-      return res.status(400).json({
-        error: `Drawing for item "${item.drawing_number || `Item ${item.id}`}" has not been approved yet. All items must have an approved drawing before the order can be approved.`
-      });
-    }
-  }
-
+  // No drawing gate here — order is approved first, then design uploads drawings per item
   await db.run(
     "UPDATE orders SET status='approved', approved_by=$1, approved_at=NOW() WHERE id=$2",
     [req.user.id, req.params.id]
