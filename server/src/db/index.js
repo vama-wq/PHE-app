@@ -160,19 +160,17 @@ async function initDB(retries = 10, delayMs = 3000) {
       await pool.query(`ALTER TABLE production_checklist ADD CONSTRAINT production_checklist_stage_no_check CHECK (stage_no BETWEEN 1 AND 30)`);
       // Add notes column for rework/notes per stage
       await pool.query(`ALTER TABLE production_checklist ADD COLUMN IF NOT EXISTS notes TEXT`);
-      // Fix job cards stuck at qc_pending that were actually QC-approved
-      // (stage 29 done + an approved QC hold record = should be qc_approved)
+      // Fix incorrectly auto-approved job cards: reset to qc_pending if they have no QC reports
+      // A card should only be qc_approved if it actually has a QC report from the QC team
       await pool.query(`
-        UPDATE job_cards SET status = 'qc_approved'
-        WHERE status = 'qc_pending'
+        UPDATE job_cards SET status = 'qc_pending'
+        WHERE status = 'qc_approved'
+          AND id NOT IN (
+            SELECT DISTINCT job_card_id FROM qc_reports
+          )
           AND id IN (
-            SELECT DISTINCT jc.id FROM job_cards jc
+            SELECT jc.id FROM job_cards jc
             JOIN production_checklist pc ON pc.job_card_id = jc.id AND pc.stage_no = 29 AND pc.done = 1
-            WHERE NOT EXISTS (
-              SELECT 1 FROM job_card_holds
-              WHERE job_card_id = jc.id AND status = 'pending'
-            )
-            AND jc.qc_rejected IS NOT TRUE
           )
       `);
 
