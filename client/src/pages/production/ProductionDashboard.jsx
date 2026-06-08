@@ -1550,7 +1550,9 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               Undo Stage
             </button>
           )}
-          {!isDone && canManage && (!requiresPhoto || (photoRequiredAfter6pm && stagePhotoFile) || (photoRequiredForStage && stagePhotoFile)) && (
+          {!isDone && canManage && (
+            (!requiresPhoto || (photoRequiredAfter6pm && stagePhotoFile) || (photoRequiredForStage && stagePhotoFile) || stageDef.isDispatch)
+          ) && (
             <button
               className="btn-primary"
               onClick={handleMarkDone}
@@ -1559,6 +1561,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
                 mandatoryMissing.length > 0 ? 'Complete all mandatory stages first' :
                 rejQtyInt > 2 && !rejPhoto ? 'Upload rejection photo first' :
                 stageDef.isDispatch && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim() ? 'Enter reason for remade qty' :
+                photoRequiredForStage && !stagePhotoFile ? 'Upload photo first' :
                 ''
               }
             >
