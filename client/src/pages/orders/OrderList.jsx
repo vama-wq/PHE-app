@@ -55,14 +55,7 @@ export default function OrderList() {
         (o.product_codes && o.product_codes.toLowerCase().includes(s))
       );
     }
-    if (statusFilter) {
-      const JC_STATUSES = new Set(['job_card_created','in_progress','qc_pending','qc_approved','packaging','dispatched']);
-      if (JC_STATUSES.has(statusFilter)) {
-        r = r.filter(o => o.card_status === statusFilter);
-      } else {
-        r = r.filter(o => o.status === statusFilter);
-      }
-    }
+    if (statusFilter) r = r.filter(o => o.status === statusFilter);
     if (clientFilter) r = r.filter(o => o.customer_code === clientFilter);
     if (productFilter) r = r.filter(o => (o.product_codes || '').split(',').map(p => p.trim()).includes(productFilter));
     if (dateFrom) r = r.filter(o => o.order_date && o.order_date >= dateFrom);
