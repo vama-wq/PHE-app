@@ -36,7 +36,7 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // ── GET all stages with rejections (owner dashboard) ─────────────────────────
-router.get('/rejections/all', authenticate, authorize('owner', 'admin'), async (req, res) => {
+router.get('/rejections/all', authenticate, authorize('owner', 'admin', 'production', 'design'), async (req, res) => {
   const rows = await getDB().all(`
     SELECT
       pc.job_card_id, pc.stage_no, pc.rejection_qty, pc.remade_qty,
@@ -47,7 +47,7 @@ router.get('/rejections/all', authenticate, authorize('owner', 'admin'), async (
     JOIN job_cards jc ON pc.job_card_id = jc.id
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
-    WHERE pc.rejection_qty > 2
+    WHERE pc.rejection_qty > 0
     ORDER BY pc.rejection_qty DESC, pc.done_at DESC
   `);
   res.json(rows);

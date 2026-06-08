@@ -741,6 +741,7 @@ function DesignDashboard() {
   const { user } = useAuthStore();
   const [qcCards, setQcCards]       = useState([]);
   const [materialPOs, setMaterialPOs] = useState([]);
+  const [rejections, setRejections] = useState([]);
   const [recent, setRecent]         = useState([]);
   const [loading, setLoading]       = useState(true);
 
@@ -754,6 +755,7 @@ function DesignDashboard() {
       if (hasPurchases)
         reqs.push(api.get('/purchase-orders/pending-material-qc').then(r => setMaterialPOs(r.data)));
     }
+    reqs.push(api.get('/job-cards/rejections/all').then(r => setRejections(r.data)).catch(() => {}));
     Promise.all(reqs).finally(() => setLoading(false));
   }, []);
 
@@ -836,6 +838,44 @@ function DesignDashboard() {
               </div>
             </SectionCard>
           )}
+
+          {/* Rejections */}
+          {rejections.length > 0 && (
+            <SectionCard title="Production Rejections" icon={XCircle} iconColor="text-orange-500"
+              action={rejections.filter(r => r.rejection_qty > 2).length > 0 && (
+                <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">
+                  {rejections.filter(r => r.rejection_qty > 2).length} critical
+                </span>
+              )}
+            >
+              <div className="divide-y divide-gray-50">
+                {rejections.slice(0, 8).map((r, i) => {
+                  const isCritical = r.rejection_qty > 2;
+                  const stageName  = PRODUCTION_STAGES.find(s => s.no === r.stage_no)?.name || '';
+                  return (
+                    <div key={i} className={`flex items-center justify-between px-5 py-3 ${isCritical ? 'bg-red-50/40' : ''}`}>
+                      <div className="flex items-center gap-3 min-w-0">
+                        {isCritical && <AlertTriangle size={14} className="text-red-500 flex-shrink-0" />}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-sm text-gray-900">{r.job_card_no}</span>
+                            <span className="text-xs text-gray-500">{r.order_code} · {r.customer_code}</span>
+                          </div>
+                          <div className="text-xs text-gray-500 mt-0.5">Stage {r.stage_no}: {stageName}</div>
+                        </div>
+                      </div>
+                      <div className={`text-sm font-bold flex-shrink-0 ml-3 ${isCritical ? 'text-red-600' : 'text-orange-600'}`}>
+                        {r.rejection_qty} rejected
+                      </div>
+                    </div>
+                  );
+                })}
+                {rejections.length > 8 && (
+                  <div className="px-5 py-2 text-xs text-gray-400 text-center">+{rejections.length - 8} more</div>
+                )}
+              </div>
+            </SectionCard>
+          )}
         </div>
 
         {/* Side */}
@@ -890,6 +930,7 @@ function DesignDashboard() {
 function ProductionDashboard() {
   const { user } = useAuthStore();
   const [jobCards, setJobCards] = useState([]);
+  const [rejections, setRejections] = useState([]);
   const [recent, setRecent]     = useState([]);
   const [loading, setLoading]   = useState(true);
 
@@ -898,8 +939,10 @@ function ProductionDashboard() {
 
   useEffect(() => {
     const reqs = [api.get('/activity/recent?limit=10').then(r => setRecent(r.data))];
-    if (hasJobCards || hasProduction)
+    if (hasJobCards || hasProduction) {
       reqs.push(api.get('/job-cards').then(r => setJobCards(r.data)));
+      reqs.push(api.get('/job-cards/rejections/all').then(r => setRejections(r.data)).catch(() => {}));
+    }
     Promise.all(reqs).finally(() => setLoading(false));
   }, []);
 
@@ -1010,6 +1053,43 @@ function ProductionDashboard() {
                   <Link to="/job-cards" className="block text-center text-xs text-brand-600 py-2">
                     +{activeCards.length - 10} more
                   </Link>
+                )}
+              </div>
+            </SectionCard>
+          )}
+          {/* Rejections */}
+          {rejections.length > 0 && (
+            <SectionCard title="Production Rejections" icon={XCircle} iconColor="text-orange-500"
+              action={rejections.filter(r => r.rejection_qty > 2).length > 0 && (
+                <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">
+                  {rejections.filter(r => r.rejection_qty > 2).length} critical
+                </span>
+              )}
+            >
+              <div className="divide-y divide-gray-50">
+                {rejections.slice(0, 8).map((r, i) => {
+                  const isCritical = r.rejection_qty > 2;
+                  const stageName  = PRODUCTION_STAGES.find(s => s.no === r.stage_no)?.name || '';
+                  return (
+                    <div key={i} className={`flex items-center justify-between px-5 py-3 ${isCritical ? 'bg-red-50/40' : ''}`}>
+                      <div className="flex items-center gap-3 min-w-0">
+                        {isCritical && <AlertTriangle size={14} className="text-red-500 flex-shrink-0" />}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-sm text-gray-900">{r.job_card_no}</span>
+                            <span className="text-xs text-gray-500">{r.order_code} · {r.customer_code}</span>
+                          </div>
+                          <div className="text-xs text-gray-500 mt-0.5">Stage {r.stage_no}: {stageName}</div>
+                        </div>
+                      </div>
+                      <div className={`text-sm font-bold flex-shrink-0 ml-3 ${isCritical ? 'text-red-600' : 'text-orange-600'}`}>
+                        {r.rejection_qty} rejected
+                      </div>
+                    </div>
+                  );
+                })}
+                {rejections.length > 8 && (
+                  <div className="px-5 py-2 text-xs text-gray-400 text-center">+{rejections.length - 8} more</div>
                 )}
               </div>
             </SectionCard>
