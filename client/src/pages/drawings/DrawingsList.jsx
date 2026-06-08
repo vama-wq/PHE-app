@@ -28,15 +28,34 @@ export default function DrawingsList() {
 
   const canUpload = ['design', 'admin', 'owner'].includes(user?.role);
 
-  // Tabs: needs drawing, awaiting owner review, rejected, approved
-  const needsDrawing   = orders.filter(o => !o.drawing_status);
-  const awaitingReview = orders.filter(o => o.drawing_status === 'pending_review');
-  const rejectedOrders = orders.filter(o => o.drawing_status === 'rejected');
-  const approvedOrders = orders.filter(o => o.drawing_status === 'approved');
+  // Compute per-order drawing status from per-drawing statuses
+  // An order "needs drawing" if any item has no drawing
+  // "awaiting review" if any item drawing is pending_review (and none rejected)
+  // "rejected" if any item drawing is rejected
+  // "approved" only if all items have an approved drawing
+  const getOrderDrawingStatus = (order) => {
+    const items = Array.isArray(order.items) ? order.items : [];
+    const drawings = Array.isArray(order.drawings) ? order.drawings : [];
+    if (items.length === 0) return 'no_items';
+    let anyPending = false, anyRejected = false, anyMissing = false;
+    for (const item of items) {
+      const itemDrawings = drawings.filter(d => d.item_id === item.id);
+      if (itemDrawings.length === 0) { anyMissing = true; continue; }
+      const statuses = itemDrawings.map(d => d.drawing_status);
+      if (statuses.includes('rejected')) anyRejected = true;
+      else if (statuses.includes('pending_review')) anyPending = true;
+      else if (!statuses.includes('approved')) anyMissing = true;
+    }
+    if (anyRejected) return 'rejected';
+    if (anyMissing) return 'needs_drawing';
+    if (anyPending) return 'pending_review';
+    return 'approved';
+  };
 
-  // backward compat aliases for displayed
-  const pendingOrders = needsDrawing;
-  const readyOrders   = approvedOrders;
+  const needsDrawing   = orders.filter(o => ['needs_drawing','no_items'].includes(getOrderDrawingStatus(o)));
+  const awaitingReview = orders.filter(o => getOrderDrawingStatus(o) === 'pending_review');
+  const rejectedOrders = orders.filter(o => getOrderDrawingStatus(o) === 'rejected');
+  const approvedOrders = orders.filter(o => getOrderDrawingStatus(o) === 'approved');
 
   const displayed = tab === 'pending' ? needsDrawing
     : tab === 'review' ? awaitingReview

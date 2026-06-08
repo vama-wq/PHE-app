@@ -75,6 +75,7 @@ router.get('/drawings/pending', authenticate, async (req, res) => {
       (SELECT COUNT(*) FROM order_drawings od WHERE od.order_id = o.id) AS drawing_count,
       (SELECT json_agg(json_build_object('id', od2.id, 'file_name', od2.file_name,
               'original_name', od2.original_name, 'notes', od2.notes, 'item_id', od2.item_id,
+              'drawing_status', od2.drawing_status, 'rejection_reason', od2.rejection_reason,
               'created_at', od2.created_at, 'uploaded_by_name', u2.name))
        FROM order_drawings od2
        LEFT JOIN users u2 ON u2.id = od2.uploaded_by
@@ -149,6 +150,21 @@ router.get('/:id', authenticate, async (req, res) => {
      WHERE od.order_id = $1 ORDER BY od.item_id NULLS LAST, od.created_at ASC`,
     [order.id]
   );
+  // Compute per-item drawing status for easy UI consumption
+  // item_drawing_status: map of item_id → 'approved'|'pending_review'|'rejected'|null
+  const itemDrawingMap = {};
+  for (const d of order.order_drawings) {
+    if (!d.item_id) continue;
+    const existing = itemDrawingMap[d.item_id];
+    // If any drawing for this item is approved, the item is approved
+    // Otherwise worst status wins: rejected > pending_review > null
+    if (!existing || d.drawing_status === 'approved' ||
+        (d.drawing_status === 'pending_review' && existing !== 'approved') ||
+        (d.drawing_status === 'rejected' && !['approved','pending_review'].includes(existing))) {
+      itemDrawingMap[d.item_id] = d.drawing_status || null;
+    }
+  }
+  order.item_drawing_status = itemDrawingMap;
 
   order.job_cards = await db.all(
     `SELECT jc.*, u.name as uploaded_by_name
@@ -311,39 +327,33 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
   const { notes, item_id } = req.body;
   const db = getDB();
   const r = await db.insert(
-    `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
     [req.params.id, item_id ? parseInt(item_id) : null, req.file.storagePath, req.file.filename, req.file.originalname, notes||null, req.user.id]
-  );
-  // Mark order drawing as pending review for owner to approve
-  await db.run(
-    `UPDATE orders SET drawing_status='pending_review', drawing_rejection_reason=NULL WHERE id=$1`,
-    [req.params.id]
   );
   await logActivity(req.params.id, null, 'drawing_uploaded', `Reference drawing uploaded: ${req.file.originalname}`, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid, file_name: req.file.filename, original_name: req.file.originalname });
 });
 
-// ── Drawing review: owner approves or rejects drawings ────────────────────────
-router.put('/:id/drawings/approve', authenticate, authorize('owner'), async (req, res) => {
+// ── Drawing review: owner approves or rejects individual drawings ──────────────
+router.put('/:id/drawings/:drawingId/approve', authenticate, authorize('owner'), async (req, res) => {
   const db = getDB();
-  const count = await db.get('SELECT COUNT(*) as c FROM order_drawings WHERE order_id=$1', [req.params.id]);
-  if (parseInt(count?.c ?? 0) === 0) return res.status(400).json({ error: 'No drawings to approve' });
-  await db.run(`UPDATE orders SET drawing_status='approved', drawing_rejection_reason=NULL WHERE id=$1`, [req.params.id]);
-  await logActivity(req.params.id, null, 'drawing_approved', 'Reference drawings approved by owner', req.user.id);
-  res.json({ message: 'Drawings approved' });
+  const d = await db.get('SELECT * FROM order_drawings WHERE id=$1 AND order_id=$2', [req.params.drawingId, req.params.id]);
+  if (!d) return res.status(404).json({ error: 'Drawing not found' });
+  await db.run(`UPDATE order_drawings SET drawing_status='approved', rejection_reason=NULL WHERE id=$1`, [req.params.drawingId]);
+  await logActivity(req.params.id, null, 'drawing_approved', `Drawing approved: ${d.original_name || d.file_name}`, req.user.id);
+  res.json({ message: 'Drawing approved' });
 });
 
-router.put('/:id/drawings/reject', authenticate, authorize('owner'), async (req, res) => {
+router.put('/:id/drawings/:drawingId/reject', authenticate, authorize('owner'), async (req, res) => {
   const { reason } = req.body;
   if (!reason?.trim()) return res.status(400).json({ error: 'Rejection reason is required' });
   const db = getDB();
-  await db.run(
-    `UPDATE orders SET drawing_status='rejected', drawing_rejection_reason=$1 WHERE id=$2`,
-    [reason.trim(), req.params.id]
-  );
-  await logActivity(req.params.id, null, 'drawing_rejected', `Reference drawings rejected: ${reason}`, req.user.id);
-  res.json({ message: 'Drawings rejected' });
+  const d = await db.get('SELECT * FROM order_drawings WHERE id=$1 AND order_id=$2', [req.params.drawingId, req.params.id]);
+  if (!d) return res.status(404).json({ error: 'Drawing not found' });
+  await db.run(`UPDATE order_drawings SET drawing_status='rejected', rejection_reason=$1 WHERE id=$2`, [reason.trim(), req.params.drawingId]);
+  await logActivity(req.params.id, null, 'drawing_rejected', `Drawing rejected: ${reason}`, req.user.id);
+  res.json({ message: 'Drawing rejected' });
 });
 
 router.delete('/:id/drawings/:drawingId', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
@@ -352,14 +362,6 @@ router.delete('/:id/drawings/:drawingId', authenticate, authorize('design', 'adm
   if (!d) return res.status(404).json({ error: 'Not found' });
   await deleteFromStorage(d.file_path);
   await db.run('DELETE FROM order_drawings WHERE id=$1', [req.params.drawingId]);
-  // If no drawings remain, reset drawing status so design must re-upload
-  const remaining = await db.get('SELECT COUNT(*) as c FROM order_drawings WHERE order_id=$1', [req.params.id]);
-  if (parseInt(remaining?.c ?? 0) === 0) {
-    await db.run(`UPDATE orders SET drawing_status=NULL, drawing_rejection_reason=NULL WHERE id=$1`, [req.params.id]);
-  } else {
-    // Drawings still exist — put back to pending_review so owner can re-evaluate
-    await db.run(`UPDATE orders SET drawing_status='pending_review', drawing_rejection_reason=NULL WHERE id=$1`, [req.params.id]);
-  }
   res.json({ message: 'Deleted' });
 });
 
@@ -405,15 +407,19 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.status === 'approved') return res.status(409).json({ error: 'Order already approved' });
 
-  // Gate: drawings must be uploaded AND approved by owner before order approval
-  const orderForGate = await db.get('SELECT drawing_status FROM orders WHERE id=$1', [req.params.id]);
-  if (orderForGate?.drawing_status !== 'approved') {
-    if (!orderForGate?.drawing_status)
-      return res.status(400).json({ error: 'Reference drawings must be uploaded and approved before this order can be approved.' });
-    if (orderForGate.drawing_status === 'pending_review')
-      return res.status(400).json({ error: 'Reference drawings are awaiting your approval before the order can be approved.' });
-    if (orderForGate.drawing_status === 'rejected')
-      return res.status(400).json({ error: 'Reference drawings were rejected. Design team must upload new drawings before approval.' });
+  // Gate: all items must have an approved drawing before order can be approved
+  const allItems = await db.all('SELECT id, drawing_number FROM order_items WHERE order_id=$1', [req.params.id]);
+  if (allItems.length === 0) return res.status(400).json({ error: 'Order has no items.' });
+  for (const item of allItems) {
+    const approvedDrw = await db.get(
+      `SELECT id FROM order_drawings WHERE order_id=$1 AND item_id=$2 AND drawing_status='approved' LIMIT 1`,
+      [req.params.id, item.id]
+    );
+    if (!approvedDrw) {
+      return res.status(400).json({
+        error: `Drawing for item "${item.drawing_number || `Item ${item.id}`}" has not been approved yet. All items must have an approved drawing before the order can be approved.`
+      });
+    }
   }
 
   await db.run(

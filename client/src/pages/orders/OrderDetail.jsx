@@ -56,14 +56,18 @@ export default function OrderDetail() {
   const restrictedRole     = ['design', 'qc', 'production'].includes(user.role);
   const canApprove         = user.role === 'owner' && order.status === 'pending_approval';
   const hasDrawings        = order.order_drawings?.length > 0;
-  const drawingStatus      = order.drawing_status; // null | 'pending_review' | 'approved' | 'rejected'
-  const drawingsApproved   = drawingStatus === 'approved';
-  const canApproveDrawing  = user.role === 'owner' && drawingStatus === 'pending_review';
-  const canUploadJobCard   = ['admin', 'owner'].includes(user.role) &&
-    !['pending_approval', 'rejected'].includes(order.status) && hasDrawings;
+  // Per-item drawing status (computed server-side)
+  const itemDrawingStatus  = order.item_drawing_status || {};
+  // All items approved = every item has an entry with 'approved'
+  const allItemsApproved   = (order.items || []).length > 0 &&
+    (order.items || []).every(it => itemDrawingStatus[it.id] === 'approved');
+  const drawingsApproved   = allItemsApproved; // order can be approved when all items' drawings approved
   const canManageItems     = ['admin', 'owner'].includes(user.role);
   const canUploadQuotation = ['admin', 'owner'].includes(user.role) && !restrictedRole;
   const canUploadDrawing   = ['design', 'admin', 'owner'].includes(user.role);
+  // Job card: admin/owner can upload if order is approved AND item has an approved drawing
+  const canUploadJobCardBase = ['admin', 'owner'].includes(user.role) &&
+    !['pending_approval', 'rejected'].includes(order.status);
 
   const handleDeleteItem = async (itemId) => {
     if (!window.confirm('Remove this item?')) return;
@@ -142,13 +146,7 @@ export default function OrderDetail() {
                 </button>
                 {!drawingsApproved && (
                   <div className="absolute right-0 top-full mt-1.5 w-72 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg z-10 hidden group-hover:block">
-                    {!hasDrawings
-                      ? '⚠️ Drawings must be uploaded and approved before order can be approved.'
-                      : drawingStatus === 'pending_review'
-                        ? '⚠️ Approve the reference drawings first, then approve the order.'
-                        : drawingStatus === 'rejected'
-                          ? '⚠️ Drawings were rejected. Design must upload new drawings.'
-                          : '⚠️ Reference drawings must be approved before this order can be approved.'}
+                    ⚠️ All item drawings must be individually approved before the order can be approved.
                   </div>
                 )}
               </div>
@@ -336,68 +334,27 @@ export default function OrderDetail() {
 
           {/* ── Reference Drawings (per item) ── */}
           <div className="card p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="section-title">
-                  <PenLine size={18} className="text-orange-500" />
-                  Reference Drawings
-                </h2>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  One drawing per item · <strong className="text-red-500">owner must approve drawings before order approval</strong>
-                </p>
-              </div>
-              {/* Owner approve/reject drawing buttons */}
-              {canApproveDrawing && (
-                <div className="flex gap-2">
-                  <button
-                    className="btn-danger btn-sm"
-                    onClick={() => setShowDrawingRejectModal(true)}
-                  >
-                    <XCircle size={13} /> Reject Drawings
-                  </button>
-                  <button
-                    className="btn-primary btn-sm"
-                    onClick={async () => {
-                      await api.put(`/orders/${id}/drawings/approve`);
-                      load();
-                    }}
-                  >
-                    <CheckCircle size={13} /> Approve Drawings
-                  </button>
-                </div>
-              )}
+            <div className="mb-4">
+              <h2 className="section-title">
+                <PenLine size={18} className="text-orange-500" />
+                Reference Drawings
+              </h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                One drawing per item · owner approves/rejects each individually · approved items can have job cards uploaded
+              </p>
             </div>
 
-            {/* Drawing status banner */}
-            {drawingStatus === 'approved' && (
+            {/* Overall approval banner */}
+            {allItemsApproved && (
               <div className="mb-4 flex items-center gap-2 text-sm rounded-xl px-4 py-3 bg-green-50 border border-green-200 text-green-700">
-                <CheckCircle size={15} /> Reference drawings approved by owner. Order can now be approved.
+                <CheckCircle size={15} /> All item drawings approved. Order can now be approved.
               </div>
             )}
-            {drawingStatus === 'pending_review' && (
-              <div className="mb-4 flex items-center gap-2 text-sm rounded-xl px-4 py-3 bg-blue-50 border border-blue-200 text-blue-700">
-                <Clock size={15} /> Drawings uploaded and awaiting owner review.
-                {user.role === 'owner' && ' Use the Approve / Reject buttons above.'}
-              </div>
-            )}
-            {drawingStatus === 'rejected' && (
-              <div className="mb-4 text-sm rounded-xl px-4 py-3 bg-red-50 border border-red-200 text-red-700">
-                <div className="flex items-center gap-2 font-semibold mb-1">
-                  <AlertTriangle size={15} /> Drawings Rejected — upload new drawings
-                </div>
-                <div className="text-xs text-red-600">Reason: {order.drawing_rejection_reason}</div>
-                {canUploadDrawing && (
-                  <div className="text-xs text-red-500 mt-1">Please delete the rejected drawings below and upload corrected versions.</div>
-                )}
-              </div>
-            )}
-
-            {/* Overall no-drawing warning */}
-            {!hasDrawings && !drawingStatus && ['pending', 'pending_approval'].includes(order.status) && (
+            {!hasDrawings && ['pending', 'pending_approval'].includes(order.status) && (
               <div className="mb-4 text-sm rounded-xl px-4 py-3 bg-amber-50 border border-amber-200 text-amber-700">
                 {canUploadDrawing
-                  ? '⚠️ Upload reference drawings for each item below. Owner must approve before order can be approved.'
-                  : '⚠️ Waiting for Design team to upload reference drawings. Owner must approve them before order approval.'}
+                  ? '⚠️ Upload reference drawings for each item below. Owner must approve each before order can be approved.'
+                  : '⚠️ Waiting for Design team to upload reference drawings.'}
               </div>
             )}
 
@@ -406,59 +363,87 @@ export default function OrderDetail() {
               {(order.items || []).map((item, idx) => {
                 const itemDrawings = (order.order_drawings || []).filter(d => d.item_id === item.id);
                 const hasItemDrawing = itemDrawings.length > 0;
+                const itemStatus = itemDrawingStatus[item.id]; // 'approved'|'pending_review'|'rejected'|null
+                const itemApproved = itemStatus === 'approved';
+                const itemPending = itemStatus === 'pending_review';
+                const itemRejected = itemStatus === 'rejected';
+
+                const borderColor = itemApproved ? 'border-green-300 bg-green-50'
+                  : itemPending  ? 'border-blue-200 bg-blue-50'
+                  : itemRejected ? 'border-red-200 bg-red-50'
+                  : 'border-gray-200 bg-gray-50';
+
                 return (
-                  <div key={item.id} className={`rounded-xl border ${hasItemDrawing ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'}`}>
+                  <div key={item.id} className={`rounded-xl border ${borderColor}`}>
                     {/* Item header row */}
-                    <div className="flex items-center justify-between px-4 py-2.5">
-                      <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center justify-between px-4 py-2.5 gap-2">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
                         <span className={`text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${
-                          hasItemDrawing ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'
-                        }`}>
-                          Item {idx + 1}
-                        </span>
+                          itemApproved ? 'bg-green-100 text-green-700'
+                          : itemPending ? 'bg-blue-100 text-blue-700'
+                          : itemRejected ? 'bg-red-100 text-red-700'
+                          : 'bg-gray-200 text-gray-500'
+                        }`}>Item {idx + 1}</span>
                         <div className="min-w-0">
                           <span className="text-sm font-semibold text-gray-800 font-mono">
                             {item.drawing_number || <span className="text-gray-400 font-sans font-normal italic">No drawing no.</span>}
                           </span>
-                          {item.product_code && (
-                            <span className="ml-2 text-xs text-gray-400">{item.product_code}</span>
-                          )}
+                          {item.product_code && <span className="ml-2 text-xs text-gray-400">{item.product_code}</span>}
                           <div className="text-xs text-gray-400 mt-0.5">
-                            {[item.tube_material, item.wattage ? `${item.wattage}W` : null, item.voltage ? `${item.voltage}V` : null]
-                              .filter(Boolean).join(' · ') || 'No specs'}
+                            {[item.tube_material, item.wattage ? `${item.wattage}W` : null, item.voltage ? `${item.voltage}V` : null].filter(Boolean).join(' · ')}
                             {' · '}{item.quantity} Nos
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {hasItemDrawing
-                          ? <span className="text-xs text-green-600 font-medium flex items-center gap-1">
-                              <CheckCircle size={12} /> {itemDrawings.length} file{itemDrawings.length !== 1 ? 's' : ''}
-                            </span>
-                          : <span className="text-xs text-amber-600 font-medium">Missing</span>
-                        }
-                        {canUploadDrawing && (
-                          <button
-                            className="btn-secondary btn-sm py-1 px-2 text-xs"
-                            onClick={() => { setDrawingUploadItemId(item.id); setDrawingUploadItem(item); setShowDrawingModal(true); }}
-                          >
+                      {/* Status badge + actions */}
+                      <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+                        {itemApproved && <span className="text-xs text-green-700 font-semibold flex items-center gap-1"><CheckCircle size={12} /> Approved</span>}
+                        {itemPending  && <span className="text-xs text-blue-700 font-semibold flex items-center gap-1"><Clock size={12} /> Awaiting Review</span>}
+                        {itemRejected && <span className="text-xs text-red-700 font-semibold flex items-center gap-1"><AlertTriangle size={12} /> Rejected</span>}
+                        {!hasItemDrawing && <span className="text-xs text-amber-600 font-medium">Missing</span>}
+                        {/* Owner approve/reject per drawing */}
+                        {user.role === 'owner' && itemPending && itemDrawings.length > 0 && itemDrawings.map(d => (
+                          <div key={d.id} className="flex gap-1">
+                            <button className="btn-danger btn-sm py-0.5 px-2 text-xs"
+                              onClick={async () => {
+                                const reason = window.prompt('Rejection reason:');
+                                if (!reason?.trim()) return;
+                                await api.put(`/orders/${id}/drawings/${d.id}/reject`, { reason });
+                                load();
+                              }}>
+                              <XCircle size={11} /> Reject
+                            </button>
+                            <button className="btn-primary btn-sm py-0.5 px-2 text-xs"
+                              onClick={async () => { await api.put(`/orders/${id}/drawings/${d.id}/approve`); load(); }}>
+                              <CheckCircle size={11} /> Approve
+                            </button>
+                          </div>
+                        ))}
+                        {canUploadDrawing && (!itemApproved) && (
+                          <button className="btn-secondary btn-sm py-1 px-2 text-xs"
+                            onClick={() => { setDrawingUploadItemId(item.id); setDrawingUploadItem(item); setShowDrawingModal(true); }}>
                             <Upload size={11} /> Upload
                           </button>
                         )}
                       </div>
                     </div>
 
+                    {/* Rejection reason */}
+                    {itemRejected && itemDrawings.some(d => d.rejection_reason) && (
+                      <div className="px-4 pb-2 text-xs text-red-600">
+                        Reason: {itemDrawings.find(d => d.rejection_reason)?.rejection_reason}
+                        {canUploadDrawing && <span className="ml-2 text-red-400">— delete and re-upload a corrected drawing.</span>}
+                      </div>
+                    )}
+
                     {/* Uploaded drawings for this item */}
                     {itemDrawings.length > 0 && (
-                      <div className="border-t border-green-200 divide-y divide-green-100">
+                      <div className={`border-t divide-y ${itemApproved ? 'border-green-200 divide-green-100' : itemRejected ? 'border-red-200 divide-red-100' : 'border-blue-200 divide-blue-100'}`}>
                         {itemDrawings.map(d => (
                           <div key={d.id} className="flex items-center gap-3 px-4 py-2">
                             {isImage(d.file_name)
-                              ? <img src={`/uploads/order-drawings/${d.file_name}`} alt=""
-                                  className="w-9 h-9 object-cover rounded-lg flex-shrink-0 border border-green-200" />
-                              : <div className="w-9 h-9 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0 border border-red-100">
-                                  <FileText size={16} className="text-red-400" />
-                                </div>
+                              ? <img src={`/uploads/order-drawings/${d.file_name}`} alt="" className="w-9 h-9 object-cover rounded-lg flex-shrink-0" />
+                              : <div className="w-9 h-9 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0"><FileText size={16} className="text-red-400" /></div>
                             }
                             <div className="flex-1 min-w-0">
                               <a href={`/uploads/order-drawings/${d.file_name}`} target="_blank" rel="noopener noreferrer"
@@ -467,7 +452,7 @@ export default function OrderDetail() {
                               </a>
                               <div className="text-xs text-gray-400">{d.uploaded_by_name} · {fmtDate(d.created_at)}</div>
                             </div>
-                            {canUploadDrawing && (
+                            {canUploadDrawing && !itemApproved && (
                               <button className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded flex-shrink-0"
                                 onClick={() => handleDeleteDrawing(d.id)} title="Delete drawing">
                                 <Trash2 size={13} />
@@ -480,33 +465,6 @@ export default function OrderDetail() {
                   </div>
                 );
               })}
-
-              {/* Order-level drawings (not tied to a specific item) */}
-              {(order.order_drawings || []).filter(d => !d.item_id).map(d => (
-                <div key={d.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
-                  {isImage(d.file_name)
-                    ? <img src={`/uploads/order-drawings/${d.file_name}`} alt=""
-                        className="w-12 h-12 object-cover rounded-lg flex-shrink-0 border border-gray-200" />
-                    : <div className="w-12 h-12 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0">
-                        <FileText size={22} className="text-red-500" />
-                      </div>
-                  }
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs text-gray-400 mb-0.5">General drawing (not linked to a specific item)</div>
-                    <a href={`/uploads/order-drawings/${d.file_name}`} target="_blank" rel="noopener noreferrer"
-                      className="text-sm font-medium text-brand-600 hover:underline block truncate">
-                      {d.original_name || d.file_name}
-                    </a>
-                    <div className="text-xs text-gray-400 mt-0.5">{d.uploaded_by_name} · {fmtDate(d.created_at)}</div>
-                  </div>
-                  {canUploadDrawing && (
-                    <button className="btn-ghost btn-sm p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 flex-shrink-0"
-                      onClick={() => handleDeleteDrawing(d.id)} title="Delete drawing">
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                </div>
-              ))}
             </div>
           </div>
 
@@ -519,13 +477,8 @@ export default function OrderDetail() {
                     <span className="ml-1 text-sm font-normal text-gray-400">({order.job_cards.length})</span>
                   )}
                 </h2>
-                <p className="text-xs text-gray-400 mt-0.5">One job card per item — uploaded by Admin/Owner</p>
+                <p className="text-xs text-gray-400 mt-0.5">One job card per item — available once the item's drawing is approved</p>
               </div>
-              {canUploadJobCard && (
-                <button className="btn-primary btn-sm" onClick={() => setShowJobCardModal(true)}>
-                  <Upload size={14} /> Upload Job Card
-                </button>
-              )}
             </div>
 
             {/* Gate messages */}
@@ -535,10 +488,38 @@ export default function OrderDetail() {
             {order.status === 'rejected' && (
               <p className="text-gray-400 text-sm">Order was rejected.</p>
             )}
-            {!['pending_approval', 'rejected'].includes(order.status) && !hasDrawings && (
-              <p className="text-amber-600 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                ⚠️ Design team must upload reference drawings before job cards can be uploaded.
-              </p>
+
+            {/* Per-item job card upload gates */}
+            {canUploadJobCardBase && !['pending_approval','rejected'].includes(order.status) && (
+              <div className="space-y-2 mb-3">
+                {(order.items || []).map((item, idx) => {
+                  const itemApproved = itemDrawingStatus[item.id] === 'approved';
+                  const existingJC = (order.job_cards || []).find(jc =>
+                    jc.drawing_no === item.drawing_number || jc.item_id === item.id
+                  );
+                  if (existingJC) return null; // already has a job card
+                  return (
+                    <div key={item.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${
+                      itemApproved ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'
+                    }`}>
+                      <div>
+                        <span className="font-medium text-gray-800">{item.drawing_number || `Item ${idx + 1}`}</span>
+                        {item.product_code && <span className="ml-2 text-xs text-gray-400">{item.product_code}</span>}
+                      </div>
+                      {itemApproved ? (
+                        <button className="btn-primary btn-sm py-1 px-2 text-xs"
+                          onClick={() => { setShowJobCardModal(true); }}>
+                          <Upload size={12} /> Upload Job Card
+                        </button>
+                      ) : (
+                        <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
+                          <AlertTriangle size={11} /> Drawing not approved yet
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
 
             {/* Job card list */}
@@ -675,16 +656,6 @@ export default function OrderDetail() {
           item={drawingUploadItem}
           onClose={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); }}
           onSave={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); load(); }}
-        />
-      )}
-      {showDrawingRejectModal && (
-        <DrawingRejectModal
-          onClose={() => setShowDrawingRejectModal(false)}
-          onConfirm={async (reason) => {
-            await api.put(`/orders/${id}/drawings/reject`, { reason });
-            setShowDrawingRejectModal(false);
-            load();
-          }}
         />
       )}
       {showJobCardModal && (
