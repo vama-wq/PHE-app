@@ -550,7 +550,7 @@ export default function OrderDetail() {
                             <ExternalLink size={12} /> View
                           </a>
                         )}
-                        {canUploadJobCard && (
+                        {canUploadJobCardBase && (
                           <button className="btn-ghost btn-sm p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50"
                             onClick={() => handleDeleteJobCard(jc.id)} title="Delete">
                             <Trash2 size={14} />
