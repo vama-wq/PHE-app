@@ -161,7 +161,12 @@ async function initDB(retries = 10, delayMs = 3000) {
       // Add notes column for rework/notes per stage
       await pool.query(`ALTER TABLE production_checklist ADD COLUMN IF NOT EXISTS notes TEXT`);
       // Add unique constraint on supplier_code to prevent duplicates
-      await pool.query(`ALTER TABLE suppliers ADD CONSTRAINT IF NOT EXISTS suppliers_supplier_code_unique UNIQUE (supplier_code)`);
+      try {
+        await pool.query(`ALTER TABLE suppliers ADD CONSTRAINT suppliers_supplier_code_unique UNIQUE (supplier_code)`);
+      } catch (e) {
+        // Constraint may already exist, ignore
+        if (!e.message.includes('already exists')) console.log('Note: supplier_code unique constraint may already exist');
+      }
       // Fix incorrectly auto-approved job cards: reset to qc_pending if they have no QC reports
       // A card should only be qc_approved if it actually has a QC report from the QC team
       await pool.query(`
