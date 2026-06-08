@@ -1512,20 +1512,34 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
           />
         </div>
 
+        {/* Rejection photo upload section — required for any rejection */}
         {!isDone && rejQtyInt > 0 && (
-          <div className="rounded-xl bg-red-50 border border-red-200 p-3 mt-2">
-            <div className="flex items-center gap-2 text-red-700 font-semibold text-sm mb-1">
-              <AlertTriangle size={15} /> High Rejection — Work Must Stop
-            </div>
-            <p className="text-xs text-red-600 mb-3">
-              {rejQtyInt} pieces rejected. Upload a photo of the rejected heater.
-              Owner approval required before work can continue.
-            </p>
+          <div className={`rounded-xl p-3 mt-2 border ${rejQtyInt > 2 ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200'}`}>
+            {rejQtyInt > 2 ? (
+              <>
+                <div className="flex items-center gap-2 text-red-700 font-semibold text-sm mb-1">
+                  <AlertTriangle size={15} /> High Rejection — Work Must Stop
+                </div>
+                <p className="text-xs text-red-600 mb-3">
+                  {rejQtyInt} pieces rejected. Upload a photo of the rejected heater.
+                  Owner approval required before work can continue.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 text-yellow-700 font-semibold text-sm mb-1">
+                  <AlertTriangle size={15} /> Rejection Detected
+                </div>
+                <p className="text-xs text-yellow-600 mb-3">
+                  {rejQtyInt} piece{rejQtyInt > 1 ? 's' : ''} rejected. Please upload a rejection photo to complete this stage.
+                </p>
+              </>
+            )}
             {rejPhoto ? (
               <div className="flex items-center gap-3">
                 <a href={`/uploads/rejection-photos/${rejPhoto}`} target="_blank" rel="noopener noreferrer">
                   <img src={`/uploads/rejection-photos/${rejPhoto}`}
-                    alt="rejection" className="w-14 h-14 object-cover rounded-lg border border-red-200" />
+                    alt="rejection" className="w-14 h-14 object-cover rounded-lg border" style={{borderColor: rejQtyInt > 2 ? 'rgb(254, 226, 226)' : 'rgb(254, 243, 199)'}} />
                 </a>
                 <label className="btn-secondary btn-sm text-xs cursor-pointer">
                   Replace Photo
@@ -1535,7 +1549,11 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
                 <span className="text-xs text-green-600 font-medium">✓ Photo uploaded</span>
               </div>
             ) : (
-              <label className={`inline-flex items-center gap-2 cursor-pointer px-3 py-2 rounded-lg border border-red-300 text-red-600 hover:bg-red-100 text-sm font-medium ${uploadingRejPhoto ? 'opacity-50 pointer-events-none' : ''}`}>
+              <label className={`inline-flex items-center gap-2 cursor-pointer px-3 py-2 rounded-lg border text-sm font-medium ${
+                rejQtyInt > 2
+                  ? 'border-red-300 text-red-600 hover:bg-red-100'
+                  : 'border-yellow-300 text-yellow-600 hover:bg-yellow-100'
+              } ${uploadingRejPhoto ? 'opacity-50 pointer-events-none' : ''}`}>
                 <ImageIcon size={15} />
                 {uploadingRejPhoto ? 'Uploading...' : 'Upload Rejection Photo *'}
                 <input type="file" accept=".jpg,.jpeg,.png,.webp" className="hidden"
