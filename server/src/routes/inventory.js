@@ -69,22 +69,31 @@ router.put('/:id', authenticate, authorize('accounts', 'owner'), ...uploadItemDr
   const { item_code, name, category, unit, reorder_level, unit_cost, notes } = req.body;
   const db = getDB();
 
-  if (req.file) {
-    await db.run(
-      `UPDATE inventory_items
-       SET item_code=$1, name=$2, category=$3, unit=$4, reorder_level=$5, unit_cost=$6, notes=$7,
-           drawing_file=$8, drawing_original_name=$9
-       WHERE id=$10`,
-      [item_code?.toUpperCase(), name, category||null, unit, reorder_level, Number(unit_cost)||0, notes||null,
-       req.file.storagePath, req.file.originalname, req.params.id]
-    );
-  } else {
-    await db.run(
-      `UPDATE inventory_items SET item_code=$1, name=$2, category=$3, unit=$4, reorder_level=$5, unit_cost=$6, notes=$7 WHERE id=$8`,
-      [item_code?.toUpperCase(), name, category||null, unit, reorder_level, Number(unit_cost)||0, notes||null, req.params.id]
-    );
+  // Check if code is being changed to one that already exists (different item)
+  const existing = await db.get('SELECT id FROM inventory_items WHERE item_code=$1 AND id!=$2', [item_code?.toUpperCase(), req.params.id]);
+  if (existing) return res.status(409).json({ error: 'Item code already exists' });
+
+  try {
+    if (req.file) {
+      await db.run(
+        `UPDATE inventory_items
+         SET item_code=$1, name=$2, category=$3, unit=$4, reorder_level=$5, unit_cost=$6, notes=$7,
+             drawing_file=$8, drawing_original_name=$9
+         WHERE id=$10`,
+        [item_code?.toUpperCase(), name, category||null, unit, reorder_level, Number(unit_cost)||0, notes||null,
+         req.file.storagePath, req.file.originalname, req.params.id]
+      );
+    } else {
+      await db.run(
+        `UPDATE inventory_items SET item_code=$1, name=$2, category=$3, unit=$4, reorder_level=$5, unit_cost=$6, notes=$7 WHERE id=$8`,
+        [item_code?.toUpperCase(), name, category||null, unit, reorder_level, Number(unit_cost)||0, notes||null, req.params.id]
+      );
+    }
+    res.json({ message: 'Updated' });
+  } catch (e) {
+    if (e.message.includes('unique') || e.message.includes('UNIQUE')) return res.status(409).json({ error: 'Item code already exists' });
+    throw e;
   }
-  res.json({ message: 'Updated' });
 });
 
 router.post('/:id/transactions', authenticate, authorize('accounts', 'owner'), async (req, res) => {

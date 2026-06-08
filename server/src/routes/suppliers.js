@@ -14,12 +14,21 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (r
   if (!phone)         return res.status(400).json({ error: 'Phone number is required' });
   if (!address)       return res.status(400).json({ error: 'Address is required' });
 
-  const r = await getDB().insert(
-    `INSERT INTO suppliers (supplier_code, name, contact_person, phone, email, address, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-    [supplier_code, name, contact_person||null, phone, email||null, address, notes||null, req.user.id]
-  );
-  res.json({ id: r.lastInsertRowid });
+  const db = getDB();
+  const existing = await db.get('SELECT id FROM suppliers WHERE supplier_code=$1', [supplier_code]);
+  if (existing) return res.status(409).json({ error: 'Supplier code already exists' });
+
+  try {
+    const r = await db.insert(
+      `INSERT INTO suppliers (supplier_code, name, contact_person, phone, email, address, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [supplier_code, name, contact_person||null, phone, email||null, address, notes||null, req.user.id]
+    );
+    res.json({ id: r.lastInsertRowid });
+  } catch (e) {
+    if (e.message.includes('unique') || e.message.includes('UNIQUE')) return res.status(409).json({ error: 'Supplier code already exists' });
+    throw e;
+  }
 });
 
 router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
@@ -29,11 +38,22 @@ router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async 
   if (!phone)         return res.status(400).json({ error: 'Phone number is required' });
   if (!address)       return res.status(400).json({ error: 'Address is required' });
 
-  await getDB().run(
-    `UPDATE suppliers SET supplier_code=$1, name=$2, contact_person=$3, phone=$4, email=$5, address=$6, notes=$7 WHERE id=$8`,
-    [supplier_code, name, contact_person||null, phone, email||null, address, notes||null, req.params.id]
-  );
-  res.json({ message: 'Updated' });
+  const db = getDB();
+
+  // Check if code is being changed to one that already exists (different supplier)
+  const existing = await db.get('SELECT id FROM suppliers WHERE supplier_code=$1 AND id!=$2', [supplier_code, req.params.id]);
+  if (existing) return res.status(409).json({ error: 'Supplier code already exists' });
+
+  try {
+    await db.run(
+      `UPDATE suppliers SET supplier_code=$1, name=$2, contact_person=$3, phone=$4, email=$5, address=$6, notes=$7 WHERE id=$8`,
+      [supplier_code, name, contact_person||null, phone, email||null, address, notes||null, req.params.id]
+    );
+    res.json({ message: 'Updated' });
+  } catch (e) {
+    if (e.message.includes('unique') || e.message.includes('UNIQUE')) return res.status(409).json({ error: 'Supplier code already exists' });
+    throw e;
+  }
 });
 
 router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res) => {

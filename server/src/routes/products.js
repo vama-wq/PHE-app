@@ -34,22 +34,31 @@ router.put('/:id', authenticate, authorize('admin', 'owner'), ...uploadProductPh
   const { product_code, name, description, category } = req.body;
   const db = getDB();
 
-  if (req.file) {
-    // Delete old photo from Supabase Storage
-    const old = await db.get('SELECT photo_file FROM products WHERE id=$1', [req.params.id]);
-    if (old?.photo_file) await deleteFromStorage(old.photo_file);
+  // Check if code is being changed to one that already exists (different product)
+  const existing = await db.get('SELECT id FROM products WHERE product_code=$1 AND id!=$2', [product_code, req.params.id]);
+  if (existing) return res.status(409).json({ error: 'Product code already exists' });
 
-    await db.run(
-      'UPDATE products SET product_code=$1, name=$2, description=$3, category=$4, photo_file=$5, photo_original_name=$6 WHERE id=$7',
-      [product_code, name, description||null, category||null, req.file.storagePath, req.file.originalname, req.params.id]
-    );
-  } else {
-    await db.run(
-      'UPDATE products SET product_code=$1, name=$2, description=$3, category=$4 WHERE id=$5',
-      [product_code, name, description||null, category||null, req.params.id]
-    );
+  try {
+    if (req.file) {
+      // Delete old photo from Supabase Storage
+      const old = await db.get('SELECT photo_file FROM products WHERE id=$1', [req.params.id]);
+      if (old?.photo_file) await deleteFromStorage(old.photo_file);
+
+      await db.run(
+        'UPDATE products SET product_code=$1, name=$2, description=$3, category=$4, photo_file=$5, photo_original_name=$6 WHERE id=$7',
+        [product_code, name, description||null, category||null, req.file.storagePath, req.file.originalname, req.params.id]
+      );
+    } else {
+      await db.run(
+        'UPDATE products SET product_code=$1, name=$2, description=$3, category=$4 WHERE id=$5',
+        [product_code, name, description||null, category||null, req.params.id]
+      );
+    }
+    res.json({ message: 'Updated' });
+  } catch (e) {
+    if (e.message.includes('unique') || e.message.includes('UNIQUE')) return res.status(409).json({ error: 'Product code already exists' });
+    throw e;
   }
-  res.json({ message: 'Updated' });
 });
 
 router.delete('/:id', authenticate, authorize('admin', 'owner'), async (req, res) => {

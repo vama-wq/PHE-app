@@ -160,6 +160,8 @@ async function initDB(retries = 10, delayMs = 3000) {
       await pool.query(`ALTER TABLE production_checklist ADD CONSTRAINT production_checklist_stage_no_check CHECK (stage_no BETWEEN 1 AND 30)`);
       // Add notes column for rework/notes per stage
       await pool.query(`ALTER TABLE production_checklist ADD COLUMN IF NOT EXISTS notes TEXT`);
+      // Add unique constraint on supplier_code to prevent duplicates
+      await pool.query(`ALTER TABLE suppliers ADD CONSTRAINT IF NOT EXISTS suppliers_supplier_code_unique UNIQUE (supplier_code)`);
       // Fix incorrectly auto-approved job cards: reset to qc_pending if they have no QC reports
       // A card should only be qc_approved if it actually has a QC report from the QC team
       await pool.query(`

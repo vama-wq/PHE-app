@@ -52,19 +52,31 @@ router.put('/:id', ...restricted, async (req, res) => {
     customer_code, name, contact_person, phone, email, billing_address, shipping_address, gst_no, notes,
     country_of_destination, port_of_loading, port_of_discharge, final_destination
   } = req.body;
-  await getDB().run(
-    `UPDATE customers SET customer_code=$1, name=$2, contact_person=$3, phone=$4, email=$5,
-       billing_address=$6, shipping_address=$7, gst_no=$8, notes=$9,
-       country_of_destination=$10, port_of_loading=$11, port_of_discharge=$12, final_destination=$13
-     WHERE id=$14`,
-    [
-      customer_code?.toUpperCase(), name, contact_person||null, phone||null, email||null,
-      billing_address||null, shipping_address||null, gst_no||null, notes||null,
-      country_of_destination||null, port_of_loading||null, port_of_discharge||null, final_destination||null,
-      req.params.id
-    ]
-  );
-  res.json({ message: 'Updated' });
+
+  const db = getDB();
+
+  // Check if code is being changed to one that already exists (different customer)
+  const existing = await db.get('SELECT id FROM customers WHERE customer_code=$1 AND id!=$2', [customer_code?.toUpperCase(), req.params.id]);
+  if (existing) return res.status(409).json({ error: 'Customer code already exists' });
+
+  try {
+    await db.run(
+      `UPDATE customers SET customer_code=$1, name=$2, contact_person=$3, phone=$4, email=$5,
+         billing_address=$6, shipping_address=$7, gst_no=$8, notes=$9,
+         country_of_destination=$10, port_of_loading=$11, port_of_discharge=$12, final_destination=$13
+       WHERE id=$14`,
+      [
+        customer_code?.toUpperCase(), name, contact_person||null, phone||null, email||null,
+        billing_address||null, shipping_address||null, gst_no||null, notes||null,
+        country_of_destination||null, port_of_loading||null, port_of_discharge||null, final_destination||null,
+        req.params.id
+      ]
+    );
+    res.json({ message: 'Updated' });
+  } catch (e) {
+    if (e.message.includes('unique') || e.message.includes('UNIQUE')) return res.status(409).json({ error: 'Customer code already exists' });
+    throw e;
+  }
 });
 
 router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {
