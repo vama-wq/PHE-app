@@ -686,7 +686,7 @@ function ChecklistModal({ card, onClose, onSave }) {
           <StageDetailView
             card={{ ...card, net_qty: liveNetQty }}
             stageDef={selectedDef}
-            stageData={stageMap[selectedDef.no] || { done: 0, value1: null, value2: null, photo_file: null, rejection_qty: 0, remade_qty: 0, rejection_photo_file: null }}
+            stageData={stageMap[selectedDef.no] || { done: 0, value1: null, value2: null, photo_file: null, rejection_qty: 0, remade_qty: 0, rejection_photo_file: null, notes: null }}
             stageMap={stageMap}
             onBack={() => setView('list')}
             onSaved={async () => {
@@ -833,6 +833,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [rejPhoto, setRejPhoto] = useState(stageData.rejection_photo_file || null);
   // stagePhotoFile tracks the uploaded photo locally so the form stays open after upload
   const [stagePhotoFile, setStagePhotoFile] = useState(stageData.photo_file || null);
+  const [notes, setNotes] = useState(stageData.notes || '');
   const [uploadingRejPhoto, setUploadingRejPhoto] = useState(false);
   const [uploadingStagePhoto, setUploadingStagePhoto] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -915,7 +916,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     if (photoAlwaysRequired) return false; // photo upload IS the done action for these stages
     if (photoRequiredForStage && !stagePhotoFile) return false; // stage requires photo before marking done
     if (photoRequiredAfter6pm && !stagePhotoFile) return false; // need photo first, then Mark Done
-    if (rejQtyInt > 2 && !rejPhoto) return false;
+    if (rejQtyInt > 0 && !rejPhoto) return false; // any rejection requires photo
     if (stageDef.no === 29 && mandatoryMissing.length > 0) return false;
     if (stageDef.isDispatch && parseInt(dispatchRemadeQty, 10) > 0 && !dispatchRemadeReason.trim()) return false;
     return true;
@@ -1004,6 +1005,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         remade_qty: isDispatch ? remadeAtDispatch : (parseInt(remadeQty, 10) || 0),
         worker_name: workerName || null,
         scrap_value: scrapValue || null,
+        notes: notes || null,
         ...(isDispatch ? { dispatched_qty: finalDispatchQty } : {}),
       });
       await onSaved();
@@ -1497,7 +1499,20 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
           </div>
         )}
 
-        {!isDone && rejQtyInt > 2 && (
+        {/* Rework/Notes section for all stages */}
+        <div className="mb-4">
+          <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wide">Rework/Notes (Optional)</label>
+          <textarea
+            className="input text-sm"
+            placeholder="Add any rework notes or observations for this stage..."
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            disabled={isDone}
+            rows={3}
+          />
+        </div>
+
+        {!isDone && rejQtyInt > 0 && (
           <div className="rounded-xl bg-red-50 border border-red-200 p-3 mt-2">
             <div className="flex items-center gap-2 text-red-700 font-semibold text-sm mb-1">
               <AlertTriangle size={15} /> High Rejection — Work Must Stop

@@ -430,7 +430,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   const stageNo   = parseInt(req.params.stage, 10);
   if (isNaN(stageNo) || stageNo < 1 || stageNo > 29) return res.status(400).json({ error: 'Invalid stage' });
 
-  const { done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value } = req.body;
+  const { done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes } = req.body;
   const db = getDB();
 
   // Block if card is on hold and trying to mark done
@@ -466,15 +466,15 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     }
   }
 
-  // Require rejection photo when rejection > 2
-  if (done && rejQty > 2) {
+  // Require rejection photo when any rejection exists
+  if (done && rejQty > 0) {
     const existing = await db.get(
       'SELECT rejection_photo_file FROM production_checklist WHERE job_card_id=$1 AND stage_no=$2',
       [jobCardId, stageNo]
     );
     if (!existing?.rejection_photo_file) {
       return res.status(400).json({
-        error: 'Upload rejection photo before marking done (rejection > 2 pieces).',
+        error: 'Upload rejection photo before marking done (rejection detected).',
         code: 'REJECTION_PHOTO_REQUIRED'
       });
     }
@@ -484,8 +484,8 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
 
   await db.run(`
     INSERT INTO production_checklist
-      (job_card_id, stage_no, done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, done_at, updated_by, updated_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+      (job_card_id, stage_no, done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, done_at, updated_by, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
     ON CONFLICT(job_card_id, stage_no) DO UPDATE SET
       done          = EXCLUDED.done,
       value1        = EXCLUDED.value1,
@@ -494,6 +494,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
       remade_qty    = EXCLUDED.remade_qty,
       worker_name   = EXCLUDED.worker_name,
       scrap_value   = EXCLUDED.scrap_value,
+      notes         = EXCLUDED.notes,
       done_at = CASE
         WHEN EXCLUDED.done = 1 AND production_checklist.done_at IS NULL THEN EXCLUDED.done_at
         WHEN EXCLUDED.done = 0 THEN NULL
@@ -502,7 +503,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
       updated_by  = EXCLUDED.updated_by,
       updated_at  = NOW()
   `, [jobCardId, stageNo, done ? 1 : 0, value1 ?? null, value2 ?? null, rejQty, remQty,
-    worker_name || null, scrap_value || null, done ? now : null, req.user.id]);
+    worker_name || null, scrap_value || null, notes || null, done ? now : null, req.user.id]);
 
   // When stage 29 is re-submitted to QC, clear the QC rejection flag
   if (stageNo === 29 && done) {

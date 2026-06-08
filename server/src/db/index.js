@@ -158,6 +158,8 @@ async function initDB(retries = 10, delayMs = 3000) {
       // Widen stage_no check constraint to include stage 30 (Dispatch)
       await pool.query(`ALTER TABLE production_checklist DROP CONSTRAINT IF EXISTS production_checklist_stage_no_check`);
       await pool.query(`ALTER TABLE production_checklist ADD CONSTRAINT production_checklist_stage_no_check CHECK (stage_no BETWEEN 1 AND 30)`);
+      // Add notes column for rework/notes per stage
+      await pool.query(`ALTER TABLE production_checklist ADD COLUMN IF NOT EXISTS notes TEXT`);
       // Fix job cards stuck at qc_pending that were actually QC-approved
       // (stage 29 done + an approved QC hold record = should be qc_approved)
       await pool.query(`
