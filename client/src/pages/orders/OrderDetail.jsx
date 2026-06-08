@@ -487,7 +487,13 @@ export default function OrderDetail() {
             {canUploadJobCardBase && !['pending_approval','rejected'].includes(order.status) && (
               <div className="space-y-2 mb-3">
                 {(order.items || []).map((item, idx) => {
-                  const drawingStatus = itemDrawingStatus[item.id]; // 'approved'|'pending_review'|'rejected'|null
+                  // Use itemDrawingStatus map first; fall back to scanning order_drawings directly
+                  const itemDrawings = (order.order_drawings || []).filter(d => d.item_id === item.id);
+                  const drawingStatus = itemDrawingStatus[item.id]
+                    ?? (itemDrawings.some(d => d.drawing_status === 'approved') ? 'approved'
+                      : itemDrawings.some(d => d.drawing_status === 'pending_review') ? 'pending_review'
+                      : itemDrawings.some(d => d.drawing_status === 'rejected') ? 'rejected'
+                      : itemDrawings.length > 0 ? 'pending_review' : null);
                   const hasJC = (order.job_cards || []).some(jc =>
                     item.drawing_number && jc.drawing_no === item.drawing_number
                   );
