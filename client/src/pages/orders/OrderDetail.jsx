@@ -488,10 +488,9 @@ export default function OrderDetail() {
               <div className="space-y-2 mb-3">
                 {(order.items || []).map((item, idx) => {
                   const itemApproved = itemDrawingStatus[item.id] === 'approved';
-                  const existingJC = (order.job_cards || []).find(jc =>
-                    jc.drawing_no === item.drawing_number || jc.item_id === item.id
+                  const existingJCs = (order.job_cards || []).filter(jc =>
+                    item.drawing_number && jc.drawing_no === item.drawing_number
                   );
-                  if (existingJC) return null; // already has a job card
                   return (
                     <div key={item.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${
                       itemApproved ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'
@@ -499,11 +498,16 @@ export default function OrderDetail() {
                       <div>
                         <span className="font-medium text-gray-800">{item.drawing_number || `Item ${idx + 1}`}</span>
                         {item.product_code && <span className="ml-2 text-xs text-gray-400">{item.product_code}</span>}
+                        {existingJCs.length > 0 && (
+                          <span className="ml-2 text-xs text-green-600 font-medium">
+                            ({existingJCs.length} JC uploaded)
+                          </span>
+                        )}
                       </div>
                       {itemApproved ? (
                         <button className="btn-primary btn-sm py-1 px-2 text-xs"
                           onClick={() => { setShowJobCardModal(true); }}>
-                          <Upload size={12} /> Upload Job Card
+                          <Upload size={12} /> {existingJCs.length > 0 ? 'Add Another JC' : 'Upload Job Card'}
                         </button>
                       ) : (
                         <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
