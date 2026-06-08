@@ -910,8 +910,13 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (hvLightResult === 'fail' && (!hvLightFailCount || !hvLightFailReason.trim())) return false;
     }
     if (stageDef.fields) {
-      if (!value1.trim()) return false;
-      if (stageDef.fields.length > 1 && !value2.trim()) return false;
+      // Check required fields
+      const field1 = stageDef.fields[0];
+      if (field1?.required && !value1.trim()) return false;
+      const field2 = stageDef.fields[1];
+      if (field2?.required && !value2.trim()) return false;
+      // For non-required fields, check at least one value if field exists
+      if (!field1?.required && !value1.trim() && stageDef.fields.length > 0) return false;
     }
     if (photoAlwaysRequired) return false; // photo upload IS the done action for these stages
     if (photoRequiredForStage && !stagePhotoFile) return false; // stage requires photo before marking done

@@ -32,7 +32,7 @@ export const PRODUCTION_STAGES = [
   { no: 25, name: 'Cleaning',           photo: true },
   { no: 26, name: 'Nut Washer' },
   { no: 27, name: 'HV + Light Check',   hvLight: true },
-  { no: 28, name: 'Ohms + Meggar',      fields: [{ key: 'value1', label: 'Remark' }] },
+  { no: 28, name: 'Megger',             fields: [{ key: 'value1', label: 'Megger Value', required: true }] },
   { no: 29, name: 'Ready in Production', triggerQC: true, isDispatch: true, photoRequired: true },
 ];
 

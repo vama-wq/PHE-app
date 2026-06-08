@@ -480,6 +480,14 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     }
   }
 
+  // Stage 28 (Megger) requires a value to be entered
+  if (stageNo === 28 && done && !value1?.trim()) {
+    return res.status(400).json({
+      error: 'Megger value is required before marking this stage done.',
+      code: 'MEGGER_VALUE_REQUIRED'
+    });
+  }
+
   const now = new Date().toISOString();
 
   await db.run(`
@@ -593,6 +601,14 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
     }
 
     const now = new Date().toISOString();
+
+    // Stage 28 (Megger) requires a value to be entered
+    if (stageNo === 28 && markDone && !value1?.trim()) {
+      return res.status(400).json({
+        error: 'Megger value is required before marking this stage done.',
+        code: 'MEGGER_VALUE_REQUIRED'
+      });
+    }
 
     // Stage 29 = Dispatch — stores dispatched_qty before QC.
     const dispatchedQty = stageNo === 29 ? (parseInt(req.body.dispatched_qty, 10) || null) : null;
