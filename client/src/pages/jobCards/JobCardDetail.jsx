@@ -5,8 +5,8 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
-import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS } from '../../lib/utils';
-import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle } from 'lucide-react';
+import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, getStageLabel } from '../../lib/utils';
+import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download } from 'lucide-react';
 
 const JC_STATUSES = [
   'created','drawing_pending','drawing_done','inventory_check',
@@ -181,26 +181,223 @@ export default function JobCardDetail() {
 }
 
 function OverviewTab({ jc }) {
+  const [checklist, setChecklist] = useState(null);
+  const [qcReports, setQcReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [checklistRes, qcRes] = await Promise.all([
+          api.get(`/job-cards/${jc.id}/checklist`),
+          api.get(`/qc/${jc.id}/reports`),
+        ]);
+        setChecklist(checklistRes.data);
+        setQcReports(qcRes.data);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+    // Poll for updates every 10 seconds
+    const interval = setInterval(fetchData, 10000);
+    return () => clearInterval(interval);
+  }, [jc.id]);
+
+  // Calculate production progress
+  const stages = checklist?.stages || [];
+  const completedStages = stages.filter(s => s.done).length;
+  const progressPercent = stages.length > 0 ? Math.round((completedStages / stages.length) * 100) : 0;
+
+  // Get stage images
+  const stagePhotos = stages.filter(s => s.photo_file && s.done);
+
+  // Get dispatch and QC info
+  const dispatchStage = stages.find(s => s.stage_no === 29);
+  const dispatchedQty = dispatchStage?.dispatched_qty || 0;
+  const remainingQty = (jc.qty || 0) - (checklist?.stages?.reduce((sum, s) => sum + (s.rejection_qty || 0), 0) || 0);
+
   return (
-    <div className="card p-5">
-      <h2 className="section-title mb-4">Job Card Details</h2>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
-        {[
-          ['Job Card No', jc.job_card_no],
-          ['Product', jc.product_name || '—'],
-          ['Drawing No', jc.drawing_no || '—'],
-          ['Punching', jc.punching || '—'],
-          ['Quantity', jc.qty + ' Nos'],
-          ['Dispatch Date', fmtDate(jc.dispatch_date)],
-          ['Order', jc.order_code],
-          ['Customer Code', jc.customer_code],
-        ].map(([k, v]) => (
-          <div key={k}>
-            <dt className="text-xs text-gray-500 uppercase tracking-wide">{k}</dt>
-            <dd className="text-sm font-medium text-gray-900 mt-1">{v}</dd>
-          </div>
-        ))}
+    <div className="space-y-5">
+      {/* Job Card Details */}
+      <div className="card p-5">
+        <h2 className="section-title mb-4">Job Card Details</h2>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
+          {[
+            ['Job Card No', jc.job_card_no],
+            ['Product', jc.product_name || '—'],
+            ['Drawing No', jc.drawing_no || '—'],
+            ['Punching', jc.punching || '—'],
+            ['Quantity Ordered', jc.qty + ' Nos'],
+            ['Dispatch Date', fmtDate(jc.dispatch_date)],
+            ['Order', jc.order_code],
+            ['Customer Code', jc.customer_code],
+          ].map(([k, v]) => (
+            <div key={k}>
+              <dt className="text-xs text-gray-500 uppercase tracking-wide">{k}</dt>
+              <dd className="text-sm font-medium text-gray-900 mt-1">{v}</dd>
+            </div>
+          ))}
+        </div>
       </div>
+
+      {/* Production Progress */}
+      <div className="card p-5">
+        <h2 className="section-title mb-4">Production Progress</h2>
+        <div className="space-y-4">
+          {/* Progress Bar */}
+          <div>
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-sm font-medium text-gray-700">Overall Progress</span>
+              <span className="text-sm font-semibold text-brand-600">{progressPercent}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+              <div className="bg-brand-500 h-full transition-all duration-300" style={{ width: `${progressPercent}%` }} />
+            </div>
+            <p className="text-xs text-gray-500 mt-2">{completedStages} of {stages.length} stages completed</p>
+          </div>
+
+          {/* Stages Summary */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t border-gray-100">
+            <div className="p-3 bg-blue-50 rounded-lg">
+              <p className="text-xs text-gray-600 font-medium">In Progress</p>
+              <p className="text-lg font-bold text-blue-600">{stages.filter(s => !s.done).length}</p>
+            </div>
+            <div className="p-3 bg-green-50 rounded-lg">
+              <p className="text-xs text-gray-600 font-medium">Completed</p>
+              <p className="text-lg font-bold text-green-600">{completedStages}</p>
+            </div>
+            <div className="p-3 bg-orange-50 rounded-lg">
+              <p className="text-xs text-gray-600 font-medium">Total Rejections</p>
+              <p className="text-lg font-bold text-orange-600">{stages.reduce((sum, s) => sum + (s.rejection_qty || 0), 0)}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Dispatch Summary */}
+      <div className="card p-5">
+        <h2 className="section-title mb-4">Dispatch Summary</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 border border-gray-200 rounded-lg">
+            <p className="text-xs text-gray-600 font-medium mb-1">Qty Ordered</p>
+            <p className="text-2xl font-bold text-gray-900">{jc.qty}</p>
+            <p className="text-xs text-gray-500 mt-1">Total units</p>
+          </div>
+          <div className="p-4 border border-gray-200 rounded-lg">
+            <p className="text-xs text-gray-600 font-medium mb-1">Net Available (After Rejections)</p>
+            <p className="text-2xl font-bold text-blue-600">{remainingQty}</p>
+            <p className="text-xs text-gray-500 mt-1">Ready for dispatch</p>
+          </div>
+          <div className="p-4 border border-gray-200 rounded-lg">
+            <p className="text-xs text-gray-600 font-medium mb-1">Qty Dispatched</p>
+            <p className="text-2xl font-bold text-green-600">{dispatchedQty}</p>
+            <p className="text-xs text-gray-500 mt-1">{remainingQty - dispatchedQty} remaining</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Stage Photos Gallery */}
+      {stagePhotos.length > 0 && (
+        <div className="card p-5">
+          <h2 className="section-title mb-4">Production Photos ({stagePhotos.length})</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {stagePhotos.map(stage => (
+              <a
+                key={stage.stage_no}
+                href={`/uploads/production-photos/${stage.photo_file}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="relative group overflow-hidden rounded-lg bg-gray-200"
+              >
+                <img
+                  src={`/uploads/production-photos/${stage.photo_file}`}
+                  alt={`Stage ${stage.stage_no}`}
+                  className="w-full h-40 object-cover group-hover:scale-110 transition-transform duration-200"
+                  onError={(e) => { e.target.style.display = 'none'; }}
+                />
+                <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all flex items-end p-2">
+                  <span className="text-white text-xs font-semibold opacity-0 group-hover:opacity-100">Stage {stage.stage_no}</span>
+                </div>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Job Card & Drawing Attachments */}
+      <div className="card p-5">
+        <h2 className="section-title mb-4">Attachments</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Job Card File */}
+          {jc.file_name && (
+            <a
+              href={`/uploads/job-cards/${jc.file_name}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-4 border-2 border-blue-200 rounded-lg hover:bg-blue-50 transition-colors flex items-center gap-3"
+            >
+              <FileText size={24} className="text-blue-600" />
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Job Card File</p>
+                <p className="text-xs text-gray-500 truncate">{jc.original_name || jc.file_name}</p>
+              </div>
+            </a>
+          )}
+
+          {/* Drawing File */}
+          {jc.drawing_no && (
+            <a
+              href={`/uploads/drawings/${jc.drawing_no}.pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-4 border-2 border-orange-200 rounded-lg hover:bg-orange-50 transition-colors flex items-center gap-3"
+            >
+              <Image size={24} className="text-orange-600" />
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Drawing</p>
+                <p className="text-xs text-gray-500">{jc.drawing_no}</p>
+              </div>
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* QC Reports */}
+      {qcReports.length > 0 && (
+        <div className="card p-5">
+          <h2 className="section-title mb-4">QC Reports ({qcReports.length})</h2>
+          <div className="space-y-3">
+            {qcReports.map(report => (
+              <div key={report.id} className="p-3 border border-gray-200 rounded-lg flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                      report.result === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                    }`}>
+                      {report.result?.toUpperCase()}
+                    </span>
+                    <p className="text-xs text-gray-500">{fmtDateTime(report.created_at)}</p>
+                  </div>
+                  {report.observations && <p className="text-sm text-gray-700">{report.observations}</p>}
+                  {report.product_weight && <p className="text-xs text-gray-600 mt-1">Weight: {report.product_weight}g</p>}
+                </div>
+                {report.file_name && (
+                  <a
+                    href={`/uploads/qc-reports/${report.file_name}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-4 px-3 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                  >
+                    Download
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
