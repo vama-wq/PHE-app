@@ -1516,6 +1516,10 @@ function UploadJobCardModal({ orderId, defaultDispatchDate, items, jobCards, ite
               <div className="text-xs text-gray-400 mb-0.5 uppercase tracking-wide">Wattage / Voltage</div>
               <div className="text-sm text-gray-600">{selectedItem.wattage ? `${selectedItem.wattage}W / ${selectedItem.voltage}V` : '—'}</div>
             </div>
+            <div>
+              <div className="text-xs text-gray-400 mb-0.5 uppercase tracking-wide">Order Quantity</div>
+              <div className="text-sm font-semibold text-gray-800">{selectedItem.quantity || '—'}</div>
+            </div>
           </div>
         )}
 
