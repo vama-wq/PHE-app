@@ -7,7 +7,7 @@ import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati } from '../../lib/utils';
 import {
-  ArrowLeft, CheckCircle, XCircle, FileText, Plus, Upload,
+  ArrowLeft, CheckCircle, CheckCircle2, XCircle, FileText, Plus, Upload,
   ExternalLink, Trash2, Edit2, Package, PenLine, MessageSquare,
   Clock, AlertTriangle, Image as ImageIcon, Send, X, RefreshCw, ClipboardList
 } from 'lucide-react';
