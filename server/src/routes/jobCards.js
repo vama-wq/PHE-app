@@ -306,7 +306,8 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   if (!jc) return;
 
   let newStatus;
-  if (jc.status === 'qc_approved') newStatus = 'qc_approved'; // preserve QC approval
+  if (jc.status === 'on_hold')     newStatus = 'on_hold';     // preserve hold — owner must approve
+  else if (jc.status === 'qc_approved') newStatus = 'qc_approved'; // preserve QC approval
   else if (stage29)                newStatus = 'qc_pending';  // dispatch done → awaiting QC
   else if (maxStage)               newStatus = 'in_progress';
   else                             newStatus = 'pending';
@@ -677,7 +678,15 @@ router.put('/:id/hold/approve', authenticate, authorize('owner', 'admin'), async
   const db = getDB();
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.id]);
   if (!jc) return res.status(404).json({ error: 'Not found' });
-  if (jc.status !== 'on_hold') return res.status(400).json({ error: 'Job card is not on hold' });
+
+  // Check for pending holds — handles desync where hold exists but status drifted
+  const pendingHold = await db.get(
+    "SELECT id FROM job_card_holds WHERE job_card_id=$1 AND status='pending' LIMIT 1",
+    [req.params.id]
+  );
+  if (jc.status !== 'on_hold' && !pendingHold) {
+    return res.status(400).json({ error: 'Job card is not on hold' });
+  }
 
   await db.run(`
     UPDATE job_card_holds SET status='approved', approved_by=$1, approved_at=NOW()

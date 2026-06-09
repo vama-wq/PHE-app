@@ -180,6 +180,14 @@ async function initDB(retries = 10, delayMs = 3000) {
             JOIN production_checklist pc ON pc.job_card_id = jc.id AND pc.stage_no = 29 AND pc.done = 1
           )
       `);
+      // Fix desync: if a pending hold exists but job card status is not 'on_hold', fix it
+      await pool.query(`
+        UPDATE job_cards SET status = 'on_hold'
+        WHERE status != 'on_hold'
+          AND id IN (
+            SELECT DISTINCT job_card_id FROM job_card_holds WHERE status = 'pending'
+          )
+      `);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
