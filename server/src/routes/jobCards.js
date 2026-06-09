@@ -198,6 +198,21 @@ router.put('/:id/status', authenticate, authorize('admin', 'owner', 'production'
   const db = getDB();
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.id]);
   if (!jc) return res.status(404).json({ error: 'Not found' });
+
+  // Prevent changing away from on_hold if pending holds exist — must use proper approve flow
+  if (jc.status === 'on_hold' && status !== 'on_hold') {
+    const pendingHold = await db.get(
+      "SELECT id FROM job_card_holds WHERE job_card_id=$1 AND status='pending' LIMIT 1",
+      [req.params.id]
+    );
+    if (pendingHold) {
+      return res.status(400).json({
+        error: 'Cannot change status — job card has a pending hold. Use "Approve to Resume" to clear the hold first.',
+        code: 'PENDING_HOLD'
+      });
+    }
+  }
+
   await db.run('UPDATE job_cards SET status=$1 WHERE id=$2', [status, req.params.id]);
   await logActivity(jc.order_id, jc.id, 'status_changed', `Job card ${jc.job_card_no} → ${status}`, req.user.id);
   res.json({ message: 'Updated' });

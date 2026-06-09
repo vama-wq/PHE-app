@@ -40,6 +40,18 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.jobCardId]);
   if (!jc) return res.status(404).json({ error: 'Job card not found' });
 
+  // Block dispatch if card is on hold or has pending holds
+  if (jc.status === 'on_hold') {
+    return res.status(400).json({ error: 'Cannot dispatch — job card is on hold. Owner must approve the hold first.' });
+  }
+  const pendingHold = await db.get(
+    "SELECT id FROM job_card_holds WHERE job_card_id=$1 AND status='pending' LIMIT 1",
+    [req.params.jobCardId]
+  );
+  if (pendingHold) {
+    return res.status(400).json({ error: 'Cannot dispatch — job card has a pending hold that must be approved first.' });
+  }
+
   await db.run("UPDATE job_cards SET status='dispatched' WHERE id=$1", [req.params.jobCardId]);
   await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [jc.order_id]);
 
