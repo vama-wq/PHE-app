@@ -446,3 +446,58 @@ CREATE TABLE IF NOT EXISTS report_templates (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ── Customer Queries (post-dispatch issue tracking) ────────────────────────
+CREATE TABLE IF NOT EXISTS customer_queries (
+  id SERIAL PRIMARY KEY,
+  query_no TEXT UNIQUE NOT NULL,
+  order_id INTEGER NOT NULL REFERENCES orders(id),
+  job_card_id INTEGER REFERENCES job_cards(id),
+  subject TEXT NOT NULL,
+  description TEXT,
+  category TEXT DEFAULT 'general' CHECK(category IN ('design','production','quality','general')),
+  priority TEXT DEFAULT 'medium' CHECK(priority IN ('low','medium','high','critical')),
+  assigned_department TEXT CHECK(assigned_department IN ('design','production','admin')),
+  status TEXT DEFAULT 'open' CHECK(status IN (
+    'open','in_progress','resolved','product_return'
+  )),
+  return_type TEXT CHECK(return_type IN ('repair','debit_note')),
+  return_status TEXT CHECK(return_status IN (
+    'pending_return','received','qc_check','qc_pass','qc_fail','in_repair','repaired_dispatched','debit_note_issued'
+  )),
+  debit_note_no TEXT,
+  return_coupon_no TEXT,
+  resolution_summary TEXT,
+  resolved_by INTEGER REFERENCES users(id),
+  resolved_at TIMESTAMPTZ,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS customer_query_photos (
+  id SERIAL PRIMARY KEY,
+  query_id INTEGER NOT NULL REFERENCES customer_queries(id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  caption TEXT,
+  uploaded_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS customer_query_messages (
+  id SERIAL PRIMARY KEY,
+  query_id INTEGER NOT NULL REFERENCES customer_queries(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  message TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS customer_query_mentions (
+  id SERIAL PRIMARY KEY,
+  message_id INTEGER NOT NULL REFERENCES customer_query_messages(id) ON DELETE CASCADE,
+  query_id INTEGER NOT NULL REFERENCES customer_queries(id) ON DELETE CASCADE,
+  mentioned_user_id INTEGER NOT NULL REFERENCES users(id),
+  is_read INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);

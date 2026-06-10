@@ -16,7 +16,7 @@ async function syncOrderStatus(db, orderId, userId) {
   else                                                                   newOrderStatus = 'job_card_created';
   const order = await db.get('SELECT status FROM orders WHERE id=$1', [orderId]);
   if (!order || order.status === newOrderStatus) return;
-  const locked = ['pending_approval', 'approved', 'rejected'];
+  const locked = ['pending_approval', 'approved', 'rejected', 'customer_query', 'product_return'];
   if (locked.includes(order.status)) return;
   await db.run('UPDATE orders SET status=$1 WHERE id=$2', [newOrderStatus, orderId]);
   await logActivity(orderId, null, 'status_changed',

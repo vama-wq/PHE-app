@@ -126,6 +126,11 @@ export default function OrderDetail() {
           </p>
         </div>
         <div className="flex gap-2">
+          {user.role === 'owner' && (
+            <Link to={`/order-timeline/${order.id}`} className="btn-secondary btn-sm flex items-center gap-1">
+              <ClipboardList size={15} /> Timeline
+            </Link>
+          )}
           {user.role === 'owner' && !restrictedRole && (
             <button className="btn-danger btn-sm" onClick={handleDeleteOrder} title="Delete this order">
               <Trash2 size={15} /> Delete Order
@@ -143,6 +148,25 @@ export default function OrderDetail() {
           )}
         </div>
       </div>
+
+      {/* Customer Query Alert Banner */}
+      {['customer_query', 'product_return'].includes(order.status) && (
+        <div className="mb-5 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-amber-600 text-lg">❓</span>
+            <div>
+              <p className="text-sm font-semibold text-amber-800">
+                {order.status === 'customer_query' ? 'Active Customer Query' : 'Product Return In Progress'}
+              </p>
+              <p className="text-xs text-amber-600">This order has an active customer query that needs attention</p>
+            </div>
+          </div>
+          <a href={`/customer-queries?order_id=${order.id}`}
+            className="btn-sm bg-amber-200 text-amber-900 hover:bg-amber-300 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors">
+            View Queries
+          </a>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* ═══════════════ LEFT COLUMN ═══════════════ */}

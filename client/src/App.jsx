@@ -26,6 +26,9 @@ import FinishedGoodsList from './pages/finishedGoods/FinishedGoodsList';
 import FinishedGoodsDetail from './pages/finishedGoods/FinishedGoodsDetail';
 import FinishedGoodsLog from './pages/finishedGoods/FinishedGoodsLog';
 import DrawingsList from './pages/drawings/DrawingsList';
+import CustomerQueryList from './pages/customerQueries/CustomerQueryList';
+import CustomerQueryDetail from './pages/customerQueries/CustomerQueryDetail';
+import OrderTimeline from './pages/customerQueries/OrderTimeline';
 
 // ── Module permission helper ──────────────────────────────────────────────────
 // null permitted_modules = full role-based access. Owner always has full access.
@@ -73,6 +76,9 @@ export default function App() {
 
           <Route path="production" element={<ModuleRoute module="production"><ProductionDashboard /></ModuleRoute>} />
           <Route path="dispatch"   element={<ModuleRoute module="dispatch"><DispatchList /></ModuleRoute>} />
+          <Route path="customer-queries" element={<ModuleRoute module="dispatch"><CustomerQueryList /></ModuleRoute>} />
+          <Route path="customer-queries/:id" element={<ModuleRoute module="dispatch"><CustomerQueryDetail /></ModuleRoute>} />
+          <Route path="order-timeline/:orderId" element={<OrderTimeline />} />
           <Route path="products"   element={<ModuleRoute module="products"><ProductList /></ModuleRoute>} />
 
           <Route path="inventory" element={

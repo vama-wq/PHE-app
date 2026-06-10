@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { fmtDate, fmtDateTime, downloadExcel, PRODUCTION_STAGES } from '../../lib/utils';
-import { Upload, Search, BarChart2, Download, X, CheckCircle, Circle, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Upload, Search, BarChart2, Download, X, CheckCircle, Circle, AlertTriangle, ArrowRight, HelpCircle } from 'lucide-react';
 
 // Route label helper
 function routeLabel(route, dispQty, fgQty) {
@@ -20,10 +20,12 @@ function routeLabel(route, dispQty, fgQty) {
 
 export default function DispatchList() {
   const { user } = useAuthStore();
+  const navigate = useNavigate();
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(null);   // job card object
   const [showSummary, setShowSummary] = useState(null); // job card object
+  const [showNewQuery, setShowNewQuery] = useState(null); // job card object for new query
 
   // Filters
   const [search, setSearch] = useState('');
@@ -35,7 +37,8 @@ export default function DispatchList() {
 
   const load = () => api.get('/job-cards').then(r => {
     const relevant = r.data.filter(jc =>
-      ['qc_approved','packaging','ready_for_dispatch','dispatched'].includes(jc.status)
+      ['qc_approved','packaging','ready_for_dispatch','dispatched',
+       'customer_query','product_return','repair_in_progress','repaired_dispatched'].includes(jc.status)
     );
     setCards(relevant);
   }).finally(() => setLoading(false));
@@ -114,6 +117,9 @@ export default function DispatchList() {
           <option value="qc_approved">QC Approved</option>
           <option value="packaging">Packaging</option>
           <option value="dispatched">Dispatched</option>
+          <option value="customer_query">Customer Query</option>
+          <option value="product_return">Product Return</option>
+          <option value="repair_in_progress">Repair In Progress</option>
         </select>
         <input type="date" className="input w-[140px]" value={dateFrom}
           onChange={e => setDateFrom(e.target.value)} title="Dispatch date from" />
@@ -193,12 +199,25 @@ export default function DispatchList() {
                         title="View checklist summary">
                         <BarChart2 size={13} /> Summary
                       </button>
-                      {canManage && jc.status !== 'dispatched' && (
+                      {canManage && !['dispatched','customer_query','product_return','repair_in_progress','repaired_dispatched'].includes(jc.status) && (
                         <button
                           className="btn-primary btn-sm flex items-center gap-1 text-xs py-1 px-2"
                           onClick={() => setShowUpload(jc)}>
                           <Upload size={13} /> Dispatch
                         </button>
+                      )}
+                      {jc.status === 'dispatched' && canManage && (
+                        <button
+                          className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-amber-100 text-amber-800 hover:bg-amber-200 rounded-lg font-medium transition-colors"
+                          onClick={() => setShowNewQuery(jc)}>
+                          <HelpCircle size={13} /> Customer Query
+                        </button>
+                      )}
+                      {['customer_query','product_return','repair_in_progress'].includes(jc.status) && (
+                        <Link to={`/customer-queries?order_id=${jc.order_id}`}
+                          className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-rose-100 text-rose-800 hover:bg-rose-200 rounded-lg font-medium transition-colors">
+                          <HelpCircle size={13} /> View Query
+                        </Link>
                       )}
                     </div>
                   </td>
@@ -221,6 +240,13 @@ export default function DispatchList() {
           jc={showSummary}
           onClose={() => setShowSummary(null)} />
       )}
+
+      {showNewQuery && (
+        <NewQueryModal
+          jc={showNewQuery}
+          onClose={() => setShowNewQuery(null)}
+          onCreated={(queryId) => { setShowNewQuery(null); navigate(`/customer-queries/${queryId}`); }} />
+      )}
     </div>
   );
 }
@@ -234,8 +260,9 @@ function ChecklistSummaryModal({ jc, onClose }) {
     Promise.all([
       api.get(`/job-cards/${jc.id}/checklist`),
       api.get(`/qc/${jc.id}/reports`),
-    ]).then(([cl, qcR]) => {
-      setData({ checklist: cl.data, qcReports: qcR.data });
+      api.get(`/customer-queries/order/${jc.order_id}`).catch(() => ({ data: [] })),
+    ]).then(([cl, qcR, cqR]) => {
+      setData({ checklist: cl.data, qcReports: qcR.data, queries: cqR.data });
     }).finally(() => setLoading(false));
   }, [jc.id]);
 
@@ -404,6 +431,33 @@ function ChecklistSummaryModal({ jc, onClose }) {
             </div>
           </div>
 
+          {/* ── Customer Queries ── */}
+          {data?.queries?.length > 0 && (
+            <div>
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Customer Queries</h3>
+              <div className="space-y-2">
+                {data.queries.map(q => (
+                  <Link key={q.id} to={`/customer-queries/${q.id}`} onClick={onClose}
+                    className="block bg-amber-50 border border-amber-200 rounded-lg p-2.5 hover:bg-amber-100 transition-colors">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold text-amber-800">{q.query_no}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                        q.status === 'open' ? 'bg-red-100 text-red-700' :
+                        q.status === 'in_progress' ? 'bg-amber-100 text-amber-700' :
+                        q.status === 'resolved' ? 'bg-green-100 text-green-700' :
+                        'bg-rose-100 text-rose-700'
+                      }`}>{q.status.replace(/_/g, ' ')}</span>
+                    </div>
+                    <p className="text-xs text-amber-700 mt-0.5 truncate">{q.subject}</p>
+                    {q.resolution_summary && (
+                      <p className="text-xs text-green-700 mt-0.5 truncate">Resolution: {q.resolution_summary}</p>
+                    )}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* ── Footer link ── */}
           <div className="flex justify-between items-center pt-1">
             <Link to={`/job-cards/${jc.id}`}
@@ -498,6 +552,93 @@ function DispatchDocModal({ jc, onClose, onSave }) {
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary flex-1" disabled={saving}>
             {saving ? 'Dispatching...' : 'Upload & Mark Dispatched'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// ── New Customer Query Modal ──────────────────────────────────────────────────
+function NewQueryModal({ jc, onClose, onCreated }) {
+  const [f, setF] = useState({
+    subject: '', description: '', category: 'general',
+    priority: 'medium', assigned_department: 'production',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!f.subject.trim()) { setError('Subject is required'); return; }
+    if (!f.assigned_department) { setError('Please select a department'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      const r = await api.post('/customer-queries', {
+        order_id: jc.order_id,
+        job_card_id: jc.id,
+        ...f,
+      });
+      onCreated(r.data.id);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to create query');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title={`Customer Query — ${jc.job_card_no}`} onClose={onClose}>
+      <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm">
+        <span className="text-amber-700 font-medium">Raising a query for: </span>
+        <span className="font-bold text-amber-900">{jc.product_name || jc.drawing_no || jc.job_card_no}</span>
+        <span className="text-amber-600 ml-1">({jc.customer_code})</span>
+      </div>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="label">Subject <span className="text-red-500">*</span></label>
+          <input className="input" value={f.subject} onChange={set('subject')}
+            placeholder="Brief description of the issue" />
+        </div>
+        <div>
+          <label className="label">Description</label>
+          <textarea className="input" rows={3} value={f.description} onChange={set('description')}
+            placeholder="Detailed description of the customer's complaint..." />
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="label">Category</label>
+            <select className="input" value={f.category} onChange={set('category')}>
+              <option value="general">General</option>
+              <option value="design">Design Issue</option>
+              <option value="production">Production Issue</option>
+              <option value="quality">Quality Issue</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Priority</label>
+            <select className="input" value={f.priority} onChange={set('priority')}>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Assign To <span className="text-red-500">*</span></label>
+            <select className="input" value={f.assigned_department} onChange={set('assigned_department')}>
+              <option value="design">Design</option>
+              <option value="production">Production</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+        </div>
+        {error && <p className="text-red-600 text-sm">{error}</p>}
+        <div className="flex gap-3">
+          <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving}>
+            {saving ? 'Creating...' : 'Raise Query'}
           </button>
         </div>
       </form>

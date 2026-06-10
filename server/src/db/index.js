@@ -189,6 +189,76 @@ async function initDB(retries = 10, delayMs = 3000) {
           )
       `);
 
+      // ── Customer Queries tables ──────────────────────────────────────────────
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS customer_queries (
+          id SERIAL PRIMARY KEY,
+          query_no TEXT UNIQUE NOT NULL,
+          order_id INTEGER NOT NULL REFERENCES orders(id),
+          job_card_id INTEGER REFERENCES job_cards(id),
+          subject TEXT NOT NULL,
+          description TEXT,
+          category TEXT DEFAULT 'general',
+          priority TEXT DEFAULT 'medium',
+          assigned_department TEXT,
+          status TEXT DEFAULT 'open',
+          return_type TEXT,
+          return_status TEXT,
+          debit_note_no TEXT,
+          return_coupon_no TEXT,
+          resolution_summary TEXT,
+          resolved_by INTEGER REFERENCES users(id),
+          resolved_at TIMESTAMPTZ,
+          created_by INTEGER REFERENCES users(id),
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS customer_query_photos (
+          id SERIAL PRIMARY KEY,
+          query_id INTEGER NOT NULL REFERENCES customer_queries(id) ON DELETE CASCADE,
+          file_path TEXT NOT NULL,
+          file_name TEXT NOT NULL,
+          caption TEXT,
+          uploaded_by INTEGER REFERENCES users(id),
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS customer_query_messages (
+          id SERIAL PRIMARY KEY,
+          query_id INTEGER NOT NULL REFERENCES customer_queries(id) ON DELETE CASCADE,
+          user_id INTEGER NOT NULL REFERENCES users(id),
+          message TEXT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS customer_query_mentions (
+          id SERIAL PRIMARY KEY,
+          message_id INTEGER NOT NULL REFERENCES customer_query_messages(id) ON DELETE CASCADE,
+          query_id INTEGER NOT NULL REFERENCES customer_queries(id) ON DELETE CASCADE,
+          mentioned_user_id INTEGER NOT NULL REFERENCES users(id),
+          is_read INTEGER DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      // Add customer_query status to orders check constraint (allow new statuses)
+      // Also add 'customer_query' and 'product_return' to job_cards status options
+      // We'll just add the columns we need, constraints are loose in code
+      await pool.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check`);
+      await pool.query(`ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK(status IN (
+        'pending_approval','approved','rejected','job_card_created','in_progress',
+        'qc_pending','qc_approved','packaging','dispatched','on_hold',
+        'customer_query','resolved_dispatched','product_return'
+      ))`);
+      await pool.query(`ALTER TABLE job_cards DROP CONSTRAINT IF EXISTS job_cards_status_check`);
+      await pool.query(`ALTER TABLE job_cards ADD CONSTRAINT job_cards_status_check CHECK(status IN (
+        'pending','in_progress','on_hold','qc_pending','qc_approved','completed','dispatched',
+        'customer_query','product_return','repair_in_progress','repaired_dispatched'
+      ))`);
+
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
       if (parseInt(rows[0].c, 10) === 0) {

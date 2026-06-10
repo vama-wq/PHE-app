@@ -6,7 +6,7 @@ import api from '../../lib/api';
 import {
   LayoutDashboard, ClipboardList, FileText, Package,
   Users, Box, Wrench, Truck, LogOut, FlaskConical,
-  Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse, PenLine
+  Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse, PenLine, HelpCircle
 } from 'lucide-react';
 
 const NAV = [
@@ -17,6 +17,7 @@ const NAV = [
   { id: 'production',    to: '/production',    icon: Wrench,          label: 'Production',      roles: null },
   { id: 'qc',            to: '/qc',            icon: FlaskConical,    label: 'Quality Check',   roles: ['design','owner','admin'] },
   { id: 'dispatch',      to: '/dispatch',      icon: Truck,           label: 'Dispatch',        roles: null },
+  { id: 'customer-queries', to: '/customer-queries', icon: HelpCircle,   label: 'Customer Queries', roles: null, badge: 'openQueries' },
   { id: 'finished-goods',to: '/finished-goods',icon: Warehouse,       label: 'Finished Goods',  roles: ['owner','admin','production'] },
   { id: 'inventory',     to: '/inventory',     icon: Package,         label: 'Inventory',       roles: ['owner','admin','accounts','design'] },
   { id: 'purchases',     to: '/purchases',     icon: ShoppingCart,    label: 'Purchases',       roles: ['owner','admin','accounts'] },
@@ -38,6 +39,7 @@ export default function Sidebar() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const [drawingsPending, setDrawingsPending] = useState(0);
+  const [openQueries, setOpenQueries] = useState(0);
 
   // Fetch pending drawings count for badge (design/admin/owner only)
   useEffect(() => {
@@ -57,7 +59,18 @@ export default function Sidebar() {
     return () => clearInterval(t);
   }, [user?.role]);
 
-  const badges = { drawingsPending };
+  // Fetch open customer queries count for badge
+  useEffect(() => {
+    const fetchQ = () =>
+      api.get('/customer-queries?status=open')
+        .then(r => setOpenQueries(r.data.length))
+        .catch(() => {});
+    fetchQ();
+    const t = setInterval(fetchQ, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  const badges = { drawingsPending, openQueries };
 
   const handleLogout = async () => {
     await logout();

@@ -86,6 +86,11 @@ export const STATUS_LABELS = {
   dispatched:       'Dispatched',
   pending:          'Pending',
   completed:        'Completed',
+  customer_query:      'Customer Query',
+  product_return:      'Product Return',
+  resolved_dispatched: 'Resolved & Dispatched',
+  repair_in_progress:  'Repair In Progress',
+  repaired_dispatched: 'Repaired & Dispatched',
 };
 
 export const STATUS_COLORS = {
@@ -103,6 +108,12 @@ export const STATUS_COLORS = {
   // Job card statuses
   pending:          'bg-yellow-100 text-yellow-800',
   completed:        'bg-green-100 text-green-800',
+  // Customer query statuses
+  customer_query:      'bg-amber-100 text-amber-800',
+  product_return:      'bg-rose-100 text-rose-800',
+  resolved_dispatched: 'bg-emerald-100 text-emerald-800',
+  repair_in_progress:  'bg-orange-100 text-orange-800',
+  repaired_dispatched: 'bg-teal-100 text-teal-800',
 };
 
 export const ROLE_LABELS = {
@@ -136,6 +147,16 @@ export const ACTIVITY_ICONS = {
   dispatch_doc_uploaded:  '📄',
   dispatched:             '🚚',
   status_changed:         '🔄',
+  customer_query_raised:  '❓',
+  customer_query_resolved:'✅',
+  product_return_initiated:'🔙',
+  repair_started:         '🔧',
+  repair_dispatched:      '🚚',
+  debit_note_qc:          '📝',
+  debit_note_added:       '📄',
+  debit_note_issued:      '📋',
+  return_qc_pass:         '✅',
+  return_qc_fail:         '❌',
 };
 
 // ── Phonetic transliteration: Latin → Hindi (Devanagari) ─────────────────────
