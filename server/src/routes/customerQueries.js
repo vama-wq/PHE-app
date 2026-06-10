@@ -274,21 +274,21 @@ router.put('/:id/resolve', authenticate, authorize('owner'), async (req, res) =>
   if (q.status === 'resolved') return res.status(400).json({ error: 'Query is already resolved' });
 
   if (resolution_type === 'resolved') {
-    // Mark query resolved, order goes back to dispatched with "resolved" note
+    // Mark query resolved, order goes to resolved_dispatched (Query Resolved)
     await db.run(`
       UPDATE customer_queries SET status='resolved', resolution_summary=$1,
         resolved_by=$2, resolved_at=NOW(), updated_at=NOW() WHERE id=$3
     `, [resolution_summary.trim(), req.user.id, req.params.id]);
 
-    await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [q.order_id]);
+    await db.run("UPDATE orders SET status='resolved_dispatched' WHERE id=$1", [q.order_id]);
     if (q.job_card_id) {
-      await db.run("UPDATE job_cards SET status='dispatched' WHERE id=$1", [q.job_card_id]);
+      await db.run("UPDATE job_cards SET status='resolved_dispatched' WHERE id=$1", [q.job_card_id]);
     }
 
     await logActivity(q.order_id, q.job_card_id, 'customer_query_resolved',
       `Query ${q.query_no} resolved: ${resolution_summary.trim()}`, req.user.id);
 
-    return res.json({ message: 'Query resolved — order returned to dispatched' });
+    return res.json({ message: 'Query resolved' });
   }
 
   // Product return path

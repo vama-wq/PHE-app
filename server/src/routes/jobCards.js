@@ -25,11 +25,22 @@ router.get('/', authenticate, async (req, res) => {
         0
       ) as net_qty,
       (SELECT dispatched_qty FROM production_checklist WHERE job_card_id = jc.id AND stage_no = 29 LIMIT 1) as dispatched_qty,
-      jc.qc_dispatch_qty, jc.qc_fg_qty, jc.qc_route
+      jc.qc_dispatch_qty, jc.qc_fg_qty, jc.qc_route,
+      cq_active.id as active_query_id,
+      cq_active.query_no as active_query_no,
+      cq_active.subject as active_query_subject,
+      cq_active.assigned_department as active_query_dept,
+      cq_active.status as active_query_status,
+      cq_active.priority as active_query_priority,
+      cq_active.return_type as active_query_return_type,
+      cq_active.return_status as active_query_return_status
     FROM job_cards jc
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
     LEFT JOIN users u ON jc.uploaded_by = u.id
+    LEFT JOIN customer_queries cq_active
+      ON cq_active.job_card_id = jc.id
+      AND cq_active.status IN ('open','in_progress','product_return')
     ORDER BY jc.dispatch_date ASC
   `, [today]);
   res.json(cards);
@@ -100,6 +111,38 @@ router.get('/:id', authenticate, async (req, res) => {
   `, [today, req.params.id]);
 
   if (!jc) return res.status(404).json({ error: 'Job card not found' });
+
+  // Active customer query for this job card
+  const activeQuery = await db.get(`
+    SELECT id, query_no, subject, assigned_department, status, priority, return_type, return_status
+    FROM customer_queries
+    WHERE job_card_id = $1 AND status IN ('open','in_progress','product_return')
+    ORDER BY created_at DESC LIMIT 1
+  `, [req.params.id]);
+  if (activeQuery) {
+    jc.active_query_id = activeQuery.id;
+    jc.active_query_no = activeQuery.query_no;
+    jc.active_query_subject = activeQuery.subject;
+    jc.active_query_dept = activeQuery.assigned_department;
+    jc.active_query_status = activeQuery.status;
+    jc.active_query_priority = activeQuery.priority;
+    jc.active_query_return_type = activeQuery.return_type;
+    jc.active_query_return_status = activeQuery.return_status;
+  }
+
+  // Also check for recently resolved queries (to show "Query Resolved" info)
+  const resolvedQuery = await db.get(`
+    SELECT id, query_no, subject, resolution_summary, resolved_at
+    FROM customer_queries
+    WHERE job_card_id = $1 AND status = 'resolved'
+    ORDER BY resolved_at DESC LIMIT 1
+  `, [req.params.id]);
+  if (resolvedQuery) {
+    jc.resolved_query_id = resolvedQuery.id;
+    jc.resolved_query_no = resolvedQuery.query_no;
+    jc.resolved_query_subject = resolvedQuery.subject;
+    jc.resolved_query_summary = resolvedQuery.resolution_summary;
+  }
 
   jc.daily_reports = await db.all(`
     SELECT pr.*, u.name as reported_by_name
@@ -295,7 +338,7 @@ async function syncOrderStatus(db, orderId, userId) {
   if (!order || order.status === newOrderStatus) return;
 
   // Don't overwrite terminal/upstream statuses or active query statuses
-  const locked = ['pending_approval', 'approved', 'rejected', 'customer_query', 'product_return'];
+  const locked = ['pending_approval', 'approved', 'rejected', 'customer_query', 'product_return', 'resolved_dispatched'];
   if (locked.includes(order.status)) return;
 
   await db.run('UPDATE orders SET status=$1 WHERE id=$2', [newOrderStatus, orderId]);

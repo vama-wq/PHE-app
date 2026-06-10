@@ -8,7 +8,7 @@ import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS
 import {
   Wrench, Calendar, Plus, CheckSquare, Square, CheckCircle,
   X, ExternalLink, ClipboardList, Check, Image as ImageIcon,
-  AlertTriangle, ChevronRight, ArrowLeft, Lock, Download
+  AlertTriangle, ChevronRight, ArrowLeft, Lock, Download, HelpCircle
 } from 'lucide-react';
 
 export default function ProductionDashboard() {
@@ -165,8 +165,27 @@ function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore }) {
         const isOnHold = jc.status === 'on_hold';
         return (
           <div key={jc.id} className={`card p-5 border-l-4 ${
-            isOnHold ? 'border-l-red-500' : isOverdue ? 'border-l-red-500' : isUrgent ? 'border-l-orange-400' : 'border-l-brand-400'
+            jc.active_query_no ? 'border-l-amber-500' : isOnHold ? 'border-l-red-500' : isOverdue ? 'border-l-red-500' : isUrgent ? 'border-l-orange-400' : 'border-l-brand-400'
           }`}>
+            {/* Customer Query Warning */}
+            {jc.active_query_no && (
+              <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 mb-3 flex items-start gap-2.5">
+                <HelpCircle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-amber-800 flex items-center gap-1.5">
+                    <AlertTriangle size={13} /> Customer Query Raised
+                  </div>
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    <Link to={`/customer-queries/${jc.active_query_id}`}
+                      className="font-bold text-amber-900 hover:underline">{jc.active_query_no}</Link>
+                    {' — '}{jc.active_query_subject}
+                    {jc.active_query_dept && <span className="ml-1">· Assigned to <span className="font-semibold capitalize">{jc.active_query_dept}</span></span>}
+                    {jc.active_query_priority === 'critical' && <span className="ml-1 text-red-600 font-semibold">· CRITICAL</span>}
+                    {jc.active_query_priority === 'high' && <span className="ml-1 text-orange-600 font-semibold">· HIGH PRIORITY</span>}
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="flex items-start gap-4">
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -314,6 +333,12 @@ function AllCardsTab({ cards, todayPickIds, canManage, onPick, onUnpick, onCheck
                   <StatusBadge status={jc.status} />
                   {stageLabel && jc.status === 'in_progress' && (
                     <div className="text-xs text-gray-400 mt-0.5">{stageLabel}</div>
+                  )}
+                  {jc.active_query_no && (
+                    <Link to={`/customer-queries/${jc.active_query_id}`}
+                      className="text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded mt-0.5 inline-flex items-center gap-1 hover:bg-amber-100">
+                      <HelpCircle size={10} /> {jc.active_query_no}
+                    </Link>
                   )}
                 </td>
                 {canManage && (
@@ -536,6 +561,25 @@ function ChecklistModal({ card, onClose, onSave }) {
         <div className="text-center py-12 text-gray-400">Loading checklist...</div>
       ) : view === 'list' ? (
         <>
+          {/* Customer Query banner */}
+          {card.active_query_no && (
+            <div className="mb-4 rounded-xl bg-amber-50 border border-amber-300 p-4">
+              <div className="font-semibold text-amber-800 flex items-center gap-2">
+                <HelpCircle size={16} /> Customer Query Raised — {card.active_query_no}
+              </div>
+              <div className="text-sm text-amber-700 mt-1">
+                {card.active_query_subject}
+                {card.active_query_dept && (
+                  <span className="ml-1">· Assigned to <span className="font-semibold capitalize">{card.active_query_dept}</span></span>
+                )}
+              </div>
+              <div className="text-xs text-amber-600 mt-1">
+                <Link to={`/customer-queries/${card.active_query_id}`}
+                  className="underline hover:text-amber-800">View Query Details →</Link>
+              </div>
+            </div>
+          )}
+
           {/* Hold banner */}
           {isOnHold && (
             <div className="mb-4 rounded-xl bg-red-50 border border-red-200 p-4">

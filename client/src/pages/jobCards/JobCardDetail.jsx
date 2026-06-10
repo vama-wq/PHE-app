@@ -6,7 +6,7 @@ import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, getStageLabel } from '../../lib/utils';
-import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download } from 'lucide-react';
+import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle } from 'lucide-react';
 
 const JC_STATUSES = [
   'created','drawing_pending','drawing_done','inventory_check',
@@ -114,6 +114,53 @@ export default function JobCardDetail() {
           )}
         </div>
       </div>
+
+      {/* Customer Query Warning Banner */}
+      {jc.active_query_no && (
+        <div className="mb-5 bg-amber-50 border border-amber-300 rounded-xl p-4 flex items-start gap-3">
+          <HelpCircle size={20} className="text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <div className="font-semibold text-amber-800 flex items-center gap-2">
+              <AlertTriangle size={14} /> Customer Query Raised
+            </div>
+            <p className="text-sm text-amber-700 mt-1">
+              <Link to={`/customer-queries/${jc.active_query_id}`}
+                className="font-bold text-amber-900 hover:underline">{jc.active_query_no}</Link>
+              {' — '}{jc.active_query_subject}
+            </p>
+            <div className="text-xs text-amber-600 mt-1 flex items-center gap-3">
+              {jc.active_query_dept && <span>Assigned to: <span className="font-semibold capitalize">{jc.active_query_dept}</span></span>}
+              {jc.active_query_priority && (
+                <span className={`font-semibold uppercase ${
+                  jc.active_query_priority === 'critical' ? 'text-red-600' :
+                  jc.active_query_priority === 'high' ? 'text-orange-600' : ''
+                }`}>{jc.active_query_priority} priority</span>
+              )}
+              {jc.active_query_return_type && <span>Return: <span className="font-semibold capitalize">{jc.active_query_return_type === 'debit_note' ? 'Debit Note' : jc.active_query_return_type}</span></span>}
+            </div>
+          </div>
+          <Link to={`/customer-queries/${jc.active_query_id}`}
+            className="btn-secondary btn-sm text-xs flex-shrink-0">View Query →</Link>
+        </div>
+      )}
+
+      {/* Query Resolved Banner */}
+      {jc.status === 'resolved_dispatched' && jc.resolved_query_no && (
+        <div className="mb-5 bg-green-50 border border-green-300 rounded-xl p-4 flex items-start gap-3">
+          <CheckCircle size={20} className="text-green-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <div className="font-semibold text-green-800">Query Resolved</div>
+            <p className="text-sm text-green-700 mt-0.5">
+              <Link to={`/customer-queries/${jc.resolved_query_id}`}
+                className="font-bold text-green-900 hover:underline">{jc.resolved_query_no}</Link>
+              {' — '}{jc.resolved_query_subject}
+            </p>
+            {jc.resolved_query_summary && (
+              <p className="text-xs text-green-600 mt-1">Resolution: {jc.resolved_query_summary}</p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 bg-gray-100 p-1 rounded-lg overflow-x-auto no-print">

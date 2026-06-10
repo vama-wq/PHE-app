@@ -256,7 +256,7 @@ async function initDB(retries = 10, delayMs = 3000) {
       await pool.query(`ALTER TABLE job_cards DROP CONSTRAINT IF EXISTS job_cards_status_check`);
       await pool.query(`ALTER TABLE job_cards ADD CONSTRAINT job_cards_status_check CHECK(status IN (
         'pending','in_progress','on_hold','qc_pending','qc_approved','completed','dispatched',
-        'customer_query','product_return','repair_in_progress','repaired_dispatched'
+        'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'
       ))`);
 
       // Seed default users only on first run (empty table)

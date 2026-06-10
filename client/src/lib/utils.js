@@ -86,9 +86,9 @@ export const STATUS_LABELS = {
   dispatched:       'Dispatched',
   pending:          'Pending',
   completed:        'Completed',
-  customer_query:      'Customer Query',
+  customer_query:      'Query Raised',
   product_return:      'Product Return',
-  resolved_dispatched: 'Resolved & Dispatched',
+  resolved_dispatched: 'Query Resolved',
   repair_in_progress:  'Repair In Progress',
   repaired_dispatched: 'Repaired & Dispatched',
 };
@@ -111,7 +111,7 @@ export const STATUS_COLORS = {
   // Customer query statuses
   customer_query:      'bg-amber-100 text-amber-800',
   product_return:      'bg-rose-100 text-rose-800',
-  resolved_dispatched: 'bg-emerald-100 text-emerald-800',
+  resolved_dispatched: 'bg-green-100 text-green-700',
   repair_in_progress:  'bg-orange-100 text-orange-800',
   repaired_dispatched: 'bg-teal-100 text-teal-800',
 };

@@ -38,7 +38,7 @@ export default function DispatchList() {
   const load = () => api.get('/job-cards').then(r => {
     const relevant = r.data.filter(jc =>
       ['qc_approved','packaging','ready_for_dispatch','dispatched',
-       'customer_query','product_return','repair_in_progress','repaired_dispatched'].includes(jc.status)
+       'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'].includes(jc.status)
     );
     setCards(relevant);
   }).finally(() => setLoading(false));
@@ -117,7 +117,8 @@ export default function DispatchList() {
           <option value="qc_approved">QC Approved</option>
           <option value="packaging">Packaging</option>
           <option value="dispatched">Dispatched</option>
-          <option value="customer_query">Customer Query</option>
+          <option value="resolved_dispatched">Query Resolved</option>
+          <option value="customer_query">Query Raised</option>
           <option value="product_return">Product Return</option>
           <option value="repair_in_progress">Repair In Progress</option>
         </select>
@@ -199,14 +200,14 @@ export default function DispatchList() {
                         title="View checklist summary">
                         <BarChart2 size={13} /> Summary
                       </button>
-                      {canManage && !['dispatched','customer_query','product_return','repair_in_progress','repaired_dispatched'].includes(jc.status) && (
+                      {canManage && !['dispatched','customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'].includes(jc.status) && (
                         <button
                           className="btn-primary btn-sm flex items-center gap-1 text-xs py-1 px-2"
                           onClick={() => setShowUpload(jc)}>
                           <Upload size={13} /> Dispatch
                         </button>
                       )}
-                      {jc.status === 'dispatched' && canManage && (
+                      {['dispatched','resolved_dispatched'].includes(jc.status) && canManage && (
                         <button
                           className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-amber-100 text-amber-800 hover:bg-amber-200 rounded-lg font-medium transition-colors"
                           onClick={() => setShowNewQuery(jc)}>
