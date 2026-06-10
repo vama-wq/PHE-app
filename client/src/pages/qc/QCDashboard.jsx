@@ -9,7 +9,7 @@ import { downloadExcel } from '../../lib/utils';
 import {
   FlaskConical, CheckCircle, XCircle, Upload, FileText,
   ExternalLink, AlertTriangle, ChevronDown, ChevronUp, Download,
-  Package, Loader2
+  Package, Loader2, RotateCcw
 } from 'lucide-react';
 
 export default function QCDashboard() {
@@ -129,6 +129,28 @@ export default function QCDashboard() {
               <div key={jc.id} className={`card border-l-4 ${
                 isOverdue ? 'border-l-red-500' : isUrgent ? 'border-l-orange-400' : 'border-l-purple-400'
               }`}>
+                {/* Customer Query Return Warning */}
+                {jc.return_query_no && (
+                  <div className="px-5 pt-4 pb-0">
+                    <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 flex items-start gap-2.5">
+                      <RotateCcw size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <div className="text-sm font-semibold text-amber-800 flex items-center gap-1.5">
+                          <AlertTriangle size={13} /> Returned Product — Customer Query
+                        </div>
+                        <p className="text-xs text-amber-700 mt-0.5">
+                          This item was returned due to customer query{' '}
+                          <Link to={`/customer-queries/${jc.return_query_id}`}
+                            className="font-bold text-amber-900 hover:underline">{jc.return_query_no}</Link>.
+                          {jc.return_query_type === 'debit_note' && ' Debit note return — inspect and submit QC result.'}
+                          {jc.return_query_type === 'repair' && ' Repair return — product needs re-inspection.'}
+                          {jc.return_coupon_no && <span className="ml-1">Coupon: <strong>{jc.return_coupon_no}</strong></span>}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Card header */}
                 <div className="p-5">
                   <div className="flex items-start gap-4">
@@ -139,6 +161,11 @@ export default function QCDashboard() {
                         {isOverdue && (
                           <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
                             <AlertTriangle size={11} /> Overdue
+                          </span>
+                        )}
+                        {jc.return_query_no && (
+                          <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                            <RotateCcw size={11} /> Customer Return
                           </span>
                         )}
                       </div>

@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadToStorage, deleteFromStorage } = require('../middleware/upload');
 const multer = require('multer');
 
@@ -25,8 +25,10 @@ async function genQueryNo(db) {
 // ── List all queries (with filters) ─────────────────────────────────────────
 router.get('/', authenticate, async (req, res) => {
   const { status, order_id, assigned_department } = req.query;
+  const canSeeName = withCustomerVisibility(req);
   let sql = `
-    SELECT cq.*, o.order_code, c.customer_code, c.name as customer_name,
+    SELECT cq.*, o.order_code, c.customer_code,
+           ${canSeeName ? "c.name as customer_name," : ''}
            jc.job_card_no, jc.drawing_no, jc.product_name,
            u.name as created_by_name,
            ru.name as resolved_by_name,
@@ -96,9 +98,11 @@ router.get('/order/:orderId', authenticate, async (req, res) => {
 // ── Get single query with all details (must be AFTER static /order, /mentions, /users routes) ──
 router.get('/:id', authenticate, async (req, res) => {
   const db = getDB();
+  const canSeeName = withCustomerVisibility(req);
   const q = await db.get(`
     SELECT cq.*, o.order_code, o.order_type, o.dispatch_date as order_dispatch_date,
-           c.customer_code, c.name as customer_name,
+           c.customer_code,
+           ${canSeeName ? "c.name as customer_name," : ''}
            jc.job_card_no, jc.drawing_no, jc.product_name, jc.qty as jc_qty, jc.status as jc_status,
            u.name as created_by_name, u.role as created_by_role,
            ru.name as resolved_by_name
@@ -316,32 +320,16 @@ router.put('/:id/return-type', authenticate, authorize('owner'), async (req, res
   if (!q) return res.status(404).json({ error: 'Query not found' });
   if (q.status !== 'product_return') return res.status(400).json({ error: 'Query must be in product_return status' });
 
+  // Set the return type but stay at pending_return — user must confirm material received next
   await db.run(`
     UPDATE customer_queries SET return_type=$1, return_coupon_no=$2,
-      return_status='received', updated_at=NOW() WHERE id=$3
+      return_status='pending_return', updated_at=NOW() WHERE id=$3
   `, [return_type, return_coupon_no || null, req.params.id]);
 
-  if (return_type === 'repair') {
-    // Send back to production with original job card — new checklist will be created
-    if (q.job_card_id) {
-      // Reset production checklist for repair
-      await db.run("UPDATE production_checklist SET done=0, done_at=NULL WHERE job_card_id=$1", [q.job_card_id]);
-      await db.run("UPDATE job_cards SET status='repair_in_progress' WHERE id=$1", [q.job_card_id]);
-    }
-    await db.run(`UPDATE customer_queries SET return_status='in_repair', updated_at=NOW() WHERE id=$1`, [req.params.id]);
-    await logActivity(q.order_id, q.job_card_id, 'repair_started',
-      `Repair started for return ${q.query_no} — coupon: ${return_coupon_no || 'N/A'}`, req.user.id);
-  } else {
-    // Debit note path — goes to QC for inspection
-    if (q.job_card_id) {
-      await db.run("UPDATE job_cards SET status='qc_pending' WHERE id=$1", [q.job_card_id]);
-    }
-    await db.run(`UPDATE customer_queries SET return_status='qc_check', updated_at=NOW() WHERE id=$1`, [req.params.id]);
-    await logActivity(q.order_id, q.job_card_id, 'debit_note_qc',
-      `Debit note return for ${q.query_no} sent to QC — coupon: ${return_coupon_no || 'N/A'}`, req.user.id);
-  }
+  await logActivity(q.order_id, q.job_card_id, 'return_type_set',
+    `Return type set to ${return_type} for ${q.query_no} — coupon: ${return_coupon_no || 'N/A'}. Awaiting material return.`, req.user.id);
 
-  res.json({ message: `Return type set to ${return_type}` });
+  res.json({ message: `Return type set to ${return_type}. Mark material as received when product arrives.` });
 });
 
 // ── Add debit note number ──────────────────────────────────────────────────
@@ -361,6 +349,40 @@ router.put('/:id/debit-note', authenticate, authorize('accounts', 'owner'), asyn
     `Debit note ${debit_note_no.trim()} added for query ${q.query_no}`, req.user.id);
 
   res.json({ message: 'Debit note added' });
+});
+
+// ── Mark material as received — triggers QC or production based on return_type ──
+router.put('/:id/material-received', authenticate, authorize('accounts', 'owner', 'admin'), async (req, res) => {
+  const db = getDB();
+  const q = await db.get('SELECT * FROM customer_queries WHERE id=$1', [req.params.id]);
+  if (!q) return res.status(404).json({ error: 'Query not found' });
+  if (q.return_status !== 'pending_return') {
+    return res.status(400).json({ error: 'Query must be in pending_return status' });
+  }
+  if (!q.return_type) {
+    return res.status(400).json({ error: 'Return type must be set first' });
+  }
+
+  if (q.return_type === 'repair') {
+    // Send to production for repair
+    if (q.job_card_id) {
+      await db.run("UPDATE production_checklist SET done=0, done_at=NULL WHERE job_card_id=$1", [q.job_card_id]);
+      await db.run("UPDATE job_cards SET status='repair_in_progress' WHERE id=$1", [q.job_card_id]);
+    }
+    await db.run(`UPDATE customer_queries SET return_status='in_repair', updated_at=NOW() WHERE id=$1`, [req.params.id]);
+    await logActivity(q.order_id, q.job_card_id, 'material_received',
+      `Material received for ${q.query_no}. Sent to production for repair.`, req.user.id);
+    return res.json({ message: 'Material received — sent to production for repair' });
+  }
+
+  // Debit note path — send to QC
+  if (q.job_card_id) {
+    await db.run("UPDATE job_cards SET status='qc_pending' WHERE id=$1", [q.job_card_id]);
+  }
+  await db.run(`UPDATE customer_queries SET return_status='qc_check', updated_at=NOW() WHERE id=$1`, [req.params.id]);
+  await logActivity(q.order_id, q.job_card_id, 'material_received',
+    `Material received for ${q.query_no}. Sent to QC for inspection (debit note return).`, req.user.id);
+  res.json({ message: 'Material received — sent to QC for inspection' });
 });
 
 // ── QC check result for returned product ────────────────────────────────────
@@ -492,10 +514,11 @@ router.put('/:id/debit-note-complete', authenticate, authorize('owner', 'account
 router.get('/order/:orderId/timeline', authenticate, async (req, res) => {
   const db = getDB();
   const orderId = req.params.orderId;
+  const canSeeName = withCustomerVisibility(req);
 
   // Get order info
   const order = await db.get(`
-    SELECT o.*, c.customer_code, c.name as customer_name
+    SELECT o.*, c.customer_code ${canSeeName ? ", c.name as customer_name" : ''}
     FROM orders o JOIN customers c ON o.customer_id = c.id WHERE o.id=$1
   `, [orderId]);
   if (!order) return res.status(404).json({ error: 'Order not found' });

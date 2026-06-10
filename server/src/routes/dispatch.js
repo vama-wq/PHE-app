@@ -34,6 +34,38 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadDispatch
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
+// ── Update / replace a dispatch document (edit invoice) ─────────────────────
+router.put('/doc/:id', authenticate, authorize('accounts', 'owner'), ...uploadDispatch, async (req, res) => {
+  const { doc_type, shipping_carrier, tracking_number, dispatch_date, notes } = req.body;
+  const db = getDB();
+  const doc = await db.get('SELECT * FROM dispatch_documents WHERE id=$1', [req.params.id]);
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+  // If a new file was uploaded, delete the old one and use the new path
+  let filePath = doc.file_path;
+  let fileName = doc.file_name;
+  if (req.file) {
+    if (doc.file_path) await deleteFromStorage(doc.file_path);
+    filePath = req.file.storagePath;
+    fileName = req.file.filename;
+  }
+
+  await db.run(
+    `UPDATE dispatch_documents SET doc_type=$1, file_path=$2, file_name=$3,
+       shipping_carrier=$4, tracking_number=$5, dispatch_date=$6, notes=$7
+     WHERE id=$8`,
+    [doc_type || doc.doc_type, filePath, fileName,
+     shipping_carrier ?? doc.shipping_carrier, tracking_number ?? doc.tracking_number,
+     dispatch_date || doc.dispatch_date, notes ?? doc.notes, req.params.id]
+  );
+
+  const jc = await db.get('SELECT order_id FROM job_cards WHERE id=$1', [doc.job_card_id]);
+  if (jc) await logActivity(jc.order_id, doc.job_card_id, 'dispatch_doc_updated',
+    `Dispatch document updated: ${doc_type || doc.doc_type}`, req.user.id);
+
+  res.json({ message: 'Document updated' });
+});
+
 router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'owner'), async (req, res) => {
   const { dispatch_date, shipping_carrier, tracking_number } = req.body;
   const db = getDB();
@@ -50,6 +82,15 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
   );
   if (pendingHold) {
     return res.status(400).json({ error: 'Cannot dispatch — job card has a pending hold that must be approved first.' });
+  }
+
+  // Require at least an invoice document before dispatching
+  const invoiceDoc = await db.get(
+    "SELECT id FROM dispatch_documents WHERE job_card_id=$1 AND doc_type='invoice' LIMIT 1",
+    [req.params.jobCardId]
+  );
+  if (!invoiceDoc) {
+    return res.status(400).json({ error: 'An invoice document is required before dispatching. Please upload an invoice first.' });
   }
 
   await db.run("UPDATE job_cards SET status='dispatched' WHERE id=$1", [req.params.jobCardId]);

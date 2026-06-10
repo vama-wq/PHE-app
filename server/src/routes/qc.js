@@ -36,11 +36,19 @@ router.get('/', authenticate, authorize('design', 'owner', 'admin'), async (req,
          0
        ) as net_qty,
        COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0) as total_rejected,
-       COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0) as total_remade
+       COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0) as total_remade,
+       cq_return.query_no as return_query_no,
+       cq_return.id as return_query_id,
+       cq_return.return_type as return_query_type,
+       cq_return.return_coupon_no as return_coupon_no
      FROM job_cards jc
      JOIN orders o ON jc.order_id = o.id
      JOIN customers c ON o.customer_id = c.id
      LEFT JOIN users u ON jc.uploaded_by = u.id
+     LEFT JOIN customer_queries cq_return
+       ON cq_return.job_card_id = jc.id
+       AND cq_return.status = 'product_return'
+       AND cq_return.return_status IN ('qc_check', 'in_repair')
      WHERE (
        jc.status = 'qc_pending'
        OR (

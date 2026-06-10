@@ -198,7 +198,7 @@ export default function CustomerQueryDetail() {
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">Customer</span>
-              <span className="font-medium">{query.customer_code} — {query.customer_name}</span>
+              <span className="font-medium">{query.customer_name ? `${query.customer_code} — ${query.customer_name}` : query.customer_code}</span>
             </div>
             {query.job_card_no && (
               <div className="flex justify-between">
@@ -287,15 +287,38 @@ export default function CustomerQueryDetail() {
 
               {/* Action buttons for return flow */}
               <div className="pt-2 space-y-2">
-                {isOwner && query.return_status === 'pending_return' && (
+                {/* If pending_return and no return_type yet → Set Return Type */}
+                {isOwner && query.return_status === 'pending_return' && !query.return_type && (
                   <button className="btn-primary w-full text-sm" onClick={() => setShowReturnType(true)}>
                     Set Return Type
                   </button>
                 )}
-                {isOwner && query.return_status === 'received' && !query.return_type && (
-                  <button className="btn-primary w-full text-sm" onClick={() => setShowReturnType(true)}>
-                    Set Return Type
-                  </button>
+                {/* If pending_return and return_type IS set → Material Received */}
+                {canManage && query.return_status === 'pending_return' && query.return_type && (
+                  <div>
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2">
+                      <div className="flex items-center gap-1.5 text-amber-700 text-xs font-semibold mb-0.5">
+                        <AlertTriangle size={13} /> Awaiting Material Return
+                      </div>
+                      <p className="text-xs text-amber-600">
+                        Return type: <span className="font-semibold capitalize">{query.return_type === 'debit_note' ? 'Debit Note' : 'Repair'}</span>.
+                        Mark as received once the product arrives.
+                      </p>
+                    </div>
+                    <button className="btn-primary w-full text-sm flex items-center justify-center gap-1.5"
+                      onClick={async () => {
+                        if (!confirm('Confirm material has been received? This will send the product to ' +
+                          (query.return_type === 'repair' ? 'production for repair.' : 'QC for inspection.'))) return;
+                        try {
+                          await api.put(`/customer-queries/${id}/material-received`);
+                          load();
+                        } catch (err) {
+                          alert(err.response?.data?.error || 'Failed to mark as received');
+                        }
+                      }}>
+                      <Package size={14} /> Material Received
+                    </button>
+                  </div>
                 )}
                 {query.return_type === 'debit_note' && !query.debit_note_no && canManage && (
                   <button className="btn-secondary w-full text-sm flex items-center justify-center gap-1"

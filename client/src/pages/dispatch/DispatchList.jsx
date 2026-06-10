@@ -475,32 +475,105 @@ function ChecklistSummaryModal({ jc, onClose }) {
 
 // ── Dispatch Doc Modal ─────────────────────────────────────────────────────────
 function DispatchDocModal({ jc, onClose, onSave }) {
+  const [docs, setDocs] = useState([]);       // existing uploaded docs
+  const [loadingDocs, setLoadingDocs] = useState(true);
+  const [editingDoc, setEditingDoc] = useState(null); // doc being edited
+
+  // Invoice form
+  const [invoiceFile, setInvoiceFile] = useState(null);
+  const [invoiceUploaded, setInvoiceUploaded] = useState(false);
+
+  // Additional doc form
+  const [addDocType, setAddDocType] = useState('packing_list');
+  const [addDocFile, setAddDocFile] = useState(null);
+  const [showAddDoc, setShowAddDoc] = useState(false);
+
+  // Dispatch fields
   const [f, setF] = useState({
-    doc_type: 'invoice', shipping_carrier: '', tracking_number: '',
+    shipping_carrier: '', tracking_number: '',
     dispatch_date: new Date().toISOString().split('T')[0], notes: ''
   });
-  const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
-  // Show QC-approved dispatch qty
   const dispQty = jc.qc_dispatch_qty != null ? jc.qc_dispatch_qty : jc.net_qty ?? jc.qty;
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!file)                      { setError('Invoice / dispatch document is required — please upload a file'); return; }
-    if (!f.shipping_carrier.trim()) { setError('Shipping carrier is required'); return; }
-    if (!f.tracking_number.trim())  { setError('Tracking number is required'); return; }
-    setSaving(true);
-    setError('');
+  // Load existing docs
+  const loadDocs = () => {
+    api.get(`/dispatch/job-card/${jc.id}`).then(r => {
+      setDocs(r.data);
+      const hasInvoice = r.data.some(d => d.doc_type === 'invoice');
+      setInvoiceUploaded(hasInvoice);
+    }).finally(() => setLoadingDocs(false));
+  };
+  useEffect(() => { loadDocs(); }, [jc.id]);
+
+  // Upload invoice
+  const handleUploadInvoice = async () => {
+    if (!invoiceFile) { setError('Please select an invoice file'); return; }
+    setUploading(true); setError('');
     const fd = new FormData();
     fd.append('job_card_id', jc.id);
-    Object.entries(f).forEach(([k, v]) => fd.append(k, v));
-    if (file) fd.append('file', file);
+    fd.append('doc_type', 'invoice');
+    fd.append('file', invoiceFile);
     try {
       await api.post('/dispatch', fd);
-      await api.put(`/dispatch/${jc.id}/mark-dispatched`);
+      setInvoiceFile(null);
+      loadDocs();
+    } catch (err) { setError(err.response?.data?.error || 'Upload failed'); }
+    setUploading(false);
+  };
+
+  // Upload additional doc
+  const handleUploadAdditional = async () => {
+    if (!addDocFile) { setError('Please select a file'); return; }
+    setUploading(true); setError('');
+    const fd = new FormData();
+    fd.append('job_card_id', jc.id);
+    fd.append('doc_type', addDocType);
+    fd.append('file', addDocFile);
+    try {
+      await api.post('/dispatch', fd);
+      setAddDocFile(null);
+      setShowAddDoc(false);
+      loadDocs();
+    } catch (err) { setError(err.response?.data?.error || 'Upload failed'); }
+    setUploading(false);
+  };
+
+  // Edit (replace) an existing doc
+  const handleEditDoc = async (docId, newFile, newDocType) => {
+    if (!newFile && !newDocType) return;
+    setUploading(true); setError('');
+    const fd = new FormData();
+    if (newDocType) fd.append('doc_type', newDocType);
+    if (newFile) fd.append('file', newFile);
+    try {
+      await api.put(`/dispatch/doc/${docId}`, fd);
+      setEditingDoc(null);
+      loadDocs();
+    } catch (err) { setError(err.response?.data?.error || 'Update failed'); }
+    setUploading(false);
+  };
+
+  // Delete doc
+  const handleDeleteDoc = async (docId) => {
+    if (!confirm('Delete this document?')) return;
+    try {
+      await api.delete(`/dispatch/${docId}`);
+      loadDocs();
+    } catch (err) { setError(err.response?.data?.error || 'Delete failed'); }
+  };
+
+  // Final dispatch
+  const handleDispatch = async () => {
+    if (!f.shipping_carrier.trim()) { setError('Shipping carrier is required'); return; }
+    if (!f.tracking_number.trim())  { setError('Tracking number is required'); return; }
+    setSaving(true); setError('');
+    try {
+      await api.put(`/dispatch/${jc.id}/mark-dispatched`, f);
       onSave();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed');
@@ -508,8 +581,11 @@ function DispatchDocModal({ jc, onClose, onSave }) {
     }
   };
 
+  const invoiceDoc = docs.find(d => d.doc_type === 'invoice');
+  const otherDocs = docs.filter(d => d.doc_type !== 'invoice');
+
   return (
-    <Modal open title={`Dispatch — ${jc.job_card_no}`} onClose={onClose}>
+    <Modal open title={`Dispatch — ${jc.job_card_no}`} onClose={onClose} size="lg">
       <div className="mb-4 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-sm">
         <span className="text-blue-700 font-medium">QC-approved dispatch qty: </span>
         <span className="font-bold text-blue-900">{dispQty}</span>
@@ -517,45 +593,177 @@ function DispatchDocModal({ jc, onClose, onSave }) {
           <span className="text-blue-600 ml-2">({routeLabel(jc.qc_route, jc.qc_dispatch_qty, jc.qc_fg_qty)})</span>
         )}
       </div>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="label">Document Type</label>
-          <select className="input" value={f.doc_type} onChange={set('doc_type')}>
-            <option value="invoice">Invoice</option>
-            <option value="packing_list">Packing List</option>
-            <option value="delivery_challan">Delivery Challan</option>
-            <option value="eway_bill">E-Way Bill</option>
-            <option value="other">Other</option>
-          </select>
+
+      <div className="space-y-5">
+        {/* ── Step 1: Invoice (mandatory) ── */}
+        <div className={`rounded-xl border-2 p-4 ${invoiceUploaded ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+          <div className="flex items-center gap-2 mb-2">
+            {invoiceUploaded
+              ? <CheckCircle size={18} className="text-green-600" />
+              : <AlertTriangle size={18} className="text-red-500" />
+            }
+            <h3 className="font-semibold text-sm">
+              {invoiceUploaded ? 'Invoice Uploaded' : 'Invoice Required *'}
+            </h3>
+          </div>
+
+          {invoiceDoc ? (
+            <div className="flex items-center justify-between bg-white rounded-lg border border-gray-200 p-2.5">
+              <div className="flex items-center gap-2 text-sm">
+                <Upload size={14} className="text-green-600" />
+                <a href={`/uploads/${invoiceDoc.file_path}`} target="_blank" rel="noreferrer"
+                  className="text-brand-700 hover:underline font-medium">{invoiceDoc.file_name}</a>
+                <span className="text-xs text-gray-400">Invoice</span>
+              </div>
+              <div className="flex gap-1">
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => setEditingDoc(invoiceDoc)}>Edit</button>
+                <span className="text-gray-300">|</span>
+                <button className="text-xs text-red-600 hover:underline" onClick={() => handleDeleteDoc(invoiceDoc.id)}>Delete</button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <FileUpload onFile={setInvoiceFile} accept=".pdf,.jpg,.jpeg,.png" label="Select Invoice *" />
+              <button className="btn-primary btn-sm px-4 flex-shrink-0 self-end"
+                onClick={handleUploadInvoice} disabled={uploading || !invoiceFile}>
+                {uploading ? 'Uploading...' : 'Upload Invoice'}
+              </button>
+            </div>
+          )}
         </div>
-        <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Upload Invoice / Document *" />
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="label">Shipping Carrier <span className="text-red-500">*</span></label>
-            <input className="input" placeholder="e.g. DTDC" value={f.shipping_carrier} onChange={set('shipping_carrier')} />
+
+        {/* ── Additional Documents (optional) ── */}
+        <div className="border border-gray-200 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold text-sm text-gray-700">Additional Documents (Optional)</h3>
+            {!showAddDoc && (
+              <button className="btn-secondary btn-sm text-xs" onClick={() => setShowAddDoc(true)}>
+                + Add Document
+              </button>
+            )}
           </div>
-          <div>
-            <label className="label">Tracking No <span className="text-red-500">*</span></label>
-            <input className="input" value={f.tracking_number} onChange={set('tracking_number')} />
-          </div>
-          <div>
-            <label className="label">Dispatch Date</label>
-            <input className="input" type="date" value={f.dispatch_date} onChange={set('dispatch_date')} />
-          </div>
-          <div>
-            <label className="label">Notes</label>
-            <input className="input" value={f.notes} onChange={set('notes')} />
+
+          {/* Existing additional docs */}
+          {otherDocs.length > 0 && (
+            <div className="space-y-1.5 mb-3">
+              {otherDocs.map(doc => (
+                <div key={doc.id} className="flex items-center justify-between bg-gray-50 rounded-lg border border-gray-100 p-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Upload size={13} className="text-gray-500" />
+                    <a href={`/uploads/${doc.file_path}`} target="_blank" rel="noreferrer"
+                      className="text-brand-700 hover:underline">{doc.file_name}</a>
+                    <span className="text-xs text-gray-400 capitalize">{(doc.doc_type || '').replace(/_/g, ' ')}</span>
+                  </div>
+                  <div className="flex gap-1">
+                    <button className="text-xs text-blue-600 hover:underline" onClick={() => setEditingDoc(doc)}>Edit</button>
+                    <span className="text-gray-300">|</span>
+                    <button className="text-xs text-red-600 hover:underline" onClick={() => handleDeleteDoc(doc.id)}>Delete</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add new doc form */}
+          {showAddDoc && (
+            <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+              <select className="input text-sm" value={addDocType} onChange={e => setAddDocType(e.target.value)}>
+                <option value="packing_list">Packing List</option>
+                <option value="delivery_challan">Delivery Challan</option>
+                <option value="eway_bill">E-Way Bill</option>
+                <option value="other">Other</option>
+              </select>
+              <FileUpload onFile={setAddDocFile} accept=".pdf,.jpg,.jpeg,.png" label="Select Document" />
+              <div className="flex gap-2">
+                <button className="btn-ghost btn-sm text-xs" onClick={() => setShowAddDoc(false)}>Cancel</button>
+                <button className="btn-primary btn-sm text-xs" onClick={handleUploadAdditional}
+                  disabled={uploading || !addDocFile}>
+                  {uploading ? 'Uploading...' : 'Upload'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Step 2: Shipping Details & Dispatch ── */}
+        <div className="border border-gray-200 rounded-xl p-4">
+          <h3 className="font-semibold text-sm text-gray-700 mb-3">Shipping Details</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Shipping Carrier <span className="text-red-500">*</span></label>
+              <input className="input" placeholder="e.g. DTDC" value={f.shipping_carrier} onChange={set('shipping_carrier')} />
+            </div>
+            <div>
+              <label className="label">Tracking No <span className="text-red-500">*</span></label>
+              <input className="input" value={f.tracking_number} onChange={set('tracking_number')} />
+            </div>
+            <div>
+              <label className="label">Dispatch Date</label>
+              <input className="input" type="date" value={f.dispatch_date} onChange={set('dispatch_date')} />
+            </div>
+            <div>
+              <label className="label">Notes</label>
+              <input className="input" value={f.notes} onChange={set('notes')} />
+            </div>
           </div>
         </div>
+
         {error && <p className="text-red-600 text-sm">{error}</p>}
+
         <div className="flex gap-3">
-          <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn-primary flex-1" disabled={saving}>
-            {saving ? 'Dispatching...' : 'Upload & Mark Dispatched'}
+          <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button className="btn-primary flex-1" onClick={handleDispatch}
+            disabled={saving || !invoiceUploaded}
+            title={!invoiceUploaded ? 'Upload an invoice first' : ''}>
+            {saving ? 'Dispatching...' : 'Mark as Dispatched'}
           </button>
         </div>
-      </form>
+      </div>
+
+      {/* Edit Document Modal */}
+      {editingDoc && (
+        <EditDocModal doc={editingDoc} onClose={() => setEditingDoc(null)}
+          onSave={(newFile, newDocType) => handleEditDoc(editingDoc.id, newFile, newDocType)} />
+      )}
     </Modal>
+  );
+}
+
+// ── Edit Document Sub-Modal ──────────────────────────────────────────────────
+function EditDocModal({ doc, onClose, onSave }) {
+  const [file, setFile] = useState(null);
+  const [docType, setDocType] = useState(doc.doc_type || 'invoice');
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-[60]" onClick={onClose}>
+      <div className="bg-white rounded-xl p-5 max-w-md w-full shadow-xl" onClick={e => e.stopPropagation()}>
+        <h3 className="text-lg font-semibold mb-4">Edit Document</h3>
+        <div className="space-y-3">
+          <div>
+            <label className="label">Document Type</label>
+            <select className="input" value={docType} onChange={e => setDocType(e.target.value)}>
+              <option value="invoice">Invoice</option>
+              <option value="packing_list">Packing List</option>
+              <option value="delivery_challan">Delivery Challan</option>
+              <option value="eway_bill">E-Way Bill</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Current File</label>
+            <a href={`/uploads/${doc.file_path}`} target="_blank" rel="noreferrer"
+              className="text-sm text-brand-700 hover:underline block mb-1">{doc.file_name}</a>
+          </div>
+          <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Replace with new file (optional)" />
+          <div className="flex gap-3 pt-2">
+            <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+            <button className="btn-primary flex-1" onClick={() => onSave(file, docType)}>
+              Save Changes
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

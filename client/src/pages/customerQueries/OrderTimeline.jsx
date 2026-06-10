@@ -35,13 +35,13 @@ export default function OrderTimeline() {
         Order Timeline — {order.order_code}
       </h1>
       <p className="text-gray-500 text-sm mb-6">
-        Complete journey from order to delivery for {order.customer_code} — {order.customer_name}
+        Complete journey from order to delivery for {order.customer_name ? `${order.customer_code} — ${order.customer_name}` : order.customer_code}
       </p>
 
       {/* ── Order Summary ── */}
       <Section icon={ClipboardList} title="Order" status={order.status} color="blue">
         <div className="grid grid-cols-3 gap-4 text-sm">
-          <Info label="Customer" value={`${order.customer_code} — ${order.customer_name}`} />
+          <Info label="Customer" value={order.customer_name ? `${order.customer_code} — ${order.customer_name}` : order.customer_code} />
           <Info label="Order Date" value={fmtDate(order.order_date)} />
           <Info label="Dispatch Date" value={fmtDate(order.dispatch_date)} />
           <Info label="Type" value={order.order_type} />
