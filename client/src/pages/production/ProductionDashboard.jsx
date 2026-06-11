@@ -599,32 +599,91 @@ function ChecklistModal({ card, onClose, onSave }) {
     setView('stage');
   };
 
+  const days = daysUntil(card.dispatch_date);
+  const isOverdue = days < 0;
+
   return (
     <Modal open title={view === 'list' ? `Checklist — ${card.job_card_no}` : `Stage ${selectedDef?.no}: ${selectedDef?.name}`} onClose={onClose} size="xl">
-      {/* Sub-header: order info + progress */}
-      <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
-        <div className="text-sm text-gray-500">
-          <Link to={`/orders/${card.order_id}`} className="text-brand-600 hover:underline font-medium">
-            {card.order_code}
-          </Link>
-          {' · '}{card.customer_code}
-          {card.qty && (
-            <span>
-              {' · '}
-              {liveNetQty != null && liveNetQty < card.qty
-                ? <><span className="text-orange-600 font-medium">{liveNetQty} dispatchable</span> <span className="text-gray-400 text-xs">(of {card.qty})</span></>
-                : <>Qty: {liveNetQty ?? card.qty}</>
-              }
-            </span>
-          )}
-          {' · '}Dispatch: <span className="font-medium text-gray-700">{fmtDate(card.dispatch_date)}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-28 h-2 bg-gray-200 rounded-full overflow-hidden">
-            <div className="h-full bg-green-500 rounded-full transition-all duration-300"
-              style={{ width: `${progress}%` }} />
+      {/* Job Card Details Header */}
+      <div className="mb-4 pb-4 border-b border-gray-200">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <h3 className="text-lg font-bold text-gray-900">{card.job_card_no}</h3>
+            <StatusBadge status={card.status} />
+            {isOverdue ? (
+              <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">{Math.abs(days)}d overdue</span>
+            ) : days !== null && days <= 3 ? (
+              <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-semibold">{days === 0 ? 'Today!' : `${days}d left`}</span>
+            ) : null}
           </div>
-          <span className="text-sm font-semibold text-gray-600">{completedCount}/{visibleCount}</span>
+          <div className="flex items-center gap-2">
+            <div className="w-28 h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div className="h-full bg-green-500 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%` }} />
+            </div>
+            <span className="text-sm font-semibold text-gray-600">{completedCount}/{visibleCount}</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div>
+            <dt className="text-xs text-gray-500 font-medium uppercase">Order</dt>
+            <dd className="text-sm font-semibold text-gray-900 mt-0.5">
+              <Link to={`/orders/${card.order_id}`} className="text-brand-600 hover:underline">{card.order_code}</Link>
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-gray-500 font-medium uppercase">Customer</dt>
+            <dd className="text-sm font-semibold text-gray-900 mt-0.5">{card.customer_code}</dd>
+          </div>
+          {card.product_name && (
+            <div>
+              <dt className="text-xs text-gray-500 font-medium uppercase">Product</dt>
+              <dd className="text-sm font-semibold text-gray-900 mt-0.5">{card.product_name}</dd>
+            </div>
+          )}
+          {card.drawing_no && (
+            <div>
+              <dt className="text-xs text-gray-500 font-medium uppercase">Drawing No</dt>
+              <dd className="text-sm text-gray-900 mt-0.5">{card.drawing_no}</dd>
+            </div>
+          )}
+          {card.punching && (
+            <div>
+              <dt className="text-xs text-gray-500 font-medium uppercase">Punching</dt>
+              <dd className="text-sm text-gray-900 mt-0.5">{card.punching}</dd>
+            </div>
+          )}
+          <div>
+            <dt className="text-xs text-gray-500 font-medium uppercase">Qty Ordered</dt>
+            <dd className="text-sm font-semibold text-gray-900 mt-0.5">{card.qty} Nos</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-gray-500 font-medium uppercase">Dispatchable Qty</dt>
+            <dd className={`text-sm font-semibold mt-0.5 ${liveNetQty < card.qty ? 'text-orange-600' : 'text-green-700'}`}>
+              {liveNetQty}{liveNetQty < card.qty ? ` (−${card.qty - liveNetQty} rejected)` : ''}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-gray-500 font-medium uppercase">Dispatch Date</dt>
+            <dd className={`text-sm font-semibold mt-0.5 ${isOverdue ? 'text-red-600' : 'text-gray-900'}`}>{fmtDate(card.dispatch_date)}</dd>
+          </div>
+          {card.current_stage && (
+            <div>
+              <dt className="text-xs text-gray-500 font-medium uppercase">Current Stage</dt>
+              <dd className="text-sm text-blue-700 font-medium mt-0.5">{getStageLabel(card.current_stage)}</dd>
+            </div>
+          )}
+          {card.file_name && (
+            <div>
+              <dt className="text-xs text-gray-500 font-medium uppercase">Job Card File</dt>
+              <dd className="text-sm mt-0.5">
+                <a href={`/uploads/job-cards/${card.file_name}`} target="_blank" rel="noopener noreferrer"
+                  className="text-brand-600 hover:underline flex items-center gap-1">
+                  <ExternalLink size={11} /> View File
+                </a>
+              </dd>
+            </div>
+          )}
         </div>
       </div>
 
