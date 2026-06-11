@@ -1,13 +1,13 @@
 const router = require('express').Router();
 const { getDB } = require('../db');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, withCustomerVisibility } = require('../middleware/auth');
 
 // ── Data source query runners (async, PostgreSQL positional params) ────────────
 
-async function runOrders(db, filters = {}) {
+async function runOrders(db, filters = {}, canSeeNames = false) {
   let sql = `
     SELECT
-      o.id, o.order_code, c.name AS customer_name, c.customer_code,
+      o.id, o.order_code, ${canSeeNames ? "c.name AS customer_name," : ''} c.customer_code,
       o.status, o.order_date, o.dispatch_date, o.notes,
       u.name AS created_by_name, o.created_at,
       COUNT(DISTINCT oi.id) AS item_count
@@ -25,11 +25,11 @@ async function runOrders(db, filters = {}) {
   return db.all(sql, params);
 }
 
-async function runJobCards(db, filters = {}) {
+async function runJobCards(db, filters = {}, canSeeNames = false) {
   let sql = `
     SELECT
       jc.id, jc.job_card_no, o.order_code,
-      c.name AS customer_name, c.customer_code,
+      ${canSeeNames ? "c.name AS customer_name," : ''} c.customer_code,
       jc.product_name, jc.qty, jc.punching, jc.drawing_no,
       jc.status, jc.current_stage, jc.dispatch_date,
       u.name AS uploaded_by_name, jc.created_at
@@ -47,11 +47,11 @@ async function runJobCards(db, filters = {}) {
   return db.all(sql, params);
 }
 
-async function runQC(db, filters = {}) {
+async function runQC(db, filters = {}, canSeeNames = false) {
   let sql = `
     SELECT
       qr.id, jc.job_card_no, o.order_code,
-      c.name AS customer_name, c.customer_code,
+      ${canSeeNames ? "c.name AS customer_name," : ''} c.customer_code,
       qr.result, qr.observations, qr.corrective_action, qr.product_weight,
       qr.file_name, u.name AS created_by_name, qr.created_at
     FROM qc_reports qr
@@ -69,11 +69,11 @@ async function runQC(db, filters = {}) {
   return db.all(sql, params);
 }
 
-async function runDispatch(db, filters = {}) {
+async function runDispatch(db, filters = {}, canSeeNames = false) {
   let sql = `
     SELECT
       dd.id, jc.job_card_no, o.order_code,
-      c.name AS customer_name, c.customer_code,
+      ${canSeeNames ? "c.name AS customer_name," : ''} c.customer_code,
       dd.doc_type, dd.file_name, dd.notes,
       u.name AS uploaded_by_name, dd.created_at
     FROM dispatch_documents dd
@@ -128,11 +128,11 @@ async function runPurchaseOrders(db, filters = {}) {
   return db.all(sql, params);
 }
 
-async function runRejections(db, filters = {}) {
+async function runRejections(db, filters = {}, canSeeNames = false) {
   let sql = `
     SELECT
       pc.id, jc.job_card_no, o.order_code,
-      c.name AS customer_name, c.customer_code,
+      ${canSeeNames ? "c.name AS customer_name," : ''} c.customer_code,
       pc.stage_no, pc.rejection_qty, pc.remade_qty,
       pc.done_at, jc.status AS card_status,
       jch.status AS hold_status, jch.approved_at,
@@ -169,7 +169,8 @@ router.get('/data/:source', authenticate, async (req, res) => {
   if (!runner) return res.status(400).json({ error: 'Unknown data source' });
   try {
     const db = getDB();
-    const rows = await runner(db, req.query);
+    const canSeeNames = withCustomerVisibility(req);
+    const rows = await runner(db, req.query, canSeeNames);
     res.json(rows);
   } catch (err) {
     console.error('Report data error:', err);

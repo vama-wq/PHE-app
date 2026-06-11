@@ -322,7 +322,7 @@ function exportCSV(rows, columns, filename) {
   const header = columns.map(c => `"${c.label}"`).join(',');
   const body = rows.map(row =>
     columns.map(c => {
-      const v = rawValue(row[c.key], c.type);
+      const v = rawValue(c.key === 'customer_name' ? (row.customer_name || row.customer_code) : row[c.key], c.type);
       return `"${String(v).replace(/"/g, '""')}"`;
     }).join(',')
   ).join('\n');
@@ -427,7 +427,7 @@ function ResultsTable({ rows, columns }) {
             <tr key={i} className="hover:bg-gray-50 transition-colors">
               {columns.map(col => (
                 <td key={col.key} className="px-4 py-3 text-gray-700 max-w-xs">
-                  <div className="truncate">{fmtCell(row[col.key], col.type)}</div>
+                  <div className="truncate">{fmtCell(col.key === 'customer_name' ? (row.customer_name || row.customer_code) : row[col.key], col.type)}</div>
                 </td>
               ))}
             </tr>

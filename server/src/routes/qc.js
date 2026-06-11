@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQC, uploadChecklistPhoto } = require('../middleware/upload');
 
 // Recompute order status from all its job cards
@@ -24,8 +24,9 @@ async function syncOrderStatus(db, orderId, userId) {
 }
 
 router.get('/', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
+  const canSeeNames = withCustomerVisibility(req);
   const cards = await getDB().all(
-    `SELECT jc.*, o.order_code, o.order_type, c.customer_code, c.name as customer_name,
+    `SELECT jc.*, o.order_code, o.order_type, c.customer_code, ${canSeeNames ? "c.name as customer_name," : ''}
        u.name as uploaded_by_name,
        (SELECT COUNT(*) FROM qc_reports WHERE job_card_id = jc.id) as report_count,
        (jc.dispatch_date::date - CURRENT_DATE) as days_until_dispatch,

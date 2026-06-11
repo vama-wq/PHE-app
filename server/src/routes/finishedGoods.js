@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 
 // ── Global movement log (all inward + outward across all FG items) ────────────
 router.get('/logs', authenticate, async (req, res) => {
@@ -51,6 +51,7 @@ router.get('/', authenticate, async (req, res) => {
 // ── Single finished good with enriched log ────────────────────────────────────
 router.get('/:id', authenticate, async (req, res) => {
   const db = getDB();
+  const canSeeNames = withCustomerVisibility(req);
   const fg = await db.get(`
     SELECT fg.*, u.name as created_by_name
     FROM finished_goods fg
@@ -58,17 +59,17 @@ router.get('/:id', authenticate, async (req, res) => {
     WHERE fg.id = $1
   `, [req.params.id]);
   if (!fg) return res.status(404).json({ error: 'Not found' });
+  if (!canSeeNames) { fg.customer_name = undefined; }
 
   const log = await db.all(`
     SELECT fgl.*,
       u.name AS created_by_name,
-      -- join job_cards to get drawing_no, job card id, and customer for each inward
       jc.id          AS job_card_id,
       jc.drawing_no  AS jc_drawing_no,
       jc.product_name,
       o.order_code   AS jc_order_code,
-      c.customer_code AS jc_customer_code,
-      c.name          AS jc_customer_name
+      c.customer_code AS jc_customer_code
+      ${canSeeNames ? ", c.name AS jc_customer_name" : ''}
     FROM finished_goods_log fgl
     LEFT JOIN users u ON fgl.created_by = u.id
     LEFT JOIN job_cards jc ON jc.job_card_no = fgl.job_card_no

@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const XLSX = require('xlsx');
 const { getDB } = require('../db');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 
 const STAGE_NAMES = {
   1:'Coil',2:'Coil + Tube Cutting',3:'Ohms',4:'Spot',5:'Tube Cutting',
@@ -40,8 +40,9 @@ function autoWidth(ws) {
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 router.get('/orders', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const canSeeNames = withCustomerVisibility(req);
   const rows = await getDB().all(`
-    SELECT o.order_code, c.customer_code, c.name as customer_name,
+    SELECT o.order_code, c.customer_code, ${canSeeNames ? "c.name as customer_name," : ''}
       o.order_date, o.dispatch_date, o.status, o.notes,
       u.name as created_by, o.created_at
     FROM orders o
@@ -53,7 +54,7 @@ router.get('/orders', authenticate, authorize('owner', 'admin', 'accounts'), asy
   const data = rows.map(r => ({
     'Order Code':    r.order_code,
     'Customer Code': r.customer_code,
-    'Customer Name': r.customer_name || '',
+    ...(canSeeNames ? { 'Customer Name': r.customer_name || '' } : {}),
     'Order Date':    r.order_date || '',
     'Dispatch Date': r.dispatch_date || '',
     'Status':        r.status,
@@ -235,13 +236,14 @@ router.get('/rejections', authenticate, authorize('owner', 'admin'), async (req,
 // ── Dispatch Checklist ────────────────────────────────────────────────────────
 router.get('/dispatch-checklist', authenticate, authorize('owner', 'admin', 'accounts', 'production'), async (req, res) => {
   const db = getDB();
+  const canSeeNames = withCustomerVisibility(req);
 
   // Get all dispatched (or qc_approved/packaging) job cards
   const cards = await db.all(`
     SELECT jc.id, jc.job_card_no, jc.drawing_no, jc.product_name,
       jc.qty, jc.dispatch_date, jc.status,
       o.order_code, o.order_type,
-      c.customer_code, c.name as customer_name,
+      c.customer_code, ${canSeeNames ? "c.name as customer_name," : ''}
       GREATEST(
         jc.qty
           - COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
@@ -292,7 +294,7 @@ router.get('/dispatch-checklist', authenticate, authorize('owner', 'admin', 'acc
     'Order Code':       jc.order_code,
     'Order Type':       jc.order_type || '',
     'Customer Code':    jc.customer_code,
-    'Customer Name':    jc.customer_name || '',
+    ...(canSeeNames ? { 'Customer Name': jc.customer_name || '' } : {}),
     'Drawing No':       jc.drawing_no || '',
     'Product Name':     jc.product_name || '',
     'Original Qty':     jc.qty ?? '',
