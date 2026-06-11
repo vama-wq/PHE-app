@@ -115,48 +115,251 @@ export default function JobCardDetail() {
         </div>
       </div>
 
-      {/* Customer Query Warning Banner */}
+      {/* Customer Query Warning Banner — Full Details */}
       {jc.active_query_no && (
-        <div className="mb-5 bg-amber-50 border border-amber-300 rounded-xl p-4 flex items-start gap-3">
-          <HelpCircle size={20} className="text-amber-600 flex-shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <div className="font-semibold text-amber-800 flex items-center gap-2">
-              <AlertTriangle size={14} /> Customer Query Raised
+        <div className="mb-5 bg-amber-50 border border-amber-300 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 bg-amber-100/60 border-b border-amber-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={16} className="text-amber-700" />
+              <span className="font-bold text-amber-900">Customer Query Raised</span>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-semibold uppercase ${
+                jc.active_query_priority === 'critical' ? 'bg-red-100 text-red-700' :
+                jc.active_query_priority === 'high' ? 'bg-orange-100 text-orange-700' :
+                jc.active_query_priority === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                'bg-gray-100 text-gray-600'
+              }`}>{jc.active_query_priority || 'medium'}</span>
             </div>
-            <p className="text-sm text-amber-700 mt-1">
-              <Link to={`/customer-queries/${jc.active_query_id}`}
-                className="font-bold text-amber-900 hover:underline">{jc.active_query_no}</Link>
-              {' — '}{jc.active_query_subject}
-            </p>
-            <div className="text-xs text-amber-600 mt-1 flex items-center gap-3">
-              {jc.active_query_dept && <span>Assigned to: <span className="font-semibold capitalize">{jc.active_query_dept}</span></span>}
-              {jc.active_query_priority && (
-                <span className={`font-semibold uppercase ${
-                  jc.active_query_priority === 'critical' ? 'text-red-600' :
-                  jc.active_query_priority === 'high' ? 'text-orange-600' : ''
-                }`}>{jc.active_query_priority} priority</span>
-              )}
-              {jc.active_query_return_type && <span>Return: <span className="font-semibold capitalize">{jc.active_query_return_type === 'debit_note' ? 'Debit Note' : jc.active_query_return_type}</span></span>}
-            </div>
+            <Link to={`/customer-queries/${jc.active_query_id}`}
+              className="btn-secondary btn-sm text-xs">View Full Query →</Link>
           </div>
-          <Link to={`/customer-queries/${jc.active_query_id}`}
-            className="btn-secondary btn-sm text-xs flex-shrink-0">View Query →</Link>
+          <div className="p-5">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              <div>
+                <dt className="text-xs text-amber-600 font-medium uppercase">Query No</dt>
+                <dd className="text-sm font-bold text-amber-900 mt-0.5">
+                  <Link to={`/customer-queries/${jc.active_query_id}`} className="hover:underline">{jc.active_query_no}</Link>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-amber-600 font-medium uppercase">Job Card</dt>
+                <dd className="text-sm font-semibold text-gray-900 mt-0.5">{jc.job_card_no}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-amber-600 font-medium uppercase">Order</dt>
+                <dd className="text-sm font-semibold text-gray-900 mt-0.5">
+                  <Link to={`/orders/${jc.order_id}`} className="text-brand-600 hover:underline">{jc.order_code}</Link>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-amber-600 font-medium uppercase">Customer</dt>
+                <dd className="text-sm font-semibold text-gray-900 mt-0.5">{jc.customer_code}</dd>
+              </div>
+              {jc.active_query_category && (
+                <div>
+                  <dt className="text-xs text-amber-600 font-medium uppercase">Category</dt>
+                  <dd className="text-sm text-gray-800 mt-0.5 capitalize">{jc.active_query_category}</dd>
+                </div>
+              )}
+              <div>
+                <dt className="text-xs text-amber-600 font-medium uppercase">Assigned Dept</dt>
+                <dd className="text-sm font-semibold text-gray-800 mt-0.5 capitalize">{jc.active_query_dept || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-amber-600 font-medium uppercase">Status</dt>
+                <dd className="text-sm text-gray-800 mt-0.5 capitalize">{(jc.active_query_status || '').replace(/_/g, ' ')}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-amber-600 font-medium uppercase">Raised On</dt>
+                <dd className="text-sm text-gray-800 mt-0.5">{fmtDateTime(jc.active_query_created_at)}</dd>
+              </div>
+              {jc.active_query_created_by_name && (
+                <div>
+                  <dt className="text-xs text-amber-600 font-medium uppercase">Raised By</dt>
+                  <dd className="text-sm text-gray-800 mt-0.5">{jc.active_query_created_by_name}</dd>
+                </div>
+              )}
+              {jc.product_name && (
+                <div>
+                  <dt className="text-xs text-amber-600 font-medium uppercase">Product</dt>
+                  <dd className="text-sm text-gray-800 mt-0.5">{jc.product_name}</dd>
+                </div>
+              )}
+              <div>
+                <dt className="text-xs text-amber-600 font-medium uppercase">Qty</dt>
+                <dd className="text-sm text-gray-800 mt-0.5">{jc.qty} Nos</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-amber-600 font-medium uppercase">Dispatch Date</dt>
+                <dd className="text-sm text-gray-800 mt-0.5">{fmtDate(jc.dispatch_date)}</dd>
+              </div>
+            </div>
+            <div className="mb-3">
+              <dt className="text-xs text-amber-600 font-medium uppercase mb-1">Subject</dt>
+              <dd className="text-sm font-semibold text-gray-900">{jc.active_query_subject}</dd>
+            </div>
+            {jc.active_query_description && (
+              <div className="mb-3">
+                <dt className="text-xs text-amber-600 font-medium uppercase mb-1">Description</dt>
+                <dd className="text-sm text-gray-700 bg-amber-100/40 rounded-lg p-3">{jc.active_query_description}</dd>
+              </div>
+            )}
+            {(jc.active_query_return_type || jc.active_query_return_coupon_no || jc.active_query_debit_note_no) && (
+              <div className="flex flex-wrap gap-4 pt-3 border-t border-amber-200">
+                {jc.active_query_return_type && (
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium uppercase">Return Type</dt>
+                    <dd className="text-sm font-semibold text-gray-800 mt-0.5 capitalize">{jc.active_query_return_type === 'debit_note' ? 'Debit Note' : jc.active_query_return_type}</dd>
+                  </div>
+                )}
+                {jc.active_query_return_status && (
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium uppercase">Return Status</dt>
+                    <dd className="text-sm text-gray-800 mt-0.5 capitalize">{jc.active_query_return_status.replace(/_/g, ' ')}</dd>
+                  </div>
+                )}
+                {jc.active_query_return_coupon_no && (
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium uppercase">Coupon No</dt>
+                    <dd className="text-sm font-semibold text-gray-800 mt-0.5">{jc.active_query_return_coupon_no}</dd>
+                  </div>
+                )}
+                {jc.active_query_debit_note_no && (
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium uppercase">Debit Note No</dt>
+                    <dd className="text-sm font-semibold text-gray-800 mt-0.5">{jc.active_query_debit_note_no}</dd>
+                  </div>
+                )}
+              </div>
+            )}
+            {(jc.active_query_message_count > 0 || jc.active_query_photo_count > 0) && (
+              <div className="flex gap-4 mt-3 pt-3 border-t border-amber-200 text-xs text-amber-700">
+                {jc.active_query_message_count > 0 && <span>{jc.active_query_message_count} message{jc.active_query_message_count > 1 ? 's' : ''}</span>}
+                {jc.active_query_photo_count > 0 && <span>{jc.active_query_photo_count} photo{jc.active_query_photo_count > 1 ? 's' : ''}</span>}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Query Resolved Banner */}
+      {/* Query Resolved Banner — Full Details */}
       {jc.status === 'resolved_dispatched' && jc.resolved_query_no && (
-        <div className="mb-5 bg-green-50 border border-green-300 rounded-xl p-4 flex items-start gap-3">
-          <CheckCircle size={20} className="text-green-600 flex-shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <div className="font-semibold text-green-800">Query Resolved</div>
-            <p className="text-sm text-green-700 mt-0.5">
-              <Link to={`/customer-queries/${jc.resolved_query_id}`}
-                className="font-bold text-green-900 hover:underline">{jc.resolved_query_no}</Link>
-              {' — '}{jc.resolved_query_subject}
-            </p>
+        <div className="mb-5 bg-green-50 border border-green-300 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 bg-green-100/60 border-b border-green-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCircle size={16} className="text-green-700" />
+              <span className="font-bold text-green-900">Query Resolved</span>
+            </div>
+            <Link to={`/customer-queries/${jc.resolved_query_id}`}
+              className="btn-secondary btn-sm text-xs">View Full Query →</Link>
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              <div>
+                <dt className="text-xs text-green-600 font-medium uppercase">Query No</dt>
+                <dd className="text-sm font-bold text-green-900 mt-0.5">
+                  <Link to={`/customer-queries/${jc.resolved_query_id}`} className="hover:underline">{jc.resolved_query_no}</Link>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-green-600 font-medium uppercase">Job Card</dt>
+                <dd className="text-sm font-semibold text-gray-900 mt-0.5">{jc.job_card_no}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-green-600 font-medium uppercase">Order</dt>
+                <dd className="text-sm font-semibold text-gray-900 mt-0.5">
+                  <Link to={`/orders/${jc.order_id}`} className="text-brand-600 hover:underline">{jc.order_code}</Link>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-green-600 font-medium uppercase">Customer</dt>
+                <dd className="text-sm font-semibold text-gray-900 mt-0.5">{jc.customer_code}</dd>
+              </div>
+              {jc.resolved_query_category && (
+                <div>
+                  <dt className="text-xs text-green-600 font-medium uppercase">Category</dt>
+                  <dd className="text-sm text-gray-800 mt-0.5 capitalize">{jc.resolved_query_category}</dd>
+                </div>
+              )}
+              {jc.resolved_query_dept && (
+                <div>
+                  <dt className="text-xs text-green-600 font-medium uppercase">Assigned Dept</dt>
+                  <dd className="text-sm text-gray-800 mt-0.5 capitalize">{jc.resolved_query_dept}</dd>
+                </div>
+              )}
+              <div>
+                <dt className="text-xs text-green-600 font-medium uppercase">Raised On</dt>
+                <dd className="text-sm text-gray-800 mt-0.5">{fmtDateTime(jc.resolved_query_created_at)}</dd>
+              </div>
+              {jc.resolved_query_created_by_name && (
+                <div>
+                  <dt className="text-xs text-green-600 font-medium uppercase">Raised By</dt>
+                  <dd className="text-sm text-gray-800 mt-0.5">{jc.resolved_query_created_by_name}</dd>
+                </div>
+              )}
+              <div>
+                <dt className="text-xs text-green-600 font-medium uppercase">Resolved On</dt>
+                <dd className="text-sm text-gray-800 mt-0.5">{fmtDateTime(jc.resolved_query_resolved_at)}</dd>
+              </div>
+              {jc.resolved_query_resolved_by_name && (
+                <div>
+                  <dt className="text-xs text-green-600 font-medium uppercase">Resolved By</dt>
+                  <dd className="text-sm text-gray-800 mt-0.5">{jc.resolved_query_resolved_by_name}</dd>
+                </div>
+              )}
+              {jc.product_name && (
+                <div>
+                  <dt className="text-xs text-green-600 font-medium uppercase">Product</dt>
+                  <dd className="text-sm text-gray-800 mt-0.5">{jc.product_name}</dd>
+                </div>
+              )}
+              <div>
+                <dt className="text-xs text-green-600 font-medium uppercase">Qty</dt>
+                <dd className="text-sm text-gray-800 mt-0.5">{jc.qty} Nos</dd>
+              </div>
+            </div>
+            <div className="mb-3">
+              <dt className="text-xs text-green-600 font-medium uppercase mb-1">Subject</dt>
+              <dd className="text-sm font-semibold text-gray-900">{jc.resolved_query_subject}</dd>
+            </div>
+            {jc.resolved_query_description && (
+              <div className="mb-3">
+                <dt className="text-xs text-green-600 font-medium uppercase mb-1">Description</dt>
+                <dd className="text-sm text-gray-700 bg-green-100/40 rounded-lg p-3">{jc.resolved_query_description}</dd>
+              </div>
+            )}
             {jc.resolved_query_summary && (
-              <p className="text-xs text-green-600 mt-1">Resolution: {jc.resolved_query_summary}</p>
+              <div className="mb-3">
+                <dt className="text-xs text-green-600 font-medium uppercase mb-1">Resolution Summary</dt>
+                <dd className="text-sm text-gray-700 bg-green-100/40 rounded-lg p-3">{jc.resolved_query_summary}</dd>
+              </div>
+            )}
+            {(jc.resolved_query_return_type || jc.resolved_query_return_coupon_no || jc.resolved_query_debit_note_no) && (
+              <div className="flex flex-wrap gap-4 pt-3 border-t border-green-200">
+                {jc.resolved_query_return_type && (
+                  <div>
+                    <dt className="text-xs text-green-600 font-medium uppercase">Return Type</dt>
+                    <dd className="text-sm font-semibold text-gray-800 mt-0.5 capitalize">{jc.resolved_query_return_type === 'debit_note' ? 'Debit Note' : jc.resolved_query_return_type}</dd>
+                  </div>
+                )}
+                {jc.resolved_query_return_coupon_no && (
+                  <div>
+                    <dt className="text-xs text-green-600 font-medium uppercase">Coupon No</dt>
+                    <dd className="text-sm font-semibold text-gray-800 mt-0.5">{jc.resolved_query_return_coupon_no}</dd>
+                  </div>
+                )}
+                {jc.resolved_query_debit_note_no && (
+                  <div>
+                    <dt className="text-xs text-green-600 font-medium uppercase">Debit Note No</dt>
+                    <dd className="text-sm font-semibold text-gray-800 mt-0.5">{jc.resolved_query_debit_note_no}</dd>
+                  </div>
+                )}
+              </div>
+            )}
+            {(jc.resolved_query_message_count > 0 || jc.resolved_query_photo_count > 0) && (
+              <div className="flex gap-4 mt-3 pt-3 border-t border-green-200 text-xs text-green-700">
+                {jc.resolved_query_message_count > 0 && <span>{jc.resolved_query_message_count} message{jc.resolved_query_message_count > 1 ? 's' : ''}</span>}
+                {jc.resolved_query_photo_count > 0 && <span>{jc.resolved_query_photo_count} photo{jc.resolved_query_photo_count > 1 ? 's' : ''}</span>}
+              </div>
             )}
           </div>
         </div>

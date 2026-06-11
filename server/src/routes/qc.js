@@ -39,8 +39,15 @@ router.get('/', authenticate, authorize('design', 'owner', 'admin'), async (req,
        COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0) as total_remade,
        cq_return.query_no as return_query_no,
        cq_return.id as return_query_id,
+       cq_return.subject as return_query_subject,
+       cq_return.description as return_query_description,
+       cq_return.category as return_query_category,
+       cq_return.priority as return_query_priority,
        cq_return.return_type as return_query_type,
-       cq_return.return_coupon_no as return_coupon_no
+       cq_return.return_status as return_query_return_status,
+       cq_return.return_coupon_no as return_coupon_no,
+       cq_return.debit_note_no as return_debit_note_no,
+       cq_return.created_at as return_query_created_at
      FROM job_cards jc
      JOIN orders o ON jc.order_id = o.id
      JOIN customers c ON o.customer_id = c.id

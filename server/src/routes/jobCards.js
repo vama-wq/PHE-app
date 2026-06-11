@@ -29,11 +29,16 @@ router.get('/', authenticate, async (req, res) => {
       cq_active.id as active_query_id,
       cq_active.query_no as active_query_no,
       cq_active.subject as active_query_subject,
+      cq_active.description as active_query_description,
+      cq_active.category as active_query_category,
       cq_active.assigned_department as active_query_dept,
       cq_active.status as active_query_status,
       cq_active.priority as active_query_priority,
       cq_active.return_type as active_query_return_type,
-      cq_active.return_status as active_query_return_status
+      cq_active.return_status as active_query_return_status,
+      cq_active.return_coupon_no as active_query_return_coupon_no,
+      cq_active.debit_note_no as active_query_debit_note_no,
+      cq_active.created_at as active_query_created_at
     FROM job_cards jc
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
@@ -112,36 +117,71 @@ router.get('/:id', authenticate, async (req, res) => {
 
   if (!jc) return res.status(404).json({ error: 'Job card not found' });
 
-  // Active customer query for this job card
+  // Active customer query for this job card (full details)
   const activeQuery = await db.get(`
-    SELECT id, query_no, subject, assigned_department, status, priority, return_type, return_status
-    FROM customer_queries
-    WHERE job_card_id = $1 AND status IN ('open','in_progress','product_return')
-    ORDER BY created_at DESC LIMIT 1
+    SELECT cq.id, cq.query_no, cq.subject, cq.description, cq.category,
+      cq.assigned_department, cq.status, cq.priority,
+      cq.return_type, cq.return_status, cq.return_coupon_no, cq.debit_note_no,
+      cq.created_at, u_created.name as created_by_name,
+      (SELECT COUNT(*) FROM customer_query_messages WHERE query_id = cq.id) as message_count,
+      (SELECT COUNT(*) FROM customer_query_photos WHERE query_id = cq.id) as photo_count
+    FROM customer_queries cq
+    LEFT JOIN users u_created ON cq.created_by = u_created.id
+    WHERE cq.job_card_id = $1 AND cq.status IN ('open','in_progress','product_return')
+    ORDER BY cq.created_at DESC LIMIT 1
   `, [req.params.id]);
   if (activeQuery) {
     jc.active_query_id = activeQuery.id;
     jc.active_query_no = activeQuery.query_no;
     jc.active_query_subject = activeQuery.subject;
+    jc.active_query_description = activeQuery.description;
+    jc.active_query_category = activeQuery.category;
     jc.active_query_dept = activeQuery.assigned_department;
     jc.active_query_status = activeQuery.status;
     jc.active_query_priority = activeQuery.priority;
     jc.active_query_return_type = activeQuery.return_type;
     jc.active_query_return_status = activeQuery.return_status;
+    jc.active_query_return_coupon_no = activeQuery.return_coupon_no;
+    jc.active_query_debit_note_no = activeQuery.debit_note_no;
+    jc.active_query_created_at = activeQuery.created_at;
+    jc.active_query_created_by_name = activeQuery.created_by_name;
+    jc.active_query_message_count = activeQuery.message_count;
+    jc.active_query_photo_count = activeQuery.photo_count;
   }
 
   // Also check for recently resolved queries (to show "Query Resolved" info)
   const resolvedQuery = await db.get(`
-    SELECT id, query_no, subject, resolution_summary, resolved_at
-    FROM customer_queries
-    WHERE job_card_id = $1 AND status = 'resolved'
-    ORDER BY resolved_at DESC LIMIT 1
+    SELECT cq.id, cq.query_no, cq.subject, cq.description, cq.category,
+      cq.assigned_department, cq.priority,
+      cq.return_type, cq.return_coupon_no, cq.debit_note_no,
+      cq.resolution_summary, cq.resolved_at, cq.created_at,
+      u_resolved.name as resolved_by_name, u_created.name as created_by_name,
+      (SELECT COUNT(*) FROM customer_query_messages WHERE query_id = cq.id) as message_count,
+      (SELECT COUNT(*) FROM customer_query_photos WHERE query_id = cq.id) as photo_count
+    FROM customer_queries cq
+    LEFT JOIN users u_resolved ON cq.resolved_by = u_resolved.id
+    LEFT JOIN users u_created ON cq.created_by = u_created.id
+    WHERE cq.job_card_id = $1 AND cq.status = 'resolved'
+    ORDER BY cq.resolved_at DESC LIMIT 1
   `, [req.params.id]);
   if (resolvedQuery) {
     jc.resolved_query_id = resolvedQuery.id;
     jc.resolved_query_no = resolvedQuery.query_no;
     jc.resolved_query_subject = resolvedQuery.subject;
+    jc.resolved_query_description = resolvedQuery.description;
+    jc.resolved_query_category = resolvedQuery.category;
+    jc.resolved_query_dept = resolvedQuery.assigned_department;
+    jc.resolved_query_priority = resolvedQuery.priority;
+    jc.resolved_query_return_type = resolvedQuery.return_type;
+    jc.resolved_query_return_coupon_no = resolvedQuery.return_coupon_no;
+    jc.resolved_query_debit_note_no = resolvedQuery.debit_note_no;
     jc.resolved_query_summary = resolvedQuery.resolution_summary;
+    jc.resolved_query_resolved_at = resolvedQuery.resolved_at;
+    jc.resolved_query_created_at = resolvedQuery.created_at;
+    jc.resolved_query_resolved_by_name = resolvedQuery.resolved_by_name;
+    jc.resolved_query_created_by_name = resolvedQuery.created_by_name;
+    jc.resolved_query_message_count = resolvedQuery.message_count;
+    jc.resolved_query_photo_count = resolvedQuery.photo_count;
   }
 
   jc.daily_reports = await db.all(`

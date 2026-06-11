@@ -129,23 +129,100 @@ export default function QCDashboard() {
               <div key={jc.id} className={`card border-l-4 ${
                 isOverdue ? 'border-l-red-500' : isUrgent ? 'border-l-orange-400' : 'border-l-purple-400'
               }`}>
-                {/* Customer Query Return Warning */}
+                {/* Customer Query Return Warning — Detailed */}
                 {jc.return_query_no && (
                   <div className="px-5 pt-4 pb-0">
-                    <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 flex items-start gap-2.5">
-                      <RotateCcw size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
-                      <div>
-                        <div className="text-sm font-semibold text-amber-800 flex items-center gap-1.5">
-                          <AlertTriangle size={13} /> Returned Product — Customer Query
+                    <div className="bg-amber-50 border border-amber-300 rounded-xl overflow-hidden">
+                      <div className="px-4 py-2 bg-amber-100/60 border-b border-amber-200 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <RotateCcw size={14} className="text-amber-700" />
+                          <span className="text-sm font-bold text-amber-900">Returned Product — Customer Query</span>
+                          {jc.return_query_priority && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold uppercase ${
+                              jc.return_query_priority === 'critical' ? 'bg-red-100 text-red-700' :
+                              jc.return_query_priority === 'high' ? 'bg-orange-100 text-orange-700' :
+                              'bg-yellow-100 text-yellow-700'
+                            }`}>{jc.return_query_priority}</span>
+                          )}
                         </div>
-                        <p className="text-xs text-amber-700 mt-0.5">
-                          This item was returned due to customer query{' '}
-                          <Link to={`/customer-queries/${jc.return_query_id}`}
-                            className="font-bold text-amber-900 hover:underline">{jc.return_query_no}</Link>.
-                          {jc.return_query_type === 'debit_note' && ' Debit note return — inspect and submit QC result.'}
-                          {jc.return_query_type === 'repair' && ' Repair return — product needs re-inspection.'}
-                          {jc.return_coupon_no && <span className="ml-1">Coupon: <strong>{jc.return_coupon_no}</strong></span>}
-                        </p>
+                        <Link to={`/customer-queries/${jc.return_query_id}`}
+                          className="text-xs text-amber-800 font-medium hover:underline">View Query →</Link>
+                      </div>
+                      <div className="p-4">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                          <div>
+                            <dt className="text-xs text-amber-600 font-medium">Query No</dt>
+                            <dd className="text-sm font-bold text-amber-900">{jc.return_query_no}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-xs text-amber-600 font-medium">Job Card</dt>
+                            <dd className="text-sm font-semibold text-gray-900">{jc.job_card_no}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-xs text-amber-600 font-medium">Order</dt>
+                            <dd className="text-sm font-semibold text-gray-900">
+                              <Link to={`/orders/${jc.order_id}`} className="text-brand-600 hover:underline">{jc.order_code}</Link>
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-xs text-amber-600 font-medium">Customer</dt>
+                            <dd className="text-sm font-semibold text-gray-900">{jc.customer_code}</dd>
+                          </div>
+                          {jc.return_query_category && (
+                            <div>
+                              <dt className="text-xs text-amber-600 font-medium">Category</dt>
+                              <dd className="text-sm text-gray-800 capitalize">{jc.return_query_category}</dd>
+                            </div>
+                          )}
+                          <div>
+                            <dt className="text-xs text-amber-600 font-medium">Return Type</dt>
+                            <dd className="text-sm font-semibold text-gray-800 capitalize">
+                              {jc.return_query_type === 'debit_note' ? 'Debit Note' : jc.return_query_type || '—'}
+                            </dd>
+                          </div>
+                          {jc.return_query_return_status && (
+                            <div>
+                              <dt className="text-xs text-amber-600 font-medium">Return Status</dt>
+                              <dd className="text-sm text-gray-800 capitalize">{jc.return_query_return_status.replace(/_/g, ' ')}</dd>
+                            </div>
+                          )}
+                          <div>
+                            <dt className="text-xs text-amber-600 font-medium">Qty</dt>
+                            <dd className="text-sm text-gray-800">{jc.qty} Nos</dd>
+                          </div>
+                        </div>
+                        {jc.return_query_subject && (
+                          <div className="mb-2">
+                            <dt className="text-xs text-amber-600 font-medium mb-0.5">Subject</dt>
+                            <dd className="text-sm font-semibold text-gray-900">{jc.return_query_subject}</dd>
+                          </div>
+                        )}
+                        {jc.return_query_description && (
+                          <div className="mb-2">
+                            <dt className="text-xs text-amber-600 font-medium mb-0.5">Description</dt>
+                            <dd className="text-xs text-gray-700 bg-amber-100/40 rounded p-2">{jc.return_query_description}</dd>
+                          </div>
+                        )}
+                        <div className="text-xs text-amber-700 bg-amber-100/60 rounded p-2 mt-2">
+                          {jc.return_query_type === 'debit_note' && 'Debit note return — inspect and submit QC result.'}
+                          {jc.return_query_type === 'repair' && 'Repair return — product needs re-inspection after repair.'}
+                          {!jc.return_query_type && 'Returned product — inspect and submit QC result.'}
+                        </div>
+                        {(jc.return_coupon_no || jc.return_debit_note_no) && (
+                          <div className="flex flex-wrap gap-3 pt-2 border-t border-amber-200 mt-2">
+                            {jc.return_coupon_no && (
+                              <span className="text-xs text-amber-800">Coupon No: <strong>{jc.return_coupon_no}</strong></span>
+                            )}
+                            {jc.return_debit_note_no && (
+                              <span className="text-xs text-amber-800">Debit Note No: <strong>{jc.return_debit_note_no}</strong></span>
+                            )}
+                          </div>
+                        )}
+                        {jc.return_query_created_at && (
+                          <div className="text-xs text-amber-600 mt-2 pt-2 border-t border-amber-200">
+                            Query raised on {fmtDateTime(jc.return_query_created_at)}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>

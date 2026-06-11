@@ -167,22 +167,87 @@ function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore }) {
           <div key={jc.id} className={`card p-5 border-l-4 ${
             jc.active_query_no ? 'border-l-amber-500' : isOnHold ? 'border-l-red-500' : isOverdue ? 'border-l-red-500' : isUrgent ? 'border-l-orange-400' : 'border-l-brand-400'
           }`}>
-            {/* Customer Query Warning */}
+            {/* Customer Query Warning — Detailed */}
             {jc.active_query_no && (
-              <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 mb-3 flex items-start gap-2.5">
-                <HelpCircle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <div className="text-sm font-semibold text-amber-800 flex items-center gap-1.5">
-                    <AlertTriangle size={13} /> Customer Query Raised
+              <div className="bg-amber-50 border border-amber-300 rounded-xl mb-3 overflow-hidden">
+                <div className="px-4 py-2 bg-amber-100/60 border-b border-amber-200 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle size={14} className="text-amber-700" />
+                    <span className="text-sm font-bold text-amber-900">Customer Query Raised</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold uppercase ${
+                      jc.active_query_priority === 'critical' ? 'bg-red-100 text-red-700' :
+                      jc.active_query_priority === 'high' ? 'bg-orange-100 text-orange-700' :
+                      'bg-yellow-100 text-yellow-700'
+                    }`}>{jc.active_query_priority || 'medium'}</span>
                   </div>
-                  <p className="text-xs text-amber-700 mt-0.5">
-                    <Link to={`/customer-queries/${jc.active_query_id}`}
-                      className="font-bold text-amber-900 hover:underline">{jc.active_query_no}</Link>
-                    {' — '}{jc.active_query_subject}
-                    {jc.active_query_dept && <span className="ml-1">· Assigned to <span className="font-semibold capitalize">{jc.active_query_dept}</span></span>}
-                    {jc.active_query_priority === 'critical' && <span className="ml-1 text-red-600 font-semibold">· CRITICAL</span>}
-                    {jc.active_query_priority === 'high' && <span className="ml-1 text-orange-600 font-semibold">· HIGH PRIORITY</span>}
-                  </p>
+                  <Link to={`/customer-queries/${jc.active_query_id}`}
+                    className="text-xs text-amber-800 font-medium hover:underline">View Query →</Link>
+                </div>
+                <div className="p-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                    <div>
+                      <dt className="text-xs text-amber-600 font-medium">Query No</dt>
+                      <dd className="text-sm font-bold text-amber-900">{jc.active_query_no}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-amber-600 font-medium">Job Card</dt>
+                      <dd className="text-sm font-semibold text-gray-900">{jc.job_card_no}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-amber-600 font-medium">Order</dt>
+                      <dd className="text-sm font-semibold text-gray-900">{jc.order_code}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-amber-600 font-medium">Customer</dt>
+                      <dd className="text-sm font-semibold text-gray-900">{jc.customer_code}</dd>
+                    </div>
+                    {jc.active_query_category && (
+                      <div>
+                        <dt className="text-xs text-amber-600 font-medium">Category</dt>
+                        <dd className="text-sm text-gray-800 capitalize">{jc.active_query_category}</dd>
+                      </div>
+                    )}
+                    <div>
+                      <dt className="text-xs text-amber-600 font-medium">Assigned Dept</dt>
+                      <dd className="text-sm font-semibold text-gray-800 capitalize">{jc.active_query_dept || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-amber-600 font-medium">Qty</dt>
+                      <dd className="text-sm text-gray-800">{jc.qty} Nos</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-amber-600 font-medium">Dispatch</dt>
+                      <dd className="text-sm text-gray-800">{fmtDate(jc.dispatch_date)}</dd>
+                    </div>
+                  </div>
+                  <div className="mb-2">
+                    <dt className="text-xs text-amber-600 font-medium mb-0.5">Subject</dt>
+                    <dd className="text-sm font-semibold text-gray-900">{jc.active_query_subject}</dd>
+                  </div>
+                  {jc.active_query_description && (
+                    <div className="mb-2">
+                      <dt className="text-xs text-amber-600 font-medium mb-0.5">Description</dt>
+                      <dd className="text-xs text-gray-700 bg-amber-100/40 rounded p-2">{jc.active_query_description}</dd>
+                    </div>
+                  )}
+                  {(jc.active_query_return_type || jc.active_query_return_coupon_no || jc.active_query_debit_note_no) && (
+                    <div className="flex flex-wrap gap-3 pt-2 border-t border-amber-200 mt-2">
+                      {jc.active_query_return_type && (
+                        <span className="text-xs text-amber-800">Return: <strong className="capitalize">{jc.active_query_return_type === 'debit_note' ? 'Debit Note' : jc.active_query_return_type}</strong></span>
+                      )}
+                      {jc.active_query_return_coupon_no && (
+                        <span className="text-xs text-amber-800">Coupon: <strong>{jc.active_query_return_coupon_no}</strong></span>
+                      )}
+                      {jc.active_query_debit_note_no && (
+                        <span className="text-xs text-amber-800">Debit Note: <strong>{jc.active_query_debit_note_no}</strong></span>
+                      )}
+                    </div>
+                  )}
+                  {jc.active_query_created_at && (
+                    <div className="text-xs text-amber-600 mt-2 pt-2 border-t border-amber-200">
+                      Raised on {fmtDateTime(jc.active_query_created_at)}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -335,10 +400,16 @@ function AllCardsTab({ cards, todayPickIds, canManage, onPick, onUnpick, onCheck
                     <div className="text-xs text-gray-400 mt-0.5">{stageLabel}</div>
                   )}
                   {jc.active_query_no && (
-                    <Link to={`/customer-queries/${jc.active_query_id}`}
-                      className="text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded mt-0.5 inline-flex items-center gap-1 hover:bg-amber-100">
-                      <HelpCircle size={10} /> {jc.active_query_no}
-                    </Link>
+                    <div className="mt-1">
+                      <Link to={`/customer-queries/${jc.active_query_id}`}
+                        className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg inline-flex items-center gap-1 hover:bg-amber-100">
+                        <AlertTriangle size={10} />
+                        <span className="font-semibold">{jc.active_query_no}</span>
+                        <span className="text-amber-600">·</span>
+                        <span className="truncate max-w-[120px]">{jc.active_query_subject}</span>
+                        {jc.active_query_priority === 'critical' && <span className="text-red-600 font-bold ml-0.5">!</span>}
+                      </Link>
+                    </div>
                   )}
                 </td>
                 {canManage && (
@@ -561,21 +632,87 @@ function ChecklistModal({ card, onClose, onSave }) {
         <div className="text-center py-12 text-gray-400">Loading checklist...</div>
       ) : view === 'list' ? (
         <>
-          {/* Customer Query banner */}
+          {/* Customer Query banner — Detailed */}
           {card.active_query_no && (
-            <div className="mb-4 rounded-xl bg-amber-50 border border-amber-300 p-4">
-              <div className="font-semibold text-amber-800 flex items-center gap-2">
-                <HelpCircle size={16} /> Customer Query Raised — {card.active_query_no}
-              </div>
-              <div className="text-sm text-amber-700 mt-1">
-                {card.active_query_subject}
-                {card.active_query_dept && (
-                  <span className="ml-1">· Assigned to <span className="font-semibold capitalize">{card.active_query_dept}</span></span>
-                )}
-              </div>
-              <div className="text-xs text-amber-600 mt-1">
+            <div className="mb-4 rounded-xl bg-amber-50 border border-amber-300 overflow-hidden">
+              <div className="px-4 py-2 bg-amber-100/60 border-b border-amber-200 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle size={14} className="text-amber-700" />
+                  <span className="text-sm font-bold text-amber-900">Customer Query Raised</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold uppercase ${
+                    card.active_query_priority === 'critical' ? 'bg-red-100 text-red-700' :
+                    card.active_query_priority === 'high' ? 'bg-orange-100 text-orange-700' :
+                    'bg-yellow-100 text-yellow-700'
+                  }`}>{card.active_query_priority || 'medium'}</span>
+                </div>
                 <Link to={`/customer-queries/${card.active_query_id}`}
-                  className="underline hover:text-amber-800">View Query Details →</Link>
+                  className="text-xs text-amber-800 font-medium hover:underline">View Query →</Link>
+              </div>
+              <div className="p-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium">Query No</dt>
+                    <dd className="text-sm font-bold text-amber-900">{card.active_query_no}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium">Job Card</dt>
+                    <dd className="text-sm font-semibold text-gray-900">{card.job_card_no}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium">Order</dt>
+                    <dd className="text-sm font-semibold text-gray-900">{card.order_code}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium">Customer</dt>
+                    <dd className="text-sm font-semibold text-gray-900">{card.customer_code}</dd>
+                  </div>
+                  {card.active_query_category && (
+                    <div>
+                      <dt className="text-xs text-amber-600 font-medium">Category</dt>
+                      <dd className="text-sm text-gray-800 capitalize">{card.active_query_category}</dd>
+                    </div>
+                  )}
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium">Assigned Dept</dt>
+                    <dd className="text-sm font-semibold text-gray-800 capitalize">{card.active_query_dept || '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium">Qty</dt>
+                    <dd className="text-sm text-gray-800">{card.qty} Nos</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-amber-600 font-medium">Dispatch</dt>
+                    <dd className="text-sm text-gray-800">{fmtDate(card.dispatch_date)}</dd>
+                  </div>
+                </div>
+                <div className="mb-2">
+                  <dt className="text-xs text-amber-600 font-medium mb-0.5">Subject</dt>
+                  <dd className="text-sm font-semibold text-gray-900">{card.active_query_subject}</dd>
+                </div>
+                {card.active_query_description && (
+                  <div className="mb-2">
+                    <dt className="text-xs text-amber-600 font-medium mb-0.5">Description</dt>
+                    <dd className="text-xs text-gray-700 bg-amber-100/40 rounded p-2">{card.active_query_description}</dd>
+                  </div>
+                )}
+                {(card.active_query_return_type || card.active_query_return_coupon_no || card.active_query_debit_note_no) && (
+                  <div className="flex flex-wrap gap-3 pt-2 border-t border-amber-200 mt-2">
+                    {card.active_query_return_type && (
+                      <span className="text-xs text-amber-800">Return: <strong className="capitalize">{card.active_query_return_type === 'debit_note' ? 'Debit Note' : card.active_query_return_type}</strong></span>
+                    )}
+                    {card.active_query_return_coupon_no && (
+                      <span className="text-xs text-amber-800">Coupon: <strong>{card.active_query_return_coupon_no}</strong></span>
+                    )}
+                    {card.active_query_debit_note_no && (
+                      <span className="text-xs text-amber-800">Debit Note: <strong>{card.active_query_debit_note_no}</strong></span>
+                    )}
+                  </div>
+                )}
+                {card.active_query_created_at && (
+                  <div className="text-xs text-amber-600 mt-2 pt-2 border-t border-amber-200">
+                    Raised on {fmtDateTime(card.active_query_created_at)}
+                  </div>
+                )}
               </div>
             </div>
           )}
