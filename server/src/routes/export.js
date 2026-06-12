@@ -6,8 +6,8 @@ const { authenticate, authorize, withCustomerVisibility } = require('../middlewa
 const STAGE_NAMES = {
   1:'Coil',2:'Coil + Tube Cutting',3:'Ohms',4:'Spot',5:'Tube Cutting',
   6:'Filling',7:'HV + Light Check (1)',8:'Draw',9:'HV + Light Check (2)',
-  10:'Straightening',11:'Trimming',12:'Spot Annealing + Buffing',
-  13:'Furnace Annealing',14:'Bending',15:'In Plating',16:'Plating Completed',
+  10:'Straightening',11:'Trimming',12:'Spot Annealing or Furnace Annealing',
+  13:'Buffing',14:'Bending',15:'In Plating',16:'Plating Completed',
   17:'Kharoch Process',18:'Overnight Oven',19:'HV + Light Check (3)',
   20:'Nipple Press',21:'3 Hours Oven',22:'Sealing',23:'HV + Light Check (4)',
   24:'Cleaning',25:'Nut Washer',26:'HV + Light Check (5)',
@@ -286,7 +286,7 @@ router.get('/dispatch-checklist', authenticate, authorize('owner', 'admin', 'acc
     stageMap[s.job_card_id][s.stage_no] = s;
   }
 
-  const STAGE_NOS_LIST = [1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29];
+  const STAGE_NOS_LIST = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29];
 
   // Sheet 1: Summary per job card
   const summaryData = cards.map(jc => ({

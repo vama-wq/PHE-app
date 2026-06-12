@@ -501,7 +501,7 @@ router.get('/:id/checklist', authenticate, async (req, res) => {
   );
 
   // Stage numbers in display order (no 13 — Furnace Annealing merged into 12)
-  const STAGE_NOS = [1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29];
+  const STAGE_NOS = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29];
   const map = {};
   rows.forEach(r => { map[r.stage_no] = r; });
   const stages = STAGE_NOS.map(n => map[n] || {

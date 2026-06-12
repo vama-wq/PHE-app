@@ -18,6 +18,7 @@ export const PRODUCTION_STAGES = [
   { no: 10, name: 'Straightening' },
   { no: 11, name: 'Trimming' },
   { no: 12, name: 'Spot Annealing or Furnace Annealing' },
+  { no: 13, name: 'Buffing',            optional: true },
   { no: 14, name: 'Bending',            heaterAdjust: true },
   { no: 15, name: 'Brazing',            optional: true, brazing: true },
   { no: 16, name: 'In Plating',          optional: true },
