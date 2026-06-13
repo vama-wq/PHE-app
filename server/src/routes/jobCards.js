@@ -228,6 +228,25 @@ router.get('/:id', authenticate, async (req, res) => {
     WHERE a.job_card_id = $1 ORDER BY a.created_at DESC
   `, [req.params.id]);
 
+  jc.production_reports = await db.all(`
+    SELECT pr.*, u.name as reported_by_name
+    FROM production_daily_reports pr LEFT JOIN users u ON pr.reported_by = u.id
+    WHERE pr.job_card_id = $1 ORDER BY pr.report_date DESC, pr.created_at DESC
+  `, [req.params.id]);
+
+  jc.package_photos = await db.all(`
+    SELECT p.*, u.name as uploaded_by_name
+    FROM package_photos p LEFT JOIN users u ON p.uploaded_by = u.id
+    WHERE p.job_card_id = $1 ORDER BY p.created_at DESC
+  `, [req.params.id]);
+
+  const qcReport = await db.get(`
+    SELECT q.*, u.name as created_by_name
+    FROM qc_reports q LEFT JOIN users u ON q.created_by = u.id
+    WHERE q.job_card_id = $1 ORDER BY q.created_at DESC LIMIT 1
+  `, [req.params.id]);
+  jc.qc_report = qcReport || null;
+
   res.json(jc);
 });
 

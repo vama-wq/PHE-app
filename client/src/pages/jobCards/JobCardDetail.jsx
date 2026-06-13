@@ -5,8 +5,8 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
-import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, getStageLabel } from '../../lib/utils';
-import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle } from 'lucide-react';
+import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES } from '../../lib/utils';
+import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle } from 'lucide-react';
 
 const JC_STATUSES = [
   'created','drawing_pending','drawing_done','inventory_check',
@@ -435,6 +435,8 @@ function OverviewTab({ jc }) {
   const [checklist, setChecklist] = useState(null);
   const [qcReports, setQcReports] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [expandedStage, setExpandedStage] = useState(null);
+  const [photoModal, setPhotoModal] = useState(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -449,25 +451,31 @@ function OverviewTab({ jc }) {
         setLoading(false);
       }
     };
-
     fetchData();
-    // Poll for updates every 10 seconds
     const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
   }, [jc.id]);
 
-  // Calculate production progress
   const stages = checklist?.stages || [];
   const completedStages = stages.filter(s => s.done).length;
   const progressPercent = stages.length > 0 ? Math.round((completedStages / stages.length) * 100) : 0;
-
-  // Get stage images
-  const stagePhotos = stages.filter(s => s.photo_file && s.done);
-
-  // Get dispatch and QC info
+  const stagePhotos = stages.filter(s => (s.photo_file || s.rejection_photo_file) && s.done);
   const dispatchStage = stages.find(s => s.stage_no === 29);
   const dispatchedQty = dispatchStage?.dispatched_qty || 0;
-  const remainingQty = (jc.qty || 0) - (checklist?.stages?.reduce((sum, s) => sum + (s.rejection_qty || 0), 0) || 0);
+  const totalRejections = stages.reduce((sum, s) => sum + (s.rejection_qty || 0), 0);
+  const remainingQty = (jc.qty || 0) - totalRejections;
+
+  const parseStageValue = (stageDef, sData) => {
+    if (!sData.value1 && !sData.value2) return null;
+    if (stageDef?.hvLight && sData.value1) {
+      try { const d = JSON.parse(sData.value1); return d; } catch { return { light: sData.value1 }; }
+    }
+    if (stageDef?.brazing && sData.value1) {
+      try { return JSON.parse(sData.value1); } catch { return null; }
+    }
+    if (stageDef?.heaterAdjust) return sData.value1 === 'adjusted' ? { adjusted: true } : null;
+    return { value1: sData.value1, value2: sData.value2 };
+  };
 
   return (
     <div className="space-y-5">
@@ -496,36 +504,216 @@ function OverviewTab({ jc }) {
       {/* Production Progress */}
       <div className="card p-5">
         <h2 className="section-title mb-4">Production Progress</h2>
-        <div className="space-y-4">
-          {/* Progress Bar */}
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-medium text-gray-700">Overall Progress</span>
-              <span className="text-sm font-semibold text-brand-600">{progressPercent}%</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-              <div className="bg-brand-500 h-full transition-all duration-300" style={{ width: `${progressPercent}%` }} />
-            </div>
-            <p className="text-xs text-gray-500 mt-2">{completedStages} of {stages.length} stages completed</p>
-          </div>
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-sm font-medium text-gray-700">Overall Progress</span>
+          <span className="text-sm font-semibold text-brand-600">{progressPercent}%</span>
+        </div>
+        <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden mb-1">
+          <div className="bg-brand-500 h-full transition-all duration-300" style={{ width: `${progressPercent}%` }} />
+        </div>
+        <p className="text-xs text-gray-500 mb-4">{completedStages} of {stages.length} stages completed</p>
 
-          {/* Stages Summary */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t border-gray-100">
-            <div className="p-3 bg-blue-50 rounded-lg">
-              <p className="text-xs text-gray-600 font-medium">In Progress</p>
-              <p className="text-lg font-bold text-blue-600">{stages.filter(s => !s.done).length}</p>
-            </div>
-            <div className="p-3 bg-green-50 rounded-lg">
-              <p className="text-xs text-gray-600 font-medium">Completed</p>
-              <p className="text-lg font-bold text-green-600">{completedStages}</p>
-            </div>
-            <div className="p-3 bg-orange-50 rounded-lg">
-              <p className="text-xs text-gray-600 font-medium">Total Rejections</p>
-              <p className="text-lg font-bold text-orange-600">{stages.reduce((sum, s) => sum + (s.rejection_qty || 0), 0)}</p>
-            </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+          <div className="p-3 bg-blue-50 rounded-lg">
+            <p className="text-xs text-gray-600 font-medium">In Progress</p>
+            <p className="text-lg font-bold text-blue-600">{stages.filter(s => !s.done).length}</p>
+          </div>
+          <div className="p-3 bg-green-50 rounded-lg">
+            <p className="text-xs text-gray-600 font-medium">Completed</p>
+            <p className="text-lg font-bold text-green-600">{completedStages}</p>
+          </div>
+          <div className="p-3 bg-orange-50 rounded-lg">
+            <p className="text-xs text-gray-600 font-medium">Total Rejections</p>
+            <p className="text-lg font-bold text-orange-600">{totalRejections}</p>
           </div>
         </div>
       </div>
+
+      {/* Full Production Checklist */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
+          <h2 className="section-title">Production Checklist</h2>
+        </div>
+        <div className="divide-y divide-gray-100">
+          {stages.map(s => {
+            const def = PRODUCTION_STAGES.find(d => d.no === s.stage_no);
+            const isDone = !!s.done;
+            const isExpanded = expandedStage === s.stage_no;
+            const hasDetails = s.worker_name || s.value1 || s.value2 || s.scrap_value || s.rejection_qty || s.photo_file || s.rejection_photo_file || s.notes;
+            const parsed = def ? parseStageValue(def, s) : null;
+
+            return (
+              <div key={s.stage_no}>
+                <button
+                  onClick={() => setExpandedStage(isExpanded ? null : s.stage_no)}
+                  className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-gray-50 transition-colors"
+                >
+                  {isDone
+                    ? <CheckCircle size={18} className="text-green-500 flex-shrink-0" />
+                    : <div className="w-[18px] h-[18px] rounded-full border-2 border-gray-300 flex-shrink-0" />
+                  }
+                  <span className="text-xs font-bold text-gray-400 w-6">{s.stage_no}</span>
+                  <span className={`flex-1 text-sm font-medium ${isDone ? 'text-gray-800' : 'text-gray-400'}`}>
+                    {def?.name || `Stage ${s.stage_no}`}
+                    {def?.optional && <span className="text-xs text-gray-400 ml-1">(Optional)</span>}
+                  </span>
+                  {s.rejection_qty > 0 && (
+                    <span className="text-xs px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-semibold">{s.rejection_qty} rej</span>
+                  )}
+                  {(s.photo_file || s.rejection_photo_file) && <Camera size={14} className="text-gray-400" />}
+                  {isDone && s.done_at && (
+                    <span className="text-xs text-gray-400 hidden md:inline">{fmtDate(s.done_at)}</span>
+                  )}
+                  {hasDetails
+                    ? (isExpanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />)
+                    : <div className="w-4" />
+                  }
+                </button>
+                {isExpanded && (
+                  <div className="px-5 pb-4 pt-1 ml-12 space-y-2 bg-gray-50/50">
+                    {s.worker_name && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">Worker:</span>
+                        <span className="text-gray-800">{s.worker_name}</span>
+                      </div>
+                    )}
+                    {isDone && s.done_at && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">Completed:</span>
+                        <span className="text-gray-800">{fmtDateTime(s.done_at)}</span>
+                      </div>
+                    )}
+                    {def?.hvLight && parsed && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">HV + Light:</span>
+                        <span className="text-gray-800">
+                          {parsed.hv && `HV: ${parsed.hv}`}{parsed.hv && parsed.light && ' · '}{parsed.light && `Light: ${parsed.light}`}
+                          {parsed.ir && ` · IR: ${parsed.ir}`}
+                        </span>
+                      </div>
+                    )}
+                    {def?.heaterAdjust && parsed?.adjusted && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">Adjustment:</span>
+                        <span className="text-green-700 font-medium">Adjusted</span>
+                      </div>
+                    )}
+                    {def?.brazing && parsed && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">Brazing:</span>
+                        <span className="text-gray-800">
+                          {parsed.brazing_type || '—'}
+                          {parsed.brazing_material && ` · ${parsed.brazing_material}`}
+                        </span>
+                      </div>
+                    )}
+                    {!def?.hvLight && !def?.heaterAdjust && !def?.brazing && (s.value1 || s.value2) && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">
+                          {def?.fields?.[0]?.label || 'Value'}:
+                        </span>
+                        <span className="text-gray-800">
+                          {s.value1}{s.value2 && ` · ${def?.fields?.[1]?.label || ''}: ${s.value2}`}
+                        </span>
+                      </div>
+                    )}
+                    {s.scrap_value && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">Scrap Value:</span>
+                        <span className="text-amber-700">{s.scrap_value}</span>
+                      </div>
+                    )}
+                    {s.rejection_qty > 0 && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">Rejected:</span>
+                        <span className="text-red-700 font-semibold">{s.rejection_qty} pcs</span>
+                        {s.remade_qty > 0 && <span className="text-green-700 ml-2">(Remade: {s.remade_qty})</span>}
+                      </div>
+                    )}
+                    {s.notes && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">Notes:</span>
+                        <span className="text-gray-700">{s.notes}</span>
+                      </div>
+                    )}
+                    {/* Stage Photos */}
+                    <div className="flex gap-3 mt-2">
+                      {s.photo_file && (
+                        <button onClick={() => setPhotoModal({ src: `/uploads/production-photos/${s.photo_file}`, label: `Stage ${s.stage_no} Photo` })}
+                          className="w-20 h-20 rounded-lg overflow-hidden border-2 border-green-200 hover:border-green-400 transition-colors cursor-pointer">
+                          <img src={`/uploads/production-photos/${s.photo_file}`} alt={`Stage ${s.stage_no}`}
+                            className="w-full h-full object-cover" onError={e => { e.target.parentElement.style.display = 'none'; }} />
+                        </button>
+                      )}
+                      {s.rejection_photo_file && (
+                        <button onClick={() => setPhotoModal({ src: `/uploads/rejection-photos/${s.rejection_photo_file}`, label: `Stage ${s.stage_no} Rejection` })}
+                          className="w-20 h-20 rounded-lg overflow-hidden border-2 border-red-200 hover:border-red-400 transition-colors cursor-pointer relative">
+                          <img src={`/uploads/rejection-photos/${s.rejection_photo_file}`} alt={`Stage ${s.stage_no} Rejection`}
+                            className="w-full h-full object-cover" onError={e => { e.target.parentElement.style.display = 'none'; }} />
+                          <span className="absolute bottom-0 left-0 right-0 bg-red-600 text-white text-[10px] text-center">Reject</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* All Photos Gallery */}
+      {stagePhotos.length > 0 && (
+        <div className="card p-5">
+          <h2 className="section-title mb-4">Production Photos ({stagePhotos.length})</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {stagePhotos.map(stage => {
+              const def = PRODUCTION_STAGES.find(d => d.no === stage.stage_no);
+              return (
+                <div key={`photo-${stage.stage_no}`} className="space-y-2">
+                  {stage.photo_file && (
+                    <button onClick={() => setPhotoModal({ src: `/uploads/production-photos/${stage.photo_file}`, label: `Stage ${stage.stage_no}: ${def?.name || ''}` })}
+                      className="relative group overflow-hidden rounded-lg bg-gray-200 w-full cursor-pointer">
+                      <img src={`/uploads/production-photos/${stage.photo_file}`} alt={`Stage ${stage.stage_no}`}
+                        className="w-full h-40 object-cover group-hover:scale-110 transition-transform duration-200"
+                        onError={e => { e.target.style.display = 'none'; }} />
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2">
+                        <span className="text-white text-xs font-semibold">Stage {stage.stage_no}: {def?.name || ''}</span>
+                      </div>
+                    </button>
+                  )}
+                  {stage.rejection_photo_file && (
+                    <button onClick={() => setPhotoModal({ src: `/uploads/rejection-photos/${stage.rejection_photo_file}`, label: `Stage ${stage.stage_no} Rejection` })}
+                      className="relative group overflow-hidden rounded-lg bg-gray-200 w-full cursor-pointer">
+                      <img src={`/uploads/rejection-photos/${stage.rejection_photo_file}`} alt={`Stage ${stage.stage_no} Rejection`}
+                        className="w-full h-40 object-cover group-hover:scale-110 transition-transform duration-200"
+                        onError={e => { e.target.style.display = 'none'; }} />
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-red-600/80 to-transparent p-2">
+                        <span className="text-white text-xs font-semibold">Stage {stage.stage_no}: Rejection Photo</span>
+                      </div>
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Photo Lightbox Modal */}
+      {photoModal && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => setPhotoModal(null)}>
+          <div className="relative max-w-4xl max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setPhotoModal(null)}
+              className="absolute -top-3 -right-3 w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg z-10">
+              <XCircle size={20} className="text-gray-600" />
+            </button>
+            <img src={photoModal.src} alt={photoModal.label}
+              className="max-w-full max-h-[85vh] object-contain rounded-lg" />
+            <div className="text-center mt-2 text-white text-sm font-medium">{photoModal.label}</div>
+          </div>
+        </div>
+      )}
 
       {/* Dispatch Summary */}
       <div className="card p-5">
@@ -534,61 +722,25 @@ function OverviewTab({ jc }) {
           <div className="p-4 border border-gray-200 rounded-lg">
             <p className="text-xs text-gray-600 font-medium mb-1">Qty Ordered</p>
             <p className="text-2xl font-bold text-gray-900">{jc.qty}</p>
-            <p className="text-xs text-gray-500 mt-1">Total units</p>
           </div>
           <div className="p-4 border border-gray-200 rounded-lg">
-            <p className="text-xs text-gray-600 font-medium mb-1">Net Available (After Rejections)</p>
+            <p className="text-xs text-gray-600 font-medium mb-1">Net Available</p>
             <p className="text-2xl font-bold text-blue-600">{remainingQty}</p>
-            <p className="text-xs text-gray-500 mt-1">Ready for dispatch</p>
           </div>
           <div className="p-4 border border-gray-200 rounded-lg">
             <p className="text-xs text-gray-600 font-medium mb-1">Qty Dispatched</p>
             <p className="text-2xl font-bold text-green-600">{dispatchedQty}</p>
-            <p className="text-xs text-gray-500 mt-1">{remainingQty - dispatchedQty} remaining</p>
           </div>
         </div>
       </div>
 
-      {/* Stage Photos Gallery */}
-      {stagePhotos.length > 0 && (
-        <div className="card p-5">
-          <h2 className="section-title mb-4">Production Photos ({stagePhotos.length})</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {stagePhotos.map(stage => (
-              <a
-                key={stage.stage_no}
-                href={`/uploads/production-photos/${stage.photo_file}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="relative group overflow-hidden rounded-lg bg-gray-200"
-              >
-                <img
-                  src={`/uploads/production-photos/${stage.photo_file}`}
-                  alt={`Stage ${stage.stage_no}`}
-                  className="w-full h-40 object-cover group-hover:scale-110 transition-transform duration-200"
-                  onError={(e) => { e.target.style.display = 'none'; }}
-                />
-                <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all flex items-end p-2">
-                  <span className="text-white text-xs font-semibold opacity-0 group-hover:opacity-100">Stage {stage.stage_no}</span>
-                </div>
-              </a>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Job Card & Drawing Attachments */}
+      {/* Attachments */}
       <div className="card p-5">
         <h2 className="section-title mb-4">Attachments</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Job Card File */}
           {jc.file_name && (
-            <a
-              href={`/uploads/job-cards/${jc.file_name}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-4 border-2 border-blue-200 rounded-lg hover:bg-blue-50 transition-colors flex items-center gap-3"
-            >
+            <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+              className="p-4 border-2 border-blue-200 rounded-lg hover:bg-blue-50 transition-colors flex items-center gap-3">
               <FileText size={24} className="text-blue-600" />
               <div>
                 <p className="text-sm font-semibold text-gray-900">Job Card File</p>
@@ -596,15 +748,9 @@ function OverviewTab({ jc }) {
               </div>
             </a>
           )}
-
-          {/* Drawing File */}
           {jc.drawing_no && (
-            <a
-              href={`/uploads/drawings/${jc.drawing_no}.pdf`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-4 border-2 border-orange-200 rounded-lg hover:bg-orange-50 transition-colors flex items-center gap-3"
-            >
+            <a href={`/uploads/drawings/${jc.drawing_no}.pdf`} target="_blank" rel="noopener noreferrer"
+              className="p-4 border-2 border-orange-200 rounded-lg hover:bg-orange-50 transition-colors flex items-center gap-3">
               <Image size={24} className="text-orange-600" />
               <div>
                 <p className="text-sm font-semibold text-gray-900">Drawing</p>
@@ -626,23 +772,15 @@ function OverviewTab({ jc }) {
                   <div className="flex items-center gap-2 mb-1">
                     <span className={`text-xs px-2 py-1 rounded-full font-medium ${
                       report.result === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                    }`}>
-                      {report.result?.toUpperCase()}
-                    </span>
+                    }`}>{report.result?.toUpperCase()}</span>
                     <p className="text-xs text-gray-500">{fmtDateTime(report.created_at)}</p>
                   </div>
                   {report.observations && <p className="text-sm text-gray-700">{report.observations}</p>}
                   {report.product_weight && <p className="text-xs text-gray-600 mt-1">Weight: {report.product_weight}g</p>}
                 </div>
                 {report.file_name && (
-                  <a
-                    href={`/uploads/qc-reports/${report.file_name}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ml-4 px-3 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
-                  >
-                    Download
-                  </a>
+                  <a href={`/uploads/qc-reports/${report.file_name}`} target="_blank" rel="noopener noreferrer"
+                    className="ml-4 px-3 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Download</a>
                 )}
               </div>
             ))}
@@ -902,6 +1040,7 @@ function QCTab({ jc, canAdd, onAdd }) {
 function DispatchTab({ jc, userRole, onReload }) {
   const [dispatch, setDispatch] = useState({ shipping_carrier: '', tracking_number: '', dispatch_date: new Date().toISOString().split('T')[0] });
   const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(null);
   const canDispatch = ['accounts', 'owner'].includes(userRole);
 
   const qtyOrdered = parseInt(jc.qty, 10) || 0;
@@ -912,6 +1051,12 @@ function DispatchTab({ jc, userRole, onReload }) {
   const qcRoute = jc.qc_route;
 
   const dispatchedDoc = jc.dispatch_docs?.find(d => d.shipping_carrier || d.tracking_number);
+
+  const copyToClipboard = (text, label) => {
+    navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 2000);
+  };
 
   const handleDownload = () => {
     const rows = [
@@ -1050,13 +1195,27 @@ function DispatchTab({ jc, userRole, onReload }) {
             {dispatchedDoc.shipping_carrier && (
               <div>
                 <div className="text-xs text-gray-500 uppercase font-medium">Carrier</div>
-                <div className="text-sm text-gray-800 mt-0.5">{dispatchedDoc.shipping_carrier}</div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-sm text-gray-800">{dispatchedDoc.shipping_carrier}</span>
+                  <button onClick={() => copyToClipboard(dispatchedDoc.shipping_carrier, 'carrier')}
+                    className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600" title="Copy">
+                    <Copy size={13} />
+                  </button>
+                  {copied === 'carrier' && <span className="text-xs text-green-600">Copied</span>}
+                </div>
               </div>
             )}
             {dispatchedDoc.tracking_number && (
               <div>
                 <div className="text-xs text-gray-500 uppercase font-medium">Tracking Number</div>
-                <div className="text-sm text-gray-800 mt-0.5">{dispatchedDoc.tracking_number}</div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-sm text-gray-800 font-mono">{dispatchedDoc.tracking_number}</span>
+                  <button onClick={() => copyToClipboard(dispatchedDoc.tracking_number, 'tracking')}
+                    className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600" title="Copy">
+                    <Copy size={13} />
+                  </button>
+                  {copied === 'tracking' && <span className="text-xs text-green-600">Copied</span>}
+                </div>
               </div>
             )}
             {dispatchedDoc.dispatch_date && (
@@ -1087,12 +1246,14 @@ function DispatchTab({ jc, userRole, onReload }) {
                 <FileText size={18} className="text-brand-500 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium capitalize">{d.doc_type?.replace(/_/g, ' ') || 'Document'}</div>
+                  {d.shipping_carrier && <div className="text-xs text-gray-500">Carrier: {d.shipping_carrier}</div>}
+                  {d.tracking_number && <div className="text-xs text-gray-500">Tracking: {d.tracking_number}</div>}
                   <div className="text-xs text-gray-400">{d.created_by_name} · {fmtDate(d.created_at)}</div>
                 </div>
                 {d.file_name && (
                   <a href={`/uploads/dispatch/${d.file_name}`} target="_blank" rel="noopener noreferrer"
-                    className="btn-ghost btn-sm text-brand-600">
-                    <Download size={14} /> View
+                    className="btn-ghost btn-sm text-brand-600" download>
+                    <Download size={14} /> Download
                   </a>
                 )}
               </div>
