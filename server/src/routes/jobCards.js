@@ -224,7 +224,7 @@ router.get('/:id', authenticate, async (req, res) => {
 
   jc.activity = await db.all(`
     SELECT a.*, u.name as user_name
-    FROM activity_log a LEFT JOIN users u ON a.user_id = u.id
+    FROM activity_log a LEFT JOIN users u ON a.created_by = u.id
     WHERE a.job_card_id = $1 ORDER BY a.created_at DESC
   `, [req.params.id]);
 
