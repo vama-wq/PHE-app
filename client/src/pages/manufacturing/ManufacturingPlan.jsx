@@ -120,7 +120,7 @@ export default function ManufacturingPlan() {
   useEffect(() => {
     api.get('/manufacturing/planning-data')
       .then(r => setData(r.data))
-      .catch(err => setError(err.response?.data?.error || err.message || 'Unknown error'))
+      .catch(err => setError(`${err.response?.status || ''} ${err.response?.data?.error || err.message || 'Unknown error'}`))
       .finally(() => setLoading(false));
   }, []);
 

@@ -17,17 +17,19 @@ router.get('/planning-data', authenticate, authorize('owner', 'production'), asy
       ORDER BY jc.dispatch_date ASC
     `);
 
-    const cardIds = cards.map(c => c.id);
-    if (cardIds.length === 0) return res.json({ cards: [], stages: [] });
+    if (cards.length === 0) return res.json({ cards: [], stages: [] });
 
-    const placeholders = cardIds.map((_, i) => `$${i + 1}`).join(',');
+    // Fetch all checklist stages for active cards in one query using a subquery
     const stages = await db.all(`
-      SELECT job_card_id, stage_no, done, done_at, worker_name,
-        rejection_qty, remade_qty
-      FROM production_checklist
-      WHERE job_card_id IN (${placeholders})
-      ORDER BY job_card_id, stage_no
-    `, cardIds);
+      SELECT pc.job_card_id, pc.stage_no, pc.done, pc.done_at, pc.worker_name,
+        pc.rejection_qty, pc.remade_qty
+      FROM production_checklist pc
+      WHERE pc.job_card_id IN (
+        SELECT jc.id FROM job_cards jc
+        WHERE jc.status NOT IN ('dispatched', 'resolved_dispatched')
+      )
+      ORDER BY pc.job_card_id, pc.stage_no
+    `);
 
     res.json({ cards, stages });
   } catch (err) {
