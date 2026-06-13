@@ -505,10 +505,42 @@ router.put('/:id/reject', authenticate, authorize('owner'), async (req, res) => 
   res.json({ message: 'Order rejected' });
 });
 
-router.put('/:id', authenticate, authorize('admin', 'owner'), async (req, res) => {
-  const { notes } = req.body;
-  await getDB().run('UPDATE orders SET notes=$1 WHERE id=$2', [notes||null, req.params.id]);
+router.put('/:id', authenticate, authorize('admin', 'owner', 'accounts'), async (req, res) => {
+  const db = getDB();
+  const order = await db.get('SELECT status FROM orders WHERE id=$1', [req.params.id]);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  if (order.status === 'rejected') {
+    const { dispatch_date, notes, order_type } = req.body;
+    const sets = ['notes = $1'];
+    const params = [notes || null];
+    let idx = 2;
+    if (dispatch_date !== undefined) { sets.push(`dispatch_date = $${idx}`); params.push(dispatch_date || null); idx++; }
+    if (order_type !== undefined) { sets.push(`order_type = $${idx}`); params.push(order_type); idx++; }
+    params.push(req.params.id);
+    await db.run(`UPDATE orders SET ${sets.join(', ')} WHERE id = $${idx}`, params);
+  } else {
+    const { notes } = req.body;
+    await db.run('UPDATE orders SET notes=$1 WHERE id=$2', [notes || null, req.params.id]);
+  }
   res.json({ message: 'Updated' });
+});
+
+router.put('/:id/resubmit', authenticate, authorize('admin', 'owner', 'accounts'), async (req, res) => {
+  const db = getDB();
+  const order = await db.get('SELECT id, status, order_code FROM orders WHERE id=$1', [req.params.id]);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.status !== 'rejected') return res.status(400).json({ error: 'Only rejected orders can be resubmitted' });
+  await db.run("UPDATE orders SET status='pending_approval', rejection_reason=NULL WHERE id=$1", [req.params.id]);
+  await logActivity(req.params.id, null, 'order_resubmitted', `Order resubmitted for approval`, req.user.id);
+  await notifyAllExcept(db, req.user.id, {
+    type: 'order_message',
+    title: `${order.order_code} resubmitted`,
+    body: `${req.user.name} resubmitted order for approval`,
+    link: `/orders/${req.params.id}`,
+    sourceUserId: req.user.id,
+  });
+  res.json({ message: 'Order resubmitted for approval' });
 });
 
 router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {

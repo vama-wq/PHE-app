@@ -45,6 +45,9 @@ export default function OrderDetail() {
   const [drawingUploadItem, setDrawingUploadItem]     = useState(null); // full item object for modal title
   const [showDrawingRejectModal, setShowDrawingRejectModal] = useState(false);
   const [deletingJobCard, setDeletingJobCard] = useState(null);
+  const [editingOrder, setEditingOrder] = useState(false);
+  const [editFields, setEditFields] = useState({});
+  const [resubmitting, setResubmitting] = useState(false);
 
   const load = () =>
     api.get(`/orders/${id}`).then(r => setOrder(r.data)).finally(() => setLoading(false));
@@ -57,12 +60,14 @@ export default function OrderDetail() {
   // Step 1: Owner approves the order (business approval — no drawing gate)
   const canApprove           = user.role === 'owner' && order.status === 'pending_approval';
   const orderApproved        = !['pending_approval', 'rejected'].includes(order.status);
+  const isRejected           = order.status === 'rejected';
+  const canResubmit          = isRejected && ['admin', 'owner', 'accounts'].includes(user.role);
   const hasDrawings          = order.order_drawings?.length > 0;
   // Per-item drawing status (computed server-side)
   const itemDrawingStatus    = order.item_drawing_status || {};
   const allItemsApproved     = (order.items || []).length > 0 &&
     (order.items || []).every(it => itemDrawingStatus[it.id] === 'approved');
-  const canManageItems       = ['admin', 'owner'].includes(user.role);
+  const canManageItems       = ['admin', 'owner'].includes(user.role) || canResubmit;
   const canUploadQuotation   = ['admin', 'owner'].includes(user.role) && !restrictedRole;
   // Step 2: Design can upload drawings only after order is approved
   const canUploadDrawing     = ['design', 'admin', 'owner'].includes(user.role) && orderApproved;
@@ -107,6 +112,34 @@ export default function OrderDetail() {
     }
   };
 
+  const startEditOrder = () => {
+    setEditFields({
+      dispatch_date: order.dispatch_date ? order.dispatch_date.slice(0, 10) : '',
+      notes: order.notes || '',
+      order_type: order.order_type || 'local_he',
+    });
+    setEditingOrder(true);
+  };
+
+  const saveOrderEdits = async () => {
+    await api.put(`/orders/${id}`, editFields);
+    setEditingOrder(false);
+    load();
+  };
+
+  const handleResubmit = async () => {
+    if (!window.confirm('Resubmit this order for approval?')) return;
+    setResubmitting(true);
+    try {
+      if (editingOrder) await saveOrderEdits();
+      await api.put(`/orders/${id}/resubmit`);
+      load();
+    } catch (e) {
+      alert(e.response?.data?.error || 'Failed to resubmit');
+    }
+    setResubmitting(false);
+  };
+
   const isImage = (name) => /\.(jpg|jpeg|png|gif|webp)$/i.test(name);
 
   return (
@@ -136,6 +169,11 @@ export default function OrderDetail() {
               <Trash2 size={15} /> Delete Order
             </button>
           )}
+          {canResubmit && (
+            <button className="btn-primary" onClick={handleResubmit} disabled={resubmitting}>
+              <Send size={15} /> {resubmitting ? 'Resubmitting...' : 'Resubmit for Approval'}
+            </button>
+          )}
           {canApprove && !restrictedRole && (
             <>
               <button className="btn-danger btn-sm" onClick={() => setShowRejectModal(true)}>
@@ -150,6 +188,28 @@ export default function OrderDetail() {
       </div>
 
       {/* Customer Query Alert Banner */}
+      {isRejected && (
+        <div className="mb-5 bg-red-50 border border-red-200 rounded-xl px-5 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <XCircle size={20} className="text-red-500 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-red-800">Order Rejected</p>
+              {order.rejection_reason && (
+                <p className="text-sm text-red-600 mt-0.5">{order.rejection_reason}</p>
+              )}
+              {canResubmit && (
+                <p className="text-xs text-red-500 mt-1">Edit the order details or items below, then resubmit for approval.</p>
+              )}
+            </div>
+          </div>
+          {canResubmit && (
+            <button className="btn-primary btn-sm flex-shrink-0" onClick={handleResubmit} disabled={resubmitting}>
+              <Send size={14} /> {resubmitting ? 'Resubmitting...' : 'Resubmit'}
+            </button>
+          )}
+        </div>
+      )}
+
       {['customer_query', 'product_return'].includes(order.status) && (
         <div className="mb-5 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -212,13 +272,53 @@ export default function OrderDetail() {
                   <dd className="text-sm mt-1 text-red-600 bg-red-50 px-3 py-2 rounded-lg">{order.rejection_reason}</dd>
                 </div>
               )}
-              {order.notes && (
+              {order.notes && !editingOrder && (
                 <div className="col-span-2">
                   <dt className="text-xs text-gray-500 uppercase tracking-wide">Notes</dt>
                   <dd className="text-sm mt-1 text-gray-600">{order.notes}</dd>
                 </div>
               )}
             </dl>
+
+            {/* Editable fields when rejected */}
+            {canResubmit && !editingOrder && (
+              <div className="mt-4 pt-4 border-t border-red-100">
+                <button className="btn-secondary btn-sm" onClick={startEditOrder}>
+                  <Edit2 size={14} /> Edit Order Details
+                </button>
+              </div>
+            )}
+            {editingOrder && (
+              <div className="mt-4 pt-4 border-t border-gray-200 space-y-3">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">Dispatch Date</label>
+                    <input type="date" className="input" value={editFields.dispatch_date || ''}
+                      onChange={e => setEditFields(p => ({ ...p, dispatch_date: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="label">Order Type</label>
+                    <select className="input" value={editFields.order_type || 'local_he'}
+                      onChange={e => setEditFields(p => ({ ...p, order_type: e.target.value }))}>
+                      <option value="local_he">Local HE</option>
+                      <option value="export_he">Export HE</option>
+                      <option value="inventory_order">Inventory Order (IO)</option>
+                      <option value="io_export_he">IO Export HE</option>
+                      <option value="io_local_he">IO Local HE</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="label">Notes</label>
+                  <textarea className="input" rows={2} value={editFields.notes || ''}
+                    onChange={e => setEditFields(p => ({ ...p, notes: e.target.value }))} />
+                </div>
+                <div className="flex gap-2">
+                  <button className="btn-primary btn-sm" onClick={saveOrderEdits}>Save Changes</button>
+                  <button className="btn-ghost btn-sm" onClick={() => setEditingOrder(false)}>Cancel</button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ── Items ── */}
