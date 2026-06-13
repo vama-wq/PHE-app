@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadToStorage, deleteFromStorage, uploadChatAttachments } = require('../middleware/upload');
+const { notifyAllExcept } = require('./notifications');
 const multer = require('multer');
 
 const memStorage = multer.memoryStorage();
@@ -251,6 +252,16 @@ router.post('/:id/messages', authenticate, ...uploadChatAttachments, async (req,
 
   // Mark query as in_progress if it was open
   await db.run("UPDATE customer_queries SET status='in_progress', updated_at=NOW() WHERE id=$1 AND status='open'", [req.params.id]);
+
+  const preview = (message || '').trim().slice(0, 100);
+  const fileNote = hasFiles ? ` [+${req.files.length} file${req.files.length > 1 ? 's' : ''}]` : '';
+  await notifyAllExcept(db, req.user.id, {
+    type: 'query_message',
+    title: `${req.user.name} in ${q.query_no}`,
+    body: preview ? preview + fileNote : `Sent${fileNote}`,
+    link: `/customer-queries/${req.params.id}`,
+    sourceUserId: req.user.id,
+  });
 
   res.status(201).json({ id: messageId });
 });

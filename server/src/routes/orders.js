@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, deleteFromStorage } = require('../middleware/upload');
+const { notifyAllExcept } = require('./notifications');
 
 // ── Mentions ──────────────────────────────────────────────────────────────────
 router.get('/my-mentions', authenticate, async (req, res) => {
@@ -441,6 +442,18 @@ router.post('/:id/messages', authenticate, ...uploadChatAttachments, async (req,
       }
     }
   }
+
+  const order = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
+  const orderCode = order?.order_code || `Order #${req.params.id}`;
+  const preview = (message || '').trim().slice(0, 100);
+  const fileNote = hasFiles ? ` [+${req.files.length} file${req.files.length > 1 ? 's' : ''}]` : '';
+  await notifyAllExcept(db, req.user.id, {
+    type: 'order_message',
+    title: `${req.user.name} in ${orderCode}`,
+    body: preview ? preview + fileNote : `Sent${fileNote}`,
+    link: `/orders/${req.params.id}`,
+    sourceUserId: req.user.id,
+  });
 
   res.status(201).json({ id: messageId });
 });

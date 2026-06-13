@@ -7,7 +7,7 @@ import { Link } from 'react-router-dom';
 import {
   AlertTriangle, ClipboardList, CheckCircle, Clock, TrendingUp,
   Package, XCircle, ShoppingCart, FlaskConical, Wrench,
-  Truck, IndianRupee, Bell, AtSign,
+  Truck, IndianRupee, Bell,
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -109,16 +109,16 @@ function ActivityFeed({ items }) {
   );
 }
 
-// ── Mentions Panel ────────────────────────────────────────────────────────────
+// ── Notifications Panel ───────────────────────────────────────────────────────
 function MentionsPanel() {
-  const [mentions, setMentions] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [prevUnread, setPrevUnread] = useState(0);
 
   const load = () => {
-    api.get('/orders/my-mentions').then(r => { setMentions(r.data); setLoading(false); }).catch(() => setLoading(false));
+    api.get('/notifications').then(r => { setNotifications(r.data); setLoading(false); }).catch(() => setLoading(false));
   };
-  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
+  useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
 
   // Request notification permission on mount
   useEffect(() => {
@@ -127,42 +127,49 @@ function MentionsPanel() {
     }
   }, []);
 
-  // Desktop notification when new unread mentions arrive
-  const unread = mentions.filter(m => !m.is_read).length;
+  // Desktop notification when new unread notifications arrive
+  const unread = notifications.filter(n => !n.is_read).length;
   useEffect(() => {
     if (unread > prevUnread && prevUnread >= 0 && !loading) {
-      const newest = mentions.find(m => !m.is_read);
+      const newest = notifications.find(n => !n.is_read);
       if (newest && 'Notification' in window && Notification.permission === 'granted') {
-        const source = newest.source === 'query' ? newest.query_no : newest.order_code;
-        new Notification('New mention in PHE', {
-          body: `${newest.sender_name} mentioned you in ${source}: "${newest.message?.slice(0, 80)}"`,
+        new Notification(newest.title, {
+          body: newest.body || '',
           icon: '/favicon.ico',
-          tag: `mention-${newest.id}-${newest.source}`,
+          tag: `notif-${newest.id}`,
         });
       }
     }
     setPrevUnread(unread);
   }, [unread]);
 
-  const markRead = async (m) => {
-    const qs = m.source === 'query' ? '?source=query' : '';
-    await api.put(`/orders/my-mentions/${m.id}/read${qs}`).catch(() => {});
-    setMentions(prev => prev.map(x => x.id === m.id && x.source === m.source ? { ...x, is_read: 1 } : x));
+  const markRead = async (n) => {
+    await api.put(`/notifications/${n.id}/read`).catch(() => {});
+    setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, is_read: 1 } : x));
   };
 
   const markAllRead = async () => {
-    await api.put('/orders/my-mentions/read-all').catch(() => {});
-    setMentions(prev => prev.map(m => ({ ...m, is_read: 1 })));
+    await api.put('/notifications/read-all').catch(() => {});
+    setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })));
+  };
+
+  const typeIcon = (type) => {
+    if (type === 'query_message') return 'bg-amber-100 text-amber-700';
+    return 'bg-blue-100 text-blue-700';
+  };
+  const typeLabel = (type) => {
+    if (type === 'query_message') return 'Query';
+    return 'Order';
   };
 
   return (
     <div className="card">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <h2 className="section-title">
-          <AtSign size={17} className="text-brand-500" />
-          Mentions
+          <Bell size={17} className="text-brand-500" />
+          Notifications
           {unread > 0 && (
-            <span className="ml-2 bg-brand-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full">{unread}</span>
+            <span className="ml-2 bg-red-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full">{unread}</span>
           )}
         </h2>
         {unread > 0 && (
@@ -171,37 +178,31 @@ function MentionsPanel() {
       </div>
       {loading ? (
         <div className="px-5 py-6 text-center text-gray-400 text-sm">Loading...</div>
-      ) : mentions.length === 0 ? (
+      ) : notifications.length === 0 ? (
         <div className="px-5 py-8 text-center text-gray-400 text-sm">
-          <AtSign size={24} className="mx-auto mb-2 text-gray-200" />
-          No mentions yet
+          <Bell size={24} className="mx-auto mb-2 text-gray-200" />
+          No notifications yet
         </div>
       ) : (
-        <div className="divide-y divide-gray-50 max-h-72 overflow-y-auto">
-          {mentions.map(m => (
+        <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
+          {notifications.map(n => (
             <div
-              key={`${m.source}-${m.id}`}
-              className={`px-4 py-3 flex gap-3 transition-colors ${!m.is_read ? 'bg-brand-50' : ''}`}
+              key={n.id}
+              className={`px-4 py-3 flex gap-3 transition-colors ${!n.is_read ? 'bg-brand-50' : ''}`}
             >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5 mb-0.5">
-                  {!m.is_read && <span className="w-2 h-2 rounded-full bg-brand-600 flex-shrink-0" />}
-                  <span className="text-xs font-semibold text-gray-700">{m.sender_name}</span>
-                  <span className="text-xs text-gray-400">in</span>
-                  {m.source === 'query' ? (
-                    <Link to={`/customer-queries/${m.query_id}`} className="text-xs text-brand-600 hover:underline font-medium">{m.query_no}</Link>
-                  ) : (
-                    <Link to={`/orders/${m.order_id}`} className="text-xs text-brand-600 hover:underline font-medium">{m.order_code}</Link>
-                  )}
-                  <span className={`text-xs px-1 py-0.5 rounded ${m.source === 'query' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
-                    {m.source === 'query' ? 'Query' : 'Order'}
+                  {!n.is_read && <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />}
+                  <Link to={n.link || '/'} className="text-xs font-semibold text-gray-700 hover:text-brand-600">{n.title}</Link>
+                  <span className={`text-xs px-1 py-0.5 rounded ${typeIcon(n.type)}`}>
+                    {typeLabel(n.type)}
                   </span>
                 </div>
-                <p className="text-sm text-gray-600 truncate">{m.message}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{fmtDateTime(m.created_at)}</p>
+                {n.body && <p className="text-sm text-gray-600 truncate">{n.body}</p>}
+                <p className="text-xs text-gray-400 mt-0.5">{fmtDateTime(n.created_at)}</p>
               </div>
-              {!m.is_read && (
-                <button onClick={() => markRead(m)} className="text-xs text-gray-400 hover:text-brand-600 flex-shrink-0 self-start pt-1" title="Mark as read">
+              {!n.is_read && (
+                <button onClick={() => markRead(n)} className="text-xs text-gray-400 hover:text-brand-600 flex-shrink-0 self-start pt-1" title="Mark as read">
                   <CheckCircle size={14} />
                 </button>
               )}

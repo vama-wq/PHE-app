@@ -244,6 +244,22 @@ async function initDB(retries = 10, delayMs = 3000) {
           created_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      // ── Notifications ─────────────────────────────────────────────────────────
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT,
+          link TEXT,
+          source_user_id INTEGER REFERENCES users(id),
+          is_read INTEGER DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, is_read, created_at DESC)`);
+
       // ── Message attachments ──────────────────────────────────────────────────
       await pool.query(`
         CREATE TABLE IF NOT EXISTS message_attachments (

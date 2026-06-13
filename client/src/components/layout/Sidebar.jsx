@@ -6,11 +6,11 @@ import api from '../../lib/api';
 import {
   LayoutDashboard, ClipboardList, FileText, Package,
   Users, Box, Wrench, Truck, LogOut, FlaskConical,
-  Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse, PenLine, HelpCircle
+  Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse, PenLine, HelpCircle, Bell
 } from 'lucide-react';
 
 const NAV = [
-  { id: 'dashboard',     to: '/',              icon: LayoutDashboard, label: 'Dashboard',      roles: null },
+  { id: 'dashboard',     to: '/',              icon: LayoutDashboard, label: 'Dashboard',      roles: null, badge: 'unreadNotifs' },
   { id: 'orders',        to: '/orders',        icon: ClipboardList,   label: 'Orders',          roles: null },
   { id: 'drawings',      to: '/drawings',      icon: PenLine,         label: 'Drawings',        roles: ['owner','admin','design'], badge: 'drawingsPending' },
   { id: 'job-cards',     to: '/job-cards',     icon: FileText,        label: 'Job Cards',       roles: null },
@@ -40,6 +40,7 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const [drawingsPending, setDrawingsPending] = useState(0);
   const [openQueries, setOpenQueries] = useState(0);
+  const [unreadNotifs, setUnreadNotifs] = useState(0);
 
   // Fetch pending drawings count for badge (design/admin/owner only)
   useEffect(() => {
@@ -70,7 +71,18 @@ export default function Sidebar() {
     return () => clearInterval(t);
   }, []);
 
-  const badges = { drawingsPending, openQueries };
+  // Fetch unread notifications count
+  useEffect(() => {
+    const fetchN = () =>
+      api.get('/notifications/unread-count')
+        .then(r => setUnreadNotifs(r.data.count || 0))
+        .catch(() => {});
+    fetchN();
+    const t = setInterval(fetchN, 10000);
+    return () => clearInterval(t);
+  }, []);
+
+  const badges = { drawingsPending, openQueries, unreadNotifs };
 
   const handleLogout = async () => {
     await logout();
