@@ -379,7 +379,7 @@ export default function JobCardDetail() {
       </div>
 
       {/* Tab Content */}
-      {activeTab === 'overview' && <OverviewTab jc={jc} />}
+      {activeTab === 'overview' && <OverviewTab jc={jc} userRole={user.role} />}
       {activeTab === 'assemblies' && (
         <AssembliesTab jc={jc} canAdd={canAddAssembly} canEdit={canAddAssembly || canUpdateRawMaterial}
           userRole={user.role} onAdd={() => setShowAssemblyModal(true)}
@@ -431,7 +431,7 @@ export default function JobCardDetail() {
   );
 }
 
-function OverviewTab({ jc }) {
+function OverviewTab({ jc, userRole }) {
   const [checklist, setChecklist] = useState(null);
   const [qcReports, setQcReports] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -732,6 +732,11 @@ function OverviewTab({ jc }) {
             <p className="text-2xl font-bold text-green-600">{dispatchedQty}</p>
           </div>
         </div>
+
+        {/* Dispatch Details — visible only to owner + accounts */}
+        {['accounts', 'owner'].includes(userRole) && (
+          <DispatchDetailsInline jc={jc} />
+        )}
       </div>
 
       {/* Attachments */}
@@ -781,6 +786,102 @@ function OverviewTab({ jc }) {
                 {report.file_name && (
                   <a href={`/uploads/qc/${report.file_name}`} target="_blank" rel="noopener noreferrer"
                     className="ml-4 px-3 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Download</a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DispatchDetailsInline({ jc }) {
+  const [copied, setCopied] = useState(null);
+  const dispatchedDoc = jc.dispatch_docs?.find(d => d.shipping_carrier || d.tracking_number);
+  const hasAnyDispatchData = dispatchedDoc || (jc.dispatch_docs && jc.dispatch_docs.length > 0);
+
+  const copyToClipboard = (text, label) => {
+    navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  if (!hasAnyDispatchData) {
+    return (
+      <div className="mt-5 pt-5 border-t border-gray-200">
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Dispatch Details</h3>
+        <p className="text-sm text-gray-400">No dispatch details available yet.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-5 pt-5 border-t border-gray-200 space-y-4">
+      {dispatchedDoc && (
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Shipping Information</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            {dispatchedDoc.shipping_carrier && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase font-medium">Carrier</div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-sm text-gray-800 font-semibold">{dispatchedDoc.shipping_carrier}</span>
+                  <button onClick={() => copyToClipboard(dispatchedDoc.shipping_carrier, 'carrier')}
+                    className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600" title="Copy">
+                    <Copy size={13} />
+                  </button>
+                  {copied === 'carrier' && <span className="text-xs text-green-600">Copied</span>}
+                </div>
+              </div>
+            )}
+            {dispatchedDoc.tracking_number && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase font-medium">Tracking Number</div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-sm text-gray-800 font-mono font-semibold">{dispatchedDoc.tracking_number}</span>
+                  <button onClick={() => copyToClipboard(dispatchedDoc.tracking_number, 'tracking')}
+                    className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600" title="Copy">
+                    <Copy size={13} />
+                  </button>
+                  {copied === 'tracking' && <span className="text-xs text-green-600">Copied</span>}
+                </div>
+              </div>
+            )}
+            {dispatchedDoc.dispatch_date && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase font-medium">Dispatched On</div>
+                <div className="text-sm text-gray-800 mt-0.5">{fmtDate(dispatchedDoc.dispatch_date)}</div>
+              </div>
+            )}
+            {dispatchedDoc.notes && (
+              <div className="col-span-full">
+                <div className="text-xs text-gray-500 uppercase font-medium">Notes</div>
+                <div className="text-sm text-gray-800 mt-0.5">{dispatchedDoc.notes}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {jc.dispatch_docs?.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900 mb-2">Dispatch Documents</h3>
+          <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg overflow-hidden">
+            {jc.dispatch_docs.map(d => (
+              <div key={d.id} className="flex items-center gap-3 px-4 py-3">
+                <FileText size={16} className="text-brand-500 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium capitalize">{d.doc_type?.replace(/_/g, ' ') || 'Document'}</div>
+                  {d.shipping_carrier && <span className="text-xs text-gray-500 mr-3">Carrier: {d.shipping_carrier}</span>}
+                  {d.tracking_number && <span className="text-xs text-gray-500">Tracking: {d.tracking_number}</span>}
+                  <div className="text-xs text-gray-400">{d.created_by_name} · {fmtDate(d.created_at)}</div>
+                </div>
+                {d.file_name && (
+                  <a href={`/uploads/dispatch/${d.file_name}`} target="_blank" rel="noopener noreferrer"
+                    className="btn-ghost btn-sm text-brand-600" download>
+                    <Download size={14} /> Download
+                  </a>
                 )}
               </div>
             ))}
