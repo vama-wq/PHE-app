@@ -110,6 +110,7 @@ function scheduleJobCard(jc, stageData, durations, applicableStages) {
 export default function ManufacturingPlan() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [durations, setDurations] = useState(loadDurations);
   const [showSettings, setShowSettings] = useState(false);
   const [viewMode, setViewMode] = useState('daily');
@@ -119,7 +120,7 @@ export default function ManufacturingPlan() {
   useEffect(() => {
     api.get('/manufacturing/planning-data')
       .then(r => setData(r.data))
-      .catch(() => {})
+      .catch(err => setError(err.response?.data?.error || err.message || 'Unknown error'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -182,7 +183,7 @@ export default function ManufacturingPlan() {
   }, [schedules]);
 
   if (loading) return <div className="p-8 text-center text-gray-400">Loading manufacturing data...</div>;
-  if (!data) return <div className="p-8 text-center text-red-500">Failed to load data</div>;
+  if (!data) return <div className="p-8 text-center text-red-500">Failed to load data{error ? `: ${error}` : ''}</div>;
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
