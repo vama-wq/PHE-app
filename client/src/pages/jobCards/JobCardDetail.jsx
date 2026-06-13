@@ -735,7 +735,7 @@ function OverviewTab({ jc, userRole }) {
 
         {/* Dispatch Details — visible only to owner + accounts */}
         {['accounts', 'owner'].includes(userRole) && (
-          <DispatchDetailsInline jc={jc} />
+          <DispatchDetailsInline jc={jc} qcReports={qcReports} />
         )}
       </div>
 
@@ -796,10 +796,11 @@ function OverviewTab({ jc, userRole }) {
   );
 }
 
-function DispatchDetailsInline({ jc }) {
+function DispatchDetailsInline({ jc, qcReports }) {
   const [copied, setCopied] = useState(null);
   const dispatchedDoc = jc.dispatch_docs?.find(d => d.shipping_carrier || d.tracking_number);
   const hasAnyDispatchData = dispatchedDoc || (jc.dispatch_docs && jc.dispatch_docs.length > 0);
+  const hasQC = (qcReports && qcReports.length > 0) || jc.qc_report;
 
   const copyToClipboard = (text, label) => {
     navigator.clipboard.writeText(text);
@@ -807,18 +808,25 @@ function DispatchDetailsInline({ jc }) {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  if (!hasAnyDispatchData) {
-    return (
-      <div className="mt-5 pt-5 border-t border-gray-200">
-        <h3 className="text-sm font-semibold text-gray-900 mb-2">Dispatch Details</h3>
-        <p className="text-sm text-gray-400">No dispatch details available yet.</p>
-      </div>
-    );
-  }
+  const downloadFile = async (url, filename) => {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename || url.split('/').pop();
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch { window.open(url, '_blank'); }
+  };
 
   return (
     <div className="mt-5 pt-5 border-t border-gray-200 space-y-4">
-      {dispatchedDoc && (
+      {/* Shipping Information */}
+      {dispatchedDoc ? (
         <div>
           <h3 className="text-sm font-semibold text-gray-900 mb-3">Shipping Information</h3>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -862,8 +870,14 @@ function DispatchDetailsInline({ jc }) {
             )}
           </div>
         </div>
+      ) : (
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900 mb-2">Dispatch Details</h3>
+          <p className="text-sm text-gray-400">No shipping details available yet.</p>
+        </div>
       )}
 
+      {/* Dispatch Documents */}
       {jc.dispatch_docs?.length > 0 && (
         <div>
           <h3 className="text-sm font-semibold text-gray-900 mb-2">Dispatch Documents</h3>
@@ -878,10 +892,47 @@ function DispatchDetailsInline({ jc }) {
                   <div className="text-xs text-gray-400">{d.created_by_name} · {fmtDate(d.created_at)}</div>
                 </div>
                 {d.file_name && (
-                  <a href={`/uploads/dispatch/${d.file_name}`} target="_blank" rel="noopener noreferrer"
-                    className="btn-ghost btn-sm text-brand-600" download>
+                  <button onClick={() => downloadFile(`/uploads/dispatch/${d.file_name}`, d.original_name || d.file_name)}
+                    className="btn-ghost btn-sm text-brand-600">
                     <Download size={14} /> Download
-                  </a>
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* QC Reports */}
+      {hasQC && (
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900 mb-2">QC Reports</h3>
+          <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg overflow-hidden">
+            {(qcReports && qcReports.length > 0 ? qcReports : (jc.qc_report ? [jc.qc_report] : [])).map(report => (
+              <div key={report.id} className="flex items-center gap-3 px-4 py-3">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                  report.result === 'approved' ? 'bg-green-100' : report.result === 'rejected' ? 'bg-red-100' : 'bg-yellow-100'
+                }`}>
+                  {report.result === 'approved'
+                    ? <CheckCircle size={16} className="text-green-600" />
+                    : <XCircle size={16} className="text-red-600" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                      report.result === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                    }`}>{report.result?.toUpperCase()}</span>
+                    <span className="text-xs text-gray-500">{fmtDateTime(report.created_at)}</span>
+                  </div>
+                  {report.observations && <p className="text-sm text-gray-700 mt-1 truncate">{report.observations}</p>}
+                  {report.product_weight && <span className="text-xs text-gray-500">Weight: {report.product_weight}g</span>}
+                  <div className="text-xs text-gray-400">{report.created_by_name}</div>
+                </div>
+                {report.file_name && (
+                  <button onClick={() => downloadFile(`/uploads/qc/${report.file_name}`, report.original_name || report.file_name)}
+                    className="btn-ghost btn-sm text-brand-600">
+                    <Download size={14} /> Download
+                  </button>
                 )}
               </div>
             ))}
@@ -1159,6 +1210,21 @@ function DispatchTab({ jc, userRole, onReload }) {
     setTimeout(() => setCopied(null), 2000);
   };
 
+  const downloadFile = async (url, filename) => {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename || url.split('/').pop();
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch { window.open(url, '_blank'); }
+  };
+
   const handleDownload = () => {
     const rows = [
       ['DISPATCH DETAILS', ''],
@@ -1352,10 +1418,10 @@ function DispatchTab({ jc, userRole, onReload }) {
                   <div className="text-xs text-gray-400">{d.created_by_name} · {fmtDate(d.created_at)}</div>
                 </div>
                 {d.file_name && (
-                  <a href={`/uploads/dispatch/${d.file_name}`} target="_blank" rel="noopener noreferrer"
-                    className="btn-ghost btn-sm text-brand-600" download>
+                  <button onClick={() => downloadFile(`/uploads/dispatch/${d.file_name}`, d.original_name || d.file_name)}
+                    className="btn-ghost btn-sm text-brand-600">
                     <Download size={14} /> Download
-                  </a>
+                  </button>
                 )}
               </div>
             ))}
