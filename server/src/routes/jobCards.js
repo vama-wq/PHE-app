@@ -204,6 +204,30 @@ router.get('/:id', authenticate, async (req, res) => {
   jc.total_remade   = parseInt(qtySummary?.total_remade   || 0, 10);
   jc.net_qty        = Math.max((parseInt(jc.qty, 10) || 0) - jc.total_rejected + jc.total_remade, 0);
 
+  jc.assemblies = await db.all(`
+    SELECT a.*, u.name as dispatched_by_name
+    FROM job_card_assemblies a LEFT JOIN users u ON a.raw_material_dispatched_by = u.id
+    WHERE a.job_card_id = $1 ORDER BY a.id
+  `, [req.params.id]);
+
+  jc.drawings = await db.all(`
+    SELECT d.*, u.name as uploaded_by_name
+    FROM drawings d LEFT JOIN users u ON d.uploaded_by = u.id
+    WHERE d.job_card_id = $1 ORDER BY d.created_at DESC
+  `, [req.params.id]);
+
+  jc.dispatch_docs = await db.all(`
+    SELECT d.*, u.name as created_by_name
+    FROM dispatch_documents d LEFT JOIN users u ON d.created_by = u.id
+    WHERE d.job_card_id = $1 ORDER BY d.created_at DESC
+  `, [req.params.id]);
+
+  jc.activity = await db.all(`
+    SELECT a.*, u.name as user_name
+    FROM activity_log a LEFT JOIN users u ON a.user_id = u.id
+    WHERE a.job_card_id = $1 ORDER BY a.created_at DESC
+  `, [req.params.id]);
+
   res.json(jc);
 });
 

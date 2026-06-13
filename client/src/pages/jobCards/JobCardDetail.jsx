@@ -43,6 +43,7 @@ export default function JobCardDetail() {
   const canAddReport = ['production', 'owner'].includes(user.role);
   const canAddQC = ['design', 'owner'].includes(user.role);
   const canUploadPackage = ['production', 'owner'].includes(user.role);
+  const canViewDispatch = ['accounts', 'owner'].includes(user.role);
 
   const tabs = [
     { key: 'overview',    label: 'Overview' },
@@ -50,7 +51,7 @@ export default function JobCardDetail() {
     { key: 'drawings',    label: `Drawings (${jc.drawings?.length || 0})` },
     { key: 'production',  label: 'Production' },
     { key: 'qc',          label: 'Quality' },
-    { key: 'dispatch',    label: 'Dispatch' },
+    ...(canViewDispatch ? [{ key: 'dispatch', label: 'Dispatch' }] : []),
     { key: 'timeline',    label: 'Timeline' },
   ];
 
@@ -903,30 +904,204 @@ function DispatchTab({ jc, userRole, onReload }) {
   const [saving, setSaving] = useState(false);
   const canDispatch = ['accounts', 'owner'].includes(userRole);
 
+  const qtyOrdered = parseInt(jc.qty, 10) || 0;
+  const totalRejected = jc.total_rejected || 0;
+  const netQty = jc.net_qty || (qtyOrdered - totalRejected);
+  const qcDispatchQty = jc.qc_dispatch_qty;
+  const qcFgQty = jc.qc_fg_qty;
+  const qcRoute = jc.qc_route;
+
+  const dispatchedDoc = jc.dispatch_docs?.find(d => d.shipping_carrier || d.tracking_number);
+
+  const handleDownload = () => {
+    const rows = [
+      ['DISPATCH DETAILS', ''],
+      ['', ''],
+      ['Job Card No', jc.job_card_no || ''],
+      ['Order Code', jc.order_code || ''],
+      ['Customer Code', jc.customer_code || ''],
+      ['Product', jc.product_name || ''],
+      ['Drawing No', jc.drawing_no || ''],
+      ['Punching', jc.punching || ''],
+      ['', ''],
+      ['QUANTITIES', ''],
+      ['Qty Ordered', qtyOrdered],
+      ['Total Rejections', totalRejected],
+      ['Net Available', netQty],
+      ...(qcRoute ? [
+        ['QC Route', qcRoute === 'dispatch' ? 'Dispatch' : qcRoute === 'finished_goods' ? 'Finished Goods' : qcRoute === 'both' || qcRoute === 'split' ? 'Split' : qcRoute],
+        ...(qcDispatchQty != null ? [['Qty to Dispatch', qcDispatchQty]] : []),
+        ...(qcFgQty != null ? [['Qty to Finished Goods', qcFgQty]] : []),
+      ] : []),
+      ['', ''],
+      ['DISPATCH INFO', ''],
+      ['Dispatch Date', jc.dispatch_date ? fmtDate(jc.dispatch_date) : ''],
+      ['Status', jc.status || ''],
+      ...(dispatchedDoc ? [
+        ['Shipping Carrier', dispatchedDoc.shipping_carrier || ''],
+        ['Tracking Number', dispatchedDoc.tracking_number || ''],
+      ] : []),
+      ['', ''],
+      ['DOCUMENTS', ''],
+      ...(jc.dispatch_docs?.length
+        ? jc.dispatch_docs.map(d => [
+            (d.doc_type || 'document').replace(/_/g, ' '),
+            `${d.file_name || ''} | ${d.created_by_name || ''} | ${d.created_at ? fmtDate(d.created_at) : ''}`
+          ])
+        : [['None', '']]),
+    ];
+
+    const csvContent = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Dispatch_${jc.job_card_no || jc.id}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-5">
-      <h2 className="section-title">Dispatch Documents</h2>
-      {jc.dispatch_docs?.length === 0 ? (
-        <div className="card p-6 text-center text-gray-400 text-sm">No dispatch documents yet.</div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {jc.dispatch_docs.map(d => (
-            <div key={d.id} className="card p-4 flex items-center gap-3">
-              <FileText size={20} className="text-brand-500 flex-shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium capitalize">{d.doc_type?.replace('_', ' ') || 'Document'}</div>
-                {d.file_name && (
-                  <a href={`/uploads/dispatch/${d.file_name}`} target="_blank" rel="noopener noreferrer"
-                    className="text-xs text-brand-600 hover:underline truncate block">{d.file_name}</a>
+      <div className="flex items-center justify-between">
+        <h2 className="section-title">Dispatch Details</h2>
+        <button onClick={handleDownload} className="btn-secondary btn-sm">
+          <Download size={15} /> Download
+        </button>
+      </div>
+
+      {/* Job Card & Customer Info */}
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-gray-900 mb-3">Order Information</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <div className="text-xs text-gray-500 uppercase font-medium">Job Card No</div>
+            <div className="text-sm text-gray-800 font-semibold mt-0.5">{jc.job_card_no}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase font-medium">Order</div>
+            <Link to={`/orders/${jc.order_id}`} className="text-sm text-brand-600 hover:underline mt-0.5 block">{jc.order_code}</Link>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase font-medium">Customer</div>
+            <div className="text-sm text-gray-800 mt-0.5">{jc.customer_code}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase font-medium">Dispatch Date</div>
+            <div className="text-sm text-gray-800 mt-0.5">{fmtDate(jc.dispatch_date)}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase font-medium">Product</div>
+            <div className="text-sm text-gray-800 mt-0.5">{jc.product_name || '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase font-medium">Drawing No</div>
+            <div className="text-sm text-gray-800 mt-0.5">{jc.drawing_no || '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase font-medium">Punching</div>
+            <div className="text-sm text-gray-800 mt-0.5">{jc.punching || '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase font-medium">Status</div>
+            <div className="mt-0.5"><StatusBadge status={jc.status} /></div>
+          </div>
+        </div>
+      </div>
+
+      {/* Quantity Summary */}
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-gray-900 mb-3">Quantity Summary</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-blue-50 rounded-lg p-3">
+            <div className="text-xs text-blue-600 font-medium">Qty Ordered</div>
+            <div className="text-xl font-bold text-blue-700">{qtyOrdered}</div>
+          </div>
+          <div className="bg-red-50 rounded-lg p-3">
+            <div className="text-xs text-red-600 font-medium">Total Rejections</div>
+            <div className="text-xl font-bold text-red-700">{totalRejected}</div>
+          </div>
+          <div className="bg-green-50 rounded-lg p-3">
+            <div className="text-xs text-green-600 font-medium">Net Available</div>
+            <div className="text-xl font-bold text-green-700">{netQty}</div>
+          </div>
+          {qcRoute && (
+            <div className="bg-amber-50 rounded-lg p-3">
+              <div className="text-xs text-amber-600 font-medium">QC Route</div>
+              <div className="text-sm font-bold text-amber-700 mt-1">
+                {qcRoute === 'dispatch' && `${qcDispatchQty ?? netQty} → Dispatch`}
+                {qcRoute === 'finished_goods' && `${qcFgQty ?? netQty} → Finished Goods`}
+                {(qcRoute === 'both' || qcRoute === 'split') && (
+                  <>{qcDispatchQty ?? '—'} → Dispatch<br />{qcFgQty ?? '—'} → FG</>
                 )}
-                {d.tracking_number && <div className="text-xs text-gray-500">Tracking: {d.tracking_number}</div>}
-                <div className="text-xs text-gray-400">{d.created_by_name} · {fmtDate(d.created_at)}</div>
               </div>
             </div>
-          ))}
+          )}
+        </div>
+      </div>
+
+      {/* Shipping Info */}
+      {dispatchedDoc && (
+        <div className="card p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Shipping Information</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            {dispatchedDoc.shipping_carrier && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase font-medium">Carrier</div>
+                <div className="text-sm text-gray-800 mt-0.5">{dispatchedDoc.shipping_carrier}</div>
+              </div>
+            )}
+            {dispatchedDoc.tracking_number && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase font-medium">Tracking Number</div>
+                <div className="text-sm text-gray-800 mt-0.5">{dispatchedDoc.tracking_number}</div>
+              </div>
+            )}
+            {dispatchedDoc.dispatch_date && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase font-medium">Dispatch Date</div>
+                <div className="text-sm text-gray-800 mt-0.5">{fmtDate(dispatchedDoc.dispatch_date)}</div>
+              </div>
+            )}
+            {dispatchedDoc.notes && (
+              <div className="col-span-full">
+                <div className="text-xs text-gray-500 uppercase font-medium">Notes</div>
+                <div className="text-sm text-gray-800 mt-0.5">{dispatchedDoc.notes}</div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
+      {/* Dispatch Documents */}
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-gray-900 mb-3">Documents</h3>
+        {!jc.dispatch_docs?.length ? (
+          <div className="text-center text-gray-400 text-sm py-4">No dispatch documents uploaded yet.</div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {jc.dispatch_docs.map(d => (
+              <div key={d.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+                <FileText size={18} className="text-brand-500 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium capitalize">{d.doc_type?.replace(/_/g, ' ') || 'Document'}</div>
+                  <div className="text-xs text-gray-400">{d.created_by_name} · {fmtDate(d.created_at)}</div>
+                </div>
+                {d.file_name && (
+                  <a href={`/uploads/dispatch/${d.file_name}`} target="_blank" rel="noopener noreferrer"
+                    className="btn-ghost btn-sm text-brand-600">
+                    <Download size={14} /> View
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Mark as Dispatched */}
       {canDispatch && jc.status !== 'dispatched' && (
         <div className="card p-5">
           <h3 className="font-semibold text-gray-900 mb-4">Mark as Dispatched</h3>
@@ -949,11 +1124,15 @@ function DispatchTab({ jc, userRole, onReload }) {
           </div>
           <button className="btn-primary mt-4" disabled={saving} onClick={async () => {
             setSaving(true);
-            await api.put(`/dispatch/${jc.id}/mark-dispatched`, dispatch);
-            onReload();
+            try {
+              await api.put(`/dispatch/${jc.id}/mark-dispatched`, dispatch);
+              onReload();
+            } catch (err) {
+              alert(err.response?.data?.error || 'Failed to dispatch');
+            }
             setSaving(false);
           }}>
-            {saving ? 'Saving...' : '🚚 Mark as Dispatched'}
+            {saving ? 'Saving...' : 'Mark as Dispatched'}
           </button>
         </div>
       )}
