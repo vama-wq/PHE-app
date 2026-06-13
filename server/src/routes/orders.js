@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, deleteFromStorage } = require('../middleware/upload');
-const { notifyAllExcept } = require('./notifications');
+const { createNotification } = require('./notifications');
 
 // ── Mentions ──────────────────────────────────────────────────────────────────
 router.get('/my-mentions', authenticate, async (req, res) => {
@@ -443,17 +443,24 @@ router.post('/:id/messages', authenticate, ...uploadChatAttachments, async (req,
     }
   }
 
-  const order = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
-  const orderCode = order?.order_code || `Order #${req.params.id}`;
-  const preview = (message || '').trim().slice(0, 100);
-  const fileNote = hasFiles ? ` [+${req.files.length} file${req.files.length > 1 ? 's' : ''}]` : '';
-  await notifyAllExcept(db, req.user.id, {
-    type: 'order_message',
-    title: `${req.user.name} in ${orderCode}`,
-    body: preview ? preview + fileNote : `Sent${fileNote}`,
-    link: `/orders/${req.params.id}`,
-    sourceUserId: req.user.id,
-  });
+  if (Array.isArray(mentionIds) && mentionIds.length) {
+    const order = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
+    const orderCode = order?.order_code || `Order #${req.params.id}`;
+    const preview = (message || '').trim().slice(0, 100);
+    const fileNote = hasFiles ? ` [+${req.files.length} file${req.files.length > 1 ? 's' : ''}]` : '';
+    for (const userId of mentionIds) {
+      if (userId !== req.user.id) {
+        await createNotification(db, {
+          userId,
+          type: 'order_message',
+          title: `${req.user.name} in ${orderCode}`,
+          body: preview ? preview + fileNote : `Sent${fileNote}`,
+          link: `/orders/${req.params.id}`,
+          sourceUserId: req.user.id,
+        });
+      }
+    }
+  }
 
   res.status(201).json({ id: messageId });
 });
@@ -533,13 +540,17 @@ router.put('/:id/resubmit', authenticate, authorize('admin', 'owner', 'accounts'
   if (order.status !== 'rejected') return res.status(400).json({ error: 'Only rejected orders can be resubmitted' });
   await db.run("UPDATE orders SET status='pending_approval', rejection_reason=NULL WHERE id=$1", [req.params.id]);
   await logActivity(req.params.id, null, 'order_resubmitted', `Order resubmitted for approval`, req.user.id);
-  await notifyAllExcept(db, req.user.id, {
-    type: 'order_message',
-    title: `${order.order_code} resubmitted`,
-    body: `${req.user.name} resubmitted order for approval`,
-    link: `/orders/${req.params.id}`,
-    sourceUserId: req.user.id,
-  });
+  const owners = await db.all("SELECT id FROM users WHERE role='owner' AND id != $1", [req.user.id]);
+  for (const o of owners) {
+    await createNotification(db, {
+      userId: o.id,
+      type: 'order_message',
+      title: `${order.order_code} resubmitted`,
+      body: `${req.user.name} resubmitted order for approval`,
+      link: `/orders/${req.params.id}`,
+      sourceUserId: req.user.id,
+    });
+  }
   res.json({ message: 'Order resubmitted for approval' });
 });
 
