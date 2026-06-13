@@ -287,7 +287,8 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
       return;
     }
     const invIds = Object.keys(selectedInventory);
-    if (invIds.length === 0) {
+    const isEditing = !!item;
+    if (!isEditing && invIds.length === 0) {
       setError('Please select at least one inventory item');
       return;
     }
@@ -401,7 +402,7 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
         {/* Inventory Items */}
         <div className="col-span-2 relative">
           <label className="label">
-            Inventory Items <span className="text-red-500">*</span>
+            Inventory Items {!item && <span className="text-red-500">*</span>}
             <span className="text-gray-400 font-normal ml-1">(select all raw materials needed)</span>
           </label>
           {/* Selected items with qty */}

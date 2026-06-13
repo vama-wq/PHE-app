@@ -1025,7 +1025,8 @@ function ItemModal({ item, orderId, onClose, onSave }) {
     const missing = validateItem(f);
     if (missing.length) { setError(`Required fields missing: ${missing.join(', ')}`); return; }
     const invIds = Object.keys(selectedInventory);
-    if (invIds.length === 0) { setError('Please select at least one inventory item'); return; }
+    const isEditing = !!item?.id;
+    if (!isEditing && invIds.length === 0) { setError('Please select at least one inventory item'); return; }
     const missingQty = invIds.filter(id => !selectedInventory[id] || parseFloat(selectedInventory[id]) <= 0);
     if (missingQty.length) { setError('Please enter a quantity for all selected inventory items'); return; }
     const inventory_item_ids = invIds.map(id => ({ id: parseInt(id), qty: parseFloat(selectedInventory[id]) }));
@@ -1147,7 +1148,7 @@ function ItemModal({ item, orderId, onClose, onSave }) {
         {/* Inventory Items */}
         <div className="col-span-2 relative">
           <label className="label">
-            Inventory Items <span className="text-red-500">*</span>
+            Inventory Items {!item?.id && <span className="text-red-500">*</span>}
             <span className="text-gray-400 font-normal ml-1">(select all raw materials needed)</span>
           </label>
           {selectedInventoryItems.length > 0 && (
