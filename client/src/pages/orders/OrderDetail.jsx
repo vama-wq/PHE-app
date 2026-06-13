@@ -724,7 +724,7 @@ export default function OrderDetail() {
 
 // ── Render message with highlighted @mentions ─────────────────────────────────
 function MessageText({ text, isMe }) {
-  const parts = text.split(/(@\w[\w\s]*)/g);
+  const parts = text.split(/(@[\w][\w\s/]*[\w])/g);
   return (
     <>
       {parts.map((part, i) =>
@@ -776,14 +776,15 @@ function ChatPanel({ orderId, currentUser }) {
     const val = e.target.value;
     setNewMsg(val);
     const caret = e.target.selectionStart;
-    // Find the last @ before caret
     const textToCaret = val.slice(0, caret);
     const atIdx = textToCaret.lastIndexOf('@');
-    if (atIdx !== -1) {
-      const query = textToCaret.slice(atIdx + 1);
-      // Only show dropdown if no space before caret (i.e. still typing the mention)
-      if (!query.includes(' ') || query.length === 0) {
-        setMentionQuery(query.toLowerCase());
+    if (atIdx !== -1 && (atIdx === 0 || /\s/.test(textToCaret[atIdx - 1]))) {
+      const query = textToCaret.slice(atIdx + 1).toLowerCase();
+      const hasMatches = query.length === 0 || users.some(u =>
+        u.name.toLowerCase().includes(query) || (u.role || '').toLowerCase().includes(query)
+      );
+      if (hasMatches) {
+        setMentionQuery(query);
         setMentionPos(atIdx);
         return;
       }

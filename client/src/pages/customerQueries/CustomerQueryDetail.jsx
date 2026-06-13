@@ -98,7 +98,16 @@ export default function CustomerQueryDetail() {
     if (!newMsg.trim()) return;
     setSending(true);
     try {
-      await api.post(`/customer-queries/${id}/messages`, { message: newMsg, mentionIds });
+      let finalMsg = newMsg;
+      if (mentionIds.length > 0) {
+        const mentionNames = mentionIds
+          .map(uid => users.find(u => u.id === uid))
+          .filter(Boolean)
+          .map(u => `@${u.name}`)
+          .join(' ');
+        finalMsg = mentionNames + ' ' + newMsg;
+      }
+      await api.post(`/customer-queries/${id}/messages`, { message: finalMsg, mentionIds });
       setNewMsg('');
       setMentionIds([]);
       const r = await api.get(`/customer-queries/${id}/messages`);
@@ -526,8 +535,7 @@ export default function CustomerQueryDetail() {
 // Highlight @mentions in message text
 function highlightMentions(text, users) {
   if (!text) return text;
-  // Simple: look for @Name patterns
-  const parts = text.split(/(@\w[\w\s/]*)/g);
+  const parts = text.split(/(@[\w][\w\s/]*[\w])/g);
   return parts.map((part, i) => {
     if (part.startsWith('@')) {
       return <span key={i} className="text-blue-600 font-semibold bg-blue-50 px-0.5 rounded">{part}</span>;

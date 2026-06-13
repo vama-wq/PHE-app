@@ -6,11 +6,12 @@ const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, deleteFromSto
 // ── Mentions ──────────────────────────────────────────────────────────────────
 router.get('/my-mentions', authenticate, async (req, res) => {
   const db = getDB();
-  const mentions = await db.all(
+  const orderMentions = await db.all(
     `SELECT mm.id, mm.is_read, mm.created_at,
             om.message, om.user_id as sender_id,
             u.name as sender_name, u.role as sender_role,
-            o.id as order_id, o.order_code
+            o.id as order_id, o.order_code,
+            'order' as source, NULL as query_id, NULL as query_no
      FROM message_mentions mm
      JOIN order_messages om ON om.id = mm.message_id
      JOIN users u ON u.id = om.user_id
@@ -20,22 +21,47 @@ router.get('/my-mentions', authenticate, async (req, res) => {
      LIMIT 50`,
     [req.user.id]
   );
-  res.json(mentions);
+  const queryMentions = await db.all(
+    `SELECT cqm.id, cqm.is_read, cqm.created_at,
+            m.message, m.user_id as sender_id,
+            u.name as sender_name, u.role as sender_role,
+            NULL as order_id, NULL as order_code,
+            'query' as source, cq.id as query_id, cq.query_no
+     FROM customer_query_mentions cqm
+     JOIN customer_query_messages m ON m.id = cqm.message_id
+     JOIN users u ON u.id = m.user_id
+     JOIN customer_queries cq ON cq.id = cqm.query_id
+     WHERE cqm.mentioned_user_id = $1
+     ORDER BY cqm.created_at DESC
+     LIMIT 50`,
+    [req.user.id]
+  );
+  const all = [...orderMentions, ...queryMentions]
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .slice(0, 50);
+  res.json(all);
 });
 
 router.put('/my-mentions/:id/read', authenticate, async (req, res) => {
-  await getDB().run(
-    'UPDATE message_mentions SET is_read=1 WHERE id=$1 AND mentioned_user_id=$2',
-    [req.params.id, req.user.id]
-  );
+  const { source } = req.query;
+  if (source === 'query') {
+    await getDB().run(
+      'UPDATE customer_query_mentions SET is_read=1 WHERE id=$1 AND mentioned_user_id=$2',
+      [req.params.id, req.user.id]
+    );
+  } else {
+    await getDB().run(
+      'UPDATE message_mentions SET is_read=1 WHERE id=$1 AND mentioned_user_id=$2',
+      [req.params.id, req.user.id]
+    );
+  }
   res.json({ message: 'Marked as read' });
 });
 
 router.put('/my-mentions/read-all', authenticate, async (req, res) => {
-  await getDB().run(
-    'UPDATE message_mentions SET is_read=1 WHERE mentioned_user_id=$1',
-    [req.user.id]
-  );
+  const db = getDB();
+  await db.run('UPDATE message_mentions SET is_read=1 WHERE mentioned_user_id=$1', [req.user.id]);
+  await db.run('UPDATE customer_query_mentions SET is_read=1 WHERE mentioned_user_id=$1', [req.user.id]);
   res.json({ message: 'All marked as read' });
 });
 

@@ -113,23 +113,47 @@ function ActivityFeed({ items }) {
 function MentionsPanel() {
   const [mentions, setMentions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [prevUnread, setPrevUnread] = useState(0);
 
   const load = () => {
     api.get('/orders/my-mentions').then(r => { setMentions(r.data); setLoading(false); }).catch(() => setLoading(false));
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
 
-  const markRead = async (id) => {
-    await api.put(`/orders/my-mentions/${id}/read`).catch(() => {});
-    setMentions(prev => prev.map(m => m.id === id ? { ...m, is_read: 1 } : m));
+  // Request notification permission on mount
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Desktop notification when new unread mentions arrive
+  const unread = mentions.filter(m => !m.is_read).length;
+  useEffect(() => {
+    if (unread > prevUnread && prevUnread >= 0 && !loading) {
+      const newest = mentions.find(m => !m.is_read);
+      if (newest && 'Notification' in window && Notification.permission === 'granted') {
+        const source = newest.source === 'query' ? newest.query_no : newest.order_code;
+        new Notification('New mention in PHE', {
+          body: `${newest.sender_name} mentioned you in ${source}: "${newest.message?.slice(0, 80)}"`,
+          icon: '/favicon.ico',
+          tag: `mention-${newest.id}-${newest.source}`,
+        });
+      }
+    }
+    setPrevUnread(unread);
+  }, [unread]);
+
+  const markRead = async (m) => {
+    const qs = m.source === 'query' ? '?source=query' : '';
+    await api.put(`/orders/my-mentions/${m.id}/read${qs}`).catch(() => {});
+    setMentions(prev => prev.map(x => x.id === m.id && x.source === m.source ? { ...x, is_read: 1 } : x));
   };
 
   const markAllRead = async () => {
     await api.put('/orders/my-mentions/read-all').catch(() => {});
     setMentions(prev => prev.map(m => ({ ...m, is_read: 1 })));
   };
-
-  const unread = mentions.filter(m => !m.is_read).length;
 
   return (
     <div className="card">
@@ -156,7 +180,7 @@ function MentionsPanel() {
         <div className="divide-y divide-gray-50 max-h-72 overflow-y-auto">
           {mentions.map(m => (
             <div
-              key={m.id}
+              key={`${m.source}-${m.id}`}
               className={`px-4 py-3 flex gap-3 transition-colors ${!m.is_read ? 'bg-brand-50' : ''}`}
             >
               <div className="flex-1 min-w-0">
@@ -164,13 +188,20 @@ function MentionsPanel() {
                   {!m.is_read && <span className="w-2 h-2 rounded-full bg-brand-600 flex-shrink-0" />}
                   <span className="text-xs font-semibold text-gray-700">{m.sender_name}</span>
                   <span className="text-xs text-gray-400">in</span>
-                  <Link to={`/orders/${m.order_id}`} className="text-xs text-brand-600 hover:underline font-medium">{m.order_code}</Link>
+                  {m.source === 'query' ? (
+                    <Link to={`/customer-queries/${m.query_id}`} className="text-xs text-brand-600 hover:underline font-medium">{m.query_no}</Link>
+                  ) : (
+                    <Link to={`/orders/${m.order_id}`} className="text-xs text-brand-600 hover:underline font-medium">{m.order_code}</Link>
+                  )}
+                  <span className={`text-xs px-1 py-0.5 rounded ${m.source === 'query' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                    {m.source === 'query' ? 'Query' : 'Order'}
+                  </span>
                 </div>
                 <p className="text-sm text-gray-600 truncate">{m.message}</p>
                 <p className="text-xs text-gray-400 mt-0.5">{fmtDateTime(m.created_at)}</p>
               </div>
               {!m.is_read && (
-                <button onClick={() => markRead(m.id)} className="text-xs text-gray-400 hover:text-brand-600 flex-shrink-0 self-start pt-1" title="Mark as read">
+                <button onClick={() => markRead(m)} className="text-xs text-gray-400 hover:text-brand-600 flex-shrink-0 self-start pt-1" title="Mark as read">
                   <CheckCircle size={14} />
                 </button>
               )}
