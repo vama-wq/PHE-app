@@ -102,3 +102,15 @@
   }
 }
 .print-only { display: none; }
+
+/* ── Policy / User Guide content styles ── */
+.policy-content p { @apply text-sm text-gray-700 leading-relaxed mb-3; }
+.policy-content h4 { @apply text-sm font-semibold text-gray-900 mt-5 mb-2; }
+.policy-content ul, .policy-content ol { @apply text-sm text-gray-700 pl-5 mb-3 space-y-1; }
+.policy-content ul { list-style-type: disc; }
+.policy-content ol { list-style-type: decimal; }
+.policy-content table { @apply w-full text-sm mb-4 border border-gray-200 rounded-lg overflow-hidden; }
+.policy-content thead { @apply bg-gray-50; }
+.policy-content th { @apply px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200; }
+.policy-content td { @apply px-3 py-2 text-gray-600 border-b border-gray-100; }
+.policy-content em { @apply text-xs text-gray-400 not-italic; }

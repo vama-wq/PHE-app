@@ -6,7 +6,7 @@ import api from '../../lib/api';
 import {
   LayoutDashboard, ClipboardList, FileText, Package,
   Users, Box, Wrench, Truck, LogOut, FlaskConical,
-  Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse, PenLine, HelpCircle, Bell
+  Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse, PenLine, HelpCircle, Bell, BookOpen
 } from 'lucide-react';
 
 const NAV = [
@@ -25,6 +25,7 @@ const NAV = [
   { id: 'customers',     to: '/customers',     icon: Users,           label: 'Customers',       roles: ['admin','owner'] },
   { id: 'products',      to: '/products',      icon: Box,             label: 'Products',        roles: null },
   { id: 'reports',       to: '/reports',       icon: BarChart2,       label: 'Reports',         roles: null },
+  { id: 'policy',        to: '/policy',        icon: BookOpen,        label: 'Policy of PHE',   roles: null },
 ];
 
 const ROLE_DOT = {
