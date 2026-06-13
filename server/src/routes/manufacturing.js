@@ -6,35 +6,34 @@ router.get('/planning-data', authenticate, authorize('owner', 'production'), asy
   try {
     const db = getDB();
 
-    const cards = await db.all(`
-      SELECT jc.id, jc.job_card_no, jc.qty, jc.dispatch_date, jc.status,
+    const cards = await db.all(
+      `SELECT jc.id, jc.job_card_no, jc.qty, jc.dispatch_date, jc.status,
         jc.product_name, jc.drawing_no, jc.punching,
         o.order_code, c.customer_code
       FROM job_cards jc
       JOIN orders o ON jc.order_id = o.id
       JOIN customers c ON o.customer_id = c.id
-      WHERE jc.status NOT IN ('dispatched', 'resolved_dispatched')
-      ORDER BY jc.dispatch_date ASC
-    `);
+      WHERE jc.status NOT IN ($1, $2)
+      ORDER BY jc.dispatch_date ASC`,
+      ['dispatched', 'resolved_dispatched']
+    );
 
     if (cards.length === 0) return res.json({ cards: [], stages: [] });
 
-    // Fetch all checklist stages for active cards in one query using a subquery
-    const stages = await db.all(`
-      SELECT pc.job_card_id, pc.stage_no, pc.done, pc.done_at, pc.worker_name,
+    const stages = await db.all(
+      `SELECT pc.job_card_id, pc.stage_no, pc.done, pc.done_at, pc.worker_name,
         pc.rejection_qty, pc.remade_qty
       FROM production_checklist pc
-      WHERE pc.job_card_id IN (
-        SELECT jc.id FROM job_cards jc
-        WHERE jc.status NOT IN ('dispatched', 'resolved_dispatched')
-      )
-      ORDER BY pc.job_card_id, pc.stage_no
-    `);
+      INNER JOIN job_cards jc ON jc.id = pc.job_card_id
+      WHERE jc.status NOT IN ($1, $2)
+      ORDER BY pc.job_card_id, pc.stage_no`,
+      ['dispatched', 'resolved_dispatched']
+    );
 
     res.json({ cards, stages });
   } catch (err) {
     console.error('Manufacturing planning-data error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, stack: err.stack?.split('\n').slice(0, 3) });
   }
 });
 
