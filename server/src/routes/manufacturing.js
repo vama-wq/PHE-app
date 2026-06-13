@@ -38,4 +38,15 @@ router.get('/planning-data', authenticate, authorize('owner', 'production'), asy
   }
 });
 
+// Temporary debug endpoint — remove after testing
+router.get('/debug', async (req, res) => {
+  try {
+    const db = getDB();
+    const { rows } = await db.pool.query('SELECT COUNT(*) as c FROM job_cards WHERE status NOT IN ($1, $2)', ['dispatched', 'resolved_dispatched']);
+    res.json({ ok: true, activeCards: rows[0].c });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 module.exports = router;
