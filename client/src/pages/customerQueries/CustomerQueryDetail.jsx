@@ -8,7 +8,7 @@ import { fmtDate, fmtDateTime, ROLE_LABELS } from '../../lib/utils';
 import {
   ArrowLeft, Send, Camera, Upload, CheckCircle, XCircle, AlertTriangle,
   MessageSquare, Clock, User, AtSign, ChevronRight, Truck, FileText,
-  RotateCcw, CreditCard, Package, Wrench, Image, X
+  RotateCcw, CreditCard, Package, Wrench, Image, X, Paperclip, Download, File
 } from 'lucide-react';
 
 const QUERY_STATUS_LABELS = {
@@ -57,7 +57,9 @@ export default function CustomerQueryDetail() {
   const [sending, setSending] = useState(false);
   const [mentionIds, setMentionIds] = useState([]);
   const [showMentions, setShowMentions] = useState(false);
+  const [chatAttachments, setChatAttachments] = useState([]);
   const chatEndRef = useRef(null);
+  const chatFileRef = useRef(null);
 
   // Modal states
   const [showResolve, setShowResolve] = useState(false);
@@ -95,7 +97,7 @@ export default function CustomerQueryDetail() {
   }, [messages]);
 
   const sendMessage = async () => {
-    if (!newMsg.trim()) return;
+    if (!newMsg.trim() && !chatAttachments.length) return;
     setSending(true);
     try {
       let finalMsg = newMsg;
@@ -107,9 +109,14 @@ export default function CustomerQueryDetail() {
           .join(' ');
         finalMsg = mentionNames + ' ' + newMsg;
       }
-      await api.post(`/customer-queries/${id}/messages`, { message: finalMsg, mentionIds });
+      const fd = new FormData();
+      fd.append('message', finalMsg);
+      fd.append('mentionIds', JSON.stringify(mentionIds));
+      chatAttachments.forEach(f => fd.append('attachments', f));
+      await api.post(`/customer-queries/${id}/messages`, fd);
       setNewMsg('');
       setMentionIds([]);
+      setChatAttachments([]);
       const r = await api.get(`/customer-queries/${id}/messages`);
       setMessages(r.data);
     } catch {}
@@ -417,7 +424,26 @@ export default function CustomerQueryDetail() {
                       <span className="text-xs font-semibold text-gray-700">{msg.user_name}</span>
                       <span className="text-xs text-gray-400 capitalize">{ROLE_LABELS[msg.user_role] || msg.user_role}</span>
                     </div>
-                    <p className="text-sm text-gray-800 whitespace-pre-wrap">{highlightMentions(msg.message, users)}</p>
+                    {msg.message && <p className="text-sm text-gray-800 whitespace-pre-wrap">{highlightMentions(msg.message, users)}</p>}
+                    {msg.attachments?.length > 0 && (
+                      <div className={`flex flex-wrap gap-2 ${msg.message ? 'mt-2' : ''}`}>
+                        {msg.attachments.map(att => {
+                          const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(att.file_name);
+                          return isImage ? (
+                            <a key={att.id} href={`/uploads/${att.file_path}`} target="_blank" rel="noreferrer" className="block">
+                              <img src={`/uploads/${att.file_path}`} alt={att.file_name} className="max-w-[200px] max-h-[150px] rounded-lg border border-gray-200 object-cover" />
+                            </a>
+                          ) : (
+                            <a key={att.id} href={`/uploads/${att.file_path}`} target="_blank" rel="noreferrer"
+                              className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs bg-white border border-gray-200 text-gray-700 hover:bg-gray-50">
+                              <File size={12} />
+                              <span className="truncate max-w-[120px]">{att.file_name}</span>
+                              <Download size={10} />
+                            </a>
+                          );
+                        })}
+                      </div>
+                    )}
                     <div className="text-xs text-gray-400 mt-1 text-right">{fmtDateTime(msg.created_at)}</div>
                   </div>
                 </div>
@@ -441,6 +467,19 @@ export default function CustomerQueryDetail() {
                       </span>
                     ) : null;
                   })}
+                </div>
+              )}
+              {chatAttachments.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {chatAttachments.map((f, i) => (
+                    <div key={i} className="flex items-center gap-1.5 bg-gray-100 rounded-lg px-2 py-1 text-xs text-gray-600">
+                      <Paperclip size={10} />
+                      <span className="truncate max-w-[120px]">{f.name}</span>
+                      <button type="button" onClick={() => setChatAttachments(prev => prev.filter((_, j) => j !== i))} className="text-gray-400 hover:text-red-500">
+                        <X size={10} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -468,6 +507,14 @@ export default function CustomerQueryDetail() {
                     </div>
                   )}
                 </div>
+                <input type="file" ref={chatFileRef} className="hidden" multiple
+                  accept="image/*,.pdf,.doc,.docx,.xls,.xlsx"
+                  onChange={e => { setChatAttachments(prev => [...prev, ...Array.from(e.target.files)]); e.target.value = ''; }}
+                />
+                <button type="button" onClick={() => chatFileRef.current?.click()}
+                  className="btn-ghost p-2 text-gray-400 hover:text-blue-600" title="Attach files">
+                  <Paperclip size={18} />
+                </button>
                 <input
                   className="input flex-1"
                   placeholder="Type a message..."
@@ -476,7 +523,7 @@ export default function CustomerQueryDetail() {
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
                   onFocus={() => setShowMentions(false)}
                 />
-                <button className="btn-primary px-4" onClick={sendMessage} disabled={sending || !newMsg.trim()}>
+                <button className="btn-primary px-4" onClick={sendMessage} disabled={sending || (!newMsg.trim() && !chatAttachments.length)}>
                   <Send size={16} />
                 </button>
               </div>

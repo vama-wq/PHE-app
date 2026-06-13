@@ -107,6 +107,7 @@ const uploaders = {
   productPhoto:    makeUploader('product-photos',     imageOnlyFilter, 10),
   itemDrawing:     makeUploader('item-drawings',      fileFilter),
   purchaseQC:      makeUploader('purchase-qc',        fileFilter),
+  chatAttachment:  makeUploader('chat-attachments',   fileFilter, 10),
 };
 
 // Export multer + push middleware pairs, matching the old named-export API
@@ -124,6 +125,7 @@ module.exports = {
   uploadProductPhoto:    [uploaders.productPhoto.upload.single('photo'),    uploaders.productPhoto.pushToStorage],
   uploadItemDrawing:     [uploaders.itemDrawing.upload.single('drawing'),   uploaders.itemDrawing.pushToStorage],
   uploadPurchaseQC:      [uploaders.purchaseQC.upload.single('report'),     uploaders.purchaseQC.pushToStorage],
+  uploadChatAttachments: [uploaders.chatAttachment.upload.array('attachments', 5), uploaders.chatAttachment.pushToStorage],
 
   // Utilities for route handlers
   uploadToStorage,

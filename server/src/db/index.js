@@ -244,6 +244,30 @@ async function initDB(retries = 10, delayMs = 3000) {
           created_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      // ── Message attachments ──────────────────────────────────────────────────
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS message_attachments (
+          id SERIAL PRIMARY KEY,
+          message_id INTEGER NOT NULL,
+          file_path TEXT NOT NULL,
+          file_name TEXT NOT NULL,
+          file_size INTEGER DEFAULT 0,
+          mime_type TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS customer_query_message_attachments (
+          id SERIAL PRIMARY KEY,
+          message_id INTEGER NOT NULL REFERENCES customer_query_messages(id) ON DELETE CASCADE,
+          file_path TEXT NOT NULL,
+          file_name TEXT NOT NULL,
+          file_size INTEGER DEFAULT 0,
+          mime_type TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+
       // Add customer_query status to orders check constraint (allow new statuses)
       // Also add 'customer_query' and 'product_return' to job_cards status options
       // We'll just add the columns we need, constraints are loose in code

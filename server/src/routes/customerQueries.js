@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
-const { uploadToStorage, deleteFromStorage } = require('../middleware/upload');
+const { uploadToStorage, deleteFromStorage, uploadChatAttachments } = require('../middleware/upload');
 const multer = require('multer');
 
 const memStorage = multer.memoryStorage();
@@ -195,17 +195,28 @@ router.delete('/:id/photos/:photoId', authenticate, async (req, res) => {
 
 // ── Chat messages ──────────────────────────────────────────────────────────
 router.get('/:id/messages', authenticate, async (req, res) => {
-  res.json(await getDB().all(
+  const db = getDB();
+  const messages = await db.all(
     `SELECT m.*, u.name as user_name, u.role as user_role
      FROM customer_query_messages m JOIN users u ON m.user_id = u.id
      WHERE m.query_id = $1 ORDER BY m.created_at ASC`,
     [req.params.id]
-  ));
+  );
+  for (const msg of messages) {
+    msg.attachments = await db.all(
+      'SELECT id, file_path, file_name, file_size, mime_type FROM customer_query_message_attachments WHERE message_id = $1',
+      [msg.id]
+    );
+  }
+  res.json(messages);
 });
 
-router.post('/:id/messages', authenticate, async (req, res) => {
-  const { message, mentionIds } = req.body;
-  if (!message?.trim()) return res.status(400).json({ error: 'Message cannot be empty' });
+router.post('/:id/messages', authenticate, ...uploadChatAttachments, async (req, res) => {
+  const { message } = req.body;
+  let mentionIds = req.body.mentionIds;
+  if (typeof mentionIds === 'string') try { mentionIds = JSON.parse(mentionIds); } catch { mentionIds = []; }
+  const hasFiles = req.files?.length > 0;
+  if (!message?.trim() && !hasFiles) return res.status(400).json({ error: 'Message or attachment required' });
   const db = getDB();
 
   const q = await db.get('SELECT id, query_no FROM customer_queries WHERE id=$1', [req.params.id]);
@@ -213,9 +224,18 @@ router.post('/:id/messages', authenticate, async (req, res) => {
 
   const r = await db.insert(
     'INSERT INTO customer_query_messages (query_id, user_id, message) VALUES ($1,$2,$3)',
-    [req.params.id, req.user.id, message.trim()]
+    [req.params.id, req.user.id, (message || '').trim()]
   );
   const messageId = r.lastInsertRowid;
+
+  if (hasFiles) {
+    for (const f of req.files) {
+      await db.insert(
+        'INSERT INTO customer_query_message_attachments (message_id, file_path, file_name, file_size, mime_type) VALUES ($1,$2,$3,$4,$5)',
+        [messageId, f.storagePath, f.originalname, f.size, f.mimetype]
+      );
+    }
+  }
 
   // Insert mentions
   if (Array.isArray(mentionIds) && mentionIds.length) {

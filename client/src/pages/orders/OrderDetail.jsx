@@ -9,7 +9,7 @@ import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transli
 import {
   ArrowLeft, CheckCircle, CheckCircle2, XCircle, FileText, Plus, Upload,
   ExternalLink, Trash2, Edit2, Package, PenLine, MessageSquare,
-  Clock, AlertTriangle, Image as ImageIcon, Send, X, RefreshCw, ClipboardList
+  Clock, AlertTriangle, Image as ImageIcon, Send, X, RefreshCw, ClipboardList, Paperclip, Download, File
 } from 'lucide-react';
 
 // ── Required-field validation (mirrors OrderList) ────────────────────────────
@@ -750,11 +750,13 @@ function ChatPanel({ orderId, currentUser }) {
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState([]);
-  const [mentionQuery, setMentionQuery] = useState(null); // string after @ or null
-  const [mentionPos, setMentionPos] = useState(0);        // caret position where @ was typed
-  const [mentionedIds, setMentionedIds] = useState([]);   // user IDs mentioned in current draft
+  const [mentionQuery, setMentionQuery] = useState(null);
+  const [mentionPos, setMentionPos] = useState(0);
+  const [mentionedIds, setMentionedIds] = useState([]);
+  const [attachments, setAttachments] = useState([]);
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const loadMessages = async () => {
     const r = await api.get(`/orders/${orderId}/messages`);
@@ -816,13 +818,18 @@ function ChatPanel({ orderId, currentUser }) {
   };
 
   const sendMessage = async () => {
-    if (!newMsg.trim() || sending) return;
+    if ((!newMsg.trim() && !attachments.length) || sending) return;
     setSending(true);
     try {
-      await api.post(`/orders/${orderId}/messages`, { message: newMsg, mentionIds: mentionedIds });
+      const fd = new FormData();
+      fd.append('message', newMsg);
+      fd.append('mentionIds', JSON.stringify(mentionedIds));
+      attachments.forEach(f => fd.append('attachments', f));
+      await api.post(`/orders/${orderId}/messages`, fd);
       setNewMsg('');
       setMentionQuery(null);
       setMentionedIds([]);
+      setAttachments([]);
       await loadMessages();
     } finally {
       setSending(false);
@@ -881,7 +888,26 @@ function ChatPanel({ orderId, currentUser }) {
                       ? 'bg-brand-600 text-white rounded-tr-sm'
                       : 'bg-gray-100 text-gray-800 rounded-tl-sm'
                   }`}>
-                    <MessageText text={msg.message} isMe={isMe} />
+                    {msg.message && <MessageText text={msg.message} isMe={isMe} />}
+                    {msg.attachments?.length > 0 && (
+                      <div className={`flex flex-wrap gap-2 ${msg.message ? 'mt-2' : ''}`}>
+                        {msg.attachments.map(att => {
+                          const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(att.file_name);
+                          return isImage ? (
+                            <a key={att.id} href={`/uploads/${att.file_path}`} target="_blank" rel="noreferrer" className="block">
+                              <img src={`/uploads/${att.file_path}`} alt={att.file_name} className="max-w-[200px] max-h-[150px] rounded-lg border border-white/20 object-cover" />
+                            </a>
+                          ) : (
+                            <a key={att.id} href={`/uploads/${att.file_path}`} target="_blank" rel="noreferrer"
+                              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs ${isMe ? 'bg-white/15 text-white hover:bg-white/25' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
+                              <File size={12} />
+                              <span className="truncate max-w-[120px]">{att.file_name}</span>
+                              <Download size={10} />
+                            </a>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                   <span className="text-xs text-gray-300">{fmtDateTime(msg.created_at)}</span>
                 </div>
@@ -893,7 +919,7 @@ function ChatPanel({ orderId, currentUser }) {
       </div>
 
       {/* Input */}
-      <div className="border-t border-gray-100 p-3 flex gap-2 items-end relative">
+      <div className="border-t border-gray-100 p-3 relative">
         {/* @mention dropdown */}
         {mentionQuery !== null && filteredUsers.length > 0 && (
           <div className="absolute bottom-full left-3 mb-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
@@ -915,24 +941,47 @@ function ChatPanel({ orderId, currentUser }) {
             ))}
           </div>
         )}
-        <textarea
-          ref={textareaRef}
-          className="input flex-1 resize-none text-sm py-2 leading-snug"
-          placeholder="Type a message… use @ to mention someone"
-          value={newMsg}
-          onChange={handleChange}
-          onKeyDown={handleKey}
-          rows={2}
-          style={{ minHeight: '40px', maxHeight: '80px' }}
-        />
-        <button
-          className="btn-primary px-3 py-2 flex-shrink-0"
-          disabled={sending || !newMsg.trim()}
-          onClick={sendMessage}
-          title="Send"
-        >
-          <Send size={15} />
-        </button>
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {attachments.map((f, i) => (
+              <div key={i} className="flex items-center gap-1.5 bg-gray-100 rounded-lg px-2 py-1 text-xs text-gray-600">
+                <Paperclip size={10} />
+                <span className="truncate max-w-[120px]">{f.name}</span>
+                <button type="button" onClick={() => setAttachments(prev => prev.filter((_, j) => j !== i))} className="text-gray-400 hover:text-red-500">
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2 items-end">
+          <input type="file" ref={fileInputRef} className="hidden" multiple
+            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx"
+            onChange={e => { setAttachments(prev => [...prev, ...Array.from(e.target.files)]); e.target.value = ''; }}
+          />
+          <button type="button" onClick={() => fileInputRef.current?.click()}
+            className="p-2 text-gray-400 hover:text-brand-600 transition-colors flex-shrink-0" title="Attach files">
+            <Paperclip size={16} />
+          </button>
+          <textarea
+            ref={textareaRef}
+            className="input flex-1 resize-none text-sm py-2 leading-snug"
+            placeholder="Type a message… use @ to mention someone"
+            value={newMsg}
+            onChange={handleChange}
+            onKeyDown={handleKey}
+            rows={2}
+            style={{ minHeight: '40px', maxHeight: '80px' }}
+          />
+          <button
+            className="btn-primary px-3 py-2 flex-shrink-0"
+            disabled={sending || (!newMsg.trim() && !attachments.length)}
+            onClick={sendMessage}
+            title="Send"
+          >
+            <Send size={15} />
+          </button>
+        </div>
       </div>
     </div>
   );

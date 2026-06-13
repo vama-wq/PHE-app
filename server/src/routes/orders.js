@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
-const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, deleteFromStorage } = require('../middleware/upload');
+const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, deleteFromStorage } = require('../middleware/upload');
 
 // ── Mentions ──────────────────────────────────────────────────────────────────
 router.get('/my-mentions', authenticate, async (req, res) => {
@@ -392,23 +392,43 @@ router.delete('/:id/drawings/:drawingId', authenticate, authorize('design', 'adm
 });
 
 router.get('/:id/messages', authenticate, async (req, res) => {
-  res.json(await getDB().all(
+  const db = getDB();
+  const messages = await db.all(
     `SELECT om.*, u.name as user_name, u.role as user_role
      FROM order_messages om JOIN users u ON om.user_id = u.id
      WHERE om.order_id = $1 ORDER BY om.created_at ASC`,
     [req.params.id]
-  ));
+  );
+  for (const msg of messages) {
+    msg.attachments = await db.all(
+      'SELECT id, file_path, file_name, file_size, mime_type FROM message_attachments WHERE message_id = $1',
+      [msg.id]
+    );
+  }
+  res.json(messages);
 });
 
-router.post('/:id/messages', authenticate, async (req, res) => {
-  const { message, mentionIds } = req.body;
-  if (!message?.trim()) return res.status(400).json({ error: 'Message cannot be empty' });
+router.post('/:id/messages', authenticate, ...uploadChatAttachments, async (req, res) => {
+  const { message } = req.body;
+  let mentionIds = req.body.mentionIds;
+  if (typeof mentionIds === 'string') try { mentionIds = JSON.parse(mentionIds); } catch { mentionIds = []; }
+  const hasFiles = req.files?.length > 0;
+  if (!message?.trim() && !hasFiles) return res.status(400).json({ error: 'Message or attachment required' });
   const db = getDB();
   const r = await db.insert(
     'INSERT INTO order_messages (order_id, user_id, message) VALUES ($1,$2,$3)',
-    [req.params.id, req.user.id, message.trim()]
+    [req.params.id, req.user.id, (message || '').trim()]
   );
   const messageId = r.lastInsertRowid;
+
+  if (hasFiles) {
+    for (const f of req.files) {
+      await db.insert(
+        'INSERT INTO message_attachments (message_id, file_path, file_name, file_size, mime_type) VALUES ($1,$2,$3,$4,$5)',
+        [messageId, f.storagePath, f.originalname, f.size, f.mimetype]
+      );
+    }
+  }
 
   // Insert mentions using client-supplied user IDs (avoids regex parsing of names with spaces/slashes)
   if (Array.isArray(mentionIds) && mentionIds.length) {
