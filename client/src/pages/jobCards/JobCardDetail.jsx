@@ -639,9 +639,9 @@ function OverviewTab({ jc }) {
                     {/* Stage Photos */}
                     <div className="flex gap-3 mt-2">
                       {s.photo_file && (
-                        <button onClick={() => setPhotoModal({ src: `/uploads/production-photos/${s.photo_file}`, label: `Stage ${s.stage_no} Photo` })}
+                        <button onClick={() => setPhotoModal({ src: `/uploads/checklist-photos/${s.photo_file}`, label: `Stage ${s.stage_no} Photo` })}
                           className="w-20 h-20 rounded-lg overflow-hidden border-2 border-green-200 hover:border-green-400 transition-colors cursor-pointer">
-                          <img src={`/uploads/production-photos/${s.photo_file}`} alt={`Stage ${s.stage_no}`}
+                          <img src={`/uploads/checklist-photos/${s.photo_file}`} alt={`Stage ${s.stage_no}`}
                             className="w-full h-full object-cover" onError={e => { e.target.parentElement.style.display = 'none'; }} />
                         </button>
                       )}
@@ -672,9 +672,9 @@ function OverviewTab({ jc }) {
               return (
                 <div key={`photo-${stage.stage_no}`} className="space-y-2">
                   {stage.photo_file && (
-                    <button onClick={() => setPhotoModal({ src: `/uploads/production-photos/${stage.photo_file}`, label: `Stage ${stage.stage_no}: ${def?.name || ''}` })}
+                    <button onClick={() => setPhotoModal({ src: `/uploads/checklist-photos/${stage.photo_file}`, label: `Stage ${stage.stage_no}: ${def?.name || ''}` })}
                       className="relative group overflow-hidden rounded-lg bg-gray-200 w-full cursor-pointer">
-                      <img src={`/uploads/production-photos/${stage.photo_file}`} alt={`Stage ${stage.stage_no}`}
+                      <img src={`/uploads/checklist-photos/${stage.photo_file}`} alt={`Stage ${stage.stage_no}`}
                         className="w-full h-40 object-cover group-hover:scale-110 transition-transform duration-200"
                         onError={e => { e.target.style.display = 'none'; }} />
                       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2">
@@ -779,7 +779,7 @@ function OverviewTab({ jc }) {
                   {report.product_weight && <p className="text-xs text-gray-600 mt-1">Weight: {report.product_weight}g</p>}
                 </div>
                 {report.file_name && (
-                  <a href={`/uploads/qc-reports/${report.file_name}`} target="_blank" rel="noopener noreferrer"
+                  <a href={`/uploads/qc/${report.file_name}`} target="_blank" rel="noopener noreferrer"
                     className="ml-4 px-3 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Download</a>
                 )}
               </div>
