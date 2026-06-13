@@ -30,6 +30,7 @@ import CustomerQueryList from './pages/customerQueries/CustomerQueryList';
 import CustomerQueryDetail from './pages/customerQueries/CustomerQueryDetail';
 import OrderTimeline from './pages/customerQueries/OrderTimeline';
 import PolicyGuide from './pages/PolicyGuide';
+import ManufacturingPlan from './pages/manufacturing/ManufacturingPlan';
 
 // ── Module permission helper ──────────────────────────────────────────────────
 // null permitted_modules = full role-based access. Owner always has full access.
@@ -143,6 +144,11 @@ export default function App() {
           } />
 
           <Route path="reports" element={<ModuleRoute module="reports"><ReportsDashboard /></ModuleRoute>} />
+          <Route path="manufacturing-plan" element={
+            <ProtectedRoute roles={['owner','production']}>
+              <ManufacturingPlan />
+            </ProtectedRoute>
+          } />
           <Route path="policy" element={<PolicyGuide />} />
 
           {/* Account pages are never module-gated */}
