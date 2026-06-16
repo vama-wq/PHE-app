@@ -640,7 +640,7 @@ export default function OrderDetail() {
                         <span className="text-xs text-gray-500 font-medium flex items-center gap-1">
                           <CheckCircle2 size={11} className="text-green-500" /> Job Card Uploaded
                         </span>
-                      ) : drawingStatus === 'approved' || order.order_code === 'ORD-020-26' ? (
+                      ) : drawingStatus === 'approved' || ['ORD-020-26','ORD-024-26'].includes(order.order_code) ? (
                         <button className="btn-primary btn-sm py-1 px-2 text-xs"
                           onClick={() => { setShowJobCardModal(true); }}>
                           <Upload size={12} /> Upload Job Card
@@ -1619,7 +1619,7 @@ function UploadJobCardModal({ orderId, orderCode, defaultDispatchDate, items, jo
   const [saving, setSaving] = useState(false);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  const bypassDrawing = orderCode === 'ORD-020-26';
+  const bypassDrawing = ['ORD-020-26','ORD-024-26'].includes(orderCode);
   const takenDrawings = new Set(jobCards.map(jc => jc.drawing_no).filter(Boolean));
   const availableItems = items.filter(item =>
     (bypassDrawing || itemDrawingStatus[item.id] === 'approved') && !takenDrawings.has(item.drawing_number)
