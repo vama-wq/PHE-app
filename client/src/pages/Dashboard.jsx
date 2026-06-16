@@ -133,11 +133,13 @@ function MentionsPanel() {
     if (unread > prevUnread && prevUnread >= 0 && !loading) {
       const newest = notifications.find(n => !n.is_read);
       if (newest && 'Notification' in window && Notification.permission === 'granted') {
-        new Notification(newest.title, {
-          body: newest.body || '',
-          icon: '/favicon.ico',
-          tag: `notif-${newest.id}`,
-        });
+        try {
+          new Notification(newest.title, {
+            body: newest.body || '',
+            icon: '/favicon.ico',
+            tag: `notif-${newest.id}`,
+          });
+        } catch (e) {}
       }
     }
     setPrevUnread(unread);
