@@ -114,7 +114,7 @@ router.get('/drawings/pending', authenticate, async (req, res) => {
     FROM orders o
     JOIN customers c ON c.id = o.customer_id
     LEFT JOIN users u ON u.id = o.created_by
-    WHERE o.status = 'approved'
+    WHERE o.status IN ('approved', 'job_card_created', 'in_progress')
     ORDER BY o.created_at DESC
   `);
   res.json(rows);
