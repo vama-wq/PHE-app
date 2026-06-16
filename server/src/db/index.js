@@ -69,6 +69,19 @@ async function initDB(retries = 10, delayMs = 3000) {
     try {
       // Run idempotent migrations
       await pool.query(`ALTER TABLE job_card_holds ADD COLUMN IF NOT EXISTS notes TEXT`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS backup_log (
+          id SERIAL PRIMARY KEY,
+          backup_date   DATE NOT NULL,
+          completed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          status        TEXT NOT NULL,
+          db_bytes      BIGINT,
+          file_count    INTEGER,
+          storage_bytes BIGINT,
+          failures      INTEGER,
+          total_bytes   BIGINT,
+          host          TEXT
+        )`);
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS qc_rejected BOOLEAN DEFAULT FALSE`);
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS qc_rejection_notes TEXT`);
       await pool.query(`ALTER TABLE finished_goods_log ADD COLUMN IF NOT EXISTS client_code TEXT`);

@@ -7,8 +7,50 @@ import { Link } from 'react-router-dom';
 import {
   AlertTriangle, ClipboardList, CheckCircle, Clock, TrendingUp,
   Package, XCircle, ShoppingCart, FlaskConical, Wrench,
-  Truck, IndianRupee, Bell,
+  Truck, IndianRupee, Bell, DatabaseBackup,
 } from 'lucide-react';
+
+// ── Backup status badge (owner dashboard, top-right) ────────────────────────
+function BackupBadge({ backup }) {
+  if (backup === undefined) return null; // still loading
+  const today = new Date().toISOString().slice(0, 10);
+  const dateStr = backup?.backup_date ? String(backup.backup_date).slice(0, 10) : null;
+  const isToday = dateStr === today;
+
+  let tone, label;
+  if (!backup || !backup.status) { tone = 'gray';  label = 'No backup yet'; }
+  else if (backup.status === 'full' && isToday) { tone = 'green'; label = 'Backed up today'; }
+  else if (backup.status === 'full')            { tone = 'amber'; label = 'Backup outdated'; }
+  else if (backup.status === 'partial')         { tone = 'amber'; label = 'Backup partial'; }
+  else                                          { tone = 'red';   label = 'Backup failed'; }
+
+  const tones = {
+    green: 'bg-green-50 text-green-700 border-green-200',
+    amber: 'bg-amber-50 text-amber-700 border-amber-200',
+    red:   'bg-red-50 text-red-700 border-red-200',
+    gray:  'bg-gray-50 text-gray-500 border-gray-200',
+  };
+  const fmtBytes = (n) => {
+    n = Number(n) || 0; if (n < 1024) return n + ' B';
+    const u = ['KB','MB','GB']; let i = -1; do { n /= 1024; i++; } while (n >= 1024 && i < 2);
+    return n.toFixed(1) + ' ' + u[i];
+  };
+  const tooltip = backup?.status
+    ? `Last full backup: ${fmtDateTime(backup.completed_at)}\n${backup.file_count || 0} files · ${fmtBytes(backup.total_bytes)}` +
+      (backup.failures ? `\n${backup.failures} file(s) failed` : '')
+    : 'No backup has run yet';
+
+  return (
+    <div title={tooltip}
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium ${tones[tone]}`}>
+      <DatabaseBackup size={14} />
+      <span>{label}</span>
+      {backup?.completed_at && (
+        <span className="opacity-70">· {fmtDate(backup.backup_date)}</span>
+      )}
+    </div>
+  );
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -229,6 +271,7 @@ function OwnerAdminDashboard() {
   const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [loading, setLoading]             = useState(true);
   const [approvingHold, setApprovingHold] = useState(null);
+  const [backup, setBackup]               = useState(undefined);
 
   const hasOrders    = canSee(user, 'orders');
   const hasJobCards  = canSee(user, 'job-cards');
@@ -271,6 +314,7 @@ function OwnerAdminDashboard() {
     if (hasJobCards)  reqs.push(api.get('/job-cards/rejections/all').then(r => setRejections(r.data)));
     if (hasJobCards)  reqs.push(api.get('/job-cards/holds/active').then(r => setActiveHolds(r.data)));
     reqs.push(api.get('/activity/recent?limit=10').then(r => setRecent(r.data)));
+    reqs.push(api.get('/backup/status').then(r => setBackup(r.data)).catch(() => setBackup(null)));
     Promise.all(reqs).finally(() => setLoading(false));
   }, []);
 
@@ -289,9 +333,12 @@ function OwnerAdminDashboard() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">{greeting()}, {user.name.split('/')[0].trim()} 👋</h1>
-        <p className="text-gray-500 text-sm mt-1">Here's the current state of operations at PHE</p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">{greeting()}, {user.name.split('/')[0].trim()} 👋</h1>
+          <p className="text-gray-500 text-sm mt-1">Here's the current state of operations at PHE</p>
+        </div>
+        <BackupBadge backup={backup} />
       </div>
 
       {/* Stat row */}
