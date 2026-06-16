@@ -163,6 +163,12 @@ router.get('/:id', authenticate, async (req, res) => {
     [order.id]
   );
 
+  const priceReq = await db.get(
+    `SELECT id FROM activity_log WHERE order_id = $1 AND activity_type = 'price_requested' ORDER BY created_at DESC LIMIT 1`,
+    [order.id]
+  );
+  order.has_price_request = !!priceReq;
+
   const rawItems = await db.all('SELECT * FROM order_items WHERE order_id = $1 ORDER BY id ASC', [order.id]);
   order.items = await Promise.all(rawItems.map(async item => ({
     ...item,
@@ -237,16 +243,25 @@ router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => 
 });
 
 router.post('/:id/quotation', authenticate, authorize('admin', 'owner'), ...uploadQuotation, async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'File required' });
   const { notes, sent_date } = req.body;
   const db = getDB();
+
+  if (!req.file) {
+    const priceReq = await db.get(
+      `SELECT id FROM activity_log WHERE order_id = $1 AND activity_type = 'price_requested' LIMIT 1`,
+      [req.params.id]
+    );
+    if (!priceReq) return res.status(400).json({ error: 'File required' });
+    if (!notes || !notes.trim()) return res.status(400).json({ error: 'Price note is required when no file is attached' });
+  }
+
   const r = await db.insert(
     `INSERT INTO quotations (order_id, file_path, file_name, sent_date, notes, uploaded_by)
      VALUES ($1,$2,$3,$4,$5,$6)`,
-    [req.params.id, req.file.storagePath, req.file.filename, sent_date||null, notes||null, req.user.id]
+    [req.params.id, req.file?.storagePath || null, req.file?.filename || null, sent_date||null, notes||null, req.user.id]
   );
   await logActivity(req.params.id, null, 'quotation_uploaded', 'Quotation uploaded', req.user.id);
-  res.status(201).json({ id: r.lastInsertRowid, file_name: req.file.filename });
+  res.status(201).json({ id: r.lastInsertRowid, file_name: req.file?.filename || null });
 });
 
 router.get('/:id/items', authenticate, async (req, res) => {

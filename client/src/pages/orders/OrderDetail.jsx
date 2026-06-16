@@ -726,10 +726,15 @@ export default function OrderDetail() {
               <p className="text-gray-400 text-sm">No quotations uploaded.</p>
             ) : order.quotations.map(q => (
               <div key={q.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg mb-2">
-                <FileText size={18} className="text-red-500 flex-shrink-0" />
+                <FileText size={18} className={`flex-shrink-0 ${q.file_name ? 'text-red-500' : 'text-purple-500'}`} />
                 <div className="flex-1 min-w-0">
-                  <a href={`/uploads/quotations/${q.file_name}`} target="_blank" rel="noopener noreferrer"
-                    className="text-sm font-medium text-brand-600 hover:underline truncate block">{q.file_name}</a>
+                  {q.file_name ? (
+                    <a href={`/uploads/quotations/${q.file_name}`} target="_blank" rel="noopener noreferrer"
+                      className="text-sm font-medium text-brand-600 hover:underline truncate block">{q.file_name}</a>
+                  ) : (
+                    <span className="text-sm font-medium text-gray-800">Price Note</span>
+                  )}
+                  {q.notes && <div className="text-sm text-gray-700 mt-0.5">{q.notes}</div>}
                   <div className="text-xs text-gray-400">{q.uploaded_by_name} · {fmtDate(q.created_at)}</div>
                 </div>
               </div>
@@ -788,6 +793,7 @@ export default function OrderDetail() {
       )}
       {showQuotationModal && (
         <QuotationModal orderId={id}
+          hasPriceRequest={order.has_price_request && !order.quotations?.length}
           onClose={() => setShowQuotationModal(false)}
           onSave={() => { setShowQuotationModal(false); load(); }}
         />
@@ -1547,7 +1553,7 @@ function RejectModal({ onClose, onConfirm }) {
   );
 }
 
-function QuotationModal({ orderId, onClose, onSave }) {
+function QuotationModal({ orderId, hasPriceRequest, onClose, onSave }) {
   const [file, setFile] = useState(null);
   const [notes, setNotes] = useState('');
   const [sentDate, setSentDate] = useState(new Date().toISOString().split('T')[0]);
@@ -1555,10 +1561,11 @@ function QuotationModal({ orderId, onClose, onSave }) {
   const [saving, setSaving] = useState(false);
 
   const handleSubmit = async () => {
-    if (!file) return setError('Please select a file');
+    if (!file && !hasPriceRequest) return setError('Please select a file');
+    if (!file && hasPriceRequest && !notes.trim()) return setError('Please enter the price in notes');
     setSaving(true);
     const fd = new FormData();
-    fd.append('file', file);
+    if (file) fd.append('file', file);
     fd.append('notes', notes);
     fd.append('sent_date', sentDate);
     try {
@@ -1571,22 +1578,28 @@ function QuotationModal({ orderId, onClose, onSave }) {
   };
 
   return (
-    <Modal open title="Upload Quotation" onClose={onClose} size="sm">
+    <Modal open title={hasPriceRequest ? "Add Price / Quotation" : "Upload Quotation"} onClose={onClose} size="sm">
       <div className="space-y-4">
-        <FileUpload onFile={setFile} accept=".pdf" label="Select Quotation PDF" />
+        {hasPriceRequest && (
+          <div className="bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 text-sm text-purple-800">
+            Price was requested from dispatch. You can attach a quotation file or just enter the price below.
+          </div>
+        )}
+        <FileUpload onFile={setFile} accept=".pdf" label={hasPriceRequest ? "Quotation PDF (optional)" : "Select Quotation PDF"} />
         <div>
           <label className="label">Date Sent</label>
           <input className="input" type="date" value={sentDate} onChange={e => setSentDate(e.target.value)} />
         </div>
         <div>
-          <label className="label">Notes</label>
-          <textarea className="input h-20 resize-none" value={notes} onChange={e => setNotes(e.target.value)} />
+          <label className="label">{hasPriceRequest && !file ? 'Price / Notes *' : 'Notes'}</label>
+          <textarea className="input h-20 resize-none" value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder={hasPriceRequest ? 'e.g. ₹12,500 per unit' : ''} />
         </div>
         {error && <p className="text-red-600 text-sm">{error}</p>}
         <div className="flex gap-3">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button className="btn-primary flex-1" disabled={saving} onClick={handleSubmit}>
-            {saving ? 'Uploading...' : 'Upload'}
+            {saving ? 'Saving...' : file ? 'Upload' : 'Save Price'}
           </button>
         </div>
       </div>
