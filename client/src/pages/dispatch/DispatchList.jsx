@@ -6,7 +6,7 @@ import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { fmtDate, fmtDateTime, downloadExcel, PRODUCTION_STAGES } from '../../lib/utils';
-import { Upload, Search, BarChart2, Download, X, CheckCircle, Circle, AlertTriangle, ArrowRight, HelpCircle } from 'lucide-react';
+import { Upload, Search, BarChart2, Download, X, CheckCircle, Circle, AlertTriangle, ArrowRight, HelpCircle, DollarSign } from 'lucide-react';
 
 // Route label helper
 function routeLabel(route, dispQty, fgQty) {
@@ -26,6 +26,8 @@ export default function DispatchList() {
   const [showUpload, setShowUpload] = useState(null);   // job card object
   const [showSummary, setShowSummary] = useState(null); // job card object
   const [showNewQuery, setShowNewQuery] = useState(null); // job card object for new query
+
+  const [priceRequested, setPriceRequested] = useState({});
 
   // Filters
   const [search, setSearch] = useState('');
@@ -200,6 +202,23 @@ export default function DispatchList() {
                         title="View checklist summary">
                         <BarChart2 size={13} /> Summary
                       </button>
+                      {canManage && parseInt(jc.quotation_count) === 0 && !['dispatched','resolved_dispatched'].includes(jc.status) && (
+                        priceRequested[jc.id] ? (
+                          <span className="text-xs text-green-600 font-medium px-2 py-1">Requested</span>
+                        ) : (
+                          <button
+                            className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-purple-100 text-purple-800 hover:bg-purple-200 rounded-lg font-medium transition-colors"
+                            onClick={async () => {
+                              try {
+                                await api.post('/dispatch/request-price', { job_card_id: jc.id });
+                                setPriceRequested(p => ({ ...p, [jc.id]: true }));
+                              } catch (e) { alert(e.response?.data?.error || 'Failed'); }
+                            }}
+                            title="No quotation attached — request price from owner">
+                            <DollarSign size={13} /> Request Price
+                          </button>
+                        )
+                      )}
                       {canManage && !['dispatched','customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'].includes(jc.status) && (
                         <button
                           className="btn-primary btn-sm flex items-center gap-1 text-xs py-1 px-2"

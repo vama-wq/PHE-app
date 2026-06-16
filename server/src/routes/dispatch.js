@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadDispatch, deleteFromStorage } = require('../middleware/upload');
+const { createNotification } = require('./notifications');
 
 router.get('/job-card/:jobCardId', authenticate, async (req, res) => {
   const docs = await getDB().all(
@@ -100,6 +101,37 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
     `Order dispatched via ${shipping_carrier || 'carrier'} — Tracking: ${tracking_number || 'N/A'}`, req.user.id);
 
   res.json({ message: 'Marked as dispatched' });
+});
+
+router.post('/request-price', authenticate, authorize('accounts', 'owner'), async (req, res) => {
+  const { job_card_id } = req.body;
+  if (!job_card_id) return res.status(400).json({ error: 'Job card ID required' });
+
+  const db = getDB();
+  const jc = await db.get(
+    `SELECT jc.job_card_no, jc.order_id, jc.product_name, jc.drawing_no, o.order_code, c.customer_code
+     FROM job_cards jc JOIN orders o ON jc.order_id = o.id JOIN customers c ON o.customer_id = c.id
+     WHERE jc.id = $1`, [job_card_id]
+  );
+  if (!jc) return res.status(404).json({ error: 'Job card not found' });
+
+  const owners = await db.all("SELECT id FROM users WHERE role = 'owner'");
+  const itemLabel = jc.product_name || jc.drawing_no || jc.job_card_no;
+  for (const owner of owners) {
+    await createNotification(db, {
+      userId: owner.id,
+      type: 'price_request',
+      title: `Price requested for ${jc.job_card_no}`,
+      body: `${itemLabel} (${jc.customer_code}) — no quotation attached. Please add pricing.`,
+      link: `/orders/${jc.order_id}`,
+      sourceUserId: req.user.id,
+    });
+  }
+
+  await logActivity(jc.order_id, job_card_id, 'price_requested',
+    `Price requested for dispatch item: ${itemLabel}`, req.user.id);
+
+  res.json({ message: 'Price request sent to owner' });
 });
 
 router.delete('/:id', authenticate, authorize('accounts', 'owner'), async (req, res) => {
