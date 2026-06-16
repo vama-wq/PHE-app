@@ -16,7 +16,7 @@ function loadDurations() {
   try {
     const saved = localStorage.getItem('mfg_stage_durations');
     if (saved) return { ...DEFAULT_STAGE_HOURS, ...JSON.parse(saved) };
-  } catch {}
+  } catch (e) {}
   return { ...DEFAULT_STAGE_HOURS };
 }
 

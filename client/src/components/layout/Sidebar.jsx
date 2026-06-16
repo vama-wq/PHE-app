@@ -126,7 +126,7 @@ export default function Sidebar() {
               const allowed = JSON.parse(user.permitted_modules);
               // 'drawings' is not a module-gated item — always allow for allowed roles
               if (item.id !== 'drawings' && !allowed.includes(item.id)) return false;
-            } catch {}
+            } catch (e) {}
           }
           return true;
         }).map(({ to, icon: Icon, label, badge }) => {

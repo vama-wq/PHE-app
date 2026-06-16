@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect } from 'react';
+import { useEffect, lazy, Suspense, Component } from 'react';
 import { useAuthStore } from './store/authStore';
 import AppLayout from './components/layout/AppLayout';
 import Login from './pages/Login';
@@ -30,7 +30,28 @@ import CustomerQueryList from './pages/customerQueries/CustomerQueryList';
 import CustomerQueryDetail from './pages/customerQueries/CustomerQueryDetail';
 import OrderTimeline from './pages/customerQueries/OrderTimeline';
 import PolicyGuide from './pages/PolicyGuide';
-import ManufacturingPlan from './pages/manufacturing/ManufacturingPlan';
+
+const ManufacturingPlan = lazy(() => import('./pages/manufacturing/ManufacturingPlan'));
+
+class ErrorBoundary extends Component {
+  state = { hasError: false, error: null };
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '2rem', textAlign: 'center' }}>
+          <h2 style={{ color: '#dc2626', marginBottom: '0.5rem' }}>Something went wrong</h2>
+          <p style={{ color: '#6b7280', marginBottom: '1rem' }}>{this.state.error?.message}</p>
+          <button onClick={() => window.location.reload()}
+            style={{ padding: '0.5rem 1rem', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '0.375rem', cursor: 'pointer' }}>
+            Reload Page
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ── Module permission helper ──────────────────────────────────────────────────
 // null permitted_modules = full role-based access. Owner always has full access.
@@ -39,7 +60,7 @@ function canAccessModule(user, moduleId) {
   if (user.role === 'owner') return true;
   if (!user.permitted_modules) return true;
   try { return JSON.parse(user.permitted_modules).includes(moduleId); }
-  catch { return true; }
+  catch (e) { return true; }
 }
 
 // ── Route guards ──────────────────────────────────────────────────────────────
@@ -64,6 +85,7 @@ export default function App() {
   useEffect(() => { init(); }, []);
 
   return (
+    <ErrorBoundary>
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
@@ -146,7 +168,9 @@ export default function App() {
           <Route path="reports" element={<ModuleRoute module="reports"><ReportsDashboard /></ModuleRoute>} />
           <Route path="manufacturing-plan" element={
             <ProtectedRoute roles={['owner','production']}>
-              <ManufacturingPlan />
+              <Suspense fallback={<div className="p-8 text-center text-gray-400">Loading...</div>}>
+                <ManufacturingPlan />
+              </Suspense>
             </ProtectedRoute>
           } />
           <Route path="policy" element={<PolicyGuide />} />
@@ -162,5 +186,6 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
+    </ErrorBoundary>
   );
 }
