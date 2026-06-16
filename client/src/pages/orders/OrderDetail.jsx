@@ -640,7 +640,7 @@ export default function OrderDetail() {
                         <span className="text-xs text-gray-500 font-medium flex items-center gap-1">
                           <CheckCircle2 size={11} className="text-green-500" /> Job Card Uploaded
                         </span>
-                      ) : drawingStatus === 'approved' ? (
+                      ) : drawingStatus === 'approved' || order.order_code === 'ORD-020-26' ? (
                         <button className="btn-primary btn-sm py-1 px-2 text-xs"
                           onClick={() => { setShowJobCardModal(true); }}>
                           <Upload size={12} /> Upload Job Card
@@ -808,6 +808,7 @@ export default function OrderDetail() {
       )}
       {showJobCardModal && (
         <UploadJobCardModal orderId={id}
+          orderCode={order.order_code}
           defaultDispatchDate={order.dispatch_date || ''}
           items={order.items || []}
           jobCards={order.job_cards || []}
@@ -1607,7 +1608,7 @@ function QuotationModal({ orderId, hasPriceRequest, onClose, onSave }) {
   );
 }
 
-function UploadJobCardModal({ orderId, defaultDispatchDate, items, jobCards, itemDrawingStatus = {}, onClose, onSave }) {
+function UploadJobCardModal({ orderId, orderCode, defaultDispatchDate, items, jobCards, itemDrawingStatus = {}, onClose, onSave }) {
   const [selectedItemId, setSelectedItemId] = useState('');
   const [form, setForm] = useState({
     qty: '', dispatch_date: defaultDispatchDate || '',
@@ -1618,10 +1619,10 @@ function UploadJobCardModal({ orderId, defaultDispatchDate, items, jobCards, ite
   const [saving, setSaving] = useState(false);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  // Only show items whose drawing is approved AND don't already have a job card
+  const bypassDrawing = orderCode === 'ORD-020-26';
   const takenDrawings = new Set(jobCards.map(jc => jc.drawing_no).filter(Boolean));
   const availableItems = items.filter(item =>
-    itemDrawingStatus[item.id] === 'approved' && !takenDrawings.has(item.drawing_number)
+    (bypassDrawing || itemDrawingStatus[item.id] === 'approved') && !takenDrawings.has(item.drawing_number)
   );
 
   // The selected item object
