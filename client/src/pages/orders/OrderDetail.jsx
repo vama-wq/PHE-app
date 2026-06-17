@@ -938,6 +938,8 @@ function ChatPanel({ orderId, currentUser }) {
       setMentionedIds([]);
       setAttachments([]);
       await loadMessages();
+    } catch (e) {
+      alert(e.response?.data?.error || 'Failed to send message');
     } finally {
       setSending(false);
     }

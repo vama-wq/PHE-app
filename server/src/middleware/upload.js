@@ -50,16 +50,20 @@ function getPublicUrl(storagePath) {
 // by route handlers (or via the postUpload middleware below).
 const memStorage = multer.memoryStorage();
 
-const allowedTypes  = /pdf|jpg|jpeg|png|gif|webp/;
-const imageOnlyTypes = /jpg|jpeg|png|gif|webp/;
+const allowedExts  = /pdf|jpg|jpeg|png|gif|webp|heic|heif|doc|docx|xls|xlsx/;
+const allowedMimes = /^(image\/|application\/pdf|application\/msword|application\/vnd\.openxmlformats)/;
+const imageExts    = /jpg|jpeg|png|gif|webp|heic|heif/;
+const imageMimes   = /^image\//;
 
 function fileFilter(req, file, cb) {
   const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
-  allowedTypes.test(ext) ? cb(null, true) : cb(new Error('Only PDF and image files are allowed'));
+  if (allowedExts.test(ext) || allowedMimes.test(file.mimetype)) return cb(null, true);
+  cb(new Error('Only PDF, image, and document files are allowed'));
 }
 function imageOnlyFilter(req, file, cb) {
   const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
-  imageOnlyTypes.test(ext) ? cb(null, true) : cb(new Error('Only image files (JPG, PNG, GIF, WebP) are allowed'));
+  if (imageExts.test(ext) || imageMimes.test(file.mimetype)) return cb(null, true);
+  cb(new Error('Only image files (JPG, PNG, GIF, WebP) are allowed'));
 }
 
 // Factory: returns multer instance + a post-upload middleware that pushes to Supabase Storage.
