@@ -115,6 +115,18 @@ router.get('/drawings/pending', authenticate, async (req, res) => {
     JOIN customers c ON c.id = o.customer_id
     LEFT JOIN users u ON u.id = o.created_by
     WHERE o.status NOT IN ('pending_approval', 'rejected', 'dispatched', 'resolved_dispatched')
+      AND NOT (
+        -- Hide orders where every item has an approved drawing AND job cards exist
+        EXISTS (SELECT 1 FROM job_cards jc WHERE jc.order_id = o.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM order_items oi
+          WHERE oi.order_id = o.id
+            AND NOT EXISTS (
+              SELECT 1 FROM order_drawings od
+              WHERE od.order_id = o.id AND od.item_id = oi.id AND od.drawing_status = 'approved'
+            )
+        )
+      )
     ORDER BY o.created_at DESC
   `);
   res.json(rows);
