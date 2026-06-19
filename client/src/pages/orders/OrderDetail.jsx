@@ -725,19 +725,7 @@ export default function OrderDetail() {
             {!order.quotations?.length ? (
               <p className="text-gray-400 text-sm">No quotations uploaded.</p>
             ) : order.quotations.map(q => (
-              <div key={q.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg mb-2">
-                <FileText size={18} className={`flex-shrink-0 ${q.file_name ? 'text-red-500' : 'text-purple-500'}`} />
-                <div className="flex-1 min-w-0">
-                  {q.file_name ? (
-                    <a href={`/uploads/quotations/${q.file_name}`} target="_blank" rel="noopener noreferrer"
-                      className="text-sm font-medium text-brand-600 hover:underline truncate block">{q.file_name}</a>
-                  ) : (
-                    <span className="text-sm font-medium text-gray-800">Price Note</span>
-                  )}
-                  {q.notes && <div className="text-sm text-gray-700 mt-0.5">{q.notes}</div>}
-                  <div className="text-xs text-gray-400">{q.uploaded_by_name} · {fmtDate(q.created_at)}</div>
-                </div>
-              </div>
+              <QuotationRow key={q.id} q={q} orderId={id} isOwner={user?.role === 'owner'} onSaved={load} />
             ))}
           </div>}
         </div>
@@ -847,6 +835,68 @@ function MessageText({ text, isMe }) {
         )
       )}
     </>
+  );
+}
+
+// ── Quotation Row (editable notes for owner) ─────────────────────────────────
+function QuotationRow({ q, orderId, isOwner, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [notes, setNotes] = useState(q.notes || '');
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/orders/${orderId}/quotation/${q.id}`, { notes });
+      setEditing(false);
+      onSaved();
+    } catch (e) {
+      alert(e.response?.data?.error || 'Failed to update');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg mb-2">
+      <FileText size={18} className={`flex-shrink-0 mt-0.5 ${q.file_name ? 'text-red-500' : 'text-purple-500'}`} />
+      <div className="flex-1 min-w-0">
+        {q.file_name ? (
+          <a href={`/uploads/quotations/${q.file_name}`} target="_blank" rel="noopener noreferrer"
+            className="text-sm font-medium text-brand-600 hover:underline truncate block">{q.file_name}</a>
+        ) : (
+          <span className="text-sm font-medium text-gray-800">Price Note</span>
+        )}
+        {editing ? (
+          <div className="mt-1 flex gap-1.5">
+            <textarea className="input text-sm flex-1" rows={2} value={notes}
+              onChange={e => setNotes(e.target.value)} autoFocus />
+            <div className="flex flex-col gap-1">
+              <button className="btn-primary text-xs px-2 py-1" onClick={save} disabled={saving}>
+                {saving ? '…' : 'Save'}
+              </button>
+              <button className="btn-secondary text-xs px-2 py-1" onClick={() => { setEditing(false); setNotes(q.notes || ''); }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-start gap-1.5 mt-0.5">
+            {q.notes ? (
+              <div className="text-sm text-gray-700">{q.notes}</div>
+            ) : (
+              <div className="text-sm text-gray-400 italic">No notes</div>
+            )}
+            {isOwner && (
+              <button onClick={() => setEditing(true)} className="text-gray-400 hover:text-brand-600 flex-shrink-0 mt-0.5" title="Edit note">
+                <Edit2 size={12} />
+              </button>
+            )}
+          </div>
+        )}
+        <div className="text-xs text-gray-400 mt-1">{q.uploaded_by_name} · {fmtDate(q.created_at)}</div>
+      </div>
+    </div>
   );
 }
 

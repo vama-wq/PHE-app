@@ -276,6 +276,15 @@ router.post('/:id/quotation', authenticate, authorize('admin', 'owner'), ...uplo
   res.status(201).json({ id: r.lastInsertRowid, file_name: req.file?.filename || null });
 });
 
+router.put('/:id/quotation/:qid', authenticate, authorize('owner'), async (req, res) => {
+  const { notes } = req.body;
+  const db = getDB();
+  const q = await db.get('SELECT * FROM quotations WHERE id=$1 AND order_id=$2', [req.params.qid, req.params.id]);
+  if (!q) return res.status(404).json({ error: 'Quotation not found' });
+  await db.run('UPDATE quotations SET notes=$1 WHERE id=$2', [notes || null, req.params.qid]);
+  res.json({ message: 'Updated' });
+});
+
 router.get('/:id/items', authenticate, async (req, res) => {
   const items = await getDB().all('SELECT * FROM order_items WHERE order_id = $1 ORDER BY id ASC', [req.params.id]);
   // Attach inventory selections to each item
