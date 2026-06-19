@@ -202,9 +202,9 @@ export default function DispatchList() {
                         title="View checklist summary">
                         <BarChart2 size={13} /> Summary
                       </button>
-                      {canManage && parseInt(jc.quotation_count) === 0 && !['dispatched','resolved_dispatched'].includes(jc.status) && (
-                        priceRequested[jc.id] ? (
-                          <span className="text-xs text-green-600 font-medium px-2 py-1">Requested</span>
+                      {canManage && !['dispatched','resolved_dispatched'].includes(jc.status) && (
+                        (priceRequested[jc.id] || parseInt(jc.price_requested) > 0) ? (
+                          <span className="text-xs text-green-600 font-medium px-2 py-1">Price Requested</span>
                         ) : (
                           <button
                             className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-purple-100 text-purple-800 hover:bg-purple-200 rounded-lg font-medium transition-colors"
@@ -214,7 +214,7 @@ export default function DispatchList() {
                                 setPriceRequested(p => ({ ...p, [jc.id]: true }));
                               } catch (e) { alert(e.response?.data?.error || 'Failed'); }
                             }}
-                            title="No quotation attached — request price from owner">
+                            title="Request price from owner for this item">
                             <DollarSign size={13} /> Request Price
                           </button>
                         )

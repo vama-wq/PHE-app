@@ -39,7 +39,8 @@ router.get('/', authenticate, async (req, res) => {
       cq_active.return_coupon_no as active_query_return_coupon_no,
       cq_active.debit_note_no as active_query_debit_note_no,
       cq_active.created_at as active_query_created_at,
-      (SELECT COUNT(*) FROM quotations WHERE order_id = jc.order_id) as quotation_count
+      (SELECT COUNT(*) FROM quotations WHERE order_id = jc.order_id) as quotation_count,
+      (SELECT COUNT(*) FROM activity_log WHERE job_card_id = jc.id AND activity_type = 'price_requested') as price_requested
     FROM job_cards jc
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
