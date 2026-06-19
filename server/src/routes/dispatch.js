@@ -94,6 +94,13 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
     return res.status(400).json({ error: 'An invoice document is required before dispatching. Please upload an invoice first.' });
   }
 
+  // Save shipping details on the invoice document
+  await db.run(
+    `UPDATE dispatch_documents SET shipping_carrier=$1, tracking_number=$2, dispatch_date=$3
+     WHERE id=$4`,
+    [shipping_carrier || null, tracking_number || null, dispatch_date || null, invoiceDoc.id]
+  );
+
   await db.run("UPDATE job_cards SET status='dispatched' WHERE id=$1", [req.params.jobCardId]);
   await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [jc.order_id]);
 
