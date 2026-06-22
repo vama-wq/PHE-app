@@ -162,7 +162,7 @@ export default function DrawingsList() {
 }
 
 // ── Per-item upload button ─────────────────────────────────────────────────────
-function ItemUploadBtn({ orderId, item, onUploaded }) {
+function ItemUploadBtn({ orderId, item, onUploaded, label }) {
   const fileRef = useRef(null);
   const [uploading, setUploading] = useState(false);
 
@@ -198,7 +198,7 @@ function ItemUploadBtn({ orderId, item, onUploaded }) {
           ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
           : <Upload size={11} />
         }
-        {uploading ? 'Uploading…' : 'Upload'}
+        {uploading ? 'Uploading…' : (label || 'Upload')}
       </button>
       <input
         ref={fileRef}
@@ -343,18 +343,29 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
       <td className="table-cell">
         {tab === 'pending' && canUpload ? (
           <div className="flex flex-col gap-1.5">
-            {itemRows.map(({ item, idx, hasDrw }) => (
+            {itemRows.map(({ item, idx, bestStatus }) => (
               <div key={item.id} className="flex items-center gap-1.5">
                 <span className="text-xs text-gray-500 font-mono min-w-0 truncate max-w-[120px]" title={item.drawing_number}>
                   {item.drawing_number || `Item ${idx + 1}`}
                 </span>
-                {hasDrw ? (
+                {bestStatus !== 'missing' ? (
                   <span className="text-xs text-green-600 font-medium flex items-center gap-0.5">
                     <CheckCircle2 size={11} /> Done
                   </span>
                 ) : (
                   <ItemUploadBtn orderId={order.id} item={item} onUploaded={onUploaded} />
                 )}
+              </div>
+            ))}
+          </div>
+        ) : tab === 'rejected' && canUpload ? (
+          <div className="flex flex-col gap-1.5">
+            {itemRows.filter(r => r.bestStatus === 'rejected').map(({ item, idx }) => (
+              <div key={item.id} className="flex items-center gap-1.5">
+                <span className="text-xs text-red-600 font-mono min-w-0 truncate max-w-[120px]" title={item.drawing_number}>
+                  {item.drawing_number || `Item ${idx + 1}`}
+                </span>
+                <ItemUploadBtn orderId={order.id} item={item} onUploaded={onUploaded} label="Re-upload" />
               </div>
             ))}
           </div>
