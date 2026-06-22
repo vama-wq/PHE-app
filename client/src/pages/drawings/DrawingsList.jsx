@@ -218,10 +218,18 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
   // All items with their drawing status
   const itemRows = items.map((item, i) => {
     const itemDrawings = drawings.filter(d => d.item_id === item.id);
-    return { item, idx: i, itemDrawings, hasDrw: itemDrawings.length > 0 };
+    const statuses = itemDrawings.map(d => d.drawing_status);
+    const bestStatus = statuses.includes('approved') ? 'approved'
+      : statuses.includes('pending_review') ? 'pending_review'
+      : statuses.includes('rejected') ? 'rejected'
+      : itemDrawings.length > 0 ? 'uploaded' : 'missing';
+    return { item, idx: i, itemDrawings, bestStatus };
   });
 
-  const allDone = itemRows.length > 0 && itemRows.every(r => r.hasDrw);
+  const rejected = itemRows.filter(r => r.bestStatus === 'rejected').length;
+  const approved = itemRows.filter(r => r.bestStatus === 'approved').length;
+  const missing  = itemRows.filter(r => r.bestStatus === 'missing').length;
+  const pending  = itemRows.filter(r => r.bestStatus === 'pending_review').length;
 
   return (
     <tr className="hover:bg-gray-50 align-top">
@@ -253,27 +261,48 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
       {/* Status: per-item drawing checklist */}
       <td className="table-cell">
         {/* Overall badge */}
-        {allDone ? (
-          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium mb-1.5">
-            <CheckCircle2 size={10} /> All drawings uploaded
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium mb-1.5">
-            <AlertTriangle size={10} /> No Drawing
-          </span>
-        )}
+        <div className="flex flex-wrap gap-1 mb-1.5">
+          {rejected > 0 && (
+            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+              <XCircle size={10} /> {rejected} rejected
+            </span>
+          )}
+          {missing > 0 && (
+            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">
+              <AlertTriangle size={10} /> {missing} missing
+            </span>
+          )}
+          {pending > 0 && (
+            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+              <Clock size={10} /> {pending} pending
+            </span>
+          )}
+          {approved > 0 && (
+            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
+              <CheckCircle2 size={10} /> {approved} approved
+            </span>
+          )}
+        </div>
         {/* Per-item row */}
         <div className="flex flex-col gap-0.5 mt-1">
-          {itemRows.map(({ item, idx, itemDrawings, hasDrw }) => (
+          {itemRows.map(({ item, idx, itemDrawings, bestStatus }) => (
             <div key={item.id} className="flex items-center gap-1.5">
-              {hasDrw
-                ? <CheckCircle2 size={10} className="text-green-500 flex-shrink-0" />
-                : <AlertTriangle size={10} className="text-amber-500 flex-shrink-0" />
-              }
-              <span className={`text-xs font-mono ${hasDrw ? 'text-green-700' : 'text-gray-600'}`}>
+              {bestStatus === 'approved' && <CheckCircle2 size={10} className="text-green-500 flex-shrink-0" />}
+              {bestStatus === 'pending_review' && <Clock size={10} className="text-blue-500 flex-shrink-0" />}
+              {bestStatus === 'rejected' && <XCircle size={10} className="text-red-500 flex-shrink-0" />}
+              {(bestStatus === 'missing' || bestStatus === 'uploaded') && <AlertTriangle size={10} className="text-amber-500 flex-shrink-0" />}
+              <span className={`text-xs font-mono ${
+                bestStatus === 'approved' ? 'text-green-700'
+                : bestStatus === 'rejected' ? 'text-red-700'
+                : bestStatus === 'pending_review' ? 'text-blue-700'
+                : 'text-gray-600'
+              }`}>
                 {item.drawing_number || `Item ${idx + 1}`}
               </span>
-              {hasDrw && itemDrawings[0] && (
+              {bestStatus === 'rejected' && (
+                <span className="text-xs text-red-500 font-medium">Rejected</span>
+              )}
+              {itemDrawings.length > 0 && itemDrawings[0] && (
                 <a
                   href={`/uploads/order-drawings/${itemDrawings[0].file_name}`}
                   target="_blank"
