@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import api from '../../lib/api';
+import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
@@ -982,7 +982,8 @@ function ChatPanel({ orderId, currentUser }) {
       fd.append('message', newMsg);
       fd.append('mentionIds', JSON.stringify(mentionedIds));
       attachments.forEach(f => fd.append('attachments', f));
-      await api.post(`/orders/${orderId}/messages`, fd);
+      const client = attachments.length > 0 ? uploadApi : api;
+      await client.post(`/orders/${orderId}/messages`, fd);
       setNewMsg('');
       setMentionQuery(null);
       setMentionedIds([]);
@@ -1115,8 +1116,8 @@ function ChatPanel({ orderId, currentUser }) {
         )}
         <div className="flex gap-2 items-end">
           <input type="file" ref={fileInputRef} className="hidden" multiple
-            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx"
-            onChange={e => { setAttachments(prev => [...prev, ...Array.from(e.target.files)]); e.target.value = ''; }}
+            accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.pdf,.doc,.docx,.xls,.xlsx"
+            onChange={e => { if (e.target.files?.length) setAttachments(prev => [...prev, ...Array.from(e.target.files)]); e.target.value = ''; }}
           />
           <button type="button" onClick={() => fileInputRef.current?.click()}
             className="p-2 text-gray-400 hover:text-brand-600 transition-colors flex-shrink-0" title="Attach files">
