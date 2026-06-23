@@ -141,13 +141,15 @@ router.get('/', authenticate, async (req, res) => {
     `SELECT o.*, c.customer_code,
        ${canSeeNames ? 'c.name as customer_name,' : ''}
        u.name as created_by_name,
-       jc.job_card_no, jc.id as job_card_id, jc.status as card_status,
+       (SELECT jc2.job_card_no FROM job_cards jc2 WHERE jc2.order_id = o.id ORDER BY jc2.id LIMIT 1) as job_card_no,
+       (SELECT jc2.id FROM job_cards jc2 WHERE jc2.order_id = o.id ORDER BY jc2.id LIMIT 1) as job_card_id,
+       (SELECT jc2.status FROM job_cards jc2 WHERE jc2.order_id = o.id ORDER BY jc2.id LIMIT 1) as card_status,
+       (SELECT COUNT(*) FROM job_cards jc3 WHERE jc3.order_id = o.id) as job_card_count,
        (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) as item_count,
        (SELECT string_agg(DISTINCT oi2.product_code, ', ') FROM order_items oi2 WHERE oi2.order_id = o.id AND oi2.product_code IS NOT NULL AND oi2.product_code != '') as product_codes
      FROM orders o
      JOIN customers c ON o.customer_id = c.id
      LEFT JOIN users u ON o.created_by = u.id
-     LEFT JOIN job_cards jc ON jc.order_id = o.id
      ORDER BY o.created_at DESC`
   );
   res.json(orders);

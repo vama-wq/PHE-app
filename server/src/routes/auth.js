@@ -74,7 +74,10 @@ router.put('/change-password', authenticate, async (req, res) => {
 });
 
 router.get('/users', authenticate, async (req, res) => {
-  if (!['owner', 'admin'].includes(req.user.role)) return res.status(403).json({ error: 'Access denied' });
+  if (!['owner', 'admin'].includes(req.user.role)) {
+    const users = await getDB().all('SELECT id, name, role FROM users ORDER BY role, name');
+    return res.json(users);
+  }
   const users = await getDB().all(
     'SELECT id, name, username, role, created_at, permitted_modules FROM users ORDER BY role, name'
   );
