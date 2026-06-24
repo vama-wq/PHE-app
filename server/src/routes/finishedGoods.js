@@ -82,6 +82,76 @@ router.get('/:id', authenticate, async (req, res) => {
   res.json({ ...fg, log });
 });
 
+// ── Manual create / add finished goods ───────────────────────────────────────
+router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const { base_drawing_no, tube_material, tube_diameter, wattage, voltage,
+          plating_instructions, qty, notes } = req.body;
+  if (!base_drawing_no?.trim()) return res.status(400).json({ error: 'Item code (drawing no) is required' });
+  const parsedQty = parseInt(qty);
+  if (!parsedQty || parsedQty <= 0) return res.status(400).json({ error: 'Valid quantity required' });
+
+  const db = getDB();
+  const code = base_drawing_no.trim().toUpperCase();
+
+  const existing = await db.get(
+    'SELECT id, qty_in, qty_available FROM finished_goods WHERE UPPER(base_drawing_no) = $1',
+    [code]
+  );
+
+  let fgId;
+  if (existing) {
+    await db.run(
+      'UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1 WHERE id = $2',
+      [parsedQty, existing.id]
+    );
+    fgId = existing.id;
+  } else {
+    const result = await db.insert(
+      `INSERT INTO finished_goods
+         (base_drawing_no, drawing_no, tube_material, tube_diameter, wattage, voltage, plating_instructions, qty_in, qty_available, notes, created_by)
+       VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$7,$8,$9)`,
+      [code, tube_material || null, tube_diameter || null,
+       wattage || null, voltage || null, plating_instructions || null,
+       parsedQty, notes || null, req.user.id]
+    );
+    fgId = result.lastInsertRowid;
+  }
+
+  await db.insert(
+    `INSERT INTO finished_goods_log
+       (finished_good_id, movement_type, qty, notes, created_by)
+     VALUES ($1,'inward',$2,$3,$4)`,
+    [fgId, parsedQty, notes ? `Manual entry: ${notes}` : 'Manual entry', req.user.id]
+  );
+
+  res.json({ id: fgId, message: existing ? 'Stock added to existing item' : 'Finished good created' });
+});
+
+// ── Manual inward (add stock to existing FG item) ────────────────────────────
+router.post('/:id/inward', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const { qty, notes } = req.body;
+  const parsedQty = parseInt(qty);
+  if (!parsedQty || parsedQty <= 0) return res.status(400).json({ error: 'Valid quantity required' });
+
+  const db = getDB();
+  const fg = await db.get('SELECT * FROM finished_goods WHERE id=$1', [req.params.id]);
+  if (!fg) return res.status(404).json({ error: 'Not found' });
+
+  await db.run(
+    'UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1 WHERE id = $2',
+    [parsedQty, fg.id]
+  );
+
+  await db.insert(
+    `INSERT INTO finished_goods_log
+       (finished_good_id, movement_type, qty, notes, created_by)
+     VALUES ($1,'inward',$2,$3,$4)`,
+    [fg.id, parsedQty, notes ? `Manual entry: ${notes}` : 'Manual entry', req.user.id]
+  );
+
+  res.json({ message: 'Inward stock recorded' });
+});
+
 // ── Manual outward (dispatch / sampling from finished goods) ──────────────────
 router.post('/:id/outward', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const { qty, outward_type, client_code, client_name, reason, reference, notes } = req.body;

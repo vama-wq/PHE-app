@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../../lib/api';
+import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import { ArrowLeft, ArrowDownCircle, ArrowUpCircle, Package, BarChart2,
          CheckCircle, Circle, AlertTriangle, ArrowRight, Plus } from 'lucide-react';
@@ -9,10 +10,13 @@ import { fmtDateTime, fmtDate, PRODUCTION_STAGES } from '../../lib/utils';
 export default function FinishedGoodsDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuthStore();
   const [data, setData]         = useState(null);
   const [loading, setLoading]   = useState(true);
   const [summaryJc, setSummaryJc]   = useState(null);
   const [showOutward, setShowOutward] = useState(false);
+  const [showInward, setShowInward]   = useState(false);
+  const canManage = ['accounts', 'owner', 'admin'].includes(user.role);
 
   const load = () => {
     api.get(`/finished-goods/${id}`)
@@ -36,12 +40,20 @@ export default function FinishedGoodsDetail() {
           className="flex items-center gap-2 text-sm text-gray-500 hover:text-brand-600 transition-colors">
           <ArrowLeft size={16} /> Back to Finished Goods
         </button>
-        {fg.qty_available > 0 && (
-          <button className="btn-primary flex items-center gap-1.5 text-sm"
-            onClick={() => setShowOutward(true)}>
-            <Plus size={15} /> Record Outward
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {canManage && (
+            <button className="btn-secondary flex items-center gap-1.5 text-sm"
+              onClick={() => setShowInward(true)}>
+              <ArrowDownCircle size={15} /> Add Stock
+            </button>
+          )}
+          {fg.qty_available > 0 && (
+            <button className="btn-primary flex items-center gap-1.5 text-sm"
+              onClick={() => setShowOutward(true)}>
+              <Plus size={15} /> Record Outward
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Product header */}
@@ -227,6 +239,15 @@ export default function FinishedGoodsDetail() {
         )}
       </div>
 
+      {/* Inward modal */}
+      {showInward && (
+        <InwardModal
+          fg={fg}
+          onClose={() => setShowInward(false)}
+          onDone={() => { setShowInward(false); load(); }}
+        />
+      )}
+
       {/* Outward modal */}
       {showOutward && (
         <OutwardModal
@@ -241,6 +262,61 @@ export default function FinishedGoodsDetail() {
         <ChecklistSummaryModal jc={summaryJc} onClose={() => setSummaryJc(null)} />
       )}
     </div>
+  );
+}
+
+// ── Inward Modal (manual stock addition) ─────────────────────────────────────
+function InwardModal({ fg, onClose, onDone }) {
+  const [qty, setQty]       = useState('');
+  const [notes, setNotes]   = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError]   = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!qty || parseInt(qty) <= 0) return setError('Enter a valid quantity');
+    setSaving(true);
+    try {
+      await api.post(`/finished-goods/${fg.id}/inward`, {
+        qty: parseInt(qty),
+        notes: notes || undefined,
+      });
+      onDone();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title="Add Inward Stock" onClose={onClose} size="sm">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="bg-gray-50 rounded-xl p-3 text-sm">
+          <p className="font-bold text-gray-900">{fg.base_drawing_no || fg.drawing_no}</p>
+          <p className="text-gray-500 text-xs mt-0.5">
+            {[fg.tube_material, fg.wattage ? `${fg.wattage}W` : null, fg.voltage ? `${fg.voltage}V` : null].filter(Boolean).join(' · ')}
+          </p>
+          <p className="text-blue-600 font-semibold mt-1">Current stock: {fg.qty_available} Nos</p>
+        </div>
+        <div>
+          <label className="label">Quantity to Add *</label>
+          <input className="input" type="number" min="1" placeholder="e.g. 50" value={qty}
+            onChange={e => setQty(e.target.value)} required autoFocus />
+        </div>
+        <div>
+          <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
+          <textarea className="input h-16 resize-none" placeholder="Reason for manual addition..."
+            value={notes} onChange={e => setNotes(e.target.value)} />
+        </div>
+        {error && <p className="text-red-600 text-sm">{error}</p>}
+        <div className="flex gap-3 pt-1">
+          <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving}>
+            {saving ? 'Saving...' : 'Add Stock'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

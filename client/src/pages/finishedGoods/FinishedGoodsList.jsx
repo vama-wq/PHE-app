@@ -4,7 +4,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import ImportModal from '../../components/ui/ImportModal';
-import { Search, AlertTriangle, ClipboardList, Upload } from 'lucide-react';
+import { Search, AlertTriangle, ClipboardList, Upload, Plus } from 'lucide-react';
 
 export default function FinishedGoodsList() {
   const navigate  = useNavigate();
@@ -15,6 +15,7 @@ export default function FinishedGoodsList() {
   const [filterZero, setFilterZero] = useState(false);
   const [outwardModal, setOutwardModal] = useState(null);
   const [showImport, setShowImport] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -54,6 +55,13 @@ export default function FinishedGoodsList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {canManage && (
+            <button
+              className="btn-primary flex items-center gap-1.5 text-sm"
+              onClick={() => setShowAdd(true)}>
+              <Plus size={15} /> Add Finished Goods
+            </button>
+          )}
           {canManage && (
             <button
               className="btn-secondary flex items-center gap-1.5 text-sm"
@@ -166,6 +174,13 @@ export default function FinishedGoodsList() {
         </table>
       </div>
 
+      {showAdd && (
+        <AddFGModal
+          onClose={() => setShowAdd(false)}
+          onDone={() => { setShowAdd(false); load(); }}
+        />
+      )}
+
       {showImport && (
         <ImportModal
           type="finished-goods"
@@ -182,6 +197,96 @@ export default function FinishedGoodsList() {
         />
       )}
     </div>
+  );
+}
+
+function AddFGModal({ onClose, onDone }) {
+  const [code, setCode]         = useState('');
+  const [material, setMaterial] = useState('');
+  const [diameter, setDiameter] = useState('');
+  const [wattage, setWattage]   = useState('');
+  const [voltage, setVoltage]   = useState('');
+  const [plating, setPlating]   = useState('');
+  const [qty, setQty]           = useState('');
+  const [notes, setNotes]       = useState('');
+  const [saving, setSaving]     = useState(false);
+  const [error, setError]       = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!code.trim()) return setError('Item code is required');
+    if (!qty || parseInt(qty) <= 0) return setError('Enter a valid quantity');
+    setSaving(true);
+    try {
+      await api.post('/finished-goods', {
+        base_drawing_no: code.trim(),
+        tube_material: material || undefined,
+        tube_diameter: diameter || undefined,
+        wattage: wattage || undefined,
+        voltage: voltage || undefined,
+        plating_instructions: plating || undefined,
+        qty: parseInt(qty),
+        notes: notes || undefined,
+      });
+      onDone();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to add');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title="Add Finished Goods" onClose={onClose} size="sm">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <p className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg p-2">
+          If an item with the same code already exists, the quantity will be added to the existing stock.
+        </p>
+        <div>
+          <label className="label">Item Code / Drawing No *</label>
+          <input className="input" placeholder="e.g. PT-STRAIGHT-20S-750W" value={code}
+            onChange={e => setCode(e.target.value)} autoFocus />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Tube Material</label>
+            <input className="input" placeholder="e.g. SS304" value={material} onChange={e => setMaterial(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Tube Diameter (mm)</label>
+            <input className="input" type="number" placeholder="e.g. 8.5" value={diameter} onChange={e => setDiameter(e.target.value)} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Wattage (W)</label>
+            <input className="input" type="number" placeholder="e.g. 750" value={wattage} onChange={e => setWattage(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Voltage (V)</label>
+            <input className="input" type="number" placeholder="e.g. 230" value={voltage} onChange={e => setVoltage(e.target.value)} />
+          </div>
+        </div>
+        <div>
+          <label className="label">Plating Instructions</label>
+          <input className="input" placeholder="e.g. Nickel plated" value={plating} onChange={e => setPlating(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">Quantity *</label>
+          <input className="input" type="number" min="1" placeholder="e.g. 100" value={qty} onChange={e => setQty(e.target.value)} required />
+        </div>
+        <div>
+          <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
+          <textarea className="input h-16 resize-none" placeholder="Any additional notes..." value={notes} onChange={e => setNotes(e.target.value)} />
+        </div>
+        {error && <p className="text-red-600 text-sm">{error}</p>}
+        <div className="flex gap-3 pt-1">
+          <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving}>
+            {saving ? 'Saving...' : 'Add Finished Goods'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
