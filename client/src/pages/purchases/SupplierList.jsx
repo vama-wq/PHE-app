@@ -168,6 +168,11 @@ function SupplierModal({ supplier, onClose, onSaved }) {
 
     const validItems = items.filter(i => i.inventory_item_id);
     if (!validItems.length) return setError('At least one inventory item must be linked');
+    const incomplete = validItems.find(i => !i.supplier_price || Number(i.supplier_price) <= 0 || !i.lead_time_days || Number(i.lead_time_days) <= 0);
+    if (incomplete) {
+      const inv = inventoryList.find(inv => String(inv.id) === String(incomplete.inventory_item_id));
+      return setError(`Price and lead time are required for ${inv?.item_code || 'each item'}`);
+    }
 
     setSaving(true);
     setError('');
@@ -272,14 +277,14 @@ function SupplierModal({ supplier, onClose, onSaved }) {
                         onChange={e => updateItem(idx, 'supplier_part_no', e.target.value)} />
                     </div>
                     <div>
-                      <label className="text-xs text-gray-500 font-medium">Price (per unit)</label>
+                      <label className="text-xs text-gray-500 font-medium">Price (per unit) <span className="text-red-500">*</span></label>
                       <input className="input text-sm mt-0.5" type="number" step="any" min="0" placeholder="0.00" value={item.supplier_price}
-                        onChange={e => updateItem(idx, 'supplier_price', e.target.value)} />
+                        onChange={e => updateItem(idx, 'supplier_price', e.target.value)} required />
                     </div>
                     <div>
-                      <label className="text-xs text-gray-500 font-medium">Lead Time (days)</label>
-                      <input className="input text-sm mt-0.5" type="number" min="0" placeholder="e.g. 7" value={item.lead_time_days}
-                        onChange={e => updateItem(idx, 'lead_time_days', e.target.value)} />
+                      <label className="text-xs text-gray-500 font-medium">Lead Time (days) <span className="text-red-500">*</span></label>
+                      <input className="input text-sm mt-0.5" type="number" min="1" placeholder="e.g. 7" value={item.lead_time_days}
+                        onChange={e => updateItem(idx, 'lead_time_days', e.target.value)} required />
                     </div>
                     <div>
                       <label className="text-xs text-gray-500 font-medium">Min Order Qty</label>

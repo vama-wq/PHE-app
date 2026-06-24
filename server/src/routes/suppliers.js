@@ -29,6 +29,13 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (r
   if (!phone)         return res.status(400).json({ error: 'Phone number is required' });
   if (!address)       return res.status(400).json({ error: 'Address is required' });
   if (!items || !items.length) return res.status(400).json({ error: 'At least one inventory item is required' });
+  for (const item of items) {
+    if (!item.inventory_item_id) continue;
+    if (!item.supplier_price || Number(item.supplier_price) <= 0)
+      return res.status(400).json({ error: 'Price is required for each linked item' });
+    if (!item.lead_time_days || Number(item.lead_time_days) <= 0)
+      return res.status(400).json({ error: 'Lead time is required for each linked item' });
+  }
 
   const db = getDB();
   const existing = await db.get('SELECT id FROM suppliers WHERE supplier_code=$1', [supplier_code]);
