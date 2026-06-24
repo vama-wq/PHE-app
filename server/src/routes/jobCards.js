@@ -263,12 +263,22 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
   }
 
   const db = getDB();
+  let finalNo = job_card_no.toUpperCase();
+  const dup = await db.get('SELECT id FROM job_cards WHERE job_card_no = $1', [finalNo]);
+  if (dup) {
+    const count = await db.get(
+      "SELECT COUNT(*) as c FROM job_cards WHERE job_card_no = $1 OR job_card_no LIKE $2",
+      [finalNo, `${finalNo}-%`]
+    );
+    finalNo = `${finalNo}-${parseInt(count.c) + 1}`;
+  }
+
   try {
     const r = await db.insert(`
       INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, punching, drawing_no, product_name, uploaded_by)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
     `, [
-      job_card_no.toUpperCase(), parseInt(order_id, 10),
+      finalNo, parseInt(order_id, 10),
       req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null,
       qty || null, dispatch_date, notes || null,
       punching || null, drawing_no || null, product_name || null,
@@ -280,8 +290,8 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
       await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [order_id]);
     }
 
-    await logActivity(order_id, r.lastInsertRowid, 'job_card_created', `Job Card ${job_card_no} uploaded`, req.user.id);
-    res.status(201).json({ id: r.lastInsertRowid });
+    await logActivity(order_id, r.lastInsertRowid, 'job_card_created', `Job Card ${finalNo} uploaded`, req.user.id);
+    res.status(201).json({ id: r.lastInsertRowid, job_card_no: finalNo });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Job card number already exists' });
     throw e;
