@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
 import ImportModal from '../../components/ui/ImportModal';
-import { Plus, Search, Phone, Mail, MapPin, Building2, Pencil, Trash2, Upload } from 'lucide-react';
+import { Plus, Search, Phone, Mail, MapPin, Building2, Pencil, Trash2, Upload, AlertTriangle, Package, X } from 'lucide-react';
 
 export default function SupplierList() {
   const [suppliers, setSuppliers] = useState([]);
   const [filtered, setFiltered] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState(null); // null | 'new' | supplier obj
+  const [modal, setModal] = useState(null);
   const [showImport, setShowImport] = useState(false);
 
   const load = () => api.get('/suppliers').then(r => { setSuppliers(r.data); setFiltered(r.data); }).finally(() => setLoading(false));
@@ -17,7 +17,7 @@ export default function SupplierList() {
   useEffect(() => {
     if (!search) return setFiltered(suppliers);
     const q = search.toLowerCase();
-    setFiltered(suppliers.filter(s => s.name.toLowerCase().includes(q) || s.contact_person?.toLowerCase().includes(q)));
+    setFiltered(suppliers.filter(s => s.name.toLowerCase().includes(q) || s.contact_person?.toLowerCase().includes(q) || s.supplier_code?.toLowerCase().includes(q)));
   }, [suppliers, search]);
 
   const handleDelete = async (s) => {
@@ -30,12 +30,19 @@ export default function SupplierList() {
     }
   };
 
+  const noItemsCount = suppliers.filter(s => !s.item_count || s.item_count === 0).length;
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="page-title">Suppliers</h1>
-          <p className="text-gray-500 text-sm mt-0.5">{suppliers.length} suppliers</p>
+          <p className="text-gray-500 text-sm mt-0.5">
+            {suppliers.length} suppliers
+            {noItemsCount > 0 && (
+              <span className="text-amber-600 ml-2 font-medium">{noItemsCount} without items linked</span>
+            )}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => setShowImport(true)}>
@@ -84,6 +91,17 @@ export default function SupplierList() {
               {s.email && <div className="flex items-center gap-1.5 text-xs text-gray-400"><Mail size={11} />{s.email}</div>}
               {s.address && <div className="flex items-center gap-1.5 text-xs text-gray-400"><MapPin size={11} /><span className="truncate">{s.address}</span></div>}
             </div>
+            <div className="mt-3 pt-3 border-t border-gray-100">
+              {s.item_count > 0 ? (
+                <div className="flex items-center gap-1.5 text-xs text-green-600 font-medium">
+                  <Package size={12} /> {s.item_count} item{s.item_count !== 1 ? 's' : ''} linked
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-xs text-amber-600 font-medium">
+                  <AlertTriangle size={12} /> No items linked
+                </div>
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -102,9 +120,44 @@ export default function SupplierList() {
 
 function SupplierModal({ supplier, onClose, onSaved }) {
   const [f, setF] = useState(supplier || { supplier_code: '', name: '', contact_person: '', phone: '', email: '', address: '', notes: '' });
+  const [items, setItems] = useState([]);
+  const [inventoryList, setInventoryList] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [loadingItems, setLoadingItems] = useState(!!supplier);
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+
+  useEffect(() => {
+    api.get('/inventory').then(r => setInventoryList(r.data)).catch(() => {});
+    if (supplier) {
+      api.get(`/suppliers/${supplier.id}/items`)
+        .then(r => setItems(r.data.map(si => ({
+          inventory_item_id: si.inventory_item_id,
+          supplier_part_no: si.supplier_part_no || '',
+          supplier_price: si.supplier_price || '',
+          lead_time_days: si.lead_time_days || '',
+          min_order_qty: si.min_order_qty || '',
+        }))))
+        .finally(() => setLoadingItems(false));
+    }
+  }, []);
+
+  const addItem = () => {
+    setItems(prev => [...prev, { inventory_item_id: '', supplier_part_no: '', supplier_price: '', lead_time_days: '', min_order_qty: '' }]);
+  };
+
+  const updateItem = (idx, field, value) => {
+    setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
+  };
+
+  const removeItem = (idx) => {
+    setItems(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const usedItemIds = items.map(i => String(i.inventory_item_id)).filter(Boolean);
+  const availableFor = (idx) => inventoryList.filter(inv =>
+    String(inv.id) === String(items[idx]?.inventory_item_id) || !usedItemIds.includes(String(inv.id))
+  );
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -112,11 +165,16 @@ function SupplierModal({ supplier, onClose, onSaved }) {
     if (!f.name?.trim()) return setError('Supplier name is required');
     if (!f.phone?.trim()) return setError('Phone number is required');
     if (!f.address?.trim()) return setError('Address is required');
+
+    const validItems = items.filter(i => i.inventory_item_id);
+    if (!validItems.length) return setError('At least one inventory item must be linked');
+
     setSaving(true);
     setError('');
     try {
-      if (supplier) await api.put(`/suppliers/${supplier.id}`, f);
-      else await api.post('/suppliers', f);
+      const payload = { ...f, items: validItems };
+      if (supplier) await api.put(`/suppliers/${supplier.id}`, payload);
+      else await api.post('/suppliers', payload);
       onSaved();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed');
@@ -124,9 +182,15 @@ function SupplierModal({ supplier, onClose, onSaved }) {
     }
   };
 
+  const getItemLabel = (invId) => {
+    const inv = inventoryList.find(i => String(i.id) === String(invId));
+    return inv ? `${inv.item_code} — ${inv.name}` : '';
+  };
+
   return (
-    <Modal open title={supplier ? `Edit — ${supplier.name}` : 'Add Supplier'} onClose={onClose}>
-      <form onSubmit={handleSubmit} className="space-y-4">
+    <Modal open title={supplier ? `Edit — ${supplier.name}` : 'Add Supplier'} onClose={onClose} size="lg">
+      <form onSubmit={handleSubmit} className="space-y-5">
+        {/* Supplier info */}
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="label">Supplier Code <span className="text-red-500">*</span></label>
@@ -157,6 +221,81 @@ function SupplierModal({ supplier, onClose, onSaved }) {
             <textarea className="input h-12 resize-none" value={f.notes||''} onChange={set('notes')} />
           </div>
         </div>
+
+        {/* Items section */}
+        <div className="border-t border-gray-200 pt-4">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+                <Package size={14} /> Supplied Items <span className="text-red-500">*</span>
+              </h3>
+              <p className="text-xs text-gray-400 mt-0.5">Select inventory items this supplier provides</p>
+            </div>
+            <button type="button" className="btn-secondary btn-sm flex items-center gap-1 text-xs" onClick={addItem}>
+              <Plus size={13} /> Add Item
+            </button>
+          </div>
+
+          {loadingItems ? (
+            <p className="text-sm text-gray-400 py-4 text-center">Loading items...</p>
+          ) : items.length === 0 ? (
+            <div className="border-2 border-dashed border-gray-200 rounded-xl py-6 text-center">
+              <p className="text-sm text-gray-400 mb-2">No items linked yet</p>
+              <button type="button" className="btn-primary btn-sm text-xs" onClick={addItem}>
+                <Plus size={13} /> Add First Item
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+              {items.map((item, idx) => (
+                <div key={idx} className="bg-gray-50 rounded-xl p-3 border border-gray-100 relative">
+                  <button type="button" onClick={() => removeItem(idx)}
+                    className="absolute top-2 right-2 p-1 rounded-md hover:bg-red-100 text-gray-400 hover:text-red-600 transition-colors">
+                    <X size={14} />
+                  </button>
+                  <div className="grid grid-cols-1 gap-2 mb-2">
+                    <div>
+                      <label className="text-xs text-gray-500 font-medium">Inventory Item <span className="text-red-500">*</span></label>
+                      <select className="input text-sm mt-0.5" value={item.inventory_item_id}
+                        onChange={e => updateItem(idx, 'inventory_item_id', e.target.value)}>
+                        <option value="">— Select item —</option>
+                        {availableFor(idx).map(inv => (
+                          <option key={inv.id} value={inv.id}>{inv.item_code} — {inv.name} ({inv.unit})</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    <div>
+                      <label className="text-xs text-gray-500 font-medium">Supplier Part No</label>
+                      <input className="input text-sm mt-0.5" placeholder="e.g. ABC-123" value={item.supplier_part_no}
+                        onChange={e => updateItem(idx, 'supplier_part_no', e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 font-medium">Price (per unit)</label>
+                      <input className="input text-sm mt-0.5" type="number" step="any" min="0" placeholder="0.00" value={item.supplier_price}
+                        onChange={e => updateItem(idx, 'supplier_price', e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 font-medium">Lead Time (days)</label>
+                      <input className="input text-sm mt-0.5" type="number" min="0" placeholder="e.g. 7" value={item.lead_time_days}
+                        onChange={e => updateItem(idx, 'lead_time_days', e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 font-medium">Min Order Qty</label>
+                      <input className="input text-sm mt-0.5" type="number" step="any" min="0" placeholder="e.g. 100" value={item.min_order_qty}
+                        onChange={e => updateItem(idx, 'min_order_qty', e.target.value)} />
+                    </div>
+                  </div>
+                  {item.inventory_item_id && (
+                    <div className="text-xs text-brand-600 mt-1.5 font-medium">{getItemLabel(item.inventory_item_id)}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
         <div className="flex gap-3 pt-1">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>

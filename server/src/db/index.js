@@ -204,6 +204,20 @@ async function initDB(retries = 10, delayMs = 3000) {
 
       await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS min_order_qty NUMERIC DEFAULT 0`);
 
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS supplier_items (
+          id SERIAL PRIMARY KEY,
+          supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+          inventory_item_id INTEGER NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
+          supplier_part_no TEXT,
+          supplier_price NUMERIC DEFAULT 0,
+          lead_time_days INTEGER,
+          min_order_qty NUMERIC DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(supplier_id, inventory_item_id)
+        )
+      `);
+
       // ── Customer Queries tables ──────────────────────────────────────────────
       await pool.query(`
         CREATE TABLE IF NOT EXISTS customer_queries (
