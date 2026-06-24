@@ -202,6 +202,8 @@ async function initDB(retries = 10, delayMs = 3000) {
           )
       `);
 
+      await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS min_order_qty NUMERIC DEFAULT 0`);
+
       // ── Customer Queries tables ──────────────────────────────────────────────
       await pool.query(`
         CREATE TABLE IF NOT EXISTS customer_queries (

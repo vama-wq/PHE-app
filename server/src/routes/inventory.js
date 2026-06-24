@@ -31,7 +31,7 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadItemDrawing, async (req, res) => {
-  const { item_code, name, category, unit, current_stock, reorder_level, unit_cost, notes } = req.body;
+  const { item_code, name, category, unit, current_stock, reorder_level, unit_cost, min_order_qty, notes } = req.body;
   if (!item_code || !name || !unit) return res.status(400).json({ error: 'Code, name and unit required' });
 
   const db = getDB();
@@ -41,11 +41,11 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadItemDraw
   try {
     const r = await db.insert(
       `INSERT INTO inventory_items
-         (item_code, name, category, unit, current_stock, reorder_level, unit_cost, notes, drawing_file, drawing_original_name, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+         (item_code, name, category, unit, current_stock, reorder_level, unit_cost, min_order_qty, notes, drawing_file, drawing_original_name, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [
         item_code.toUpperCase(), name, category||null, unit,
-        Number(current_stock)||0, Number(reorder_level)||0, Number(unit_cost)||0, notes||null,
+        Number(current_stock)||0, Number(reorder_level)||0, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null,
         drawingFile, drawingOriginalName, req.user.id
       ]
     );
@@ -66,7 +66,7 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadItemDraw
 });
 
 router.put('/:id', authenticate, authorize('accounts', 'owner'), ...uploadItemDrawing, async (req, res) => {
-  const { item_code, name, category, unit, reorder_level, unit_cost, notes } = req.body;
+  const { item_code, name, category, unit, reorder_level, unit_cost, min_order_qty, notes } = req.body;
   const db = getDB();
 
   // Check if code is being changed to one that already exists (different item)
@@ -77,16 +77,16 @@ router.put('/:id', authenticate, authorize('accounts', 'owner'), ...uploadItemDr
     if (req.file) {
       await db.run(
         `UPDATE inventory_items
-         SET item_code=$1, name=$2, category=$3, unit=$4, reorder_level=$5, unit_cost=$6, notes=$7,
-             drawing_file=$8, drawing_original_name=$9
-         WHERE id=$10`,
-        [item_code?.toUpperCase(), name, category||null, unit, reorder_level, Number(unit_cost)||0, notes||null,
+         SET item_code=$1, name=$2, category=$3, unit=$4, reorder_level=$5, unit_cost=$6, min_order_qty=$7, notes=$8,
+             drawing_file=$9, drawing_original_name=$10
+         WHERE id=$11`,
+        [item_code?.toUpperCase(), name, category||null, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null,
          req.file.storagePath, req.file.originalname, req.params.id]
       );
     } else {
       await db.run(
-        `UPDATE inventory_items SET item_code=$1, name=$2, category=$3, unit=$4, reorder_level=$5, unit_cost=$6, notes=$7 WHERE id=$8`,
-        [item_code?.toUpperCase(), name, category||null, unit, reorder_level, Number(unit_cost)||0, notes||null, req.params.id]
+        `UPDATE inventory_items SET item_code=$1, name=$2, category=$3, unit=$4, reorder_level=$5, unit_cost=$6, min_order_qty=$7, notes=$8 WHERE id=$9`,
+        [item_code?.toUpperCase(), name, category||null, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null, req.params.id]
       );
     }
     res.json({ message: 'Updated' });

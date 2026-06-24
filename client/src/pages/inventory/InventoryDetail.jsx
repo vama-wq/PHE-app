@@ -71,6 +71,7 @@ export default function InventoryDetail() {
             <div className="text-gray-500 text-sm mt-1">{item.unit}</div>
             <div className="mt-3 pt-3 border-t border-gray-100">
               <div className="text-xs text-gray-500">Reorder Level: <span className="font-medium text-gray-700">{item.reorder_level} {item.unit}</span></div>
+              {Number(item.min_order_qty) > 0 && <div className="text-xs text-gray-500 mt-1">Min Order Qty: <span className="font-medium text-gray-700">{item.min_order_qty} {item.unit}</span></div>}
               {item.unit_cost > 0 && <div className="text-xs text-gray-500 mt-1">Unit Price: <span className="font-medium text-gray-700">₹{Number(item.unit_cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>}
               {item.category && <div className="text-xs text-gray-500 mt-1">Category: <span className="font-medium text-gray-700">{item.category}</span></div>}
             </div>
@@ -194,7 +195,7 @@ function TransactionModal({ itemId, item, onClose, onSave }) {
 }
 
 function EditItemModal({ item, onClose, onSave }) {
-  const [f, setF] = useState({ item_code: item.item_code, name: item.name, category: item.category || '', unit: item.unit, reorder_level: item.reorder_level, unit_cost: item.unit_cost || '', notes: item.notes || '' });
+  const [f, setF] = useState({ item_code: item.item_code, name: item.name, category: item.category || '', unit: item.unit, reorder_level: item.reorder_level, min_order_qty: item.min_order_qty || 0, unit_cost: item.unit_cost || '', notes: item.notes || '' });
   const [drawing, setDrawing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -225,6 +226,7 @@ function EditItemModal({ item, onClose, onSave }) {
           <div className="col-span-2"><label className="label">Name</label><input className="input" value={f.name} onChange={set('name')} /></div>
           <div><label className="label">Category</label><input className="input" value={f.category} onChange={set('category')} /></div>
           <div><label className="label">Reorder Level</label><input className="input" type="number" step="any" value={f.reorder_level} onChange={set('reorder_level')} /></div>
+          <div><label className="label">Min Order Qty</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 100" value={f.min_order_qty} onChange={set('min_order_qty')} /></div>
           <div><label className="label">Unit Price (₹)</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 12.50" value={f.unit_cost} onChange={set('unit_cost')} /></div>
           <div><label className="label">Notes</label><input className="input" value={f.notes} onChange={set('notes')} /></div>
           <div className="col-span-2">
