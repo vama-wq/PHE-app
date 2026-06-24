@@ -363,50 +363,95 @@ router.post('/products', authenticate, authorize('admin', 'owner'), upload.singl
 
 router.get('/inventory/template', authenticate, (req, res) => {
   sendTemplate(res,
-    ['item_code', 'name', 'category', 'unit', 'reorder_level', 'unit_cost', 'notes'],
+    ['item_code', 'name', 'category', 'unit', 'reorder_level', 'min_order_qty', 'unit_cost', 'notes', 'drawing'],
     'inventory_template.xlsx');
 });
 
 router.post('/inventory', authenticate, authorize('accounts', 'owner'), upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const db = getDB();
-  let rows;
-  try { ({ rows } = parseRows(req.file.buffer)); } catch { return res.status(400).json({ error: 'Invalid Excel file' }); }
-  if (!rows.length) return res.json({ imported: 0, skipped: 0, errors: [], total: 0 });
-
-  let imported = 0, skipped = 0;
-  const errors = [];
-
-  for (const [i, row] of rows.entries()) {
-    const rowNum = i + 2;
-    if (!str(row.item_code)) { errors.push(`Row ${rowNum}: item_code is required`); skipped++; continue; }
-    if (!str(row.name))      { errors.push(`Row ${rowNum}: name is required`); skipped++; continue; }
-    if (!str(row.unit))      { errors.push(`Row ${rowNum}: unit is required`); skipped++; continue; }
-    try {
-      await db.run(`
-        INSERT INTO inventory_items (item_code, name, category, unit, reorder_level, unit_cost, notes, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        ON CONFLICT(item_code) DO UPDATE SET
-          name          = EXCLUDED.name,
-          category      = EXCLUDED.category,
-          unit          = EXCLUDED.unit,
-          reorder_level = EXCLUDED.reorder_level,
-          unit_cost     = EXCLUDED.unit_cost,
-          notes         = EXCLUDED.notes
-      `, [
-        str(row.item_code), str(row.name),
-        strOrNull(row.category), str(row.unit),
-        numOrDefault(row.reorder_level), numOrDefault(row.unit_cost),
-        strOrNull(row.notes), req.user.id,
-      ]);
-      imported++;
-    } catch (e) {
-      errors.push(`Row ${rowNum}: ${e.message}`);
-      skipped++;
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const db = getDB();
+    let rows, headerRowIndex;
+    try { ({ rows, headerRowIndex } = parseRows(req.file.buffer)); } catch (parseErr) {
+      return res.status(400).json({ error: `Invalid Excel file: ${parseErr.message}` });
     }
-  }
+    if (!rows.length) return res.json({ imported: 0, skipped: 0, drawingsImported: 0, errors: [], total: 0 });
 
-  res.json({ imported, skipped, errors, total: rows.length });
+    const imageMap = extractXlsxImages(req.file.buffer, headerRowIndex);
+    console.log(`[import/inventory] rows=${rows.length} drawingsFound=${imageMap.size}`);
+
+    let imported = 0, skipped = 0, drawingsImported = 0;
+    const errors = [];
+
+    const uploadedDrawings = new Map();
+    const uploadTasks = [];
+    for (const [i, row] of rows.entries()) {
+      const img = imageMap.get(i);
+      if (!img) continue;
+      const safeName = str(row.item_code).replace(/[^a-zA-Z0-9]/g, '_');
+      const filename = `${Date.now()}_${i}_import_${safeName}.${img.ext}`;
+      uploadTasks.push(
+        uploadToStorage('item-drawings', filename, img.data, `image/${img.ext}`)
+          .then(storagePath => { uploadedDrawings.set(i, { storagePath, filename }); })
+          .catch(uploadErr => { errors.push(`Row ${i + 2}: drawing upload failed — ${uploadErr.message}`); })
+      );
+    }
+    await Promise.all(uploadTasks);
+    drawingsImported = uploadedDrawings.size;
+    console.log(`[import/inventory] drawing uploads done: ${drawingsImported}/${imageMap.size}`);
+
+    for (const [i, row] of rows.entries()) {
+      const rowNum = i + 2;
+      if (!str(row.item_code)) { errors.push(`Row ${rowNum}: item_code is required`); skipped++; continue; }
+      if (!str(row.name))      { errors.push(`Row ${rowNum}: name is required`); skipped++; continue; }
+      if (!str(row.unit))      { errors.push(`Row ${rowNum}: unit is required`); skipped++; continue; }
+
+      const { storagePath = null, filename: drawingFilename = null } = uploadedDrawings.get(i) || {};
+
+      try {
+        await db.run(`
+          INSERT INTO inventory_items (item_code, name, category, unit, reorder_level, min_order_qty, unit_cost, notes, drawing_file, drawing_original_name, created_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          ON CONFLICT(item_code) DO UPDATE SET
+            name                  = EXCLUDED.name,
+            category              = EXCLUDED.category,
+            unit                  = EXCLUDED.unit,
+            reorder_level         = EXCLUDED.reorder_level,
+            min_order_qty         = EXCLUDED.min_order_qty,
+            unit_cost             = EXCLUDED.unit_cost,
+            notes                 = EXCLUDED.notes,
+            drawing_file          = CASE WHEN EXCLUDED.drawing_file IS NOT NULL
+                                         THEN EXCLUDED.drawing_file
+                                         ELSE inventory_items.drawing_file END,
+            drawing_original_name = CASE WHEN EXCLUDED.drawing_original_name IS NOT NULL
+                                         THEN EXCLUDED.drawing_original_name
+                                         ELSE inventory_items.drawing_original_name END
+        `, [
+          str(row.item_code), str(row.name),
+          strOrNull(row.category), str(row.unit),
+          numOrDefault(row.reorder_level), numOrDefault(row.min_order_qty),
+          numOrDefault(row.unit_cost),
+          strOrNull(row.notes),
+          storagePath, drawingFilename,
+          req.user.id,
+        ]);
+        imported++;
+      } catch (e) {
+        errors.push(`Row ${rowNum}: ${e.message}`);
+        skipped++;
+        if (storagePath) {
+          try { await deleteFromStorage(storagePath); } catch {}
+          drawingsImported--;
+        }
+      }
+    }
+
+    console.log(`[import/inventory] done: imported=${imported} skipped=${skipped} drawings=${drawingsImported} errors=${errors.length}`);
+    res.json({ imported, skipped, drawingsImported, errors, total: rows.length });
+  } catch (err) {
+    console.error('[import/inventory] unhandled error:', err);
+    res.status(500).json({ error: `Import failed: ${err.message}` });
+  }
 });
 
 // ─── FINISHED GOODS ───────────────────────────────────────────────────────────

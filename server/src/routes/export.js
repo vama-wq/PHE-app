@@ -105,19 +105,21 @@ router.get('/job-cards', authenticate, authorize('owner', 'admin', 'accounts', '
 // ── Inventory ─────────────────────────────────────────────────────────────────
 router.get('/inventory', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const rows = await getDB().all(`
-    SELECT item_code, name, category, unit, current_stock, reorder_level, notes
+    SELECT item_code, name, category, unit, current_stock, reorder_level, min_order_qty, unit_cost, notes
     FROM inventory_items ORDER BY category, item_code
   `);
 
   const data = rows.map(r => ({
-    'Item Code':     r.item_code,
-    'Name':          r.name,
-    'Category':      r.category || '',
-    'Unit':          r.unit,
-    'Current Stock': r.current_stock,
-    'Reorder Level': r.reorder_level,
-    'Status':        r.current_stock <= r.reorder_level ? 'LOW STOCK' : 'OK',
-    'Notes':         r.notes || '',
+    'Item Code':      r.item_code,
+    'Name':           r.name,
+    'Category':       r.category || '',
+    'Unit':           r.unit,
+    'Current Stock':  r.current_stock,
+    'Reorder Level':  r.reorder_level,
+    'Min Order Qty':  r.min_order_qty || 0,
+    'Unit Cost':      r.unit_cost || 0,
+    'Status':         r.current_stock <= r.reorder_level ? 'LOW STOCK' : 'OK',
+    'Notes':          r.notes || '',
   }));
 
   const ws = XLSX.utils.json_to_sheet(data);
