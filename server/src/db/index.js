@@ -64,7 +64,7 @@ function getDB() {
   return db;
 }
 
-async function initDB(retries = 10, delayMs = 3000) {
+async function initDB(retries = 20, delayMs = 10000) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       // Run idempotent migrations
