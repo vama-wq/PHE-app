@@ -66,10 +66,13 @@ const CONFIGS = {
       { name: 'category', required: false },
       { name: 'unit', required: true },
       { name: 'reorder_level', required: false },
+      { name: 'min_order_qty', required: false },
       { name: 'unit_cost', required: false },
       { name: 'notes', required: false },
+      { name: 'drawing', required: false },
     ],
     updateKey: 'item_code',
+    note: 'You can embed a drawing image in the "drawing" column for each row. Supported formats: JPG, PNG, PDF.',
   },
   'finished-goods': {
     title: 'Import Finished Goods',
@@ -166,6 +169,7 @@ export default function ImportModal({ type, onClose, onDone }) {
           <p className="mt-2 text-xs text-blue-500">
             Existing records with the same <code className="bg-blue-100 px-1 rounded">{config.updateKey}</code> will be updated automatically.
           </p>
+          {config.note && <p className="mt-1 text-xs text-blue-500">{config.note}</p>}
         </div>
 
         {/* Column reference */}
@@ -253,6 +257,7 @@ export default function ImportModal({ type, onClose, onDone }) {
             <p className="text-xs text-gray-500 ml-6">
               {result.total} rows processed · {result.imported} imported · {result.skipped} skipped
               {result.imagesImported > 0 && ` · ${result.imagesImported} image${result.imagesImported !== 1 ? 's' : ''} saved`}
+              {result.drawingsImported > 0 && ` · ${result.drawingsImported} drawing${result.drawingsImported !== 1 ? 's' : ''} saved`}
             </p>
             {result.errors.length > 0 && (
               <div className="mt-2 ml-6 max-h-28 overflow-y-auto space-y-0.5">
