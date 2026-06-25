@@ -152,6 +152,16 @@ function str(v) { return String(v == null ? '' : v).trim(); }
 function strOrNull(v) { const s = str(v); return s || null; }
 function numOrDefault(v, d = 0) { const n = parseFloat(v); return isNaN(n) ? d : n; }
 
+// Return the first non-empty value among a list of possible header keys.
+// Lets imports tolerate natural header variants, e.g. "minimum order qty"
+// (normalised to minimum_order_qty) mapping to the expected min_order_qty.
+function pick(row, aliases) {
+  for (const a of aliases) {
+    if (row[a] != null && String(row[a]).trim() !== '') return row[a];
+  }
+  return '';
+}
+
 // ─── CUSTOMERS ────────────────────────────────────────────────────────────────
 
 router.get('/customers/template', authenticate, (req, res) => {
@@ -429,8 +439,9 @@ router.post('/inventory', authenticate, authorize('accounts', 'owner'), upload.s
         `, [
           str(row.item_code), str(row.name),
           strOrNull(row.category), str(row.unit),
-          numOrDefault(row.reorder_level), numOrDefault(row.min_order_qty),
-          numOrDefault(row.unit_cost),
+          numOrDefault(pick(row, ['reorder_level', 'reorder', 're_order_level', 'reorder_qty'])),
+          numOrDefault(pick(row, ['min_order_qty', 'minimum_order_qty', 'minimum_order_quantity', 'min_order_quantity', 'moq'])),
+          numOrDefault(pick(row, ['unit_cost', 'unit__cost', 'unitcost', 'cost', 'rate', 'price'])),
           strOrNull(row.notes),
           storagePath, drawingFilename,
           req.user.id,
