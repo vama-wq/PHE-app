@@ -82,7 +82,7 @@ export default function InventoryDetail() {
                 <FileText size={11} /> Drawing
               </div>
               <a
-                href={`/uploads/item-drawings/${item.drawing_file}`}
+                href={`/uploads/${item.drawing_file}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 text-brand-600 text-sm hover:underline"
@@ -236,7 +236,7 @@ function EditItemModal({ item, onClose, onSave }) {
             </label>
             {item.drawing_file && !drawing && (
               <div className="text-xs text-gray-500 mb-1">
-                Current: <a href={`/uploads/item-drawings/${item.drawing_file}`} target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">{item.drawing_original_name}</a>
+                Current: <a href={`/uploads/${item.drawing_file}`} target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">{item.drawing_original_name}</a>
               </div>
             )}
             <label className="flex items-center gap-2 cursor-pointer border border-gray-200 rounded-lg px-3 py-2 hover:border-brand-400 transition-colors bg-gray-50">

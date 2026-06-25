@@ -257,7 +257,7 @@ export default function PurchaseOrderDetail() {
                   <div className="text-xs text-gray-500">{item.drawing_original_name}</div>
                 </div>
                 <a
-                  href={`/uploads/item-drawings/${item.drawing_file}`}
+                  href={`/uploads/${item.drawing_file}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="btn-secondary btn-sm flex items-center gap-1.5"

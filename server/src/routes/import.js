@@ -162,6 +162,58 @@ function pick(row, aliases) {
   return '';
 }
 
+// Extract cell hyperlinks for a column (matched by normalised header name),
+// keyed by 0-based data-row index. Used to pull drawings that are stored as
+// Google Drive links (chips) rather than embedded images.
+function extractColumnHyperlinks(buffer, headerName, headerRowIndex = 0) {
+  const map = new Map();
+  try {
+    const wb = XLSX.read(buffer, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws || !ws['!ref']) return map;
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    let colIdx = -1;
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ c, r: headerRowIndex })];
+      if (!cell) continue;
+      const norm = String(cell.v).trim().toLowerCase().replace(/[\s\-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+      if (norm === headerName) { colIdx = c; break; }
+    }
+    if (colIdx === -1) return map;
+    for (let r = headerRowIndex + 1; r <= range.e.r; r++) {
+      const cell = ws[XLSX.utils.encode_cell({ c: colIdx, r })];
+      if (cell && cell.l && cell.l.Target) map.set(r - headerRowIndex - 1, cell.l.Target);
+    }
+  } catch (e) {
+    console.error('[import] hyperlink extraction error:', e.message);
+  }
+  return map;
+}
+
+// Pull the Drive file id out of a share/view URL.
+function driveFileId(url) {
+  if (!url) return null;
+  const m = String(url).match(/\/d\/([^/]+)/) || String(url).match(/[?&]id=([^&]+)/);
+  return m ? m[1] : null;
+}
+
+// Download a publicly-shared Google Drive file by id. Detects type from the
+// file's magic bytes. Throws a clear error if the file isn't public.
+async function fetchDriveFile(fileId) {
+  const url = `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
+  const res = await fetch(url, { redirect: 'follow' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = Buffer.from(await res.arrayBuffer());
+  if (data.slice(0, 4).toString() === '%PDF')                 return { data, ext: 'pdf', mime: 'application/pdf' };
+  if (data.slice(0, 3).toString('hex') === 'ffd8ff')          return { data, ext: 'jpg', mime: 'image/jpeg' };
+  if (data.slice(0, 8).toString('hex') === '89504e470d0a1a0a') return { data, ext: 'png', mime: 'image/png' };
+  const head = data.slice(0, 64).toString().toLowerCase();
+  if (head.includes('<!doctype') || head.includes('<html')) {
+    throw new Error('file is not publicly shared (Drive returned a web page, not the file)');
+  }
+  return { data, ext: 'bin', mime: 'application/octet-stream' };
+}
+
 // ─── CUSTOMERS ────────────────────────────────────────────────────────────────
 
 router.get('/customers/template', authenticate, (req, res) => {
@@ -407,8 +459,41 @@ router.post('/inventory', authenticate, authorize('accounts', 'owner'), upload.s
       );
     }
     await Promise.all(uploadTasks);
+
+    // Drawings can also be supplied as Google Drive links (chips) in the
+    // "drawing" column. Fetch each distinct file once (many items may share a
+    // drawing), upload it, then assign to every row that references it.
+    const linkMap = extractColumnHyperlinks(req.file.buffer, 'drawing', headerRowIndex);
+    const distinctIds = new Map(); // fileId -> first row index (for naming)
+    for (const [i, url] of linkMap) {
+      if (uploadedDrawings.has(i)) continue; // embedded image wins
+      const fid = driveFileId(url);
+      if (fid && !distinctIds.has(fid)) distinctIds.set(fid, i);
+    }
+    const fetchedByFileId = new Map(); // fileId -> { storagePath, filename }
+    const idEntries = [...distinctIds.entries()];
+    const CONCURRENCY = 8;
+    for (let start = 0; start < idEntries.length; start += CONCURRENCY) {
+      await Promise.all(idEntries.slice(start, start + CONCURRENCY).map(async ([fid, i]) => {
+        try {
+          const f = await fetchDriveFile(fid);
+          const safeName = str(rows[i].item_code).replace(/[^a-zA-Z0-9]/g, '_');
+          const storeName = `${Date.now()}_drive_${safeName}_${fid.slice(0, 8)}.${f.ext}`;
+          const storagePath = await uploadToStorage('item-drawings', storeName, f.data, f.mime);
+          fetchedByFileId.set(fid, { storagePath, filename: `${str(rows[i].item_code)}.${f.ext}` });
+        } catch (e) {
+          errors.push(`Drawing for ${rows[i].item_code}: ${e.message}`);
+        }
+      }));
+    }
+    for (const [i, url] of linkMap) {
+      if (uploadedDrawings.has(i)) continue;
+      const got = fetchedByFileId.get(driveFileId(url));
+      if (got) uploadedDrawings.set(i, got);
+    }
+
     drawingsImported = uploadedDrawings.size;
-    console.log(`[import/inventory] drawing uploads done: ${drawingsImported}/${imageMap.size}`);
+    console.log(`[import/inventory] drawings: embedded=${imageMap.size} driveLinks=${linkMap.size} distinctDriveFiles=${distinctIds.size} totalAttached=${drawingsImported}`);
 
     for (const [i, row] of rows.entries()) {
       const rowNum = i + 2;
