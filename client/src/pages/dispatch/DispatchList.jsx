@@ -59,6 +59,7 @@ export default function DispatchList() {
       const s = search.toLowerCase();
       r = r.filter(jc =>
         jc.job_card_no.toLowerCase().includes(s) ||
+        (jc.order_code || '').toLowerCase().includes(s) ||
         (jc.customer_code || '').toLowerCase().includes(s) ||
         (jc.drawing_no || '').toLowerCase().includes(s) ||
         (jc.product_name || '').toLowerCase().includes(s)
@@ -81,12 +82,27 @@ export default function DispatchList() {
 
   const canManage = ['accounts', 'owner'].includes(user.role);
 
+  // Group filtered job cards by order
+  const orderGroups = useMemo(() => {
+    const map = new Map();
+    for (const jc of filtered) {
+      const key = jc.order_id;
+      if (!map.has(key)) {
+        map.set(key, { order_id: jc.order_id, order_code: jc.order_code, customer_code: jc.customer_code, cards: [] });
+      }
+      map.get(key).cards.push(jc);
+    }
+    return [...map.values()];
+  }, [filtered]);
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Dispatch</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Job cards ready for or pending dispatch</p>
+          <p className="text-gray-500 text-sm mt-0.5">
+            {orderGroups.length} order{orderGroups.length !== 1 ? 's' : ''} · {filtered.length} job card{filtered.length !== 1 ? 's' : ''}
+          </p>
         </div>
         {canManage && (
           <button className="btn-secondary flex items-center gap-1.5 text-sm"
@@ -100,7 +116,7 @@ export default function DispatchList() {
       <div className="flex flex-wrap gap-3 mb-5">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
-          <input className="input pl-9" placeholder="Search job card, drawing, product..."
+          <input className="input pl-9" placeholder="Search order, job card, drawing, product..."
             value={search} onChange={e => setSearch(e.target.value)} />
         </div>
         <select className="input max-w-[180px]" value={clientFilter}
@@ -136,117 +152,144 @@ export default function DispatchList() {
         )}
       </div>
 
-      <div className="card overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-gray-50 border-b border-gray-200">
-            <tr>
-              <th className="table-header text-left">Job Card</th>
-              <th className="table-header text-left">Customer</th>
-              <th className="table-header text-left">Product / Drawing</th>
-              <th className="table-header text-right">QC Approved Qty</th>
-              <th className="table-header text-left">Dispatch Date</th>
-              <th className="table-header text-left">Status</th>
-              <th className="table-header text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {loading ? (
-              <tr><td colSpan={7} className="table-cell text-center text-gray-400 py-12">Loading...</td></tr>
-            ) : filtered.length === 0 ? (
-              <tr><td colSpan={7} className="table-cell text-center text-gray-400 py-12">
-                {hasFilters ? 'No results match your filters' : 'No jobs in dispatch pipeline yet'}
-              </td></tr>
-            ) : filtered.map(jc => {
-              // Show QC-approved dispatch qty (not the pre-QC stage 29 value)
-              const dispQty = jc.qc_dispatch_qty != null ? jc.qc_dispatch_qty : jc.net_qty;
-              return (
-                <tr key={jc.id} className="hover:bg-gray-50">
-                  <td className="table-cell">
-                    <Link to={`/job-cards/${jc.id}`}
-                      className="font-semibold text-brand-700 hover:underline">
-                      {jc.job_card_no}
+      {loading ? (
+        <div className="text-center text-gray-400 py-12">Loading...</div>
+      ) : orderGroups.length === 0 ? (
+        <div className="text-center text-gray-400 py-12">
+          {hasFilters ? 'No results match your filters' : 'No jobs in dispatch pipeline yet'}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {orderGroups.map(group => {
+            const allDispatched = group.cards.every(jc => ['dispatched','resolved_dispatched'].includes(jc.status));
+            return (
+              <div key={group.order_id} className="card overflow-hidden">
+                {/* Order header */}
+                <div className={`px-5 py-3 border-b flex items-center justify-between ${
+                  allDispatched ? 'bg-green-50 border-green-100' : 'bg-gray-50 border-gray-200'
+                }`}>
+                  <div className="flex items-center gap-3">
+                    <Link to={`/orders/${group.order_id}`}
+                      className="font-bold text-brand-700 hover:underline text-sm">
+                      {group.order_code}
                     </Link>
-                  </td>
-                  <td className="table-cell">{jc.customer_code}</td>
-                  <td className="table-cell text-sm">
-                    {jc.product_name && <div className="font-medium text-gray-800">{jc.product_name}</div>}
-                    {jc.drawing_no && <div className="text-xs text-gray-400">{jc.drawing_no}</div>}
-                  </td>
-                  <td className="table-cell text-right">
-                    {jc.status === 'dispatched' && jc.dispatched_qty
-                      ? <span className="font-semibold text-gray-800">{jc.dispatched_qty}</span>
-                      : dispQty != null && dispQty !== jc.qty
-                        ? <span>
-                            <span className="font-semibold text-orange-600">{dispQty}</span>
-                            <span className="text-xs text-gray-400 ml-1">of {jc.qty}</span>
-                          </span>
-                        : <span className="font-semibold text-gray-800">{dispQty ?? jc.qty}</span>
-                    }
-                    {jc.qc_route && (
-                      <div className="text-xs text-gray-400 mt-0.5">
-                        {jc.qc_route === 'finished_goods' ? 'All → FG'
-                         : jc.qc_route === 'both' || jc.qc_route === 'split'
-                           ? `FG: ${jc.qc_fg_qty} + Dispatch: ${jc.qc_dispatch_qty}`
-                           : 'All → Dispatch'}
-                      </div>
-                    )}
-                  </td>
-                  <td className="table-cell">{fmtDate(jc.dispatch_date)}</td>
-                  <td className="table-cell"><StatusBadge status={jc.status} /></td>
-                  <td className="table-cell text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      {/* Summary button — always visible */}
-                      <button
-                        className="btn-secondary btn-sm flex items-center gap-1 text-xs py-1 px-2"
-                        onClick={() => setShowSummary(jc)}
-                        title="View checklist summary">
-                        <BarChart2 size={13} /> Summary
-                      </button>
-                      {canManage && !['dispatched','resolved_dispatched'].includes(jc.status) && (
-                        (priceRequested[jc.id] || parseInt(jc.price_requested) > 0) ? (
-                          <span className="text-xs text-green-600 font-medium px-2 py-1">Price Requested</span>
-                        ) : (
-                          <button
-                            className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-purple-100 text-purple-800 hover:bg-purple-200 rounded-lg font-medium transition-colors"
-                            onClick={async () => {
-                              try {
-                                await api.post('/dispatch/request-price', { job_card_id: jc.id });
-                                setPriceRequested(p => ({ ...p, [jc.id]: true }));
-                              } catch (e) { alert(e.response?.data?.error || 'Failed'); }
-                            }}
-                            title="Request price from owner for this item">
-                            <DollarSign size={13} /> Request Price
-                          </button>
-                        )
-                      )}
-                      {canManage && !['dispatched','customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'].includes(jc.status) && (
-                        <button
-                          className="btn-primary btn-sm flex items-center gap-1 text-xs py-1 px-2"
-                          onClick={() => setShowUpload(jc)}>
-                          <Upload size={13} /> Dispatch
-                        </button>
-                      )}
-                      {['dispatched','resolved_dispatched'].includes(jc.status) && canManage && (
-                        <button
-                          className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-amber-100 text-amber-800 hover:bg-amber-200 rounded-lg font-medium transition-colors"
-                          onClick={() => setShowNewQuery(jc)}>
-                          <HelpCircle size={13} /> Customer Query
-                        </button>
-                      )}
-                      {['customer_query','product_return','repair_in_progress'].includes(jc.status) && (
-                        <Link to={`/customer-queries?order_id=${jc.order_id}`}
-                          className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-rose-100 text-rose-800 hover:bg-rose-200 rounded-lg font-medium transition-colors">
-                          <HelpCircle size={13} /> View Query
-                        </Link>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    <span className="text-sm text-gray-600 font-medium">{group.customer_code}</span>
+                    <span className="text-xs text-gray-400">
+                      {group.cards.length} job card{group.cards.length !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  {allDispatched && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium flex items-center gap-1">
+                      <CheckCircle size={11} /> All Dispatched
+                    </span>
+                  )}
+                </div>
+
+                {/* Job cards table */}
+                <table className="w-full">
+                  <thead className="bg-gray-50/50 border-b border-gray-100">
+                    <tr>
+                      <th className="table-header text-left">Job Card</th>
+                      <th className="table-header text-left">Product / Drawing</th>
+                      <th className="table-header text-right">QC Approved Qty</th>
+                      <th className="table-header text-left">Dispatch Date</th>
+                      <th className="table-header text-left">Status</th>
+                      <th className="table-header text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {group.cards.map(jc => {
+                      const dispQty = jc.qc_dispatch_qty != null ? jc.qc_dispatch_qty : jc.net_qty;
+                      return (
+                        <tr key={jc.id} className="hover:bg-gray-50">
+                          <td className="table-cell">
+                            <Link to={`/job-cards/${jc.id}`}
+                              className="font-semibold text-brand-700 hover:underline">
+                              {jc.job_card_no}
+                            </Link>
+                          </td>
+                          <td className="table-cell text-sm">
+                            {jc.product_name && <div className="font-medium text-gray-800">{jc.product_name}</div>}
+                            {jc.drawing_no && <div className="text-xs text-gray-400">{jc.drawing_no}</div>}
+                          </td>
+                          <td className="table-cell text-right">
+                            {jc.status === 'dispatched' && jc.dispatched_qty
+                              ? <span className="font-semibold text-gray-800">{jc.dispatched_qty}</span>
+                              : dispQty != null && dispQty !== jc.qty
+                                ? <span>
+                                    <span className="font-semibold text-orange-600">{dispQty}</span>
+                                    <span className="text-xs text-gray-400 ml-1">of {jc.qty}</span>
+                                  </span>
+                                : <span className="font-semibold text-gray-800">{dispQty ?? jc.qty}</span>
+                            }
+                            {jc.qc_route && (
+                              <div className="text-xs text-gray-400 mt-0.5">
+                                {jc.qc_route === 'finished_goods' ? 'All → FG'
+                                 : jc.qc_route === 'both' || jc.qc_route === 'split'
+                                   ? `FG: ${jc.qc_fg_qty} + Dispatch: ${jc.qc_dispatch_qty}`
+                                   : 'All → Dispatch'}
+                              </div>
+                            )}
+                          </td>
+                          <td className="table-cell">{fmtDate(jc.dispatch_date)}</td>
+                          <td className="table-cell"><StatusBadge status={jc.status} /></td>
+                          <td className="table-cell text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                className="btn-secondary btn-sm flex items-center gap-1 text-xs py-1 px-2"
+                                onClick={() => setShowSummary(jc)}
+                                title="View checklist summary">
+                                <BarChart2 size={13} /> Summary
+                              </button>
+                              {canManage && !['dispatched','resolved_dispatched'].includes(jc.status) && (
+                                (priceRequested[jc.id] || parseInt(jc.price_requested) > 0) ? (
+                                  <span className="text-xs text-green-600 font-medium px-2 py-1">Price Requested</span>
+                                ) : (
+                                  <button
+                                    className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-purple-100 text-purple-800 hover:bg-purple-200 rounded-lg font-medium transition-colors"
+                                    onClick={async () => {
+                                      try {
+                                        await api.post('/dispatch/request-price', { job_card_id: jc.id });
+                                        setPriceRequested(p => ({ ...p, [jc.id]: true }));
+                                      } catch (e) { alert(e.response?.data?.error || 'Failed'); }
+                                    }}
+                                    title="Request price from owner for this item">
+                                    <DollarSign size={13} /> Request Price
+                                  </button>
+                                )
+                              )}
+                              {canManage && !['dispatched','customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'].includes(jc.status) && (
+                                <button
+                                  className="btn-primary btn-sm flex items-center gap-1 text-xs py-1 px-2"
+                                  onClick={() => setShowUpload(jc)}>
+                                  <Upload size={13} /> Dispatch
+                                </button>
+                              )}
+                              {['dispatched','resolved_dispatched'].includes(jc.status) && canManage && (
+                                <button
+                                  className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-amber-100 text-amber-800 hover:bg-amber-200 rounded-lg font-medium transition-colors"
+                                  onClick={() => setShowNewQuery(jc)}>
+                                  <HelpCircle size={13} /> Customer Query
+                                </button>
+                              )}
+                              {['customer_query','product_return','repair_in_progress'].includes(jc.status) && (
+                                <Link to={`/customer-queries?order_id=${jc.order_id}`}
+                                  className="btn-sm flex items-center gap-1 text-xs py-1 px-2 bg-rose-100 text-rose-800 hover:bg-rose-200 rounded-lg font-medium transition-colors">
+                                  <HelpCircle size={13} /> View Query
+                                </Link>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {showUpload && (
         <DispatchDocModal
