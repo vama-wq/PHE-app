@@ -265,7 +265,8 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
       product_code: p.product_code || '', drawing_number: p.drawing_number || '',
       tube_material: p.tube_material || '', tube_diameter: p.tube_diameter || '',
       wattage: p.wattage || '', voltage: p.voltage || '',
-      plating_instructions: p.plating_instructions || '', quantity: p.quantity || '',
+      plating_instructions: p.plating_instructions || '',
+      quantity: '', // left blank on purpose — quantity varies per order
       remark: p.remark || '',
     });
     setProductSearch(p.product_code || '');
@@ -358,7 +359,7 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
                     {prevItems.find(p => String(p.id) === String(copyFromItemId))?.has_drawing
                       ? 'Details pre-filled. Its reference drawing will be copied in for re-approval.'
                       : 'Details pre-filled. This item had no drawing on file.'}
-                    {' '}Edit anything (e.g. quantity) before saving.
+                    {' '}Enter this order's quantity (left blank since it varies).
                   </p>
                 )}
               </>
