@@ -67,6 +67,26 @@ function getDB() {
 async function initDB(retries = 20, delayMs = 10000) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
+      // ── Self-heal: clear zombie transactions before running startup DDL ──────
+      // On Render's free tier the container is spun down after idle. If it's
+      // killed mid-query it can leave an 'idle in transaction' session on the
+      // Supabase pooler that still holds locks. On the next cold start the very
+      // first migration below (ALTER TABLE … needs an exclusive lock) blocks on
+      // that zombie, the boot hangs, and the app shows "Application loading"
+      // forever. Terminate any stale idle-in-transaction session first so the
+      // migrations can always acquire their locks.
+      try {
+        const z = await pool.query(`
+          SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND state = 'idle in transaction'
+            AND state_change < now() - interval '20 seconds'
+        `);
+        if (z.rowCount) console.log(`Cleared ${z.rowCount} stale idle-in-transaction session(s) before migrations`);
+      } catch (e) {
+        console.warn('Zombie-connection cleanup skipped:', e.message);
+      }
+
       // Run idempotent migrations
       await pool.query(`ALTER TABLE job_card_holds ADD COLUMN IF NOT EXISTS notes TEXT`);
       await pool.query(`

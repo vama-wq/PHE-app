@@ -75,21 +75,23 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
-// Init DB then start listening
-initDB()
-  .then(() => {
-    const server = app.listen(PORT, '0.0.0.0', () => {
-      console.log(`\nPHE Server running at http://localhost:${PORT}`);
-      console.log(`Environment: ${process.env.NODE_ENV}`);
-    });
-    server.on('error', (err) => {
-      if (err.code === 'EADDRINUSE') {
-        console.error(`\n⚠️  Port ${PORT} is already in use.`);
-        process.exit(1);
-      } else throw err;
-    });
-  })
-  .catch((err) => {
-    console.error('Failed to connect to database:', err.message);
+// Start serving immediately, then run DB migrations in the background.
+// The schema already exists and migrations are idempotent, so requests are safe
+// during/after migration. This keeps cold starts fast (important on Render's
+// free tier, which sleeps the container) and prevents a slow or lock-blocked
+// migration from stalling the whole boot — which previously showed users an
+// endless "Application loading" screen.
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`\nPHE Server running at http://localhost:${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV}`);
+});
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n⚠️  Port ${PORT} is already in use.`);
     process.exit(1);
-  });
+  } else throw err;
+});
+
+initDB()
+  .then(() => console.log('Database migrations complete'))
+  .catch((err) => console.error('initDB failed (server still running, will work once DB is reachable):', err.message));
