@@ -46,6 +46,17 @@ function getPublicUrl(storagePath) {
   return data?.publicUrl || null;
 }
 
+// Server-side copy of an existing stored file to a new path within the bucket
+// (no download/re-upload). Returns the new storage path.
+async function copyInStorage(fromPath, toFolder, newFilename) {
+  if (!fromPath) return null;
+  const supabase = getSupabase();
+  const toPath = `${toFolder}/${newFilename}`;
+  const { error } = await supabase.storage.from(BUCKET).copy(fromPath, toPath);
+  if (error) throw new Error(`Storage copy failed: ${error.message}`);
+  return toPath;
+}
+
 // All multer instances use memoryStorage — files are then pushed to Supabase Storage
 // by route handlers (or via the postUpload middleware below).
 const memStorage = multer.memoryStorage();
@@ -135,5 +146,6 @@ module.exports = {
   uploadToStorage,
   deleteFromStorage,
   getPublicUrl,
+  copyInStorage,
   BUCKET,
 };

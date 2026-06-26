@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
-const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, deleteFromStorage } = require('../middleware/upload');
+const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, deleteFromStorage, copyInStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 
 // ── Mentions ──────────────────────────────────────────────────────────────────
@@ -132,6 +132,34 @@ router.get('/drawings/pending', authenticate, async (req, res) => {
     ORDER BY o.created_at DESC
   `);
   res.json(rows);
+});
+
+// Previous items ordered by a given customer — used to "reuse" a past item
+// (copy its details + reference drawing) when adding an item to a new order.
+router.get('/customer/:customerId/previous-items', authenticate, async (req, res) => {
+  const db = getDB();
+  const items = await db.all(
+    `SELECT oi.id, oi.order_id, o.order_code, o.order_date,
+            oi.product_code, oi.drawing_number, oi.tube_material, oi.tube_diameter,
+            oi.wattage, oi.voltage, oi.plating_instructions, oi.quantity, oi.remark,
+            EXISTS (SELECT 1 FROM order_drawings od WHERE od.item_id = oi.id) AS has_drawing,
+            (SELECT COUNT(*) FROM order_item_images im WHERE im.item_id = oi.id) AS image_count
+     FROM order_items oi
+     JOIN orders o ON o.id = oi.order_id
+     WHERE o.customer_id = $1
+     ORDER BY o.created_at DESC, oi.id DESC`,
+    [req.params.customerId]
+  );
+  // Attach inventory selections so the form can pre-fill them too
+  for (const it of items) {
+    it.inventory_items = await db.all(
+      `SELECT ii.id, ii.item_code, ii.name, ii.unit, oii.qty
+       FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+       WHERE oii.order_item_id = $1`,
+      [it.id]
+    );
+  }
+  res.json(items);
 });
 
 router.get('/', authenticate, async (req, res) => {
@@ -321,7 +349,7 @@ router.get('/:id/items', authenticate, async (req, res) => {
 });
 
 router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req, res) => {
-  const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark, inventory_item_ids } = req.body;
+  const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark, inventory_item_ids, copy_from_item_id } = req.body;
   if (!quantity) return res.status(400).json({ error: 'Quantity is required' });
 
   const db = getDB();
@@ -341,7 +369,46 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
       );
     }
   }
-  res.status(201).json({ id: itemId });
+
+  // Reusing a previous item: copy its reference drawing + images into this new
+  // item (files duplicated in storage so they're independent). The copied
+  // drawing comes in as 'pending_review' so the owner re-approves it; the job
+  // card is NOT copied — it's created fresh later.
+  let drawingCopied = false;
+  if (copy_from_item_id) {
+    const ext = (name, fallback) => (name && name.includes('.') ? name.split('.').pop() : fallback);
+    const src = await db.get(
+      `SELECT * FROM order_drawings WHERE item_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [copy_from_item_id]
+    );
+    if (src && src.file_path) {
+      try {
+        const newName = `${Date.now()}_copy_item${itemId}.${ext(src.file_name, 'pdf')}`;
+        const newPath = await copyInStorage(src.file_path, 'order-drawings', newName);
+        await db.run(
+          `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
+          [req.params.id, itemId, newPath, newName, src.original_name, src.notes || null, req.user.id]
+        );
+        drawingCopied = true;
+      } catch (e) { console.error('[orders] drawing copy failed:', e.message); }
+    }
+    const srcImages = await db.all(`SELECT * FROM order_item_images WHERE item_id=$1`, [copy_from_item_id]);
+    for (const img of srcImages) {
+      if (!img.file_path) continue;
+      try {
+        const newName = `${Date.now()}_copy_item${itemId}_${img.id}.${ext(img.file_name, 'jpg')}`;
+        const newPath = await copyInStorage(img.file_path, 'item-images', newName);
+        await db.run(
+          `INSERT INTO order_item_images (item_id, file_path, file_name, original_name, uploaded_by)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [itemId, newPath, newName, img.original_name, req.user.id]
+        );
+      } catch (e) { console.error('[orders] item image copy failed:', e.message); }
+    }
+  }
+
+  res.status(201).json({ id: itemId, drawingCopied });
 });
 
 router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), async (req, res) => {

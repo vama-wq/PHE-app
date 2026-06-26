@@ -9,7 +9,7 @@ import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transli
 import {
   ArrowLeft, CheckCircle, CheckCircle2, XCircle, FileText, Plus, Upload,
   ExternalLink, Trash2, Edit2, Package, PenLine, MessageSquare,
-  Clock, AlertTriangle, Image as ImageIcon, Send, X, RefreshCw, ClipboardList, Paperclip, Download, File
+  Clock, AlertTriangle, Image as ImageIcon, Send, X, RefreshCw, ClipboardList, Paperclip, Download, File, RotateCcw
 } from 'lucide-react';
 
 // ── Required-field validation (mirrors OrderList) ────────────────────────────
@@ -809,6 +809,7 @@ export default function OrderDetail() {
         <ItemModal
           item={editingItem}
           orderId={id}
+          customerId={order?.customer_id}
           onClose={() => { setShowItemModal(false); setEditingItem(null); }}
           onSave={() => { setShowItemModal(false); setEditingItem(null); load(); }}
         />
@@ -1172,7 +1173,7 @@ function TimelinePanel({ activity }) {
 }
 
 // ── Item modal (add / edit on existing order) ────────────────────────────────
-function ItemModal({ item, orderId, onClose, onSave }) {
+function ItemModal({ item, orderId, customerId, onClose, onSave }) {
   const blank = {
     product_code: '', drawing_number: '', tube_material: '', tube_diameter: '',
     wattage: '', voltage: '', plating_instructions: '', quantity: '', remark: ''
@@ -1198,10 +1199,39 @@ function ItemModal({ item, orderId, onClose, onSave }) {
   const [invSearch, setInvSearch] = useState('');
   const [showInvDropdown, setShowInvDropdown] = useState(false);
 
+  // "Reuse a previous item" picker (only when adding a new item)
+  const [prevItems, setPrevItems] = useState([]);
+  const [copyFromItemId, setCopyFromItemId] = useState(null);
+
   useEffect(() => {
     api.get('/products').then(r => setProducts(r.data)).catch(() => {});
     api.get('/inventory').then(r => setInventoryItems(r.data)).catch(() => {});
   }, []);
+
+  // Load the customer's previous items (excluding this order) to reuse
+  useEffect(() => {
+    if (item?.id || !customerId) { setPrevItems([]); return; }
+    api.get(`/orders/customer/${customerId}/previous-items`)
+      .then(r => setPrevItems((r.data || []).filter(p => String(p.order_id) !== String(orderId))))
+      .catch(() => setPrevItems([]));
+  }, [customerId, item, orderId]);
+
+  const selectPrevItem = (e) => {
+    const pid = e.target.value;
+    if (!pid) { setCopyFromItemId(null); return; }
+    const p = prevItems.find(x => String(x.id) === String(pid));
+    if (!p) return;
+    setF({
+      product_code: p.product_code || '', drawing_number: p.drawing_number || '',
+      tube_material: p.tube_material || '', tube_diameter: p.tube_diameter || '',
+      wattage: p.wattage || '', voltage: p.voltage || '',
+      plating_instructions: p.plating_instructions || '', quantity: p.quantity || '',
+      remark: p.remark || '',
+    });
+    setProductSearch(p.product_code || '');
+    setSelectedInventory(Object.fromEntries((p.inventory_items || []).map(i => [i.id, i.qty || ''])));
+    setCopyFromItemId(p.id);
+  };
 
   const filteredProducts = products.filter(p =>
     (p.product_code || '').toLowerCase().includes(productSearch.toLowerCase()) ||
@@ -1241,6 +1271,7 @@ function ItemModal({ item, orderId, onClose, onSave }) {
     if (missingQty.length) { setError('Please enter a quantity for all selected inventory items'); return; }
     const inventory_item_ids = invIds.map(id => ({ id: parseInt(id), qty: parseFloat(selectedInventory[id]) }));
     const payload = { ...f, inventory_item_ids };
+    if (!item?.id && copyFromItemId) payload.copy_from_item_id = copyFromItemId;
     setSaving(true);
     try {
       if (item?.id) {
@@ -1274,6 +1305,41 @@ function ItemModal({ item, orderId, onClose, onSave }) {
   return (
     <Modal open title={item?.id ? 'Edit Item' : 'Add Item'} onClose={onClose} size="lg">
       <div className="grid grid-cols-2 gap-4">
+
+        {/* Reuse a previous item (only when adding a new item) */}
+        {!item?.id && (
+          <div className="col-span-2 bg-brand-50 border border-brand-100 rounded-lg p-3">
+            <label className="label flex items-center gap-1.5 mb-0">
+              <RotateCcw size={13} /> Reuse a previous item for this customer
+              <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            {!customerId ? (
+              <p className="text-xs text-gray-400 mt-1">No customer on this order.</p>
+            ) : prevItems.length === 0 ? (
+              <p className="text-xs text-gray-400 mt-1">No previous items found for this customer.</p>
+            ) : (
+              <>
+                <select className="input mt-1" value={copyFromItemId || ''} onChange={selectPrevItem}>
+                  <option value="">Start fresh — enter new item details</option>
+                  {prevItems.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.order_code} · {p.drawing_number || p.product_code || 'item'}
+                      {p.has_drawing ? ' · has drawing' : ''} · qty {p.quantity}
+                    </option>
+                  ))}
+                </select>
+                {copyFromItemId && (
+                  <p className="text-xs text-brand-600 mt-1.5">
+                    {prevItems.find(p => String(p.id) === String(copyFromItemId))?.has_drawing
+                      ? 'Details pre-filled. Its reference drawing will be copied in for re-approval.'
+                      : 'Details pre-filled. This item had no drawing on file.'}
+                    {' '}Edit anything (e.g. quantity) before saving.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         {/* Product Code — searchable dropdown */}
         <div className="col-span-2 relative">

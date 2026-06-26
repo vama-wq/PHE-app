@@ -6,7 +6,7 @@ import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import { fmtDate, downloadExcel } from '../../lib/utils';
-import { Plus, Search, Trash2, Edit2, Package, Image as ImageIcon, X, Download } from 'lucide-react';
+import { Plus, Search, Trash2, Edit2, Package, Image as ImageIcon, X, Download, RotateCcw } from 'lucide-react';
 
 // ── Validation helper ────────────────────────────────────────────────────────
 function validateItem(f) {
@@ -220,7 +220,7 @@ export default function OrderList() {
 }
 
 // ── Item sub-modal ──────────────────────────────────────────────────────────
-function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
+function ItemModal({ item, images: initialImages = [], customerId, onClose, onSave }) {
   const blank = {
     product_code: '', drawing_number: '', tube_material: '', tube_diameter: '',
     wattage: '', voltage: '', plating_instructions: '', quantity: '', remark: ''
@@ -238,6 +238,9 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
   );
   const [invSearch, setInvSearch] = useState('');
   const [showInvDropdown, setShowInvDropdown] = useState(false);
+  // "Reuse a previous item" picker (only when adding a new item)
+  const [prevItems, setPrevItems] = useState([]);
+  const [copyFromItemId, setCopyFromItemId] = useState(item?.copy_from_item_id || null);
   const imgRef = useRef();
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
@@ -245,6 +248,30 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
     api.get('/products').then(r => setProducts(r.data)).catch(() => {});
     api.get('/inventory').then(r => setInventoryItems(r.data)).catch(() => {});
   }, []);
+
+  // Load the customer's previous items so they can be reused without re-entry
+  useEffect(() => {
+    if (item || !customerId) { setPrevItems([]); return; }
+    api.get(`/orders/customer/${customerId}/previous-items`)
+      .then(r => setPrevItems(r.data)).catch(() => setPrevItems([]));
+  }, [customerId, item]);
+
+  const selectPrevItem = (e) => {
+    const id = e.target.value;
+    if (!id) { setCopyFromItemId(null); return; }
+    const p = prevItems.find(x => String(x.id) === String(id));
+    if (!p) return;
+    setF({
+      product_code: p.product_code || '', drawing_number: p.drawing_number || '',
+      tube_material: p.tube_material || '', tube_diameter: p.tube_diameter || '',
+      wattage: p.wattage || '', voltage: p.voltage || '',
+      plating_instructions: p.plating_instructions || '', quantity: p.quantity || '',
+      remark: p.remark || '',
+    });
+    setProductSearch(p.product_code || '');
+    setSelectedInventory(Object.fromEntries((p.inventory_items || []).map(i => [i.id, i.qty || ''])));
+    setCopyFromItemId(p.id);
+  };
 
   const filteredInventory = inventoryItems.filter(i =>
     (i.item_code || '').toLowerCase().includes(invSearch.toLowerCase()) ||
@@ -298,12 +325,46 @@ function ItemModal({ item, images: initialImages = [], onClose, onSave }) {
       return;
     }
     const inventory_item_ids = invIds.map(id => ({ id: parseInt(id), qty: parseFloat(selectedInventory[id]) }));
-    onSave({ ...f, inventory_item_ids }, images);
+    onSave({ ...f, inventory_item_ids, copy_from_item_id: copyFromItemId || null }, images);
   };
 
   return (
     <Modal open title={item ? 'Edit Item' : 'Add Item'} onClose={onClose} size="lg">
       <div className="grid grid-cols-2 gap-4">
+        {/* Reuse a previous item (only when adding a new item) */}
+        {!item && (
+          <div className="col-span-2 bg-brand-50 border border-brand-100 rounded-lg p-3">
+            <label className="label flex items-center gap-1.5 mb-0">
+              <RotateCcw size={13} /> Reuse a previous item for this customer
+              <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            {!customerId ? (
+              <p className="text-xs text-gray-400 mt-1">Select a customer on the order first to see their past items.</p>
+            ) : prevItems.length === 0 ? (
+              <p className="text-xs text-gray-400 mt-1">No previous items found for this customer.</p>
+            ) : (
+              <>
+                <select className="input mt-1" value={copyFromItemId || ''} onChange={selectPrevItem}>
+                  <option value="">Start fresh — enter new item details</option>
+                  {prevItems.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.order_code} · {p.drawing_number || p.product_code || 'item'}
+                      {p.has_drawing ? ' · has drawing' : ''} · qty {p.quantity}
+                    </option>
+                  ))}
+                </select>
+                {copyFromItemId && (
+                  <p className="text-xs text-brand-600 mt-1.5">
+                    {prevItems.find(p => String(p.id) === String(copyFromItemId))?.has_drawing
+                      ? 'Details pre-filled. Its reference drawing will be copied in for re-approval.'
+                      : 'Details pre-filled. This item had no drawing on file.'}
+                    {' '}Edit anything (e.g. quantity) before saving.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        )}
         {/* Product Code */}
         <div className="col-span-2 relative">
           <label className="label">Product Code <span className="text-red-500">*</span></label>
@@ -794,6 +855,7 @@ function NewOrderModal({ onClose, onSave }) {
         <ItemModal
           item={editingItem?.data || null}
           images={editingItem?.images || []}
+          customerId={form.customer_id}
           onClose={() => { setShowItemModal(false); setEditingItem(null); }}
           onSave={addItem}
         />
