@@ -234,14 +234,30 @@ router.get('/:id', authenticate, async (req, res) => {
 
 router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => {
   const { order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type } = req.body;
-  if (!order_code || !customer_id || !order_date) return res.status(400).json({ error: 'Code, customer and date required' });
+  if (!order_code || !order_date) return res.status(400).json({ error: 'Order code and date are required' });
 
   const db = getDB();
+
+  // A pure PHE inventory order has no external customer. Customer is optional
+  // for it — fall back to the internal "IO" customer so the NOT NULL column and
+  // the many customer joins across the app keep working. All other order types
+  // (incl. the io_export_he / io_local_he combos) still require a customer.
+  let custId = customer_id || null;
+  if (!custId) {
+    if (order_type === 'inventory_order') {
+      const io = await db.get(`SELECT id FROM customers WHERE UPPER(customer_code) = 'IO' ORDER BY id LIMIT 1`);
+      if (!io) return res.status(400).json({ error: 'Inventory-order customer (code "IO") is missing — add it once under Customers.' });
+      custId = io.id;
+    } else {
+      return res.status(400).json({ error: 'Customer is required' });
+    }
+  }
+
   try {
     const r = await db.insert(
       `INSERT INTO orders (order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [order_code.toUpperCase(), customer_id, inquiry_id||null, order_date, dispatch_date||null, notes||null, order_type||'local_he', req.user.id]
+      [order_code.toUpperCase(), custId, inquiry_id||null, order_date, dispatch_date||null, notes||null, order_type||'local_he', req.user.id]
     // valid: local_he, export_he, inventory_order, io_export_he, io_local_he
     );
 

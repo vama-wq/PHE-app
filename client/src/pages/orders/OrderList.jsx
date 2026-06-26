@@ -548,6 +548,10 @@ function NewOrderModal({ onClose, onSave }) {
 
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
+  // A pure PHE inventory order has no external customer, so the customer field
+  // is optional for it (the io_* combo types still need a customer).
+  const isInventoryOnly = form.order_type === 'inventory_order';
+
   const addItem = (data, files) => {
     if (editingItem !== null) {
       setItems(prev => prev.map((it, i) => i === editingItem.index ? data : it));
@@ -650,9 +654,13 @@ function NewOrderModal({ onClose, onSave }) {
                 <input className="input" type="date" value={form.dispatch_date} onChange={set('dispatch_date')} />
               </div>
               <div>
-                <label className="label">Customer <span className="text-red-500">*</span></label>
-                <select className="input" value={form.customer_id} onChange={set('customer_id')} required>
-                  <option value="">Select customer...</option>
+                <label className="label">
+                  Customer {isInventoryOnly
+                    ? <span className="text-gray-400 font-normal">(optional — PHE inventory order)</span>
+                    : <span className="text-red-500">*</span>}
+                </label>
+                <select className="input" value={form.customer_id} onChange={set('customer_id')} required={!isInventoryOnly}>
+                  <option value="">{isInventoryOnly ? 'None — internal PHE inventory' : 'Select customer...'}</option>
                   {customers.map(c => <option key={c.id} value={c.id}>{c.customer_code} — {c.name}</option>)}
                 </select>
               </div>
