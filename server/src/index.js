@@ -24,6 +24,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
+// ── Lightweight liveness probe ───────────────────────────────────────────────
+// No DB / auth — returns instantly. Used by the keep-alive pinger (GitHub
+// Actions) to stop Render's free tier from sleeping the container, and is handy
+// for uptime monitoring.
+app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
 // ── Serve uploaded files via Supabase Storage proxy ──────────────────────────
 // Maintains backward compat: frontend still uses /uploads/folder/filename URLs
 app.get('/uploads/*', async (req, res) => {
