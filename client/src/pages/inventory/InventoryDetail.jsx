@@ -153,7 +153,12 @@ function TransactionModal({ itemId, item, onClose, onSave }) {
   const [f, setF] = useState({ transaction_type: 'purchase_in', quantity: '', supplier_name: '', po_number: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [suppliers, setSuppliers] = useState([]);
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+
+  useEffect(() => {
+    api.get('/suppliers').then(r => setSuppliers(r.data)).catch(() => {});
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -179,7 +184,15 @@ function TransactionModal({ itemId, item, onClose, onSave }) {
         </div>
         {['purchase_in'].includes(f.transaction_type) && (
           <>
-            <div><label className="label">Supplier</label><input className="input" value={f.supplier_name} onChange={set('supplier_name')} /></div>
+            <div>
+              <label className="label">Supplier</label>
+              <select className="input" value={f.supplier_name} onChange={set('supplier_name')}>
+                <option value="">— Select supplier —</option>
+                {suppliers.map(s => (
+                  <option key={s.id} value={s.name}>{s.name}{s.supplier_code ? ` (${s.supplier_code})` : ''}</option>
+                ))}
+              </select>
+            </div>
             <div><label className="label">PO Number</label><input className="input" value={f.po_number} onChange={set('po_number')} /></div>
           </>
         )}
