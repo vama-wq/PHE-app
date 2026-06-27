@@ -260,7 +260,11 @@ router.get('/:id', authenticate, async (req, res) => {
   const rawItems = await db.all('SELECT * FROM order_items WHERE order_id = $1 ORDER BY id ASC', [order.id]);
   order.items = await Promise.all(rawItems.map(async item => ({
     ...item,
-    images: await db.all('SELECT * FROM order_item_images WHERE item_id = $1 ORDER BY created_at ASC', [item.id])
+    images: await db.all('SELECT * FROM order_item_images WHERE item_id = $1 ORDER BY created_at ASC', [item.id]),
+    inventory_items: await db.all(
+      `SELECT ii.id, ii.item_code, ii.name, ii.unit, oii.qty
+       FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+       WHERE oii.order_item_id = $1 ORDER BY ii.item_code`, [item.id]),
   })));
 
   order.order_drawings = await db.all(
@@ -472,6 +476,33 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
 router.delete('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), async (req, res) => {
   await getDB().run('DELETE FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   res.json({ message: 'Deleted' });
+});
+
+// Edit an item's inventory selection (design or owner). If the item's drawing is
+// already approved (stock deducted), the old selection is reversed and the new
+// one re-deducted so stock stays accurate.
+router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
+  const sels = (req.body.inventory_item_ids || []).filter(s => s && s.id && parseFloat(s.qty) > 0);
+  if (!sels.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity)' });
+
+  const db = getDB();
+  const item = await db.get('SELECT id, inventory_deducted FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
+  const orderCode = ord?.order_code || `Order #${req.params.id}`;
+
+  const wasDeducted = item.inventory_deducted;
+  if (wasDeducted) await restoreItemInventory(db, item.id, orderCode, req.user.id, 'Inventory edited');
+
+  await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
+  for (const sel of sels) {
+    await db.run('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+      [item.id, parseInt(sel.id), parseFloat(sel.qty) || 0]);
+  }
+
+  if (wasDeducted) await deductItemInventory(db, item.id, orderCode, req.user.id);
+  await logActivity(req.params.id, null, 'inventory_edited', `Inventory selection updated for item #${item.id}`, req.user.id);
+  res.json({ message: 'Inventory updated', reDeducted: wasDeducted });
 });
 
 router.post('/:orderId/items/:itemId/images', authenticate, authorize('admin', 'owner'), ...uploadOrderItemImage, async (req, res) => {

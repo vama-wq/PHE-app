@@ -6,6 +6,7 @@ import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import DrawingUploadModal from '../../components/DrawingUploadModal';
+import InventoryEditModal from '../../components/InventoryEditModal';
 import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati } from '../../lib/utils';
 import {
   ArrowLeft, CheckCircle, CheckCircle2, XCircle, FileText, Plus, Upload,
@@ -41,6 +42,7 @@ export default function OrderDetail() {
   const [showJobCardModal, setShowJobCardModal] = useState(false);
   const [showItemModal, setShowItemModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
+  const [invEditItem, setInvEditItem] = useState(null);
   const [showDrawingModal, setShowDrawingModal] = useState(false);
   const [drawingUploadItemId, setDrawingUploadItemId] = useState(null); // null = order-level upload
   const [drawingUploadItem, setDrawingUploadItem]     = useState(null); // full item object for modal title
@@ -69,6 +71,7 @@ export default function OrderDetail() {
   const allItemsApproved     = (order.items || []).length > 0 &&
     (order.items || []).every(it => itemDrawingStatus[it.id] === 'approved');
   const canManageItems       = ['admin', 'owner'].includes(user.role) || canResubmit;
+  const canEditInventory     = ['design', 'admin', 'owner'].includes(user.role);
   const canUploadQuotation   = ['admin', 'owner'].includes(user.role) && !restrictedRole;
   // Step 2: Design can upload drawings only after order is approved
   const canUploadDrawing     = ['design', 'admin', 'owner'].includes(user.role) && orderApproved;
@@ -426,6 +429,31 @@ export default function OrderDetail() {
                             ))}
                           </div>
                         )}
+                        {/* Inventory selected by design at drawing stage */}
+                        <div className="ml-9 mt-2">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <Package size={11} className="text-gray-400" />
+                            <span className="text-xs text-gray-400">Inventory</span>
+                            {canEditInventory && (
+                              <button className="text-xs text-brand-600 hover:underline ml-1"
+                                onClick={() => setInvEditItem(item)}>
+                                {item.inventory_items?.length ? 'Edit' : 'Add'}
+                              </button>
+                            )}
+                          </div>
+                          {item.inventory_items?.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5">
+                              {item.inventory_items.map(inv => (
+                                <span key={inv.id} className="inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-700 rounded-full px-2 py-0.5">
+                                  <span className="font-mono font-medium">{inv.item_code}</span>
+                                  <span className="text-gray-400">× {inv.qty} {inv.unit}</span>
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400 italic">None selected yet — added with the drawing.</span>
+                          )}
+                        </div>
                       </div>
                       {canManageItems && (
                         <div className="flex gap-1 flex-shrink-0">
@@ -785,6 +813,13 @@ export default function OrderDetail() {
           hasPriceRequest={order.has_price_request && !order.quotations?.length}
           onClose={() => setShowQuotationModal(false)}
           onSave={() => { setShowQuotationModal(false); load(); }}
+        />
+      )}
+      {invEditItem && (
+        <InventoryEditModal orderId={id}
+          item={invEditItem}
+          onClose={() => setInvEditItem(null)}
+          onDone={() => { setInvEditItem(null); load(); }}
         />
       )}
       {showDrawingModal && (
