@@ -188,6 +188,26 @@ async function initDB(retries = 20, delayMs = 10000) {
       // Per-drawing approval: approve/reject each drawing individually
       await pool.query(`ALTER TABLE order_drawings ADD COLUMN IF NOT EXISTS drawing_status TEXT DEFAULT NULL`);
       await pool.query(`ALTER TABLE order_drawings ADD COLUMN IF NOT EXISTS rejection_reason TEXT DEFAULT NULL`);
+      // Inventory is now selected by design at drawing-upload time and deducted when the
+      // drawing is approved (not at order approval). Track per-item deduction so we never
+      // double-deduct, and can restore stock if an approved drawing is reopened.
+      // One-time backfill (only when the column is first created): orders that were already
+      // approved under the OLD flow already had their inventory deducted at order approval —
+      // mark their items as deducted so approving their pending drawings doesn't deduct again.
+      {
+        const colExists = await pool.query(
+          `SELECT 1 FROM information_schema.columns WHERE table_name='order_items' AND column_name='inventory_deducted'`
+        );
+        await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS inventory_deducted BOOLEAN DEFAULT FALSE`);
+        if (colExists.rowCount === 0) {
+          await pool.query(`
+            UPDATE order_items oi SET inventory_deducted = TRUE
+            FROM orders o
+            WHERE o.id = oi.order_id AND o.status NOT IN ('pending_approval','rejected')
+          `);
+          console.log('Backfilled inventory_deducted=TRUE for already-approved orders');
+        }
+      }
       // Widen stage_no check constraint to include stage 30 (Dispatch)
       await pool.query(`ALTER TABLE production_checklist DROP CONSTRAINT IF EXISTS production_checklist_stage_no_check`);
       await pool.query(`ALTER TABLE production_checklist ADD CONSTRAINT production_checklist_stage_no_check CHECK (stage_no BETWEEN 1 AND 30)`);

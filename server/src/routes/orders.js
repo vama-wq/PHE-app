@@ -4,6 +4,50 @@ const { authenticate, authorize, withCustomerVisibility } = require('../middlewa
 const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, deleteFromStorage, copyInStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 
+// ── Inventory deduction tied to drawing approval ───────────────────────────────
+// Inventory for an order item is selected by design at drawing-upload time and
+// stored in order_item_inventory. It is deducted from stock when that item's
+// drawing is approved, and restored if an approved drawing is later reopened.
+// order_items.inventory_deducted guards against double-deduction.
+async function deductItemInventory(db, itemId, orderCode, userId) {
+  const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
+  if (!item || item.inventory_deducted) return; // never double-deduct
+  const sels = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [itemId]);
+  for (const sel of sels) {
+    const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
+    if (!inv) continue;
+    const newStock = Math.max((inv.current_stock || 0) - parseFloat(sel.qty || 0), 0);
+    await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+    const noteParts = [`Order: ${orderCode}`];
+    if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
+    noteParts.push('Drawing approved');
+    await db.insert(
+      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+       VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
+      [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, noteParts.join(' | '), userId]
+    );
+  }
+  if (sels.length) await db.run('UPDATE order_items SET inventory_deducted=TRUE WHERE id=$1', [itemId]);
+}
+
+async function restoreItemInventory(db, itemId, orderCode, userId, reasonNote) {
+  const item = await db.get('SELECT id, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
+  if (!item || !item.inventory_deducted) return; // only restore what was actually deducted
+  const sels = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [itemId]);
+  for (const sel of sels) {
+    const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
+    if (!inv) continue;
+    const newStock = (inv.current_stock || 0) + parseFloat(sel.qty || 0);
+    await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+    await db.insert(
+      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+       VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
+      [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, `${reasonNote} — ${orderCode}`, userId]
+    );
+  }
+  await db.run('UPDATE order_items SET inventory_deducted=FALSE WHERE id=$1', [itemId]);
+}
+
 // ── Mentions ──────────────────────────────────────────────────────────────────
 router.get('/my-mentions', authenticate, async (req, res) => {
   const db = getDB();
@@ -360,22 +404,21 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
      wattage||null, voltage||null, plating_instructions||null, quantity, remark||null]
   );
   const itemId = r.lastInsertRowid;
-  // Save inventory selections (deduction happens only on order approval)
-  if (Array.isArray(inventory_item_ids) && inventory_item_ids.length) {
-    for (const { id: invId, qty: invQty } of inventory_item_ids) {
-      await db.run(
-        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
-        [itemId, invId, invQty || 0]
-      );
-    }
-  }
+  // Inventory is no longer chosen here — design selects it when uploading the
+  // item's drawing, and it deducts on drawing approval.
 
-  // Reusing a previous item: copy its reference drawing + images into this new
-  // item (files duplicated in storage so they're independent). The copied
-  // drawing comes in as 'pending_review' so the owner re-approves it; the job
-  // card is NOT copied — it's created fresh later.
+  // Reusing a previous item: copy its reference drawing + images + inventory
+  // selection into this new item (files duplicated in storage so they're
+  // independent). The copied drawing comes in as 'pending_review' so the owner
+  // re-approves it; the job card is NOT copied — it's created fresh later.
   let drawingCopied = false;
   if (copy_from_item_id) {
+    // Copy the source item's inventory selection (deducts later on approval)
+    const srcInv = await db.all(`SELECT inventory_item_id, qty FROM order_item_inventory WHERE order_item_id=$1`, [copy_from_item_id]);
+    for (const s of srcInv) {
+      await db.run('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+        [itemId, s.inventory_item_id, s.qty]);
+    }
     const ext = (name, fallback) => (name && name.includes('.') ? name.split('.').pop() : fallback);
     const src = await db.get(
       `SELECT * FROM order_drawings WHERE item_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`,
@@ -412,7 +455,7 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
 });
 
 router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), async (req, res) => {
-  const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark, inventory_item_ids } = req.body;
+  const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark } = req.body;
   const db = getDB();
   await db.run(
     `UPDATE order_items SET product_code=$1, drawing_number=$2, tube_material=$3, tube_diameter=$4, wattage=$5,
@@ -421,16 +464,8 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
     [product_code||null, drawing_number||null, tube_material||null, tube_diameter||null, wattage||null,
      voltage||null, plating_instructions||null, quantity, remark||null, req.params.itemId, req.params.id]
   );
-  // Replace inventory selections (no stock movement — deduction happens only on order approval)
-  await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [req.params.itemId]);
-  if (Array.isArray(inventory_item_ids) && inventory_item_ids.length) {
-    for (const { id: invId, qty: invQty } of inventory_item_ids) {
-      await db.run(
-        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
-        [req.params.itemId, invId, invQty || 0]
-      );
-    }
-  }
+  // Inventory is managed at the drawing-upload step now, so editing the item's
+  // specs here must NOT touch its inventory selection.
   res.json({ message: 'Updated' });
 });
 
@@ -475,12 +510,31 @@ router.get('/:id/drawings', authenticate, async (req, res) => {
 router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner'), ...uploadOrderDrawing, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'File required' });
   const { notes, item_id } = req.body;
+  if (!item_id) return res.status(400).json({ error: 'Item is required for the drawing' });
+
+  // Design selects the inventory consumed by this item along with the drawing.
+  // It arrives as a JSON string in the multipart form.
+  let invSelections = [];
+  try { invSelections = JSON.parse(req.body.inventory_item_ids || '[]'); } catch { invSelections = []; }
+  invSelections = (invSelections || []).filter(s => s && s.id && parseFloat(s.qty) > 0);
+  if (!invSelections.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing' });
+
   const db = getDB();
   const r = await db.insert(
     `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
      VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
-    [req.params.id, item_id ? parseInt(item_id) : null, req.file.storagePath, req.file.filename, req.file.originalname, notes||null, req.user.id]
+    [req.params.id, parseInt(item_id), req.file.storagePath, req.file.filename, req.file.originalname, notes||null, req.user.id]
   );
+
+  // Replace this item's inventory selection with what design just chose.
+  await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [parseInt(item_id)]);
+  for (const sel of invSelections) {
+    await db.run(
+      'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+      [parseInt(item_id), parseInt(sel.id), parseFloat(sel.qty) || 0]
+    );
+  }
+
   await logActivity(req.params.id, null, 'drawing_uploaded', `Reference drawing uploaded: ${req.file.originalname}`, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid, file_name: req.file.filename, original_name: req.file.originalname });
 });
@@ -491,6 +545,11 @@ router.put('/:id/drawings/:drawingId/approve', authenticate, authorize('owner'),
   const d = await db.get('SELECT * FROM order_drawings WHERE id=$1 AND order_id=$2', [req.params.drawingId, req.params.id]);
   if (!d) return res.status(404).json({ error: 'Drawing not found' });
   await db.run(`UPDATE order_drawings SET drawing_status='approved', rejection_reason=NULL WHERE id=$1`, [req.params.drawingId]);
+  // Deduct this item's selected inventory now that its drawing is approved.
+  if (d.item_id) {
+    const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
+    await deductItemInventory(db, d.item_id, ord?.order_code || `Order #${req.params.id}`, req.user.id);
+  }
   await logActivity(req.params.id, null, 'drawing_approved', `Drawing approved: ${d.original_name || d.file_name}`, req.user.id);
   res.json({ message: 'Drawing approved' });
 });
@@ -502,6 +561,12 @@ router.put('/:id/drawings/:drawingId/reject', authenticate, authorize('owner'), 
   const d = await db.get('SELECT * FROM order_drawings WHERE id=$1 AND order_id=$2', [req.params.drawingId, req.params.id]);
   if (!d) return res.status(404).json({ error: 'Drawing not found' });
   await db.run(`UPDATE order_drawings SET drawing_status='rejected', rejection_reason=$1 WHERE id=$2`, [reason.trim(), req.params.drawingId]);
+  // If this drawing was previously approved, its inventory was deducted — put it
+  // back so design can revise the selection before the next approval.
+  if (d.item_id) {
+    const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
+    await restoreItemInventory(db, d.item_id, ord?.order_code || `Order #${req.params.id}`, req.user.id, 'Drawing reopened');
+  }
   await logActivity(req.params.id, null, 'drawing_rejected', `Drawing rejected: ${reason}`, req.user.id);
   res.json({ message: 'Drawing rejected' });
 });
@@ -596,32 +661,13 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.status === 'approved') return res.status(409).json({ error: 'Order already approved' });
 
-  // No drawing gate here — order is approved first, then design uploads drawings per item
+  // No drawing gate here — order is approved first, then design uploads drawings per item.
+  // Inventory is NOT deducted here anymore: it deducts per item when that item's
+  // drawing is approved (see /drawings/:drawingId/approve).
   await db.run(
     "UPDATE orders SET status='approved', approved_by=$1, approved_at=NOW() WHERE id=$2",
     [req.user.id, req.params.id]
   );
-
-  // Deduct inventory for all items in this order
-  const orderInfo = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
-  const items = await db.all('SELECT id, drawing_number FROM order_items WHERE order_id=$1', [req.params.id]);
-  for (const item of items) {
-    const invSelections = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
-    for (const sel of invSelections) {
-      const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
-      if (invItem) {
-        const newStock = Math.max((invItem.current_stock || 0) - parseFloat(sel.qty || 0), 0);
-        await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
-        const noteParts = [`Order: ${orderInfo?.order_code || req.params.id}`];
-        if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
-        await db.insert(
-          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-           VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
-          [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, noteParts.join(' | '), req.user.id]
-        );
-      }
-    }
-  }
 
   await logActivity(req.params.id, null, 'order_approved', 'Order approved by owner', req.user.id);
   res.json({ message: 'Order approved' });
@@ -701,20 +747,8 @@ router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {
   const fullOrder = await db.get('SELECT order_code FROM orders WHERE id=$1', [order.id]);
   const items = await db.all('SELECT id FROM order_items WHERE order_id=$1', [order.id]);
   for (const item of items) {
-    // Always reverse any inventory that was deducted for this order
-    const invSelections = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
-    for (const sel of invSelections) {
-      const invItem = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
-      if (invItem) {
-        const restoredStock = (invItem.current_stock || 0) + parseFloat(sel.qty || 0);
-        await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [restoredStock, sel.inventory_item_id]);
-        await db.insert(
-          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-           VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
-          [sel.inventory_item_id, parseFloat(sel.qty || 0), restoredStock, `Order deleted — ${fullOrder?.order_code || 'Order #' + req.params.id}`, req.user.id]
-        );
-      }
-    }
+    // Reverse inventory only for items whose drawing was approved (deducted).
+    await restoreItemInventory(db, item.id, fullOrder?.order_code || ('Order #' + req.params.id), req.user.id, 'Order deleted');
     const images = await db.all('SELECT file_path FROM order_item_images WHERE item_id=$1', [item.id]);
     for (const img of images) await deleteFromStorage(img.file_path);
     await db.run('DELETE FROM order_item_images WHERE item_id=$1', [item.id]);

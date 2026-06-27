@@ -5,6 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
+import DrawingUploadModal from '../../components/DrawingUploadModal';
 import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati } from '../../lib/utils';
 import {
   ArrowLeft, CheckCircle, CheckCircle2, XCircle, FileText, Plus, Upload,
@@ -788,10 +789,9 @@ export default function OrderDetail() {
       )}
       {showDrawingModal && (
         <DrawingUploadModal orderId={id}
-          itemId={drawingUploadItemId}
           item={drawingUploadItem}
           onClose={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); }}
-          onSave={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); load(); }}
+          onDone={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); load(); }}
         />
       )}
       {showJobCardModal && (
@@ -1230,8 +1230,7 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
       remark: p.remark || '',
     });
     setProductSearch(p.product_code || '');
-    setSelectedInventory(Object.fromEntries((p.inventory_items || []).map(i => [i.id, i.qty || ''])));
-    setCopyFromItemId(p.id);
+    setCopyFromItemId(p.id); // inventory is copied server-side from the source item
   };
 
   const filteredProducts = products.filter(p =>
@@ -1265,13 +1264,8 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
   const handleSave = async () => {
     const missing = validateItem(f);
     if (missing.length) { setError(`Required fields missing: ${missing.join(', ')}`); return; }
-    const invIds = Object.keys(selectedInventory);
-    const isEditing = !!item?.id;
-    if (!isEditing && invIds.length === 0) { setError('Please select at least one inventory item'); return; }
-    const missingQty = invIds.filter(id => !selectedInventory[id] || parseFloat(selectedInventory[id]) <= 0);
-    if (missingQty.length) { setError('Please enter a quantity for all selected inventory items'); return; }
-    const inventory_item_ids = invIds.map(id => ({ id: parseInt(id), qty: parseFloat(selectedInventory[id]) }));
-    const payload = { ...f, inventory_item_ids };
+    // Inventory is chosen by design at the drawing stage, not here.
+    const payload = { ...f };
     if (!item?.id && copyFromItemId) payload.copy_from_item_id = copyFromItemId;
     setSaving(true);
     try {
@@ -1422,60 +1416,10 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
           <input className="input" placeholder="Any remarks..." value={f.remark ?? ''} onChange={set('remark')} />
         </div>
 
-        {/* Inventory Items */}
-        <div className="col-span-2 relative">
-          <label className="label">
-            Inventory Items {!item?.id && <span className="text-red-500">*</span>}
-            <span className="text-gray-400 font-normal ml-1">(select all raw materials needed)</span>
-          </label>
-          {selectedInventoryItems.length > 0 && (
-            <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-2">
-              {selectedInventoryItems.map(i => (
-                <div key={i.id} className="flex items-center gap-3 px-3 py-2">
-                  <span className="text-sm font-semibold text-brand-700 flex-1">{i.item_code}</span>
-                  <input
-                    type="number" min="0.01" step="any"
-                    placeholder={`Qty (${i.unit})`}
-                    value={selectedInventory[i.id] || ''}
-                    onChange={e => setInvQty(i.id, e.target.value)}
-                    className="input w-32 text-sm py-1"
-                    onClick={e => e.stopPropagation()}
-                  />
-                  <span className="text-xs text-gray-400 w-8">{i.unit}</span>
-                  <button type="button" onClick={() => toggleInventory(i.id)} className="text-gray-300 hover:text-red-500 transition-colors">
-                    <X size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <input
-            className="input"
-            placeholder="Search inventory by code, name or category..."
-            value={invSearch}
-            onChange={e => { setInvSearch(e.target.value); setShowInvDropdown(true); }}
-            onFocus={() => setShowInvDropdown(true)}
-            onBlur={() => setTimeout(() => setShowInvDropdown(false), 150)}
-            autoComplete="off"
-          />
-          {showInvDropdown && filteredInventory.length > 0 && (
-            <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
-              {filteredInventory.map(i => {
-                const selected = i.id in selectedInventory;
-                return (
-                  <button key={i.id} type="button"
-                    className={`w-full text-left px-4 py-2 flex items-center gap-3 border-b border-gray-50 last:border-0 transition-colors ${selected ? 'bg-brand-50' : 'hover:bg-gray-50'}`}
-                    onMouseDown={() => { toggleInventory(i.id); setInvSearch(''); }}>
-                    <div className={`w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center ${selected ? 'bg-brand-600 border-brand-600' : 'border-gray-300'}`}>
-                      {selected && <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 4l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                    </div>
-                    <span className="text-sm font-semibold text-gray-800">{i.item_code}</span>
-                    <span className="text-xs text-gray-400 ml-auto">{i.unit}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+        {/* Inventory is now selected by design at the drawing-upload stage */}
+        <div className="col-span-2 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 flex items-center gap-1.5">
+          <Package size={13} className="text-gray-400" />
+          Inventory for this item is chosen by the design team when they upload its drawing.
         </div>
 
         {/* Reference Images */}
@@ -1572,63 +1516,6 @@ function DrawingRejectModal({ onClose, onConfirm }) {
               catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
             }}>
             {saving ? 'Rejecting...' : 'Reject Drawings'}
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-function DrawingUploadModal({ orderId, itemId, item, onClose, onSave }) {
-  const [file, setFile] = useState(null);
-  const [notes, setNotes] = useState('');
-  const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const handleSubmit = async () => {
-    if (!file) return setError('Please select a file');
-    setSaving(true);
-    const fd = new FormData();
-    fd.append('file', file);
-    if (notes) fd.append('notes', notes);
-    if (itemId) fd.append('item_id', itemId);
-    try {
-      await api.post(`/orders/${orderId}/drawings`, fd);
-      onSave();
-    } catch (err) {
-      setError(err.response?.data?.error || 'Upload failed');
-      setSaving(false);
-    }
-  };
-
-  const modalTitle = item
-    ? `Upload Drawing — ${item.drawing_number || item.product_code || 'Item'}`
-    : 'Upload Reference Drawing';
-
-  return (
-    <Modal open title={modalTitle} onClose={onClose} size="sm">
-      <div className="space-y-4">
-        {item && (
-          <div className="bg-blue-50 border border-blue-100 text-blue-700 text-xs rounded-lg px-3 py-2">
-            <span className="font-semibold">For: </span>
-            {item.drawing_number && <span className="font-mono">{item.drawing_number}</span>}
-            {item.product_code && <span className="ml-1 text-blue-500">({item.product_code})</span>}
-            <div className="mt-0.5 text-blue-500">
-              {[item.tube_material, item.wattage && `${item.wattage}W`, item.voltage && `${item.voltage}V`, item.quantity && `Qty: ${item.quantity}`].filter(Boolean).join(' · ')}
-            </div>
-          </div>
-        )}
-        <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png,.dwg,.dxf" label="Select drawing (PDF, Image, DWG, DXF)" />
-        <div>
-          <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
-          <textarea className="input h-20 resize-none" value={notes}
-            onChange={e => setNotes(e.target.value)} placeholder="Assembly notes, revision info, etc." />
-        </div>
-        {error && <p className="text-red-600 text-sm">{error}</p>}
-        <div className="flex gap-3">
-          <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button className="btn-primary flex-1" disabled={saving} onClick={handleSubmit}>
-            {saving ? 'Uploading...' : 'Upload Drawing'}
           </button>
         </div>
       </div>

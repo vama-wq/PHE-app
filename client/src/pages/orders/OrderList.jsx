@@ -270,8 +270,7 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
       remark: p.remark || '',
     });
     setProductSearch(p.product_code || '');
-    setSelectedInventory(Object.fromEntries((p.inventory_items || []).map(i => [i.id, i.qty || ''])));
-    setCopyFromItemId(p.id);
+    setCopyFromItemId(p.id); // inventory is copied server-side from the source item
   };
 
   const filteredInventory = inventoryItems.filter(i =>
@@ -314,19 +313,8 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
       setError(`Required fields missing: ${missing.join(', ')}`);
       return;
     }
-    const invIds = Object.keys(selectedInventory);
-    const isEditing = !!item;
-    if (!isEditing && invIds.length === 0) {
-      setError('Please select at least one inventory item');
-      return;
-    }
-    const missingQty = invIds.filter(id => !selectedInventory[id] || parseFloat(selectedInventory[id]) <= 0);
-    if (missingQty.length > 0) {
-      setError('Please enter a quantity for all selected inventory items');
-      return;
-    }
-    const inventory_item_ids = invIds.map(id => ({ id: parseInt(id), qty: parseFloat(selectedInventory[id]) }));
-    onSave({ ...f, inventory_item_ids, copy_from_item_id: copyFromItemId || null }, images);
+    // Inventory is no longer chosen here — design selects it at the drawing stage.
+    onSave({ ...f, copy_from_item_id: copyFromItemId || null }, images);
   };
 
   return (
@@ -461,66 +449,10 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
             value={f.remark} onChange={set('remark')} />
         </div>
 
-        {/* Inventory Items */}
-        <div className="col-span-2 relative">
-          <label className="label">
-            Inventory Items {!item && <span className="text-red-500">*</span>}
-            <span className="text-gray-400 font-normal ml-1">(select all raw materials needed)</span>
-          </label>
-          {/* Selected items with qty */}
-          {selectedInventoryItems.length > 0 && (
-            <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-2">
-              {selectedInventoryItems.map(i => (
-                <div key={i.id} className="flex items-center gap-3 px-3 py-2">
-                  <span className="text-sm font-semibold text-brand-700 flex-1">{i.item_code}</span>
-                  <input
-                    type="number"
-                    min="0.01"
-                    step="any"
-                    placeholder={`Qty (${i.unit})`}
-                    value={selectedInventory[i.id] || ''}
-                    onChange={e => setInvQty(i.id, e.target.value)}
-                    className="input w-32 text-sm py-1"
-                    onClick={e => e.stopPropagation()}
-                  />
-                  <span className="text-xs text-gray-400 w-8">{i.unit}</span>
-                  <button type="button" onClick={() => toggleInventory(i.id)} className="text-gray-300 hover:text-red-500 transition-colors">
-                    <X size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <input
-            className="input"
-            placeholder="Search inventory by code, name or category..."
-            value={invSearch}
-            onChange={e => { setInvSearch(e.target.value); setShowInvDropdown(true); }}
-            onFocus={() => setShowInvDropdown(true)}
-            onBlur={() => setTimeout(() => setShowInvDropdown(false), 150)}
-            autoComplete="off"
-          />
-          {showInvDropdown && filteredInventory.length > 0 && (
-            <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
-              {filteredInventory.map(i => {
-                const selected = i.id in selectedInventory;
-                return (
-                  <button
-                    key={i.id}
-                    type="button"
-                    className={`w-full text-left px-4 py-2 flex items-center gap-3 border-b border-gray-50 last:border-0 transition-colors ${selected ? 'bg-brand-50' : 'hover:bg-gray-50'}`}
-                    onMouseDown={() => { toggleInventory(i.id); setInvSearch(''); }}
-                  >
-                    <div className={`w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center ${selected ? 'bg-brand-600 border-brand-600' : 'border-gray-300'}`}>
-                      {selected && <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 4l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                    </div>
-                    <span className="text-sm font-semibold text-gray-800">{i.item_code}</span>
-                    <span className="text-xs text-gray-400 ml-auto">{i.unit}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+        {/* Inventory is now selected by design at the drawing-upload stage */}
+        <div className="col-span-2 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 flex items-center gap-1.5">
+          <Package size={13} className="text-gray-400" />
+          Inventory for this item is chosen by the design team when they upload its drawing.
         </div>
 
         {/* Reference Images */}

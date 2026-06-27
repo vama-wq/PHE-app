@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
+import DrawingUploadModal from '../../components/DrawingUploadModal';
 import {
   PenLine, CheckCircle2, Clock, AlertTriangle, Upload,
   FileImage, ExternalLink, ChevronRight, RefreshCw, XCircle
@@ -162,51 +163,28 @@ export default function DrawingsList() {
 }
 
 // ── Per-item upload button ─────────────────────────────────────────────────────
+// Opens a modal where design picks the drawing file AND the inventory the item
+// consumes (inventory deducts when the owner approves the drawing).
 function ItemUploadBtn({ orderId, item, onUploaded, label }) {
-  const fileRef = useRef(null);
-  const [uploading, setUploading] = useState(false);
-
-  const handleUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('item_id', item.id);
-      await uploadApi.post(`/orders/${orderId}/drawings`, fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      onUploaded();
-    } catch (err) {
-      alert(err.response?.data?.error || 'Upload failed');
-    } finally {
-      setUploading(false);
-      e.target.value = '';
-    }
-  };
-
+  const [open, setOpen] = useState(false);
   return (
     <div className="flex items-center gap-1.5">
       <button
         className="btn-primary text-xs px-2.5 py-1 flex items-center gap-1"
-        onClick={() => fileRef.current?.click()}
-        disabled={uploading}
+        onClick={() => setOpen(true)}
         title={`Upload drawing for ${item.drawing_number || 'item'}`}
       >
-        {uploading
-          ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-          : <Upload size={11} />
-        }
-        {uploading ? 'Uploading…' : (label || 'Upload')}
+        <Upload size={11} /> {label || 'Upload'}
       </button>
-      <input
-        ref={fileRef}
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png,.dwg,.dxf"
-        className="hidden"
-        onChange={handleUpload}
-      />
+      {open && (
+        <DrawingUploadModal
+          orderId={orderId}
+          item={item}
+          label={label === 'Re-upload' ? 'Re-upload Drawing' : 'Upload Drawing'}
+          onClose={() => setOpen(false)}
+          onDone={() => { setOpen(false); onUploaded(); }}
+        />
+      )}
     </div>
   );
 }
