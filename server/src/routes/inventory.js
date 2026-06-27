@@ -109,8 +109,7 @@ router.post('/:id/transactions', authenticate, authorize('accounts', 'owner'), a
   if (isInbound) {
     newStock = item.current_stock + parseFloat(quantity);
   } else {
-    newStock = item.current_stock - parseFloat(quantity);
-    if (newStock < 0) return res.status(400).json({ error: 'Insufficient stock' });
+    newStock = item.current_stock - parseFloat(quantity); // allow negative so shortages are visible
   }
 
   const r = await db.insert(

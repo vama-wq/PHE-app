@@ -16,7 +16,7 @@ async function deductItemInventory(db, itemId, orderCode, userId) {
   for (const sel of sels) {
     const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
     if (!inv) continue;
-    const newStock = Math.max((inv.current_stock || 0) - parseFloat(sel.qty || 0), 0);
+    const newStock = (inv.current_stock || 0) - parseFloat(sel.qty || 0); // allow negative so shortages are visible
     await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
