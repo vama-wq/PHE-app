@@ -107,7 +107,19 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 router.get('/pending-material-qc', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
-  const pos = await getDB().all(
+  const db = getDB();
+  // QC users get a restricted view — no supplier name or cost data.
+  if (req.user.role === 'design') {
+    const pos = await db.all(
+      `SELECT po.id, po.po_number, po.status, po.delivery_status, po.created_at,
+              (SELECT COUNT(*) FROM purchase_order_items poi WHERE poi.po_id = po.id) AS item_count
+       FROM purchase_orders po
+       WHERE po.status = 'approved' AND po.delivery_status = 'qc_pending'
+       ORDER BY po.created_at DESC`
+    );
+    return res.json(pos);
+  }
+  const pos = await db.all(
     `SELECT po.*, s.name as supplier_name, u.name as created_by_name
      FROM purchase_orders po
      JOIN suppliers s ON s.id = po.supplier_id
@@ -120,6 +132,26 @@ router.get('/pending-material-qc', authenticate, authorize('design', 'owner', 'a
 
 router.get('/:id', authenticate, async (req, res) => {
   const db = getDB();
+
+  // QC (design) users get a restricted view: PO number + items (name, qty,
+  // drawing, QC fields) only — no supplier, rates, costs, totals, or invoice.
+  if (req.user.role === 'design') {
+    const po = await db.get('SELECT id, po_number, status, delivery_status FROM purchase_orders WHERE id=$1', [req.params.id]);
+    if (!po) return res.status(404).json({ error: 'Not found' });
+    const items = await db.all(
+      `SELECT poi.id, poi.description, poi.qty, poi.received, poi.received_at,
+              poi.qc_status, poi.qc_weight_10, poi.qc_image_file, poi.qc_image_name,
+              poi.qc_observations, poi.qc_rejection_reason,
+              ii.item_code, ii.name as item_name, ii.unit as item_unit,
+              ii.drawing_file, ii.drawing_original_name
+       FROM purchase_order_items poi
+       LEFT JOIN inventory_items ii ON ii.id = poi.inventory_item_id
+       WHERE poi.po_id = $1 ORDER BY poi.id`,
+      [req.params.id]
+    );
+    return res.json({ ...po, qc_limited: true, items });
+  }
+
   const po = await db.get(
     `SELECT po.*, s.name as supplier_name, s.address as supplier_address,
             s.gst_no as supplier_gst, s.phone as supplier_phone,

@@ -111,6 +111,29 @@ export default function PurchaseOrderDetail() {
   const canQC = ['design', 'owner', 'admin'].includes(user?.role);
   const isQCPending = po.status === 'approved' && po.delivery_status === 'qc_pending';
   const materialQCDone = !!po.material_qc;
+
+  // QC-only restricted view (design role): PO number + items + drawing + QC form.
+  // No supplier, rates, costs, totals or invoice are shown.
+  if (po.qc_limited) {
+    return (
+      <div className="p-6 max-w-3xl mx-auto">
+        <div className="flex items-center gap-3 mb-5">
+          <button onClick={() => navigate('/qc')} className="btn-ghost btn-sm"><ArrowLeft size={16} /> Back to QC</button>
+          <h1 className="page-title">Material QC — {po.po_number}</h1>
+        </div>
+        <div className="card p-5">
+          <p className="text-sm text-gray-500 mb-4">
+            For each received item, add a material image and the weight of 10 pcs, then approve (or reject).
+          </p>
+          <div className="space-y-2.5">
+            {po.items.map(item => (
+              <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
   const drawingItems = po.items.filter(i => i.drawing_file);
 
   return (
@@ -601,11 +624,15 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
     );
   }
 
+  const drawingLink = item.drawing_file && (
+    <a className="text-xs text-brand-600 hover:underline ml-2" href={`/uploads/${item.drawing_file}`} target="_blank" rel="noopener noreferrer">drawing</a>
+  );
+
   // Not yet received — receiving is done from the "Receive an Item" dropdown.
   if (!item.received) {
     return (
       <div className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-800">{item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span></span>
+        <span className="text-sm font-medium text-gray-800">{item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span>{drawingLink}</span>
         <span className="text-xs text-gray-400">Awaiting receipt</span>
       </div>
     );
@@ -633,6 +660,7 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium text-gray-800">
           {item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span>
+          {drawingLink}
           <span className="text-xs text-teal-600 ml-2">✓ received</span>
           {item.invoice_file && <> · <a className="text-xs text-brand-600 hover:underline" href={`/uploads/${item.invoice_file}`} target="_blank" rel="noopener noreferrer">invoice</a></>}
         </span>

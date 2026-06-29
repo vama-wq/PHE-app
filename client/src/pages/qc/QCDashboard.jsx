@@ -84,12 +84,13 @@ export default function QCDashboard() {
                       <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">QC Pending</span>
                     </div>
                     <div className="text-sm text-gray-600">
-                      Supplier: <span className="font-medium">{po.supplier_name}</span>
+                      {po.supplier_name && <>Supplier: <span className="font-medium">{po.supplier_name}</span></>}
+                      {po.item_count != null && <span className="text-gray-400">{po.item_count} item{po.item_count !== 1 ? 's' : ''} to inspect</span>}
                       {po.expected_delivery_date && (
                         <span className="text-gray-400 ml-2">· Expected: {fmtDate(po.expected_delivery_date)}</span>
                       )}
                     </div>
-                    <div className="text-xs text-gray-400 mt-0.5">Created by {po.created_by_name} · {fmtDate(po.created_at)}</div>
+                    {po.created_by_name && <div className="text-xs text-gray-400 mt-0.5">Created by {po.created_by_name} · {fmtDate(po.created_at)}</div>}
                   </div>
                   <div className="flex items-center gap-2">
                     <Link
