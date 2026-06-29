@@ -13,24 +13,34 @@ async function receiveItemStock(db, po, item, userId, qty) {
   if (!(q > 0)) return;
   const now = new Date().toISOString();
   const supplier = await db.get('SELECT name FROM suppliers WHERE id=$1', [po.supplier_id]);
+
+  // Landed unit cost = material rate + (transport + other receipt costs) spread
+  // across the received quantity, so stock valuation reflects the true cost.
+  const baseRate = Number(item.rate) || 0;
+  const transport = Number(item.receive_transport_cost) || 0;
+  const other = Number(item.receive_other_cost) || 0;
+  const extraPerUnit = (transport + other) / q;
+  const landedUnitCost = Math.round((baseRate + extraPerUnit) * 100) / 100;
+
   await db.run(
     `INSERT INTO inventory_fifo_lots (item_id, po_id, qty_original, qty_remaining, unit_cost, received_at)
      VALUES ($1,$2,$3,$4,$5,$6)`,
-    [item.inventory_item_id, po.id, q, q, item.rate, now]
+    [item.inventory_item_id, po.id, q, q, landedUnitCost, now]
   );
   const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [item.inventory_item_id]);
   const newStock = (Number(inv.current_stock) || 0) + q;
   const lots = await db.all('SELECT qty_remaining, unit_cost FROM inventory_fifo_lots WHERE item_id=$1 AND qty_remaining > 0', [item.inventory_item_id]);
   const totalQty = lots.reduce((s, l) => s + Number(l.qty_remaining), 0);
   const totalCost = lots.reduce((s, l) => s + Number(l.qty_remaining) * Number(l.unit_cost), 0);
-  const avgCost = totalQty > 0 ? totalCost / totalQty : Number(item.rate);
+  const avgCost = totalQty > 0 ? totalCost / totalQty : landedUnitCost;
   await db.run('UPDATE inventory_items SET current_stock=$1, unit_cost=$2 WHERE id=$3',
     [newStock, Math.round(avgCost * 100) / 100, item.inventory_item_id]);
+  const landedNote = (transport + other) > 0 ? ` @ landed ₹${landedUnitCost}/u (rate ₹${baseRate} + ₹${Math.round(extraPerUnit * 100) / 100} costs)` : '';
   await db.run(
     `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, po_number, supplier_name, notes, created_by)
      VALUES ($1,'purchase_in',$2,$3,$4,$5,$6,$7)`,
     [item.inventory_item_id, q, newStock, po.po_number, supplier?.name || '',
-     `PO received (QC approved): ${po.po_number} — qty ${q}${Number(item.qty) !== q ? ` of ${item.qty} ordered` : ''}`, userId]
+     `PO received (QC approved): ${po.po_number} — qty ${q}${Number(item.qty) !== q ? ` of ${item.qty} ordered` : ''}${landedNote}`, userId]
   );
 }
 

@@ -618,10 +618,15 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
 function ItemQCRow({ poId, item, canQC, onDone, showCosts }) {
   const transport = Number(item.receive_transport_cost) || 0;
   const other = Number(item.receive_other_cost) || 0;
+  const landedQty = Number(item.qc_received_qty) || 0;
+  const landedPerUnit = landedQty > 0
+    ? Math.round((Number(item.rate || 0) + (transport + other) / landedQty) * 100) / 100
+    : null;
   const costLine = showCosts && (transport > 0 || other > 0) ? (
     <div className="text-xs text-gray-500 mt-0.5">
       {transport > 0 && <span>Transport: ₹{transport}</span>}
       {other > 0 && <span>{transport > 0 ? ' · ' : ''}Other: ₹{other}{item.receive_other_cost_reason ? ` (${item.receive_other_cost_reason})` : ''}</span>}
+      {item.qc_status === 'approved' && landedPerUnit != null && <span> · Landed cost: <b>₹{landedPerUnit}/unit</b></span>}
     </div>
   ) : null;
   const [open, setOpen] = useState(false);
