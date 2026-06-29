@@ -7,7 +7,7 @@ import Modal from '../../components/ui/Modal';
 import {
   ArrowLeft, Printer, Send, CheckCircle, XCircle,
   PackageCheck, Pencil, Loader2, Truck, Upload, FileText,
-  ExternalLink, RefreshCw, MessageSquare, Trash2
+  ExternalLink, RefreshCw, MessageSquare, Trash2, AlertTriangle
 } from 'lucide-react';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -134,8 +134,16 @@ export default function PurchaseOrderDetail() {
               <Trash2 size={13} /> Delete PO
             </button>
           )}
+          {['draft', 'rejected'].includes(po.status) && po.rate_increase_pending && user?.role === 'owner' && (
+            <button className="btn-primary btn-sm flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 border-amber-600" disabled={!!acting}
+              onClick={() => act('approve-rate', 'Approve Rate Change')}>
+              {acting === 'Approve Rate Change' ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+              Approve Rate Change
+            </button>
+          )}
           {['draft', 'rejected'].includes(po.status) && canManagePO && (
-            <button className="btn-primary btn-sm flex items-center gap-1.5" disabled={!!acting}
+            <button className="btn-primary btn-sm flex items-center gap-1.5" disabled={!!acting || po.rate_increase_pending}
+              title={po.rate_increase_pending ? 'A rate increase needs owner approval before this PO can be sent' : ''}
               onClick={() => act('send', 'Send')}>
               {acting === 'Send' ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
               Mark as Sent
@@ -170,6 +178,18 @@ export default function PurchaseOrderDetail() {
           </button>
         </div>
       </div>
+
+      {/* ── Rate-increase approval banner ── */}
+      {po.rate_increase_pending && (
+        <div className="card p-4 mb-5 bg-amber-50 border border-amber-200 no-print flex items-start gap-2.5">
+          <AlertTriangle size={18} className="text-amber-600 mt-0.5 flex-shrink-0" />
+          <div className="text-sm text-amber-800">
+            <span className="font-semibold">Rate increase pending owner approval.</span>{' '}
+            This PO is priced above the agreed/last rate, so it can’t be marked as sent until the owner approves the change.
+            {user?.role === 'owner' ? ' Use “Approve Rate Change” above.' : ' An owner has been notified.'} See the details in the messages below.
+          </div>
+        </div>
+      )}
 
       {/* ── Delivery Status panel (approved POs, purchase managers, screen only) ── */}
       {po.status === 'approved' && canManagePO && (

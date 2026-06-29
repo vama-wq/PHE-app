@@ -244,6 +244,11 @@ async function initDB(retries = 20, delayMs = 10000) {
 
       await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS min_order_qty NUMERIC DEFAULT 0`);
 
+      // A PO priced above the agreed/last rate needs owner approval before it can be sent.
+      await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS rate_increase_pending BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS rate_increase_approved_by INTEGER`);
+      await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS rate_increase_approved_at TIMESTAMPTZ`);
+
       await pool.query(`
         CREATE TABLE IF NOT EXISTS supplier_items (
           id SERIAL PRIMARY KEY,

@@ -2,6 +2,52 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadPurchaseQC } = require('../middleware/upload');
+const { createNotification } = require('./notifications');
+
+// Detect PO items priced above their agreed rate (supplier-link rate), or for
+// unlinked items above the most recent PO rate. Returns the list of increases.
+async function detectRateIncreases(db, supplierId, items, excludePoId = 0) {
+  const increases = [];
+  for (const item of items) {
+    if (!item.inventory_item_id) continue;
+    const newRate = Number(item.rate) || 0;
+    if (newRate <= 0) continue;
+    let baseline = null, basis = '';
+    const link = await db.get('SELECT supplier_price FROM supplier_items WHERE supplier_id=$1 AND inventory_item_id=$2', [supplierId, item.inventory_item_id]);
+    if (link && link.supplier_price != null && Number(link.supplier_price) > 0) {
+      baseline = Number(link.supplier_price); basis = 'agreed rate';
+    } else {
+      const last = await db.get(
+        `SELECT poi.rate FROM purchase_order_items poi JOIN purchase_orders po ON po.id = poi.po_id
+         WHERE poi.inventory_item_id=$1 AND po.id <> $2 ORDER BY po.created_at DESC LIMIT 1`,
+        [item.inventory_item_id, excludePoId]
+      );
+      if (last && Number(last.rate) > 0) { baseline = Number(last.rate); basis = 'last PO rate'; }
+    }
+    if (baseline != null && newRate > baseline) {
+      increases.push({ description: item.description, oldRate: baseline, newRate, basis });
+    }
+  }
+  return increases;
+}
+
+// Flag a PO as needing owner approval for a rate increase: set the flag, post an
+// automated note in the PO chat, and notify owner/admin/accounts (dashboard).
+async function flagRateIncrease(db, po, increases, byUserId) {
+  await db.run('UPDATE purchase_orders SET rate_increase_pending=TRUE WHERE id=$1', [po.id]);
+  const lines = increases.map(i => `• ${i.description}: ₹${i.oldRate} → ₹${i.newRate} (above ${i.basis})`).join('\n');
+  await db.run('INSERT INTO purchase_order_messages (po_id, user_id, message) VALUES ($1,$2,$3)',
+    [po.id, byUserId, `⚠️ Rate increase needs owner approval before this PO can be sent:\n${lines}`]);
+  const recipients = await db.all(`SELECT id FROM users WHERE role IN ('owner','admin','accounts')`);
+  for (const u of recipients) {
+    await createNotification(db, {
+      userId: u.id, type: 'po_rate_increase',
+      title: `Rate increase on ${po.po_number}`,
+      body: increases.map(i => `${i.description}: ₹${i.oldRate}→₹${i.newRate}`).join('; '),
+      link: `/purchases/${po.id}`, sourceUserId: byUserId,
+    });
+  }
+}
 
 const VALID_DELIVERY_STATUSES = [
   'in_transit', 'material_rejected', 'reconfirm_order',
@@ -112,7 +158,10 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (r
     );
   }
 
-  res.json({ id: poId, po_number: poNumber });
+  const increases = await detectRateIncreases(db, supplier_id, items, 0);
+  if (increases.length) await flagRateIncrease(db, { id: poId, po_number: poNumber }, increases, req.user.id);
+
+  res.json({ id: poId, po_number: poNumber, rateIncreasePending: increases.length > 0 });
 });
 
 router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
@@ -149,7 +198,16 @@ router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async 
     );
   }
 
-  res.json({ message: 'Updated' });
+  // Re-evaluate the rate-increase gate after the edit.
+  const increases = await detectRateIncreases(db, supplier_id || po.supplier_id, items, po.id);
+  if (increases.length) {
+    if (!po.rate_increase_pending) await flagRateIncrease(db, { id: po.id, po_number: po.po_number }, increases, req.user.id);
+    else await db.run('UPDATE purchase_orders SET rate_increase_pending=TRUE WHERE id=$1', [po.id]);
+  } else {
+    await db.run('UPDATE purchase_orders SET rate_increase_pending=FALSE WHERE id=$1', [po.id]);
+  }
+
+  res.json({ message: 'Updated', rateIncreasePending: increases.length > 0 });
 });
 
 router.put('/:id/send', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
@@ -159,8 +217,23 @@ router.put('/:id/send', authenticate, authorize('owner', 'admin', 'accounts'), a
   if (!['draft', 'rejected'].includes(po.status)) {
     return res.status(400).json({ error: 'Only draft or rejected POs can be sent' });
   }
+  if (po.rate_increase_pending) {
+    return res.status(400).json({ error: 'This PO has a rate increase that needs owner approval before it can be sent.' });
+  }
   await db.run("UPDATE purchase_orders SET status='sent', sent_at=NOW() WHERE id=$1", [po.id]);
   res.json({ message: 'PO marked as sent' });
+});
+
+// Owner approves a flagged rate increase, unlocking "Mark as Sent".
+router.put('/:id/approve-rate', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+  if (!po) return res.status(404).json({ error: 'Not found' });
+  if (!po.rate_increase_pending) return res.status(400).json({ error: 'No pending rate increase on this PO' });
+  await db.run('UPDATE purchase_orders SET rate_increase_pending=FALSE, rate_increase_approved_by=$1, rate_increase_approved_at=NOW() WHERE id=$2', [req.user.id, po.id]);
+  await db.run('INSERT INTO purchase_order_messages (po_id, user_id, message) VALUES ($1,$2,$3)',
+    [po.id, req.user.id, '✅ Owner approved the rate increase — this PO can now be marked as sent.']);
+  res.json({ message: 'Rate increase approved' });
 });
 
 router.put('/:id/approve', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
