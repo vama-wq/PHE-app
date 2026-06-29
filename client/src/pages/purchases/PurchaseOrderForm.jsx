@@ -14,15 +14,15 @@ export default function PurchaseOrderForm() {
   const [invItems, setInvItems] = useState([]);
   const [linkedItems, setLinkedItems] = useState([]); // items linked to the selected supplier
   const [supplierId, setSupplierId] = useState('');
-  const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
+  const [items, setItems] = useState([]);
   const [transportCharges, setTransportCharges] = useState('0');
   const [igstPercent, setIgstPercent] = useState('18');
   const [notes, setNotes] = useState('');
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [itemSearch, setItemSearch] = useState({});
-  const [showDropdown, setShowDropdown] = useState({});
+  const [pickerSearch, setPickerSearch] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   useEffect(() => {
     Promise.all([api.get('/suppliers'), api.get('/inventory')]).then(([s, inv]) => {
@@ -81,38 +81,22 @@ export default function PurchaseOrderForm() {
     });
   };
 
-  const selectInvItem = async (idx, invItem) => {
-    // Linked items carry the agreed supplier rate; for fallback (unlinked) items
-    // use the last PO rate.
+  // Add a picked inventory item as a new row (with the agreed/last rate).
+  const addPickedItem = async (invItem) => {
+    if (items.some(i => i.inventory_item_id === invItem.id)) { setPickerSearch(''); setPickerOpen(false); return; }
     let rate = '0';
     if (invItem.supplier_price != null && invItem.supplier_price !== '') {
       rate = String(invItem.supplier_price);
     } else {
-      try {
-        const r = await api.get(`/purchase-orders/last-rate/${invItem.id}`);
-        if (r.data.rate > 0) rate = String(r.data.rate);
-      } catch {}
+      try { const r = await api.get(`/purchase-orders/last-rate/${invItem.id}`); if (r.data.rate > 0) rate = String(r.data.rate); } catch {}
     }
-    const qty = parseFloat(items[idx].qty) || 0;
-    const rateNum = parseFloat(rate) || 0;
-    setItems(prev => {
-      const updated = [...prev];
-      updated[idx] = {
-        ...updated[idx],
-        inventory_item_id: invItem.id,
-        description: invItem.name,
-        unit: invItem.unit || '',
-        rate,
-        amount: Math.round(qty * rateNum * 100) / 100,
-      };
-      return updated;
-    });
-    setItemSearch(prev => ({ ...prev, [idx]: invItem.name }));
-    setShowDropdown(prev => ({ ...prev, [idx]: false }));
+    const row = { inventory_item_id: invItem.id, description: invItem.name, unit: invItem.unit || '', qty: '', rate, amount: 0 };
+    setItems(prev => [...prev, row]);
+    setPickerSearch('');
+    setPickerOpen(false);
   };
 
   const removeItem = (idx) => setItems(prev => prev.filter((_, i) => i !== idx));
-  const addItem = () => setItems(prev => [...prev, { ...EMPTY_ITEM }]);
 
   // Computed totals
   const tc = parseFloat(transportCharges) || 0;
@@ -127,6 +111,10 @@ export default function PurchaseOrderForm() {
   // the supplier has none linked (so POs aren't blocked before links are set up).
   const usingFallback = !!supplierId && linkedItems.length === 0;
   const pickerItems = supplierId ? (linkedItems.length ? linkedItems : invItems) : [];
+  const pq = pickerSearch.toLowerCase();
+  const pickerFiltered = pickerItems.filter(i =>
+    !pq || i.name.toLowerCase().includes(pq) || (i.item_code || '').toLowerCase().includes(pq)
+  ).slice(0, 50);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -185,7 +173,7 @@ export default function PurchaseOrderForm() {
             <div className="col-span-2 md:col-span-1">
               <label className="label">Supplier *</label>
               <select className="input" value={supplierId}
-                onChange={e => { setSupplierId(e.target.value); setItems([{ ...EMPTY_ITEM }]); setItemSearch({}); }} required>
+                onChange={e => { setSupplierId(e.target.value); setItems([]); setPickerSearch(''); }} required>
                 <option value="">Select supplier...</option>
                 {suppliers.map(s => (
                   <option key={s.id} value={s.id}>{s.name}</option>
@@ -210,18 +198,72 @@ export default function PurchaseOrderForm() {
 
         {/* Items */}
         <div className="card p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-gray-900">Items</h2>
-            <button type="button" className="btn-secondary btn-sm" onClick={addItem}>
-              <Plus size={14} /> Add Item
-            </button>
+          <h2 className="font-semibold text-gray-900 mb-3">Items</h2>
+
+          {/* Prominent item search — adds a row when clicked */}
+          <div className="relative mb-4">
+            <div className={`flex items-center gap-2 border-2 rounded-xl px-3 py-2.5 transition-colors ${supplierId ? 'border-gray-200 focus-within:border-brand-400 bg-white' : 'border-gray-100 bg-gray-50'}`}>
+              <Search size={17} className="text-gray-400 flex-shrink-0" />
+              <input
+                className="flex-1 outline-none text-sm bg-transparent disabled:cursor-not-allowed"
+                placeholder={supplierId ? 'Search items and click to add…' : 'Select a supplier first'}
+                value={pickerSearch}
+                disabled={!supplierId}
+                onChange={e => { setPickerSearch(e.target.value); setPickerOpen(true); }}
+                onFocus={() => setPickerOpen(true)}
+                onBlur={() => setTimeout(() => setPickerOpen(false), 200)}
+              />
+            </div>
+            {pickerOpen && supplierId && (
+              <div
+                className="absolute z-30 left-0 right-0 bg-white border border-gray-200 rounded-xl shadow-2xl mt-1 overflow-y-auto"
+                style={{ maxHeight: '460px' }}
+              >
+                <div className="p-2 border-b border-gray-100 sticky top-0 bg-white">
+                  <span className="text-xs text-gray-400 font-medium px-1">
+                    {pickerFiltered.length} {usingFallback ? 'item' : 'linked item'}{pickerFiltered.length !== 1 ? 's' : ''}{pickerSearch ? ' found' : ''}
+                    {usingFallback && <span className="text-amber-500"> · supplier has no linked items (showing all inventory)</span>}
+                  </span>
+                </div>
+                {pickerFiltered.length === 0 ? (
+                  <div className="px-3 py-5 text-sm text-gray-400 text-center">
+                    No {usingFallback ? 'inventory' : 'linked items'}{pickerSearch ? ' match your search' : ' available'}.
+                  </div>
+                ) : pickerFiltered.map(inv => {
+                  const added = items.some(i => i.inventory_item_id === inv.id);
+                  return (
+                    <button
+                      key={inv.id}
+                      type="button"
+                      disabled={added}
+                      className={`w-full text-left px-3 py-2.5 flex items-center gap-3 border-b border-gray-50 last:border-0 ${added ? 'opacity-40 cursor-not-allowed' : 'hover:bg-brand-50'}`}
+                      onMouseDown={() => !added && addPickedItem(inv)}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-semibold text-gray-800 truncate">{inv.name}</div>
+                        <div className="text-xs text-gray-400 mt-0.5">{inv.item_code} · {inv.unit} · Stock: {inv.current_stock}</div>
+                      </div>
+                      {inv.supplier_price != null && (
+                        <div className="text-right flex-shrink-0">
+                          <div className="text-sm font-semibold text-gray-700">₹{fmt(inv.supplier_price || 0)}</div>
+                          {inv.lead_time_days != null && <div className="text-xs text-gray-400">{inv.lead_time_days}d lead</div>}
+                        </div>
+                      )}
+                      {added
+                        ? <span className="text-xs text-green-600 font-medium flex-shrink-0">added</span>
+                        : inv.drawing_file && <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-medium flex-shrink-0">Drawing</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="table-header text-left" style={{ minWidth: '340px' }}>Description of Goods</th>
+                  <th className="table-header text-left" style={{ minWidth: '320px' }}>Item</th>
                   <th className="table-header text-center" style={{ width: '80px' }}>Unit</th>
                   <th className="table-header text-right" style={{ width: '90px' }}>Qty</th>
                   <th className="table-header text-right" style={{ width: '110px' }}>Rate (₹)</th>
@@ -230,84 +272,14 @@ export default function PurchaseOrderForm() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {items.map((item, idx) => {
-                  const searchVal = itemSearch[idx] !== undefined ? itemSearch[idx] : item.description;
-                  const q = (searchVal || '').toLowerCase();
-                  const filteredInv = pickerItems.filter(i =>
-                    !q || i.name.toLowerCase().includes(q) || (i.item_code || '').toLowerCase().includes(q)
-                  ).slice(0, 50);
-
-                  return (
+                {items.length === 0 ? (
+                  <tr><td colSpan={6} className="text-center text-gray-400 py-6 text-sm">No items added yet — search above to add.</td></tr>
+                ) : items.map((item, idx) => (
                     <tr key={idx}>
-                      <td className="table-cell" style={{ minWidth: '340px' }}>
-                        <div className="relative">
-                          <div className="flex items-center gap-1.5">
-                            <Search size={13} className="text-gray-300 flex-shrink-0" />
-                            <input
-                              className="input text-xs py-1.5"
-                              placeholder={supplierId ? 'Search this supplier’s items...' : 'Select a supplier first'}
-                              value={searchVal}
-                              disabled={!supplierId}
-                              onChange={e => {
-                                setItemSearch(p => ({ ...p, [idx]: e.target.value }));
-                                updateItem(idx, 'description', e.target.value);
-                                setShowDropdown(p => ({ ...p, [idx]: true }));
-                              }}
-                              onFocus={() => setShowDropdown(p => ({ ...p, [idx]: true }))}
-                              onBlur={() => setTimeout(() => setShowDropdown(p => ({ ...p, [idx]: false })), 200)}
-                            />
-                          </div>
-                          {showDropdown[idx] && supplierId && (
-                            <div
-                              className="absolute z-30 top-full left-0 bg-white border border-gray-200 rounded-xl shadow-2xl mt-1 overflow-y-auto"
-                              style={{ minWidth: '520px', maxHeight: '420px' }}
-                            >
-                              <div className="p-2 border-b border-gray-100 sticky top-0 bg-white">
-                                <span className="text-xs text-gray-400 font-medium px-1">
-                                  {filteredInv.length} {usingFallback ? 'item' : 'linked item'}{filteredInv.length !== 1 ? 's' : ''}{searchVal ? ' found' : ''}
-                                  {usingFallback && <span className="text-amber-500"> · supplier has no linked items (showing all inventory)</span>}
-                                </span>
-                              </div>
-                              {filteredInv.length === 0 ? (
-                                <div className="px-3 py-4 text-sm text-gray-400 text-center">
-                                  No {usingFallback ? 'inventory' : 'linked items'}{searchVal ? ' match your search' : ' available'}.
-                                </div>
-                              ) : filteredInv.map(inv => (
-                                <button
-                                  key={inv.id}
-                                  type="button"
-                                  className="w-full text-left px-3 py-2.5 hover:bg-brand-50 flex items-center gap-3 border-b border-gray-50 last:border-0"
-                                  onMouseDown={() => selectInvItem(idx, inv)}
-                                >
-                                  <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-semibold text-gray-800 truncate">{inv.name}</div>
-                                    <div className="text-xs text-gray-400 mt-0.5">{inv.item_code} · {inv.unit} · Stock: {inv.current_stock}</div>
-                                  </div>
-                                  {inv.supplier_price != null && (
-                                    <div className="text-right flex-shrink-0">
-                                      <div className="text-sm font-semibold text-gray-700">₹{fmt(inv.supplier_price || 0)}</div>
-                                      {inv.lead_time_days != null && <div className="text-xs text-gray-400">{inv.lead_time_days}d lead</div>}
-                                    </div>
-                                  )}
-                                  {inv.drawing_file && (
-                                    <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-medium flex-shrink-0">Drawing</span>
-                                  )}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
+                      <td className="table-cell" style={{ minWidth: '320px' }}>
+                        <div className="font-medium text-gray-800">{item.description}</div>
                       </td>
-                      <td className="table-cell">
-                        <input
-                          className={`input text-xs py-1.5 text-center ${item.inventory_item_id ? 'bg-gray-50 cursor-not-allowed text-gray-500' : ''}`}
-                          value={item.unit}
-                          onChange={e => updateItem(idx, 'unit', e.target.value)}
-                          placeholder="Pcs"
-                          readOnly={!!item.inventory_item_id}
-                          title={item.inventory_item_id ? 'Unit is set from inventory and cannot be changed' : ''}
-                        />
-                      </td>
+                      <td className="table-cell text-center text-gray-600">{item.unit || '—'}</td>
                       <td className="table-cell">
                         <input className="input text-xs py-1.5 text-right" type="number" step="any" value={item.qty} onChange={e => updateItem(idx, 'qty', e.target.value)} placeholder="0" />
                       </td>
@@ -318,15 +290,12 @@ export default function PurchaseOrderForm() {
                         ₹{fmt(item.amount || 0)}
                       </td>
                       <td className="table-cell">
-                        {items.length > 1 && (
-                          <button type="button" className="text-red-400 hover:text-red-600 p-1" onClick={() => removeItem(idx)}>
-                            <Trash2 size={14} />
-                          </button>
-                        )}
+                        <button type="button" className="text-red-400 hover:text-red-600 p-1" onClick={() => removeItem(idx)}>
+                          <Trash2 size={14} />
+                        </button>
                       </td>
                     </tr>
-                  );
-                })}
+                ))}
               </tbody>
             </table>
           </div>
