@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import api from '../../lib/api';
+import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import { fmtDate, fmtDateTime, ROLE_COLORS, ROLE_LABELS } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
@@ -30,7 +30,11 @@ const DELIVERY_STATUSES = [
   { value: 'purchase_accepted', label: 'Purchase Accepted', style: 'bg-green-100 text-green-700' },
   { value: 'order_cancelled',   label: 'Order Cancelled',   style: 'bg-gray-100 text-gray-500' },
   { value: 'qc_pending',        label: 'QC Pending',        style: 'bg-purple-100 text-purple-700' },
+  { value: 'received',          label: 'Received',          style: 'bg-teal-100 text-teal-700' },
 ];
+// After approval, the only manual delivery updates are In Transit / Order Cancelled.
+// "Received" is a separate invoice-gated action and QC is automatic.
+const MANUAL_DELIVERY_OPTIONS = DELIVERY_STATUSES.filter(d => ['in_transit', 'order_cancelled'].includes(d.value));
 const deliveryStyle = (v) => DELIVERY_STATUSES.find(d => d.value === v)?.style || 'bg-gray-100 text-gray-600';
 const deliveryLabel = (v) => DELIVERY_STATUSES.find(d => d.value === v)?.label || v;
 
@@ -43,6 +47,7 @@ export default function PurchaseOrderDetail() {
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState('');
   const [showApproveModal, setShowApproveModal] = useState(false);
+  const [showReceiveModal, setShowReceiveModal] = useState(false);
 
   // delivery status update (for purchase manager)
   const [newDeliveryStatus, setNewDeliveryStatus] = useState('');
@@ -161,16 +166,15 @@ export default function PurchaseOrderDetail() {
               </button>
             </>
           )}
-          {po.status === 'approved' && canManagePO && !isQCPending && (
+          {po.status === 'approved' && canManagePO && ['purchase_accepted', 'in_transit'].includes(po.delivery_status) && (
             <button className="btn-primary btn-sm flex items-center gap-1.5 bg-teal-600 hover:bg-teal-700 border-teal-600" disabled={!!acting}
-              onClick={() => act('receive', 'Mark as Received')}>
-              {acting ? <Loader2 size={13} className="animate-spin" /> : <PackageCheck size={13} />}
-              Mark as Received
+              onClick={() => setShowReceiveModal(true)}>
+              <PackageCheck size={13} /> Mark as Received
             </button>
           )}
           {po.status === 'approved' && isQCPending && (
             <span className="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full font-medium">
-              ⏳ Awaiting Material QC
+              ⏳ Awaiting QC ({po.items.filter(i => i.qc_status).length}/{po.items.length} done)
             </span>
           )}
           <button className="btn-secondary btn-sm flex items-center gap-1.5" onClick={() => window.print()}>
@@ -191,19 +195,20 @@ export default function PurchaseOrderDetail() {
         </div>
       )}
 
-      {/* ── Delivery Status panel (approved POs, purchase managers, screen only) ── */}
-      {po.status === 'approved' && canManagePO && (
+      {/* ── Delivery Status panel (only while still in transit / accepted) ── */}
+      {po.status === 'approved' && canManagePO && ['purchase_accepted', 'in_transit'].includes(po.delivery_status) && (
         <div className="card p-5 mb-5 no-print">
-          <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <h3 className="font-semibold text-gray-900 mb-1 flex items-center gap-2">
             <Truck size={16} className="text-brand-600" />
             Delivery Status
           </h3>
+          <p className="text-xs text-gray-400 mb-4">Current: <span className={`px-2 py-0.5 rounded-full font-medium ${deliveryStyle(po.delivery_status)}`}>{deliveryLabel(po.delivery_status)}</span> · Use “Mark as Received” (above) when the goods arrive with the invoice.</p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
             <div>
-              <label className="label">Status</label>
+              <label className="label">Update to</label>
               <select className="input" value={newDeliveryStatus} onChange={e => setNewDeliveryStatus(e.target.value)}>
                 <option value="">— Select status —</option>
-                {DELIVERY_STATUSES.map(d => (
+                {MANUAL_DELIVERY_OPTIONS.map(d => (
                   <option key={d.value} value={d.value}>{d.label}</option>
                 ))}
               </select>
@@ -223,42 +228,32 @@ export default function PurchaseOrderDetail() {
               </button>
             </div>
           </div>
-          {newDeliveryStatus === 'qc_pending' && (
-            <div className="mt-3 p-3 bg-purple-50 border border-purple-200 rounded-lg text-purple-700 text-sm">
-              ⚠️ Setting status to <strong>QC Pending</strong> will require the QC manager to approve the material before the PO can be marked as received.
-            </div>
-          )}
         </div>
       )}
 
-      {/* ── Material QC panel (when delivery_status = qc_pending, screen only) ── */}
+      {/* ── Received invoice ── */}
+      {po.invoice_file && (
+        <div className="card p-4 mb-5 no-print flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-gray-700"><FileText size={15} className="text-brand-600" /> Received invoice attached</div>
+          <a href={`/uploads/${po.invoice_file}`} target="_blank" rel="noopener noreferrer" className="text-brand-600 text-sm hover:underline flex items-center gap-1"><ExternalLink size={13} /> View invoice</a>
+        </div>
+      )}
+
+      {/* ── Per-item Material QC panel (when awaiting QC, screen only) ── */}
       {isQCPending && (
         <div className="card p-5 mb-5 no-print border-purple-200">
-          {materialQCDone ? (
-            <div className="flex items-center gap-3">
-              <CheckCircle size={20} className="text-green-600" />
-              <div>
-                <div className="font-semibold text-gray-900">Material QC Approved</div>
-                <div className="text-sm text-gray-500">
-                  By {po.material_qc.created_by_name} · {fmtDate(po.material_qc.created_at)}
-                  {po.material_qc.observations && <span> · {po.material_qc.observations}</span>}
-                </div>
-                {po.material_qc.file_name && (
-                  <a href={`/uploads/purchase-qc/${po.material_qc.file_name}`} target="_blank" rel="noopener noreferrer"
-                    className="text-brand-600 text-sm hover:underline flex items-center gap-1 mt-1">
-                    <ExternalLink size={12} /> View Report
-                  </a>
-                )}
-              </div>
-            </div>
-          ) : canQC ? (
-            <MaterialQCSection poId={id} onApproved={load} />
-          ) : (
-            <div className="text-center text-gray-500 py-4">
-              <div className="font-medium">Material QC Pending</div>
-              <p className="text-sm mt-1">Waiting for the QC manager to inspect and approve this material.</p>
-            </div>
-          )}
+          <h3 className="font-semibold text-gray-900 mb-1 flex items-center gap-2">
+            <CheckCircle size={16} className="text-purple-600" /> Material QC — per item
+          </h3>
+          <p className="text-xs text-gray-400 mb-4">
+            {canQC ? 'Add a material image and the weight of 10 pcs for each item, then approve (or reject).'
+                   : 'Waiting for the QC team to inspect each item.'}
+          </p>
+          <div className="space-y-3">
+            {po.items.map(item => (
+              <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} />
+            ))}
+          </div>
         </div>
       )}
 
@@ -513,6 +508,140 @@ export default function PurchaseOrderDetail() {
           onClose={() => setShowApproveModal(false)}
           onApproved={() => { setShowApproveModal(false); load(); }}
         />
+      )}
+      {showReceiveModal && (
+        <ReceiveModal
+          poId={id}
+          onClose={() => setShowReceiveModal(false)}
+          onDone={() => { setShowReceiveModal(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Mark Received — the received invoice is mandatory and moves the PO to QC.
+function ReceiveModal({ poId, onClose, onDone }) {
+  const [file, setFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async () => {
+    if (!file) return setError('Please attach the received invoice');
+    setSaving(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('invoice', file);
+      await uploadApi.put(`/purchase-orders/${poId}/receive`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      onDone();
+    } catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
+  };
+  return (
+    <Modal open title="Mark as Received" onClose={onClose} size="md">
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600">Attach the <span className="font-semibold">invoice received with the order</span>. This is required and will send the PO to QC for per-item inspection.</p>
+        <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select invoice (PDF or image)" />
+        {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+        <div className="flex gap-3">
+          <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button className="btn-primary flex-1" disabled={saving} onClick={submit}>
+            {saving ? 'Saving…' : 'Record Invoice & Send to QC'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// One PO item's QC: material image + weight of 10 pcs (both mandatory to approve).
+function ItemQCRow({ poId, item, canQC, onDone }) {
+  const [open, setOpen] = useState(false);
+  const [image, setImage] = useState(null);
+  const [weight10, setWeight10] = useState('');
+  const [observations, setObservations] = useState('');
+  const [mode, setMode] = useState('approve'); // approve | reject
+  const [rejectReason, setRejectReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  if (item.qc_status === 'approved' || item.qc_status === 'rejected') {
+    return (
+      <div className={`rounded-lg px-3 py-2.5 border ${item.qc_status === 'approved' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-gray-800">{item.description}</span>
+          <span className={`text-xs font-semibold ${item.qc_status === 'approved' ? 'text-green-700' : 'text-red-700'}`}>
+            {item.qc_status === 'approved' ? '✓ QC Approved' : '✕ Rejected'}
+          </span>
+        </div>
+        <div className="text-xs text-gray-500 mt-0.5">
+          {item.qc_status === 'approved'
+            ? <>Weight of 10: <b>{item.qc_weight_10}</b>{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</>
+            : <>Reason: {item.qc_rejection_reason}</>}
+        </div>
+      </div>
+    );
+  }
+
+  const submit = async () => {
+    setError('');
+    if (mode === 'approve') {
+      if (!image) return setError('Material image is required');
+      if (!weight10 || Number(weight10) <= 0) return setError('Weight of 10 pcs is required');
+    } else if (!rejectReason.trim()) return setError('Rejection reason is required');
+    setSaving(true);
+    try {
+      const fd = new FormData();
+      fd.append('result', mode === 'approve' ? 'accepted' : 'rejected');
+      if (mode === 'approve') { fd.append('image', image); fd.append('weight_10', weight10); fd.append('observations', observations); }
+      else fd.append('rejection_reason', rejectReason);
+      await uploadApi.post(`/purchase-orders/${poId}/items/${item.id}/qc`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      onDone();
+    } catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
+  };
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-gray-800">{item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span></span>
+        {canQC ? (
+          !open ? <button className="btn-secondary btn-sm text-xs" onClick={() => setOpen(true)}>Do QC</button>
+                : <span className="text-xs text-purple-600">Pending</span>
+        ) : <span className="text-xs text-gray-400">Pending</span>}
+      </div>
+      {open && canQC && (
+        <div className="mt-3 space-y-2.5 border-t border-gray-200 pt-3">
+          <div className="flex gap-2">
+            <button className={`btn-sm text-xs flex-1 ${mode === 'approve' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('approve')}>Approve</button>
+            <button className={`btn-sm text-xs flex-1 ${mode === 'reject' ? 'btn-primary bg-red-600 border-red-600 hover:bg-red-700' : 'btn-secondary'}`} onClick={() => setMode('reject')}>Reject</button>
+          </div>
+          {mode === 'approve' ? (
+            <>
+              <div>
+                <label className="label text-xs">Material image <span className="text-red-500">*</span></label>
+                <FileUpload onFile={setImage} accept=".jpg,.jpeg,.png,.webp" label="Select material image" />
+              </div>
+              <div>
+                <label className="label text-xs">Weight of 10 pcs <span className="text-red-500">*</span></label>
+                <input className="input text-sm" type="number" step="any" min="0" value={weight10} onChange={e => setWeight10(e.target.value)} placeholder="e.g. 1.25" />
+              </div>
+              <div>
+                <label className="label text-xs">Observations <span className="text-gray-400 font-normal">(optional)</span></label>
+                <input className="input text-sm" value={observations} onChange={e => setObservations(e.target.value)} />
+              </div>
+            </>
+          ) : (
+            <div>
+              <label className="label text-xs">Rejection reason <span className="text-red-500">*</span></label>
+              <input className="input text-sm" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+            </div>
+          )}
+          {error && <p className="text-red-600 text-xs">{error}</p>}
+          <div className="flex gap-2">
+            <button className="btn-secondary btn-sm text-xs flex-1" onClick={() => setOpen(false)} disabled={saving}>Cancel</button>
+            <button className="btn-primary btn-sm text-xs flex-1" onClick={submit} disabled={saving}>
+              {saving ? 'Saving…' : mode === 'approve' ? 'Approve item' : 'Reject item'}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

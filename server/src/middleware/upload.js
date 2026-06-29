@@ -122,6 +122,8 @@ const uploaders = {
   productPhoto:    makeUploader('product-photos',     imageOnlyFilter, 10),
   itemDrawing:     makeUploader('item-drawings',      fileFilter),
   purchaseQC:      makeUploader('purchase-qc',        fileFilter),
+  purchaseInvoice: makeUploader('purchase-invoices',  fileFilter),
+  purchaseItemQC:  makeUploader('purchase-qc',        imageOnlyFilter),
   chatAttachment:  makeUploader('chat-attachments',   fileFilter, 10),
 };
 
@@ -140,6 +142,8 @@ module.exports = {
   uploadProductPhoto:    [uploaders.productPhoto.upload.single('photo'),    uploaders.productPhoto.pushToStorage],
   uploadItemDrawing:     [uploaders.itemDrawing.upload.single('drawing'),   uploaders.itemDrawing.pushToStorage],
   uploadPurchaseQC:      [uploaders.purchaseQC.upload.single('report'),     uploaders.purchaseQC.pushToStorage],
+  uploadPurchaseInvoice: [uploaders.purchaseInvoice.upload.single('invoice'), uploaders.purchaseInvoice.pushToStorage],
+  uploadPurchaseItemQC:  [uploaders.purchaseItemQC.upload.single('image'),   uploaders.purchaseItemQC.pushToStorage],
   uploadChatAttachments: [uploaders.chatAttachment.upload.array('attachments', 5), uploaders.chatAttachment.pushToStorage],
 
   // Utilities for route handlers

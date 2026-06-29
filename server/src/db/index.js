@@ -249,6 +249,19 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS rate_increase_approved_by INTEGER`);
       await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS rate_increase_approved_at TIMESTAMPTZ`);
 
+      // Post-approval PO flow: invoice captured at "Received", then per-item QC
+      // (material image + weight of 10 pcs) before stock is added.
+      await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_file TEXT`);
+      await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_original_name TEXT`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_status TEXT`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_weight_10 NUMERIC`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_image_file TEXT`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_image_name TEXT`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_observations TEXT`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_rejection_reason TEXT`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_by INTEGER`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_at TIMESTAMPTZ`);
+
       await pool.query(`
         CREATE TABLE IF NOT EXISTS supplier_items (
           id SERIAL PRIMARY KEY,

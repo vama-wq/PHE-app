@@ -1,8 +1,34 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { uploadPurchaseQC } = require('../middleware/upload');
+const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseItemQC } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
+
+// Add a single received PO item's stock to inventory (FIFO lot + moving-average
+// cost + transaction). Used when each item passes QC.
+async function receiveItemStock(db, po, item, userId) {
+  if (!item.inventory_item_id) return;
+  const now = new Date().toISOString();
+  const supplier = await db.get('SELECT name FROM suppliers WHERE id=$1', [po.supplier_id]);
+  await db.run(
+    `INSERT INTO inventory_fifo_lots (item_id, po_id, qty_original, qty_remaining, unit_cost, received_at)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [item.inventory_item_id, po.id, item.qty, item.qty, item.rate, now]
+  );
+  const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [item.inventory_item_id]);
+  const newStock = (Number(inv.current_stock) || 0) + Number(item.qty);
+  const lots = await db.all('SELECT qty_remaining, unit_cost FROM inventory_fifo_lots WHERE item_id=$1 AND qty_remaining > 0', [item.inventory_item_id]);
+  const totalQty = lots.reduce((s, l) => s + Number(l.qty_remaining), 0);
+  const totalCost = lots.reduce((s, l) => s + Number(l.qty_remaining) * Number(l.unit_cost), 0);
+  const avgCost = totalQty > 0 ? totalCost / totalQty : Number(item.rate);
+  await db.run('UPDATE inventory_items SET current_stock=$1, unit_cost=$2 WHERE id=$3',
+    [newStock, Math.round(avgCost * 100) / 100, item.inventory_item_id]);
+  await db.run(
+    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, po_number, supplier_name, notes, created_by)
+     VALUES ($1,'purchase_in',$2,$3,$4,$5,$6,$7)`,
+    [item.inventory_item_id, Number(item.qty), newStock, po.po_number, supplier?.name || '', `PO received (QC approved): ${po.po_number}`, userId]
+  );
+}
 
 // Detect PO items priced above their agreed rate (supplier-link rate), or for
 // unlinked items above the most recent PO rate. Returns the list of increases.
@@ -242,15 +268,15 @@ router.put('/:id/approve', authenticate, authorize('owner', 'admin', 'accounts')
   if (!po) return res.status(404).json({ error: 'Not found' });
   if (po.status !== 'sent') return res.status(400).json({ error: 'PO must be in sent status to approve' });
 
-  const { delivery_status, expected_delivery_date } = req.body;
-  const ds = delivery_status && VALID_DELIVERY_STATUSES.includes(delivery_status) ? delivery_status : null;
+  const { expected_delivery_date } = req.body;
 
+  // On approval the PO automatically enters "Purchase Accepted".
   await db.run(
     `UPDATE purchase_orders SET
        status='approved', approved_at=NOW(),
-       delivery_status=$1, expected_delivery_date=COALESCE($2, expected_delivery_date)
-     WHERE id=$3`,
-    [ds, expected_delivery_date||null, po.id]
+       delivery_status='purchase_accepted', expected_delivery_date=COALESCE($1, expected_delivery_date)
+     WHERE id=$2`,
+    [expected_delivery_date||null, po.id]
   );
 
   // Sync the supplier-item link rate to this PO's approved rate. If an item's
@@ -285,8 +311,13 @@ router.put('/:id/delivery-status', authenticate, authorize('owner', 'admin', 'ac
   if (po.status !== 'approved') return res.status(400).json({ error: 'PO must be approved to update delivery status' });
 
   const { delivery_status, expected_delivery_date } = req.body;
-  if (!delivery_status || !VALID_DELIVERY_STATUSES.includes(delivery_status)) {
+  // After approval only In Transit or Order Cancelled are manual options.
+  // "Received" is its own action (requires an invoice) and QC is automatic.
+  if (!['in_transit', 'order_cancelled'].includes(delivery_status)) {
     return res.status(400).json({ error: 'Invalid delivery status' });
+  }
+  if (!['purchase_accepted', 'in_transit'].includes(po.delivery_status)) {
+    return res.status(400).json({ error: 'Delivery status can no longer be changed for this PO' });
   }
 
   await db.run(
@@ -298,103 +329,86 @@ router.put('/:id/delivery-status', authenticate, authorize('owner', 'admin', 'ac
   res.json({ message: 'Delivery status updated' });
 });
 
-router.post('/:id/material-qc', authenticate, authorize('design', 'owner', 'admin'),
-  ...uploadPurchaseQC, async (req, res) => {
+// Mark the PO received: the received invoice is mandatory. Recording it moves
+// the PO into QC (per-item inspection). Stock is NOT added yet — it's added as
+// each item passes QC.
+router.put('/:id/receive', authenticate, authorize('owner', 'admin', 'accounts'),
+  ...uploadPurchaseInvoice, async (req, res) => {
     const db = getDB();
     const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
     if (!po) return res.status(404).json({ error: 'Not found' });
-    if (po.status !== 'approved') return res.status(400).json({ error: 'PO must be approved' });
-    if (po.delivery_status !== 'qc_pending') {
-      return res.status(400).json({ error: 'Delivery status must be QC Pending' });
+    if (po.status !== 'approved') return res.status(400).json({ error: 'PO must be approved before marking received' });
+    if (!['purchase_accepted', 'in_transit'].includes(po.delivery_status)) {
+      return res.status(400).json({ error: 'PO must be Purchase Accepted or In Transit to be received' });
     }
-
-    const { observations, result, rejection_reason } = req.body;
-    const qcResult = result === 'rejected' ? 'rejected' : 'accepted';
+    if (!req.file) return res.status(400).json({ error: 'The received invoice is required to mark this PO as received' });
 
     await db.run(
-      `INSERT INTO purchase_material_qc (po_id, observations, result, rejection_reason, file_path, file_name, file_original_name, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [po.id, observations||null, qcResult,
-       qcResult === 'rejected' ? (rejection_reason||null) : null,
-       req.file?.storagePath||null, req.file?.filename||null, req.file?.originalname||null,
-       req.user.id]
+      "UPDATE purchase_orders SET delivery_status='qc_pending', invoice_file=$1, invoice_original_name=$2 WHERE id=$3",
+      [req.file.storagePath, req.file.originalname, po.id]
     );
 
-    if (qcResult === 'accepted') {
-      await db.run("UPDATE purchase_orders SET delivery_status='purchase_accepted' WHERE id=$1", [po.id]);
-      res.json({ message: 'Material QC accepted — delivery status set to Purchase Accepted' });
-    } else {
-      await db.run("UPDATE purchase_orders SET delivery_status='material_rejected' WHERE id=$1", [po.id]);
-      res.json({ message: 'Material rejected — purchase order marked as Material Rejected' });
+    // Notify the QC (design) users that material is awaiting per-item QC.
+    const qcUsers = await db.all(`SELECT id FROM users WHERE role = 'design'`);
+    for (const u of qcUsers) {
+      await createNotification(db, {
+        userId: u.id, type: 'purchase_qc_pending',
+        title: `Material QC needed — ${po.po_number}`,
+        body: 'Received material awaiting per-item QC (material image + weight of 10 pcs).',
+        link: `/purchases/${po.id}`, sourceUserId: req.user.id,
+      });
     }
+    await logActivity(null, null, 'purchase_received', `PO ${po.po_number} received (invoice recorded), sent to QC`, req.user.id);
+    res.json({ message: 'Invoice recorded — PO sent to QC for per-item inspection', qc_required: true });
   }
 );
 
-router.put('/:id/receive', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
-  const db = getDB();
-  const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
-  if (!po) return res.status(404).json({ error: 'Not found' });
-  if (po.status !== 'approved') return res.status(400).json({ error: 'PO must be approved before marking received' });
+// Per-item QC: a material image and weight of 10 pcs are mandatory to approve.
+// Approving an item adds its stock to inventory; once every item is resolved the
+// PO is finalised (received, or material_rejected if any item was rejected).
+router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 'admin'),
+  ...uploadPurchaseItemQC, async (req, res) => {
+    const db = getDB();
+    const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+    if (!po) return res.status(404).json({ error: 'Not found' });
+    if (po.delivery_status !== 'qc_pending') return res.status(400).json({ error: 'PO is not awaiting QC' });
+    const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    if (item.qc_status === 'approved') return res.status(400).json({ error: 'This item is already QC-approved' });
 
-  if (po.delivery_status === 'qc_pending') {
-    return res.status(400).json({ error: 'Material QC must be completed by QC inspector before receiving' });
-  }
-  if (po.delivery_status !== 'purchase_accepted') {
-    await db.run("UPDATE purchase_orders SET delivery_status='qc_pending' WHERE id=$1", [po.id]);
-    return res.json({ message: 'PO sent to QC for inspection. Inventory will be updated after QC approval.', qc_required: true });
-  }
-
-  const items = await db.all('SELECT * FROM purchase_order_items WHERE po_id=$1', [po.id]);
-  const now = new Date().toISOString();
-  const supplier = await db.get('SELECT name FROM suppliers WHERE id=$1', [po.supplier_id]);
-
-  await db.withTransaction(async (client) => {
-    for (const item of items) {
-      if (!item.inventory_item_id) continue;
-
-      await client.query(
-        `INSERT INTO inventory_fifo_lots (item_id, po_id, qty_original, qty_remaining, unit_cost, received_at)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [item.inventory_item_id, po.id, item.qty, item.qty, item.rate, now]
-      );
-
-      const { rows: [inv] } = await client.query(
-        'SELECT current_stock, unit_cost FROM inventory_items WHERE id=$1',
-        [item.inventory_item_id]
-      );
-      const newStock = (inv.current_stock || 0) + item.qty;
-
-      const { rows: lots } = await client.query(
-        'SELECT qty_remaining, unit_cost FROM inventory_fifo_lots WHERE item_id=$1 AND qty_remaining > 0',
-        [item.inventory_item_id]
-      );
-      const totalQty = lots.reduce((s, l) => s + l.qty_remaining, 0);
-      const totalCost = lots.reduce((s, l) => s + l.qty_remaining * l.unit_cost, 0);
-      const avgCost = totalQty > 0 ? totalCost / totalQty : item.rate;
-
-      await client.query(
-        'UPDATE inventory_items SET current_stock=$1, unit_cost=$2 WHERE id=$3',
-        [newStock, Math.round(avgCost * 100) / 100, item.inventory_item_id]
-      );
-
-      await client.query(
-        `INSERT INTO inventory_transactions
-           (item_id, transaction_type, quantity, balance_after, po_number, supplier_name, notes, created_by)
-         VALUES ($1,'purchase_in',$2,$3,$4,$5,$6,$7)`,
-        [item.inventory_item_id, item.qty, newStock,
-         po.po_number, supplier?.name || '',
-         `PO received: ${po.po_number}`, req.user.id]
-      );
+    const { result, weight_10, observations, rejection_reason } = req.body;
+    const accepted = result !== 'rejected';
+    if (accepted) {
+      if (!req.file) return res.status(400).json({ error: 'A material image is required to approve this item' });
+      if (!weight_10 || Number(weight_10) <= 0) return res.status(400).json({ error: 'Weight of 10 pcs is required to approve this item' });
+    } else if (!rejection_reason?.trim()) {
+      return res.status(400).json({ error: 'A rejection reason is required' });
     }
 
-    await client.query(
-      "UPDATE purchase_orders SET status='received', received_at=$1 WHERE id=$2",
-      [now, po.id]
+    await db.run(
+      `UPDATE purchase_order_items SET qc_status=$1, qc_weight_10=$2, qc_image_file=$3, qc_image_name=$4,
+         qc_observations=$5, qc_rejection_reason=$6, qc_by=$7, qc_at=NOW() WHERE id=$8`,
+      [accepted ? 'approved' : 'rejected', accepted ? Number(weight_10) : null,
+       req.file?.storagePath || null, req.file?.originalname || null,
+       observations || null, accepted ? null : rejection_reason.trim(), req.user.id, item.id]
     );
-  });
 
-  res.json({ message: 'PO received — inventory updated' });
-});
+    if (accepted) await receiveItemStock(db, po, item, req.user.id);
+
+    // Finalise the PO once every item has been QC-resolved.
+    const items = await db.all('SELECT qc_status FROM purchase_order_items WHERE po_id=$1', [po.id]);
+    const allResolved = items.every(i => i.qc_status === 'approved' || i.qc_status === 'rejected');
+    if (allResolved) {
+      const anyRejected = items.some(i => i.qc_status === 'rejected');
+      await db.run(
+        "UPDATE purchase_orders SET status='received', received_at=NOW(), delivery_status=$1 WHERE id=$2",
+        [anyRejected ? 'material_rejected' : 'received', po.id]
+      );
+    }
+    await logActivity(null, null, 'purchase_qc', `PO ${po.po_number}: item QC ${accepted ? 'approved' : 'rejected'}`, req.user.id);
+    res.json({ message: accepted ? 'Item QC approved — stock added' : 'Item QC rejected', allResolved });
+  }
+);
 
 router.get('/last-rate/:itemId', authenticate, async (req, res) => {
   const last = await getDB().get(

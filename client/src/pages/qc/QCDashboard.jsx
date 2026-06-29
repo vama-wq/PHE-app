@@ -92,15 +92,12 @@ export default function QCDashboard() {
                     <div className="text-xs text-gray-400 mt-0.5">Created by {po.created_by_name} · {fmtDate(po.created_at)}</div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Link to={`/purchases/${po.id}`} className="btn-secondary btn-sm flex items-center gap-1.5">
-                      <ExternalLink size={13} /> View PO
-                    </Link>
-                    <button
+                    <Link
+                      to={`/purchases/${po.id}`}
                       className="btn-primary btn-sm flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 border-purple-600"
-                      onClick={() => setMaterialQCModal(po)}
                     >
-                      <CheckCircle size={13} /> Approve Material
-                    </button>
+                      <CheckCircle size={13} /> Inspect & QC items
+                    </Link>
                   </div>
                 </div>
               </div>
