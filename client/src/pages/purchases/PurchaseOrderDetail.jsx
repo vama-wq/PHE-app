@@ -598,6 +598,7 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
   const [open, setOpen] = useState(false);
   const [image, setImage] = useState(null);
   const [weight10, setWeight10] = useState('');
+  const [receivedQty, setReceivedQty] = useState('');
   const [observations, setObservations] = useState('');
   const [mode, setMode] = useState('approve'); // approve | reject
   const [rejectReason, setRejectReason] = useState('');
@@ -616,7 +617,7 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
         </div>
         <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
           {item.qc_status === 'approved'
-            ? <span>Weight of 10: <b>{item.qc_weight_10}</b>{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</span>
+            ? <span>Received: <b>{item.qc_received_qty}</b> · Weight of 10: <b>{item.qc_weight_10}</b>{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</span>
             : <span>Reason: {item.qc_rejection_reason}</span>}
           {item.invoice_file && <a className="text-brand-600 hover:underline" href={`/uploads/${item.invoice_file}`} target="_blank" rel="noopener noreferrer">invoice</a>}
         </div>
@@ -643,12 +644,13 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
     if (mode === 'approve') {
       if (!image) return setError('Material image is required');
       if (!weight10 || Number(weight10) <= 0) return setError('Weight of 10 pcs is required');
+      if (!receivedQty || Number(receivedQty) <= 0) return setError('Actual quantity received is required');
     } else if (!rejectReason.trim()) return setError('Rejection reason is required');
     setSaving(true);
     try {
       const fd = new FormData();
       fd.append('result', mode === 'approve' ? 'accepted' : 'rejected');
-      if (mode === 'approve') { fd.append('image', image); fd.append('weight_10', weight10); fd.append('observations', observations); }
+      if (mode === 'approve') { fd.append('image', image); fd.append('weight_10', weight10); fd.append('received_qty', receivedQty); fd.append('observations', observations); }
       else fd.append('rejection_reason', rejectReason);
       await uploadApi.post(`/purchase-orders/${poId}/items/${item.id}/qc`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onDone();
@@ -680,6 +682,11 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
               <div>
                 <label className="label text-xs">Material image <span className="text-red-500">*</span></label>
                 <FileUpload onFile={setImage} accept=".jpg,.jpeg,.png,.webp" label="Select material image" />
+              </div>
+              <div>
+                <label className="label text-xs">Actual quantity received <span className="text-red-500">*</span></label>
+                <input className="input text-sm" type="number" step="any" min="0" value={receivedQty} onChange={e => setReceivedQty(e.target.value)} placeholder={`ordered: ${item.qty}`} />
+                <p className="text-xs text-gray-400 mt-0.5">Only this quantity is added to inventory.</p>
               </div>
               <div>
                 <label className="label text-xs">Weight of 10 pcs <span className="text-red-500">*</span></label>

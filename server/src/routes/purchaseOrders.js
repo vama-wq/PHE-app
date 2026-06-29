@@ -5,18 +5,21 @@ const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseItemQC } = requir
 const { createNotification } = require('./notifications');
 
 // Add a single received PO item's stock to inventory (FIFO lot + moving-average
-// cost + transaction). Used when each item passes QC.
-async function receiveItemStock(db, po, item, userId) {
+// cost + transaction). `qty` is the ACTUAL quantity received (entered at QC),
+// which may differ from the ordered quantity.
+async function receiveItemStock(db, po, item, userId, qty) {
   if (!item.inventory_item_id) return;
+  const q = Number(qty);
+  if (!(q > 0)) return;
   const now = new Date().toISOString();
   const supplier = await db.get('SELECT name FROM suppliers WHERE id=$1', [po.supplier_id]);
   await db.run(
     `INSERT INTO inventory_fifo_lots (item_id, po_id, qty_original, qty_remaining, unit_cost, received_at)
      VALUES ($1,$2,$3,$4,$5,$6)`,
-    [item.inventory_item_id, po.id, item.qty, item.qty, item.rate, now]
+    [item.inventory_item_id, po.id, q, q, item.rate, now]
   );
   const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [item.inventory_item_id]);
-  const newStock = (Number(inv.current_stock) || 0) + Number(item.qty);
+  const newStock = (Number(inv.current_stock) || 0) + q;
   const lots = await db.all('SELECT qty_remaining, unit_cost FROM inventory_fifo_lots WHERE item_id=$1 AND qty_remaining > 0', [item.inventory_item_id]);
   const totalQty = lots.reduce((s, l) => s + Number(l.qty_remaining), 0);
   const totalCost = lots.reduce((s, l) => s + Number(l.qty_remaining) * Number(l.unit_cost), 0);
@@ -26,7 +29,8 @@ async function receiveItemStock(db, po, item, userId) {
   await db.run(
     `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, po_number, supplier_name, notes, created_by)
      VALUES ($1,'purchase_in',$2,$3,$4,$5,$6,$7)`,
-    [item.inventory_item_id, Number(item.qty), newStock, po.po_number, supplier?.name || '', `PO received (QC approved): ${po.po_number}`, userId]
+    [item.inventory_item_id, q, newStock, po.po_number, supplier?.name || '',
+     `PO received (QC approved): ${po.po_number} — qty ${q}${Number(item.qty) !== q ? ` of ${item.qty} ordered` : ''}`, userId]
   );
 }
 
@@ -140,7 +144,7 @@ router.get('/:id', authenticate, async (req, res) => {
     if (!po) return res.status(404).json({ error: 'Not found' });
     const items = await db.all(
       `SELECT poi.id, poi.description, poi.qty, poi.received, poi.received_at,
-              poi.qc_status, poi.qc_weight_10, poi.qc_image_file, poi.qc_image_name,
+              poi.qc_status, poi.qc_weight_10, poi.qc_received_qty, poi.qc_image_file, poi.qc_image_name,
               poi.qc_observations, poi.qc_rejection_reason,
               ii.item_code, ii.name as item_name, ii.unit as item_unit,
               ii.drawing_file, ii.drawing_original_name
@@ -420,24 +424,25 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
     if (!item.received) return res.status(400).json({ error: 'This item must be marked received before QC' });
     if (item.qc_status === 'approved') return res.status(400).json({ error: 'This item is already QC-approved' });
 
-    const { result, weight_10, observations, rejection_reason } = req.body;
+    const { result, weight_10, received_qty, observations, rejection_reason } = req.body;
     const accepted = result !== 'rejected';
     if (accepted) {
       if (!req.file) return res.status(400).json({ error: 'A material image is required to approve this item' });
       if (!weight_10 || Number(weight_10) <= 0) return res.status(400).json({ error: 'Weight of 10 pcs is required to approve this item' });
+      if (!received_qty || Number(received_qty) <= 0) return res.status(400).json({ error: 'Actual quantity received is required to approve this item' });
     } else if (!rejection_reason?.trim()) {
       return res.status(400).json({ error: 'A rejection reason is required' });
     }
 
     await db.run(
-      `UPDATE purchase_order_items SET qc_status=$1, qc_weight_10=$2, qc_image_file=$3, qc_image_name=$4,
-         qc_observations=$5, qc_rejection_reason=$6, qc_by=$7, qc_at=NOW() WHERE id=$8`,
-      [accepted ? 'approved' : 'rejected', accepted ? Number(weight_10) : null,
+      `UPDATE purchase_order_items SET qc_status=$1, qc_weight_10=$2, qc_received_qty=$3, qc_image_file=$4, qc_image_name=$5,
+         qc_observations=$6, qc_rejection_reason=$7, qc_by=$8, qc_at=NOW() WHERE id=$9`,
+      [accepted ? 'approved' : 'rejected', accepted ? Number(weight_10) : null, accepted ? Number(received_qty) : null,
        req.file?.storagePath || null, req.file?.originalname || null,
        observations || null, accepted ? null : rejection_reason.trim(), req.user.id, item.id]
     );
 
-    if (accepted) await receiveItemStock(db, po, item, req.user.id);
+    if (accepted) await receiveItemStock(db, po, item, req.user.id, Number(received_qty));
 
     // Finalise the PO once every item has been QC-resolved.
     const items = await db.all('SELECT qc_status FROM purchase_order_items WHERE po_id=$1', [po.id]);
