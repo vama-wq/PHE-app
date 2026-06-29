@@ -268,6 +268,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ`);
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS invoice_file TEXT`);
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS invoice_original_name TEXT`);
+      // Costs known only at receipt: transport + any other cost (with a reason).
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_transport_cost NUMERIC`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_other_cost NUMERIC`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_other_cost_reason TEXT`);
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS supplier_items (

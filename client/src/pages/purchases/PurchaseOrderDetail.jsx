@@ -274,7 +274,7 @@ export default function PurchaseOrderDetail() {
           </p>
           <div className="space-y-2.5">
             {po.items.map(item => (
-              <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} />
+              <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} showCosts />
             ))}
           </div>
         </div>
@@ -549,15 +549,22 @@ export default function PurchaseOrderDetail() {
 function ReceiveItemModal({ poId, items, onClose, onDone }) {
   const [itemId, setItemId] = useState(items[0]?.id ? String(items[0].id) : '');
   const [file, setFile] = useState(null);
+  const [transportCost, setTransportCost] = useState('');
+  const [otherCost, setOtherCost] = useState('');
+  const [otherReason, setOtherReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const submit = async () => {
     if (!itemId) return setError('Select the item that was received');
     if (!file) return setError('Attach the invoice received with this item');
+    if (Number(otherCost) > 0 && !otherReason.trim()) return setError('Please add a reason for the other cost');
     setSaving(true); setError('');
     try {
       const fd = new FormData();
       fd.append('invoice', file);
+      if (transportCost) fd.append('transport_cost', transportCost);
+      if (otherCost) fd.append('other_cost', otherCost);
+      if (otherReason) fd.append('other_cost_reason', otherReason);
       await uploadApi.post(`/purchase-orders/${poId}/items/${itemId}/receive`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onDone();
     } catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
@@ -579,6 +586,20 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
               <label className="label">Invoice received with this item <span className="text-red-500">*</span></label>
               <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select invoice (PDF or image)" />
             </div>
+            <div>
+              <label className="label">Transport cost <span className="text-gray-400 font-normal">(₹, optional)</span></label>
+              <input className="input" type="number" step="any" min="0" value={transportCost} onChange={e => setTransportCost(e.target.value)} placeholder="0.00" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Other cost <span className="text-gray-400 font-normal">(₹, optional)</span></label>
+                <input className="input" type="number" step="any" min="0" value={otherCost} onChange={e => setOtherCost(e.target.value)} placeholder="0.00" />
+              </div>
+              <div>
+                <label className="label">Reason {Number(otherCost) > 0 && <span className="text-red-500">*</span>}</label>
+                <input className="input" value={otherReason} onChange={e => setOtherReason(e.target.value)} placeholder="e.g. unloading, packing" />
+              </div>
+            </div>
             {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
             <div className="flex gap-3">
               <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
@@ -594,7 +615,15 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
 }
 
 // One PO item's QC: material image + weight of 10 pcs (both mandatory to approve).
-function ItemQCRow({ poId, item, canQC, onDone }) {
+function ItemQCRow({ poId, item, canQC, onDone, showCosts }) {
+  const transport = Number(item.receive_transport_cost) || 0;
+  const other = Number(item.receive_other_cost) || 0;
+  const costLine = showCosts && (transport > 0 || other > 0) ? (
+    <div className="text-xs text-gray-500 mt-0.5">
+      {transport > 0 && <span>Transport: ₹{transport}</span>}
+      {other > 0 && <span>{transport > 0 ? ' · ' : ''}Other: ₹{other}{item.receive_other_cost_reason ? ` (${item.receive_other_cost_reason})` : ''}</span>}
+    </div>
+  ) : null;
   const [open, setOpen] = useState(false);
   const [image, setImage] = useState(null);
   const [weight10, setWeight10] = useState('');
@@ -621,6 +650,7 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
             : <span>Reason: {item.qc_rejection_reason}</span>}
           {item.invoice_file && <a className="text-brand-600 hover:underline" href={`/uploads/${item.invoice_file}`} target="_blank" rel="noopener noreferrer">invoice</a>}
         </div>
+        {costLine}
       </div>
     );
   }
@@ -671,6 +701,7 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
                 : <span className="text-xs text-purple-600">QC…</span>
         ) : <span className="text-xs text-gray-400">Awaiting QC</span>}
       </div>
+      {costLine}
       {open && canQC && (
         <div className="mt-3 space-y-2.5 border-t border-gray-200 pt-3">
           <div className="flex gap-2">

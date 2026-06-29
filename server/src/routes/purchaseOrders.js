@@ -383,9 +383,15 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     if (item.received) return res.status(400).json({ error: 'This item is already received' });
     if (!req.file) return res.status(400).json({ error: 'The invoice received with this item is required' });
 
+    const transportCost = Number(req.body.transport_cost) || 0;
+    const otherCost = Number(req.body.other_cost) || 0;
+    const otherReason = (req.body.other_cost_reason || '').trim() || null;
+    if (otherCost > 0 && !otherReason) return res.status(400).json({ error: 'A reason is required for the other cost' });
+
     await db.run(
-      `UPDATE purchase_order_items SET received=TRUE, received_at=NOW(), invoice_file=$1, invoice_original_name=$2 WHERE id=$3`,
-      [req.file.storagePath, req.file.originalname, item.id]
+      `UPDATE purchase_order_items SET received=TRUE, received_at=NOW(), invoice_file=$1, invoice_original_name=$2,
+         receive_transport_cost=$3, receive_other_cost=$4, receive_other_cost_reason=$5 WHERE id=$6`,
+      [req.file.storagePath, req.file.originalname, transportCost, otherCost, otherReason, item.id]
     );
     // Move the PO into QC (if not already) so it surfaces in the QC section.
     if (po.delivery_status !== 'qc_pending') {
