@@ -334,6 +334,7 @@ router.put('/:id/delivery-status', authenticate, authorize('owner', 'admin', 'ac
 // per item when it passes QC.
 router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admin', 'accounts'),
   ...uploadPurchaseInvoice, async (req, res) => {
+   try {
     const db = getDB();
     const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
     if (!po) return res.status(404).json({ error: 'Not found' });
@@ -365,6 +366,10 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     }
     await logActivity(null, null, 'purchase_received', `PO ${po.po_number}: item "${item.description}" received & sent to QC`, req.user.id);
     res.json({ message: 'Item received — sent to QC' });
+   } catch (err) {
+    console.error('[po/receive] error:', err);
+    res.status(500).json({ error: err.message || 'Failed to receive item' });
+   }
   }
 );
 
@@ -373,6 +378,7 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
 // PO is finalised (received, or material_rejected if any item was rejected).
 router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 'admin'),
   ...uploadPurchaseItemQC, async (req, res) => {
+   try {
     const db = getDB();
     const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
     if (!po) return res.status(404).json({ error: 'Not found' });
@@ -413,6 +419,10 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
     }
     await logActivity(null, null, 'purchase_qc', `PO ${po.po_number}: item QC ${accepted ? 'approved' : 'rejected'}`, req.user.id);
     res.json({ message: accepted ? 'Item QC approved — stock added' : 'Item QC rejected', allResolved });
+   } catch (err) {
+    console.error('[po/item-qc] error:', err);
+    res.status(500).json({ error: err.message || 'Failed to record QC' });
+   }
   }
 );
 
