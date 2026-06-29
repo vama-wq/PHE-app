@@ -4,6 +4,7 @@ import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import { fmtDate, fmtDateTime, ROLE_COLORS, ROLE_LABELS } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
+import FileUpload from '../../components/ui/FileUpload';
 import {
   ArrowLeft, Printer, Send, CheckCircle, XCircle,
   PackageCheck, Pencil, Loader2, Truck, Upload, FileText,
