@@ -13,7 +13,7 @@ router.get('/', authenticate, async (req, res) => {
 
 router.get('/:id/items', authenticate, async (req, res) => {
   const rows = await getDB().all(`
-    SELECT si.*, ii.item_code, ii.name AS item_name, ii.unit
+    SELECT si.*, ii.item_code, ii.name AS item_name, ii.unit, ii.current_stock, ii.drawing_file
     FROM supplier_items si
     JOIN inventory_items ii ON ii.id = si.inventory_item_id
     WHERE si.supplier_id = $1

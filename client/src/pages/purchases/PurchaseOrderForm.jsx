@@ -12,6 +12,7 @@ export default function PurchaseOrderForm() {
 
   const [suppliers, setSuppliers] = useState([]);
   const [invItems, setInvItems] = useState([]);
+  const [linkedItems, setLinkedItems] = useState([]); // items linked to the selected supplier
   const [supplierId, setSupplierId] = useState('');
   const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
   const [transportCharges, setTransportCharges] = useState('0');
@@ -49,6 +50,24 @@ export default function PurchaseOrderForm() {
     }
   }, [id]);
 
+  // Load the selected supplier's linked items — these are the only items a PO
+  // for this supplier can contain, and they carry the agreed rate.
+  useEffect(() => {
+    if (!supplierId) { setLinkedItems([]); return; }
+    api.get(`/suppliers/${supplierId}/items`).then(r => {
+      setLinkedItems((r.data || []).map(li => ({
+        id: li.inventory_item_id,
+        item_code: li.item_code,
+        name: li.item_name,
+        unit: li.unit || '',
+        current_stock: li.current_stock,
+        drawing_file: li.drawing_file,
+        supplier_price: li.supplier_price,
+        lead_time_days: li.lead_time_days,
+      })));
+    }).catch(() => setLinkedItems([]));
+  }, [supplierId]);
+
   const updateItem = (idx, field, value) => {
     setItems(prev => {
       const updated = [...prev];
@@ -62,13 +81,10 @@ export default function PurchaseOrderForm() {
     });
   };
 
-  const selectInvItem = async (idx, invItem) => {
-    let rate = '0';
-    try {
-      const r = await api.get(`/purchase-orders/last-rate/${invItem.id}`);
-      if (r.data.rate > 0) rate = String(r.data.rate);
-    } catch {}
-
+  const selectInvItem = (idx, invItem) => {
+    // Use the rate agreed for this supplier↔item link.
+    const rate = invItem.supplier_price != null && invItem.supplier_price !== ''
+      ? String(invItem.supplier_price) : '0';
     const qty = parseFloat(items[idx].qty) || 0;
     const rateNum = parseFloat(rate) || 0;
     setItems(prev => {
@@ -102,8 +118,10 @@ export default function PurchaseOrderForm() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!supplierId) return setError('Please select a supplier');
-    const validItems = items.filter(i => i.description.trim());
-    if (validItems.length === 0) return setError('Add at least one item');
+    const validItems = items.filter(i => i.inventory_item_id);
+    if (validItems.length === 0) return setError('Add at least one item from the supplier’s linked list');
+    if (items.some(i => !i.inventory_item_id && (i.description || '').trim()))
+      return setError('Each item must be picked from the supplier’s list (use the dropdown).');
 
     setSaving(true);
     setError('');
@@ -153,12 +171,14 @@ export default function PurchaseOrderForm() {
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2 md:col-span-1">
               <label className="label">Supplier *</label>
-              <select className="input" value={supplierId} onChange={e => setSupplierId(e.target.value)} required>
+              <select className="input" value={supplierId}
+                onChange={e => { setSupplierId(e.target.value); setItems([{ ...EMPTY_ITEM }]); setItemSearch({}); }} required>
                 <option value="">Select supplier...</option>
                 {suppliers.map(s => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
+              <p className="text-xs text-gray-400 mt-1">Only this supplier's linked items can be added below.</p>
             </div>
             <div>
               <label className="label">IGST %</label>
@@ -199,10 +219,10 @@ export default function PurchaseOrderForm() {
               <tbody className="divide-y divide-gray-100">
                 {items.map((item, idx) => {
                   const searchVal = itemSearch[idx] !== undefined ? itemSearch[idx] : item.description;
-                  const filteredInv = invItems.filter(i =>
-                    i.name.toLowerCase().includes((searchVal || '').toLowerCase()) ||
-                    i.item_code.toLowerCase().includes((searchVal || '').toLowerCase())
-                  ).slice(0, 10);
+                  const q = (searchVal || '').toLowerCase();
+                  const filteredInv = linkedItems.filter(i =>
+                    !q || i.name.toLowerCase().includes(q) || (i.item_code || '').toLowerCase().includes(q)
+                  ).slice(0, 50);
 
                   return (
                     <tr key={idx}>
@@ -212,42 +232,50 @@ export default function PurchaseOrderForm() {
                             <Search size={13} className="text-gray-300 flex-shrink-0" />
                             <input
                               className="input text-xs py-1.5"
-                              placeholder="Search inventory or type description..."
+                              placeholder={supplierId ? 'Search this supplier’s items...' : 'Select a supplier first'}
                               value={searchVal}
+                              disabled={!supplierId}
                               onChange={e => {
                                 setItemSearch(p => ({ ...p, [idx]: e.target.value }));
                                 updateItem(idx, 'description', e.target.value);
                                 setShowDropdown(p => ({ ...p, [idx]: true }));
                               }}
                               onFocus={() => setShowDropdown(p => ({ ...p, [idx]: true }))}
-                              onBlur={() => setTimeout(() => setShowDropdown(p => ({ ...p, [idx]: false })), 150)}
+                              onBlur={() => setTimeout(() => setShowDropdown(p => ({ ...p, [idx]: false })), 200)}
                             />
                           </div>
-                          {showDropdown[idx] && searchVal && filteredInv.length > 0 && (
+                          {showDropdown[idx] && supplierId && (
                             <div
-                              className="absolute z-20 top-full left-0 bg-white border border-gray-200 rounded-xl shadow-xl mt-1 overflow-y-auto"
-                              style={{ minWidth: '380px', maxHeight: '280px' }}
+                              className="absolute z-30 top-full left-0 bg-white border border-gray-200 rounded-xl shadow-2xl mt-1 overflow-y-auto"
+                              style={{ minWidth: '520px', maxHeight: '420px' }}
                             >
-                              <div className="p-2 border-b border-gray-100">
+                              <div className="p-2 border-b border-gray-100 sticky top-0 bg-white">
                                 <span className="text-xs text-gray-400 font-medium px-1">
-                                  {filteredInv.length} item{filteredInv.length !== 1 ? 's' : ''} found
+                                  {filteredInv.length} linked item{filteredInv.length !== 1 ? 's' : ''}{searchVal ? ' found' : ''}
                                 </span>
                               </div>
-                              {filteredInv.map(inv => (
+                              {filteredInv.length === 0 ? (
+                                <div className="px-3 py-4 text-sm text-gray-400 text-center">
+                                  No items linked to this supplier{searchVal ? ' match your search' : ''}.
+                                  <div className="text-xs mt-1">Link items to the supplier in the Suppliers section first.</div>
+                                </div>
+                              ) : filteredInv.map(inv => (
                                 <button
                                   key={inv.id}
                                   type="button"
-                                  className="w-full text-left px-3 py-2.5 hover:bg-brand-50 flex items-start gap-3 border-b border-gray-50 last:border-0"
+                                  className="w-full text-left px-3 py-2.5 hover:bg-brand-50 flex items-center gap-3 border-b border-gray-50 last:border-0"
                                   onMouseDown={() => selectInvItem(idx, inv)}
                                 >
                                   <div className="flex-1 min-w-0">
                                     <div className="text-sm font-semibold text-gray-800 truncate">{inv.name}</div>
                                     <div className="text-xs text-gray-400 mt-0.5">{inv.item_code} · {inv.unit} · Stock: {inv.current_stock}</div>
                                   </div>
+                                  <div className="text-right flex-shrink-0">
+                                    <div className="text-sm font-semibold text-gray-700">₹{fmt(inv.supplier_price || 0)}</div>
+                                    {inv.lead_time_days != null && <div className="text-xs text-gray-400">{inv.lead_time_days}d lead</div>}
+                                  </div>
                                   {inv.drawing_file && (
-                                    <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-medium flex-shrink-0 mt-0.5">
-                                      Drawing
-                                    </span>
+                                    <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-medium flex-shrink-0">Drawing</span>
                                   )}
                                 </button>
                               ))}

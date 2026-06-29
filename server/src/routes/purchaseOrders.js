@@ -179,7 +179,21 @@ router.put('/:id/approve', authenticate, authorize('owner', 'admin', 'accounts')
      WHERE id=$3`,
     [ds, expected_delivery_date||null, po.id]
   );
-  res.json({ message: 'PO approved' });
+
+  // Sync the supplier-item link rate to this PO's approved rate. If an item's
+  // final rate differs from the rate stored on the supplier↔item link, update
+  // the link so the catalog always reflects the latest approved price.
+  let ratesUpdated = 0;
+  const poItems = await db.all('SELECT inventory_item_id, rate FROM purchase_order_items WHERE po_id=$1 AND inventory_item_id IS NOT NULL', [po.id]);
+  for (const it of poItems) {
+    const link = await db.get('SELECT supplier_price FROM supplier_items WHERE supplier_id=$1 AND inventory_item_id=$2', [po.supplier_id, it.inventory_item_id]);
+    if (link && Number(link.supplier_price) !== Number(it.rate)) {
+      await db.run('UPDATE supplier_items SET supplier_price=$1 WHERE supplier_id=$2 AND inventory_item_id=$3', [Number(it.rate), po.supplier_id, it.inventory_item_id]);
+      ratesUpdated++;
+    }
+  }
+
+  res.json({ message: 'PO approved', ratesUpdated });
 });
 
 router.put('/:id/reject', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
