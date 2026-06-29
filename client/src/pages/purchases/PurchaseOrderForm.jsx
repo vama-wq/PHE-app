@@ -81,10 +81,18 @@ export default function PurchaseOrderForm() {
     });
   };
 
-  const selectInvItem = (idx, invItem) => {
-    // Use the rate agreed for this supplier↔item link.
-    const rate = invItem.supplier_price != null && invItem.supplier_price !== ''
-      ? String(invItem.supplier_price) : '0';
+  const selectInvItem = async (idx, invItem) => {
+    // Linked items carry the agreed supplier rate; for fallback (unlinked) items
+    // use the last PO rate.
+    let rate = '0';
+    if (invItem.supplier_price != null && invItem.supplier_price !== '') {
+      rate = String(invItem.supplier_price);
+    } else {
+      try {
+        const r = await api.get(`/purchase-orders/last-rate/${invItem.id}`);
+        if (r.data.rate > 0) rate = String(r.data.rate);
+      } catch {}
+    }
     const qty = parseFloat(items[idx].qty) || 0;
     const rateNum = parseFloat(rate) || 0;
     setItems(prev => {
@@ -114,6 +122,11 @@ export default function PurchaseOrderForm() {
   const igstAmount = Math.round(subtotal * (igst / 100) * 100) / 100;
   const grandTotal = Math.round((subtotal + igstAmount) * 100) / 100;
   const fmt = n => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+
+  // Strict where the supplier has linked items; fall back to all inventory when
+  // the supplier has none linked (so POs aren't blocked before links are set up).
+  const usingFallback = !!supplierId && linkedItems.length === 0;
+  const pickerItems = supplierId ? (linkedItems.length ? linkedItems : invItems) : [];
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -220,7 +233,7 @@ export default function PurchaseOrderForm() {
                 {items.map((item, idx) => {
                   const searchVal = itemSearch[idx] !== undefined ? itemSearch[idx] : item.description;
                   const q = (searchVal || '').toLowerCase();
-                  const filteredInv = linkedItems.filter(i =>
+                  const filteredInv = pickerItems.filter(i =>
                     !q || i.name.toLowerCase().includes(q) || (i.item_code || '').toLowerCase().includes(q)
                   ).slice(0, 50);
 
@@ -251,13 +264,13 @@ export default function PurchaseOrderForm() {
                             >
                               <div className="p-2 border-b border-gray-100 sticky top-0 bg-white">
                                 <span className="text-xs text-gray-400 font-medium px-1">
-                                  {filteredInv.length} linked item{filteredInv.length !== 1 ? 's' : ''}{searchVal ? ' found' : ''}
+                                  {filteredInv.length} {usingFallback ? 'item' : 'linked item'}{filteredInv.length !== 1 ? 's' : ''}{searchVal ? ' found' : ''}
+                                  {usingFallback && <span className="text-amber-500"> · supplier has no linked items (showing all inventory)</span>}
                                 </span>
                               </div>
                               {filteredInv.length === 0 ? (
                                 <div className="px-3 py-4 text-sm text-gray-400 text-center">
-                                  No items linked to this supplier{searchVal ? ' match your search' : ''}.
-                                  <div className="text-xs mt-1">Link items to the supplier in the Suppliers section first.</div>
+                                  No {usingFallback ? 'inventory' : 'linked items'}{searchVal ? ' match your search' : ' available'}.
                                 </div>
                               ) : filteredInv.map(inv => (
                                 <button
@@ -270,10 +283,12 @@ export default function PurchaseOrderForm() {
                                     <div className="text-sm font-semibold text-gray-800 truncate">{inv.name}</div>
                                     <div className="text-xs text-gray-400 mt-0.5">{inv.item_code} · {inv.unit} · Stock: {inv.current_stock}</div>
                                   </div>
-                                  <div className="text-right flex-shrink-0">
-                                    <div className="text-sm font-semibold text-gray-700">₹{fmt(inv.supplier_price || 0)}</div>
-                                    {inv.lead_time_days != null && <div className="text-xs text-gray-400">{inv.lead_time_days}d lead</div>}
-                                  </div>
+                                  {inv.supplier_price != null && (
+                                    <div className="text-right flex-shrink-0">
+                                      <div className="text-sm font-semibold text-gray-700">₹{fmt(inv.supplier_price || 0)}</div>
+                                      {inv.lead_time_days != null && <div className="text-xs text-gray-400">{inv.lead_time_days}d lead</div>}
+                                    </div>
+                                  )}
                                   {inv.drawing_file && (
                                     <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-medium flex-shrink-0">Drawing</span>
                                   )}
