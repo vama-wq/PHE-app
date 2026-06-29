@@ -329,37 +329,42 @@ router.put('/:id/delivery-status', authenticate, authorize('owner', 'admin', 'ac
   res.json({ message: 'Delivery status updated' });
 });
 
-// Mark the PO received: the received invoice is mandatory. Recording it moves
-// the PO into QC (per-item inspection). Stock is NOT added yet — it's added as
-// each item passes QC.
-router.put('/:id/receive', authenticate, authorize('owner', 'admin', 'accounts'),
+// Mark a SINGLE item received: its own invoice is mandatory. The item then
+// awaits QC. Items can be received one at a time as they arrive. Stock is added
+// per item when it passes QC.
+router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admin', 'accounts'),
   ...uploadPurchaseInvoice, async (req, res) => {
     const db = getDB();
     const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
     if (!po) return res.status(404).json({ error: 'Not found' });
-    if (po.status !== 'approved') return res.status(400).json({ error: 'PO must be approved before marking received' });
-    if (!['purchase_accepted', 'in_transit'].includes(po.delivery_status)) {
-      return res.status(400).json({ error: 'PO must be Purchase Accepted or In Transit to be received' });
+    if (po.status !== 'approved') return res.status(400).json({ error: 'PO must be approved to receive items' });
+    if (!['purchase_accepted', 'in_transit', 'qc_pending'].includes(po.delivery_status)) {
+      return res.status(400).json({ error: 'This PO is not in a receivable state' });
     }
-    if (!req.file) return res.status(400).json({ error: 'The received invoice is required to mark this PO as received' });
+    const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    if (item.received) return res.status(400).json({ error: 'This item is already received' });
+    if (!req.file) return res.status(400).json({ error: 'The invoice received with this item is required' });
 
     await db.run(
-      "UPDATE purchase_orders SET delivery_status='qc_pending', invoice_file=$1, invoice_original_name=$2 WHERE id=$3",
-      [req.file.storagePath, req.file.originalname, po.id]
+      `UPDATE purchase_order_items SET received=TRUE, received_at=NOW(), invoice_file=$1, invoice_original_name=$2 WHERE id=$3`,
+      [req.file.storagePath, req.file.originalname, item.id]
     );
-
-    // Notify the QC (design) users that material is awaiting per-item QC.
+    // Move the PO into QC (if not already) so it surfaces in the QC section.
+    if (po.delivery_status !== 'qc_pending') {
+      await db.run("UPDATE purchase_orders SET delivery_status='qc_pending' WHERE id=$1", [po.id]);
+    }
     const qcUsers = await db.all(`SELECT id FROM users WHERE role = 'design'`);
     for (const u of qcUsers) {
       await createNotification(db, {
         userId: u.id, type: 'purchase_qc_pending',
         title: `Material QC needed — ${po.po_number}`,
-        body: 'Received material awaiting per-item QC (material image + weight of 10 pcs).',
+        body: `Item "${item.description}" received — awaiting QC (material image + weight of 10 pcs).`,
         link: `/purchases/${po.id}`, sourceUserId: req.user.id,
       });
     }
-    await logActivity(null, null, 'purchase_received', `PO ${po.po_number} received (invoice recorded), sent to QC`, req.user.id);
-    res.json({ message: 'Invoice recorded — PO sent to QC for per-item inspection', qc_required: true });
+    await logActivity(null, null, 'purchase_received', `PO ${po.po_number}: item "${item.description}" received & sent to QC`, req.user.id);
+    res.json({ message: 'Item received — sent to QC' });
   }
 );
 
@@ -374,6 +379,7 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
     if (po.delivery_status !== 'qc_pending') return res.status(400).json({ error: 'PO is not awaiting QC' });
     const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
     if (!item) return res.status(404).json({ error: 'Item not found' });
+    if (!item.received) return res.status(400).json({ error: 'This item must be marked received before QC' });
     if (item.qc_status === 'approved') return res.status(400).json({ error: 'This item is already QC-approved' });
 
     const { result, weight_10, observations, rejection_reason } = req.body;

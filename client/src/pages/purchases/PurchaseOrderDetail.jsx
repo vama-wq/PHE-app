@@ -166,15 +166,15 @@ export default function PurchaseOrderDetail() {
               </button>
             </>
           )}
-          {po.status === 'approved' && canManagePO && ['purchase_accepted', 'in_transit'].includes(po.delivery_status) && (
-            <button className="btn-primary btn-sm flex items-center gap-1.5 bg-teal-600 hover:bg-teal-700 border-teal-600" disabled={!!acting}
+          {po.status === 'approved' && canManagePO && po.delivery_status !== 'order_cancelled' && po.items.some(i => !i.received) && (
+            <button className="btn-primary btn-sm flex items-center gap-1.5 bg-teal-600 hover:bg-teal-700 border-teal-600"
               onClick={() => setShowReceiveModal(true)}>
-              <PackageCheck size={13} /> Mark as Received
+              <PackageCheck size={13} /> Receive an Item
             </button>
           )}
           {po.status === 'approved' && isQCPending && (
             <span className="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full font-medium">
-              ⏳ Awaiting QC ({po.items.filter(i => i.qc_status).length}/{po.items.length} done)
+              ⏳ QC {po.items.filter(i => i.qc_status).length}/{po.items.length} · received {po.items.filter(i => i.received).length}/{po.items.length}
             </span>
           )}
           <button className="btn-secondary btn-sm flex items-center gap-1.5" onClick={() => window.print()}>
@@ -239,17 +239,16 @@ export default function PurchaseOrderDetail() {
         </div>
       )}
 
-      {/* ── Per-item Material QC panel (when awaiting QC, screen only) ── */}
-      {isQCPending && (
-        <div className="card p-5 mb-5 no-print border-purple-200">
+      {/* ── Item Receiving & QC panel (approved POs, screen only) ── */}
+      {((po.status === 'approved' && po.delivery_status !== 'order_cancelled') || po.status === 'received') && (
+        <div className="card p-5 mb-5 no-print">
           <h3 className="font-semibold text-gray-900 mb-1 flex items-center gap-2">
-            <CheckCircle size={16} className="text-purple-600" /> Material QC — per item
+            <PackageCheck size={16} className="text-teal-600" /> Item Receiving & QC
           </h3>
           <p className="text-xs text-gray-400 mb-4">
-            {canQC ? 'Add a material image and the weight of 10 pcs for each item, then approve (or reject).'
-                   : 'Waiting for the QC team to inspect each item.'}
+            Receive each item as it arrives (attach its invoice), then QC it — material image + weight of 10 pcs are required to approve.
           </p>
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {po.items.map(item => (
               <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} />
             ))}
@@ -510,8 +509,9 @@ export default function PurchaseOrderDetail() {
         />
       )}
       {showReceiveModal && (
-        <ReceiveModal
+        <ReceiveItemModal
           poId={id}
+          items={po.items.filter(i => !i.received)}
           onClose={() => setShowReceiveModal(false)}
           onDone={() => { setShowReceiveModal(false); load(); }}
         />
@@ -520,33 +520,50 @@ export default function PurchaseOrderDetail() {
   );
 }
 
-// Mark Received — the received invoice is mandatory and moves the PO to QC.
-function ReceiveModal({ poId, onClose, onDone }) {
+// Receive a single item: pick it from the dropdown of not-yet-received items and
+// attach that item's invoice (mandatory). The item then goes to QC.
+function ReceiveItemModal({ poId, items, onClose, onDone }) {
+  const [itemId, setItemId] = useState(items[0]?.id ? String(items[0].id) : '');
   const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const submit = async () => {
-    if (!file) return setError('Please attach the received invoice');
+    if (!itemId) return setError('Select the item that was received');
+    if (!file) return setError('Attach the invoice received with this item');
     setSaving(true); setError('');
     try {
       const fd = new FormData();
       fd.append('invoice', file);
-      await uploadApi.put(`/purchase-orders/${poId}/receive`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await uploadApi.post(`/purchase-orders/${poId}/items/${itemId}/receive`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onDone();
     } catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
   };
   return (
-    <Modal open title="Mark as Received" onClose={onClose} size="md">
+    <Modal open title="Receive an Item" onClose={onClose} size="md">
       <div className="space-y-4">
-        <p className="text-sm text-gray-600">Attach the <span className="font-semibold">invoice received with the order</span>. This is required and will send the PO to QC for per-item inspection.</p>
-        <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select invoice (PDF or image)" />
-        {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
-        <div className="flex gap-3">
-          <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button className="btn-primary flex-1" disabled={saving} onClick={submit}>
-            {saving ? 'Saving…' : 'Record Invoice & Send to QC'}
-          </button>
-        </div>
+        {items.length === 0 ? (
+          <p className="text-sm text-gray-500">All items on this PO have already been received.</p>
+        ) : (
+          <>
+            <div>
+              <label className="label">Item received <span className="text-red-500">*</span></label>
+              <select className="input" value={itemId} onChange={e => setItemId(e.target.value)}>
+                {items.map(i => <option key={i.id} value={i.id}>{i.description} · qty {i.qty}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Invoice received with this item <span className="text-red-500">*</span></label>
+              <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select invoice (PDF or image)" />
+            </div>
+            {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+            <div className="flex gap-3">
+              <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+              <button className="btn-primary flex-1" disabled={saving} onClick={submit}>
+                {saving ? 'Saving…' : 'Receive & Send to QC'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   );
@@ -563,6 +580,7 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  // Resolved QC (approved/rejected) — read-only summary.
   if (item.qc_status === 'approved' || item.qc_status === 'rejected') {
     return (
       <div className={`rounded-lg px-3 py-2.5 border ${item.qc_status === 'approved' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
@@ -572,11 +590,22 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
             {item.qc_status === 'approved' ? '✓ QC Approved' : '✕ Rejected'}
           </span>
         </div>
-        <div className="text-xs text-gray-500 mt-0.5">
+        <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
           {item.qc_status === 'approved'
-            ? <>Weight of 10: <b>{item.qc_weight_10}</b>{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</>
-            : <>Reason: {item.qc_rejection_reason}</>}
+            ? <span>Weight of 10: <b>{item.qc_weight_10}</b>{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</span>
+            : <span>Reason: {item.qc_rejection_reason}</span>}
+          {item.invoice_file && <a className="text-brand-600 hover:underline" href={`/uploads/${item.invoice_file}`} target="_blank" rel="noopener noreferrer">invoice</a>}
         </div>
+      </div>
+    );
+  }
+
+  // Not yet received — receiving is done from the "Receive an Item" dropdown.
+  if (!item.received) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 flex items-center justify-between">
+        <span className="text-sm font-medium text-gray-800">{item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span></span>
+        <span className="text-xs text-gray-400">Awaiting receipt</span>
       </div>
     );
   }
@@ -599,13 +628,17 @@ function ItemQCRow({ poId, item, canQC, onDone }) {
   };
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5">
+    <div className="rounded-lg border border-purple-200 bg-purple-50/40 px-3 py-2.5">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-800">{item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span></span>
+        <span className="text-sm font-medium text-gray-800">
+          {item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span>
+          <span className="text-xs text-teal-600 ml-2">✓ received</span>
+          {item.invoice_file && <> · <a className="text-xs text-brand-600 hover:underline" href={`/uploads/${item.invoice_file}`} target="_blank" rel="noopener noreferrer">invoice</a></>}
+        </span>
         {canQC ? (
           !open ? <button className="btn-secondary btn-sm text-xs" onClick={() => setOpen(true)}>Do QC</button>
-                : <span className="text-xs text-purple-600">Pending</span>
-        ) : <span className="text-xs text-gray-400">Pending</span>}
+                : <span className="text-xs text-purple-600">QC…</span>
+        ) : <span className="text-xs text-gray-400">Awaiting QC</span>}
       </div>
       {open && canQC && (
         <div className="mt-3 space-y-2.5 border-t border-gray-200 pt-3">

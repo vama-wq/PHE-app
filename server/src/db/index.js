@@ -261,6 +261,11 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_rejection_reason TEXT`);
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_by INTEGER`);
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_at TIMESTAMPTZ`);
+      // Receiving is per item, each with its own invoice; then per-item QC.
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS received BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS invoice_file TEXT`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS invoice_original_name TEXT`);
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS supplier_items (
