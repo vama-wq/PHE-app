@@ -4,6 +4,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
+import InventoryEditModal from '../../components/InventoryEditModal';
 import { fmtDate, fmtDateTime, daysUntil } from '../../lib/utils';
 import { downloadExcel } from '../../lib/utils';
 import {
@@ -706,6 +707,11 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   const [qcPhoto,      setQcPhoto]     = useState(null); // required image of approved material
   const [saving,       setSaving]      = useState(false);
   const [error,        setError]       = useState('');
+  const [bom,          setBom]         = useState(null); // inventory the item consumes
+  const [showInvEdit,  setShowInvEdit] = useState(false);
+
+  const loadBom = () => api.get(`/qc/${card.id}/bom`).then(r => setBom(r.data)).catch(() => setBom(null));
+  useEffect(() => { loadBom(); }, [card.id]);
 
   const handleSubmit = async () => {
     setError('');
@@ -738,6 +744,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   ];
 
   return (
+    <>
     <Modal open title="QC Approval — Where are these heaters going?" onClose={onClose} size="sm">
       <div className="space-y-4">
         {/* Job card info + qty summary */}
@@ -768,6 +775,42 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
           </div>
           {card.net_qty < card.qty && (
             <p className="text-xs text-orange-600 mt-1.5">⚠️ Qty is short by {card.qty - card.net_qty} piece{card.qty - card.net_qty !== 1 ? 's' : ''} due to production rejections.</p>
+          )}
+        </div>
+
+        {/* Inventory (BOM) review — confirm or edit before approving */}
+        <div className="border border-gray-200 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+              <Package size={14} className="text-brand-500" /> Inventory to consume
+            </span>
+            {bom?.item_id && !bom?.deducted && (
+              <button type="button" className="text-xs text-brand-600 hover:underline"
+                onClick={() => setShowInvEdit(true)}>Edit inventory</button>
+            )}
+          </div>
+          {!bom ? (
+            <p className="text-xs text-gray-400">Loading inventory…</p>
+          ) : bom.inventory_items.length === 0 ? (
+            <p className="text-xs text-orange-600">No inventory selected for this item. Use "Edit inventory" to add it before approving.</p>
+          ) : (
+            <ul className="space-y-1">
+              {bom.inventory_items.map(i => (
+                <li key={i.id} className="flex justify-between text-xs text-gray-700">
+                  <span><span className="font-mono">{i.item_code}</span> — {i.name}</span>
+                  <span className="font-medium">{i.qty} {i.unit}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {bom && (
+            <p className="text-[11px] mt-2 pt-2 border-t border-gray-100 text-gray-500">
+              {bom.deducted
+                ? '✓ Inventory already deducted for this item.'
+                : bom.is_split
+                  ? 'Partially dispatched — inventory deducts once the whole qty is dispatched.'
+                  : 'Approving will deduct this inventory from stock.'}
+            </p>
           )}
         </div>
 
@@ -856,5 +899,14 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
         </div>
       </div>
     </Modal>
+    {showInvEdit && bom?.item_id && (
+      <InventoryEditModal
+        orderId={bom.order_id}
+        item={{ id: bom.item_id, drawing_number: bom.drawing_number, inventory_items: bom.inventory_items }}
+        onClose={() => setShowInvEdit(false)}
+        onDone={() => { setShowInvEdit(false); loadBom(); }}
+      />
+    )}
+    </>
   );
 }

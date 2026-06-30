@@ -2,6 +2,23 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQC, uploadChecklistPhoto } = require('../middleware/upload');
+const { settleItemInventory, resolveJobCardItemId } = require('../lib/inventoryDeduction');
+
+// Deduct the job card's order item from stock once it qualifies (split-aware).
+// Wrapped so a failure here can never block QC approval. No-op when the item is
+// not yet fully settled or already deducted.
+async function settleAfterQC(db, jc, userId) {
+  try {
+    const itemId = await resolveJobCardItemId(db, jc);
+    if (!itemId) return;
+    let orderCode = jc.order_code;
+    if (!orderCode) {
+      const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
+      orderCode = o?.order_code;
+    }
+    await settleItemInventory(db, itemId, userId, orderCode || `Order #${jc.order_id}`);
+  } catch (e) { console.error('[qc] settle inventory failed:', e.message); }
+}
 
 // Recompute order status from all its job cards
 async function syncOrderStatus(db, orderId, userId) {
@@ -239,6 +256,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
       await logActivity(jc.order_id, jc.id, 'status_changed',
         `Job card ${jc.job_card_no} QC Approved — ${qty} units added to Finished Goods`, req.user.id);
       await syncOrderStatus(db, jc.order_id, req.user.id);
+  await settleAfterQC(db, jc, req.user.id);
       return res.json({ message: 'QC Approved', route: 'finished_goods', finished_good_id: fgId, qty });
     }
 
@@ -255,6 +273,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
       await logActivity(jc.order_id, jc.id, 'status_changed',
         `Job card ${jc.job_card_no} QC Approved — ${parsedFgQty} units to Finished Goods, ${parsedDispQty} to dispatch`, req.user.id);
       await syncOrderStatus(db, jc.order_id, req.user.id);
+  await settleAfterQC(db, jc, req.user.id);
       return res.json({ message: 'QC Approved', route: 'both', finished_good_id: fgId, io_qty: parsedFgQty, dispatch_qty: parsedDispQty });
     }
 
@@ -263,6 +282,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
     await db.run("UPDATE job_cards SET status='qc_approved', qc_route='dispatch', qc_dispatch_qty=$1, qc_fg_qty=0 WHERE id=$2", [dispQty, req.params.id]);
     await logActivity(jc.order_id, jc.id, 'status_changed', `Job card ${jc.job_card_no} QC Approved — ${dispQty} units going to dispatch`, req.user.id);
     await syncOrderStatus(db, jc.order_id, req.user.id);
+  await settleAfterQC(db, jc, req.user.id);
     return res.json({ message: 'QC Approved', route: 'dispatch', dispatch_qty: dispQty });
   }
 
@@ -274,6 +294,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
     await logActivity(jc.order_id, jc.id, 'status_changed',
       `Job card ${jc.job_card_no} QC Approved — ${qty} units added to Finished Goods`, req.user.id);
     await syncOrderStatus(db, jc.order_id, req.user.id);
+  await settleAfterQC(db, jc, req.user.id);
     return res.json({ message: 'QC Approved', route: 'finished_goods', finished_good_id: fgId, qty });
   }
 
@@ -290,6 +311,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
     await logActivity(jc.order_id, jc.id, 'status_changed',
       `Job card ${jc.job_card_no} QC Approved — ${parsedIoQty} units to Finished Goods, ${parsedDispatchQty} to dispatch`, req.user.id);
     await syncOrderStatus(db, jc.order_id, req.user.id);
+  await settleAfterQC(db, jc, req.user.id);
     return res.json({ message: 'QC Approved', route: 'split', finished_good_id: fgId, io_qty: parsedIoQty, dispatch_qty: parsedDispatchQty });
   }
 
@@ -297,6 +319,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   await db.run("UPDATE job_cards SET status='qc_approved', qc_route='dispatch', qc_dispatch_qty=$1, qc_fg_qty=0 WHERE id=$2", [netQty, req.params.id]);
   await logActivity(jc.order_id, jc.id, 'status_changed', `Job card ${jc.job_card_no} QC Approved`, req.user.id);
   await syncOrderStatus(db, jc.order_id, req.user.id);
+  await settleAfterQC(db, jc, req.user.id);
   res.json({ message: 'QC Approved', route: 'dispatch' });
 });
 
@@ -333,7 +356,39 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
   await logActivity(jc.order_id, jc.id, 'status_changed',
     `Job card ${jc.job_card_no} QC Rejected — returned to production. ${notes || ''}`, req.user.id);
   await syncOrderStatus(db, jc.order_id, req.user.id);
+  await settleAfterQC(db, jc, req.user.id);
   res.json({ message: 'QC rejected, returned to production' });
+});
+
+// Inventory (BOM) the job card's order item consumes — shown at QC approval so
+// design can confirm or edit it before approving. No cost fields (design-safe).
+router.get('/:id/bom', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
+  const db = getDB();
+  const jc = await db.get(
+    'SELECT id, order_id, drawing_no, order_item_id FROM job_cards WHERE id=$1', [req.params.id]
+  );
+  if (!jc) return res.status(404).json({ error: 'Not found' });
+  const itemId = await resolveJobCardItemId(db, jc);
+  if (!itemId) {
+    return res.json({ order_id: jc.order_id, item_id: null, drawing_number: jc.drawing_no || null,
+      inventory_items: [], deducted: false, is_split: false });
+  }
+  const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
+  const inventory_items = await db.all(
+    `SELECT ii.id, ii.item_code, ii.name, ii.unit, oii.qty
+     FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+     WHERE oii.order_item_id=$1 ORDER BY ii.item_code`,
+    [itemId]
+  );
+  const cardCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE order_item_id=$1', [itemId]);
+  res.json({
+    order_id: jc.order_id,
+    item_id: itemId,
+    drawing_number: item?.drawing_number || jc.drawing_no || null,
+    inventory_items,
+    deducted: !!item?.inventory_deducted,
+    is_split: parseInt(cardCount.n, 10) > 1,
+  });
 });
 
 module.exports = router;

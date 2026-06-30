@@ -3,50 +3,11 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, deleteFromStorage, copyInStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
-
-// ── Inventory deduction tied to drawing approval ───────────────────────────────
-// Inventory for an order item is selected by design at drawing-upload time and
-// stored in order_item_inventory. It is deducted from stock when that item's
-// drawing is approved, and restored if an approved drawing is later reopened.
-// order_items.inventory_deducted guards against double-deduction.
-async function deductItemInventory(db, itemId, orderCode, userId) {
-  const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
-  if (!item || item.inventory_deducted) return; // never double-deduct
-  const sels = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [itemId]);
-  for (const sel of sels) {
-    const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
-    if (!inv) continue;
-    const newStock = (inv.current_stock || 0) - parseFloat(sel.qty || 0); // allow negative so shortages are visible
-    await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
-    const noteParts = [`Order: ${orderCode}`];
-    if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
-    noteParts.push('Drawing approved');
-    await db.insert(
-      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-       VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
-      [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, noteParts.join(' | '), userId]
-    );
-  }
-  if (sels.length) await db.run('UPDATE order_items SET inventory_deducted=TRUE WHERE id=$1', [itemId]);
-}
-
-async function restoreItemInventory(db, itemId, orderCode, userId, reasonNote) {
-  const item = await db.get('SELECT id, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
-  if (!item || !item.inventory_deducted) return; // only restore what was actually deducted
-  const sels = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [itemId]);
-  for (const sel of sels) {
-    const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
-    if (!inv) continue;
-    const newStock = (inv.current_stock || 0) + parseFloat(sel.qty || 0);
-    await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
-    await db.insert(
-      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-       VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
-      [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, `${reasonNote} — ${orderCode}`, userId]
-    );
-  }
-  await db.run('UPDATE order_items SET inventory_deducted=FALSE WHERE id=$1', [itemId]);
-}
+// Inventory consumption is centralised in lib/inventoryDeduction. Deduction is no
+// longer tied to drawing approval — it now fires when the item clears QC (single
+// job card) or when a partially-dispatched item is fully dispatched (see qc.js /
+// dispatch.js). These helpers stay imported for the inventory-edit reconcile path.
+const { deductItemInventory, restoreItemInventory } = require('../lib/inventoryDeduction');
 
 // ── Mentions ──────────────────────────────────────────────────────────────────
 router.get('/my-mentions', authenticate, async (req, res) => {
@@ -417,11 +378,29 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
   // re-approves it; the job card is NOT copied — it's created fresh later.
   let drawingCopied = false;
   if (copy_from_item_id) {
-    // Copy the source item's inventory selection (deducts later on approval)
+    // Reuse (part 1): carry over the source item's inventory selection. It will be
+    // confirmed/edited by QC and deducted later (at QC / full dispatch).
     const srcInv = await db.all(`SELECT inventory_item_id, qty FROM order_item_inventory WHERE order_item_id=$1`, [copy_from_item_id]);
     for (const s of srcInv) {
       await db.run('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
         [itemId, s.inventory_item_id, s.qty]);
+    }
+    // If the source item had no inventory, flag design to add it for this reused item.
+    if (srcInv.length === 0) {
+      try {
+        const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
+        const designers = await db.all(`SELECT id FROM users WHERE role='design'`);
+        for (const u of designers) {
+          await createNotification(db, {
+            userId: u.id,
+            type: 'inventory_needed',
+            title: 'Add inventory for reused item',
+            body: `${ord?.order_code || 'An order'} has a reused item (${drawing_number || product_code || `item #${itemId}`}) with no inventory selected — please add its inventory.`,
+            link: `/orders/${req.params.id}`,
+            sourceUserId: req.user.id,
+          });
+        }
+      } catch (e) { console.error('[orders] reuse inventory notify failed:', e.message); }
     }
     const ext = (name, fallback) => (name && name.includes('.') ? name.split('.').pop() : fallback);
     const src = await db.get(
@@ -583,11 +562,9 @@ router.put('/:id/drawings/:drawingId/approve', authenticate, authorize('owner'),
   const d = await db.get('SELECT * FROM order_drawings WHERE id=$1 AND order_id=$2', [req.params.drawingId, req.params.id]);
   if (!d) return res.status(404).json({ error: 'Drawing not found' });
   await db.run(`UPDATE order_drawings SET drawing_status='approved', rejection_reason=NULL WHERE id=$1`, [req.params.drawingId]);
-  // Deduct this item's selected inventory now that its drawing is approved.
-  if (d.item_id) {
-    const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
-    await deductItemInventory(db, d.item_id, ord?.order_code || `Order #${req.params.id}`, req.user.id);
-  }
+  // NOTE: inventory is NOT deducted here anymore. The item's selected inventory is
+  // confirmed/edited and deducted at the QC stage (single job card) or once the
+  // whole qty is dispatched for a partially-dispatched item.
   await logActivity(req.params.id, null, 'drawing_approved', `Drawing approved: ${d.original_name || d.file_name}`, req.user.id);
   res.json({ message: 'Drawing approved' });
 });

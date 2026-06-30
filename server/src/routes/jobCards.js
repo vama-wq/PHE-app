@@ -274,16 +274,27 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
     finalNo = `${finalNo}-${parseInt(count.c) + 1}`;
   }
 
+  // Link this job card to the order item it produces (match by drawing number)
+  // so its inventory deducts at this item's QC / dispatch.
+  let orderItemId = null;
+  if (drawing_no) {
+    const oi = await db.get(
+      'SELECT id FROM order_items WHERE order_id=$1 AND drawing_number=$2 ORDER BY id LIMIT 1',
+      [parseInt(order_id, 10), drawing_no]
+    );
+    orderItemId = oi?.id || null;
+  }
+
   try {
     const r = await db.insert(`
-      INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, punching, drawing_no, product_name, uploaded_by)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, punching, drawing_no, product_name, uploaded_by, order_item_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
     `, [
       finalNo, parseInt(order_id, 10),
       req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null,
       qty || null, dispatch_date, notes || null,
       punching || null, drawing_no || null, product_name || null,
-      req.user.id
+      req.user.id, orderItemId
     ]);
 
     const existing = await db.get('SELECT COUNT(*) as c FROM job_cards WHERE order_id=$1', [order_id]);
@@ -926,10 +937,10 @@ router.put('/split-requests/:reqId/approve', authenticate, authorize('owner'), a
   const childCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE parent_job_card_id=$1', [jc.id]);
   const childNo = `${jc.job_card_no}-P${parseInt(childCount.n, 10) + 1}`;
   const child = await db.insert(
-    `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'qc_pending',$9,$10,$11)`,
+    `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'qc_pending',$9,$10,$11,$12)`,
     [childNo, jc.order_id, sr.qty, jc.dispatch_date, jc.current_stage || 0, jc.punching, jc.drawing_no, jc.product_name,
-     `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id]
+     `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id, jc.order_item_id]
   );
   await db.run('UPDATE job_cards SET qty = qty - $1 WHERE id=$2', [sr.qty, jc.id]);
   await db.run('UPDATE job_card_split_requests SET status=$1, child_job_card_id=$2, approved_by=$3, approved_at=NOW() WHERE id=$4',

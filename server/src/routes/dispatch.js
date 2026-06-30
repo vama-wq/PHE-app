@@ -3,6 +3,7 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadDispatch, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
+const { settleItemInventory, resolveJobCardItemId } = require('../lib/inventoryDeduction');
 
 router.get('/job-card/:jobCardId', authenticate, async (req, res) => {
   const docs = await getDB().all(
@@ -103,6 +104,16 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
 
   await db.run("UPDATE job_cards SET status='dispatched' WHERE id=$1", [req.params.jobCardId]);
   await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [jc.order_id]);
+
+  // Settle this item's inventory. For a partially-dispatched (split) item this is
+  // where the full BOM finally deducts — once every split is dispatched / in FG.
+  try {
+    const itemId = await resolveJobCardItemId(db, jc);
+    if (itemId) {
+      const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
+      await settleItemInventory(db, itemId, req.user.id, ord?.order_code || `Order #${jc.order_id}`);
+    }
+  } catch (e) { console.error('[dispatch] settle inventory failed:', e.message); }
 
   await logActivity(jc.order_id, jc.id, 'dispatched',
     `Order dispatched via ${shipping_carrier || 'carrier'} — Tracking: ${tracking_number || 'N/A'}`, req.user.id);

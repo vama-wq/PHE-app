@@ -52,8 +52,8 @@ export default function InventoryEditModal({ orderId, item, onClose, onDone }) {
     <Modal open title={`Inventory — ${item?.drawing_number || `Item ${item?.id}`}`} onClose={onClose} size="lg">
       <div className="space-y-4">
         <p className="text-xs text-gray-500">
-          Adjust the inventory this item consumes. If its drawing is already approved, the change
-          is reconciled in stock automatically.
+          Adjust the inventory this item consumes. If this item's inventory was already deducted,
+          the change is reconciled in stock automatically.
         </p>
 
         <div className="relative">

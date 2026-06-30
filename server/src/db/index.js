@@ -248,6 +248,20 @@ async function initDB(retries = 20, delayMs = 10000) {
       // early dispatch; owner approves → a child job card (skips production, starts at
       // QC) is created and the parent qty reduces.
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS parent_job_card_id INTEGER`);
+
+      // Link a job card to the specific order item it produces, so inventory can be
+      // deducted at that item's QC / dispatch (not at drawing approval). Backfill
+      // legacy cards by matching drawing number within the order.
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS order_item_id INTEGER`);
+      await pool.query(`
+        UPDATE job_cards jc
+        SET order_item_id = oi.id
+        FROM order_items oi
+        WHERE jc.order_item_id IS NULL
+          AND oi.order_id = jc.order_id
+          AND oi.drawing_number IS NOT NULL
+          AND jc.drawing_no = oi.drawing_number
+      `);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS job_card_split_requests (
           id SERIAL PRIMARY KEY,
