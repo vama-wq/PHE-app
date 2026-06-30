@@ -491,16 +491,42 @@ router.get('/last-rate/:itemId', authenticate, async (req, res) => {
 });
 
 router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res) => {
-  const db = getDB();
-  const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
-  if (!po) return res.status(404).json({ error: 'Not found' });
-  if (req.user.role !== 'owner' && !['draft', 'rejected'].includes(po.status)) {
-    return res.status(400).json({ error: 'Only draft or rejected POs can be deleted' });
+  try {
+    const db = getDB();
+    const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+    if (!po) return res.status(404).json({ error: 'Not found' });
+    if (req.user.role !== 'owner' && !['draft', 'rejected'].includes(po.status)) {
+      return res.status(400).json({ error: 'Only draft or rejected POs can be deleted' });
+    }
+
+    // Reverse any stock this PO still has on hand (from its FIFO lots), then remove
+    // the lots — they reference the PO and would otherwise block the delete.
+    const lots = await db.all('SELECT * FROM inventory_fifo_lots WHERE po_id=$1', [po.id]);
+    for (const lot of lots) {
+      const remaining = Number(lot.qty_remaining) || 0;
+      if (remaining > 0 && lot.item_id) {
+        const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [lot.item_id]);
+        if (inv) {
+          const newStock = (Number(inv.current_stock) || 0) - remaining;
+          await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, lot.item_id]);
+          await db.insert(
+            `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, po_number, notes, created_by)
+             VALUES ($1,'return_from_production',$2,$3,$4,$5,$6)`,
+            [lot.item_id, remaining, newStock, po.po_number, `PO ${po.po_number} deleted — on-hand stock reversed`, req.user.id]
+          );
+        }
+      }
+    }
+    await db.run('DELETE FROM inventory_fifo_lots WHERE po_id=$1', [po.id]);
+    await db.run('DELETE FROM purchase_order_messages WHERE po_id=$1', [po.id]);
+    await db.run('DELETE FROM purchase_material_qc WHERE po_id=$1', [po.id]);
+    await db.run('DELETE FROM purchase_order_items WHERE po_id=$1', [po.id]);
+    await db.run('DELETE FROM purchase_orders WHERE id=$1', [po.id]);
+    res.json({ message: 'Purchase order deleted' });
+  } catch (err) {
+    console.error('[po/delete] error:', err);
+    res.status(500).json({ error: err.message || 'Failed to delete' });
   }
-  await db.run('DELETE FROM purchase_order_messages WHERE po_id=$1', [po.id]);
-  await db.run('DELETE FROM purchase_material_qc WHERE po_id=$1', [po.id]);
-  await db.run('DELETE FROM purchase_orders WHERE id=$1', [po.id]);
-  res.json({ message: 'Purchase order deleted' });
 });
 
 router.get('/:id/messages', authenticate, async (req, res) => {
