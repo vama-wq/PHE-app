@@ -455,7 +455,7 @@ export default function PurchaseOrderDetail() {
                 </div>
               </td>
               <td style={{ width: '50%', textAlign: 'center', verticalAlign: 'bottom', paddingTop: '32px' }}>
-                <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '2px' }}>For Peena Traders</div>
+                <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '2px' }}>For Peena Heat Elements LLP</div>
                 <div style={{ fontWeight: 600 }}>Authorised Signatory</div>
               </td>
             </tr>
