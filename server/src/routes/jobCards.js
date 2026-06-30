@@ -455,8 +455,10 @@ async function syncOrderStatus(db, orderId, userId) {
 
 // ── Helper: recompute job card status + current_stage, then sync order ────────
 async function updateJobCardAfterStageChange(db, jobCardId, userId) {
+  // Linear progress only — exclude out-of-sequence optional stages (30+, e.g. Kharoch)
+  // so completing them doesn't freeze current_stage at the top.
   const maxRow = await db.get(
-    'SELECT MAX(stage_no) as m FROM production_checklist WHERE job_card_id=$1 AND done=1',
+    'SELECT MAX(stage_no) as m FROM production_checklist WHERE job_card_id=$1 AND done=1 AND stage_no < 30',
     [jobCardId]
   );
   const maxStage = maxRow?.m || 0;
@@ -594,7 +596,7 @@ router.get('/:id/checklist', authenticate, async (req, res) => {
 router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner', 'admin'), async (req, res) => {
   const jobCardId = parseInt(req.params.id, 10);
   const stageNo   = parseInt(req.params.stage, 10);
-  if (isNaN(stageNo) || stageNo < 1 || stageNo > 29) return res.status(400).json({ error: 'Invalid stage' });
+  if (isNaN(stageNo) || stageNo < 1 || stageNo > 40) return res.status(400).json({ error: 'Invalid stage' });
 
   const { done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, coil_weight } = req.body;
   const db = getDB();

@@ -1163,6 +1163,20 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [brazingAirCleaning, setBrazingAirCleaning] = useState(!!brazingData.airCleaning);
   const [brazingRemark, setBrazingRemark] = useState(brazingData.remark || '');
 
+  // Stage 1 (Coil) — gauge picked from inventory items in category "Spring Guage".
+  // Stored in value1 (just a record of which gauge was used; no stock deduction).
+  const isGauge = !!stageDef.gaugeSelect;
+  const [gaugeOptions, setGaugeOptions] = useState([]);
+  useEffect(() => {
+    if (!isGauge) return;
+    api.get('/inventory').then(r => {
+      setGaugeOptions((r.data || []).filter(i => {
+        const c = (i.category || '').toLowerCase().trim();
+        return c === 'spring guage' || c === 'spring gauge';
+      }));
+    }).catch(() => {});
+  }, [isGauge]);
+
   const isDone = stageData.done === 1;
   // After 6pm: require a photo for any stage completion
   const isAfter6pm = new Date().getHours() >= 18;
@@ -1667,6 +1681,30 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       )}
 
       {/* Value fields */}
+      {/* Gauge selection (stage 1 — from inventory category "Spring Guage") */}
+      {stageDef.gaugeSelect && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Gauge <span className="text-xs text-gray-400 font-normal">(optional)</span>
+          </label>
+          {isDone ? (
+            <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+              {stageData.value1 || '—'}
+            </div>
+          ) : (
+            <select className="input w-full" value={value1} onChange={e => setValue1(e.target.value)}>
+              <option value="">— Select gauge —</option>
+              {gaugeOptions.map(g => (
+                <option key={g.id} value={g.item_code}>{g.item_code} — {g.name}</option>
+              ))}
+            </select>
+          )}
+          {!isDone && gaugeOptions.length === 0 && (
+            <p className="text-xs text-amber-600 mt-1">No items found in the "Spring Guage" inventory category — add them under Inventory first.</p>
+          )}
+        </div>
+      )}
+
       {stageDef.fields && (
         <div className="mb-4 space-y-3">
           {stageDef.fields.map((field, idx) => (

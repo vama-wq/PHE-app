@@ -6,7 +6,7 @@ export const WORKER_NAME_STAGES = new Set([1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,1
 export const SCRAP_VALUE_STAGES = new Set([1, 3, 4, 5, 11, 21, 26]);
 
 export const PRODUCTION_STAGES = [
-  { no: 1,  name: 'Coil' },
+  { no: 1,  name: 'Coil',               gaugeSelect: true },
   { no: 2,  name: 'Coil + Tube Cutting', optional: true },
   { no: 3,  name: 'Ohms',               fields: [{ key: 'value1', label: 'Ohms Value' }, { key: 'value2', label: 'Coil Length' }], coilWeight: true },
   { no: 4,  name: 'Spot',               fields: [{ key: 'value1', label: 'Spot Value' }] },
@@ -20,6 +20,10 @@ export const PRODUCTION_STAGES = [
   { no: 12, name: 'Spot Annealing or Furnace Annealing' },
   { no: 13, name: 'Buffing',            optional: true },
   { no: 14, name: 'Bending',            heaterAdjust: true },
+  // Kharoch is an optional step right after Bending. It keeps a high stage id (30)
+  // so existing checklist data (keyed 1–29) is never renumbered; array position
+  // here controls where it shows. Excluded from the linear current_stage tracker.
+  { no: 30, name: 'Kharoch Process',    optional: true },
   { no: 15, name: 'Brazing',            optional: true, brazing: true },
   { no: 16, name: 'In Plating',          optional: true },
   { no: 17, name: 'Plating Completed',  optional: true },

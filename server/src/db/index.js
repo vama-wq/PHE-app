@@ -208,9 +208,10 @@ async function initDB(retries = 20, delayMs = 10000) {
           console.log('Backfilled inventory_deducted=TRUE for already-approved orders');
         }
       }
-      // Widen stage_no check constraint to include stage 30 (Dispatch)
+      // Widen stage_no check constraint. 1–29 are the linear stages; 30+ are
+      // out-of-sequence optional stages (e.g. 30 = Kharoch Process after Bending).
       await pool.query(`ALTER TABLE production_checklist DROP CONSTRAINT IF EXISTS production_checklist_stage_no_check`);
-      await pool.query(`ALTER TABLE production_checklist ADD CONSTRAINT production_checklist_stage_no_check CHECK (stage_no BETWEEN 1 AND 30)`);
+      await pool.query(`ALTER TABLE production_checklist ADD CONSTRAINT production_checklist_stage_no_check CHECK (stage_no BETWEEN 1 AND 40)`);
       // Add notes column for rework/notes per stage
       await pool.query(`ALTER TABLE production_checklist ADD COLUMN IF NOT EXISTS notes TEXT`);
       // Stage 3 (Ohms) captures the total weight of all coils produced for the job card

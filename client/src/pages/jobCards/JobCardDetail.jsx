@@ -519,7 +519,12 @@ function OverviewTab({ jc, userRole }) {
     return () => clearInterval(interval);
   }, [jc.id]);
 
-  const stages = checklist?.stages || [];
+  // Order by the canonical checklist sequence (not raw stage_no) so out-of-sequence
+  // stages like Kharoch (id 30, shown after Bending) appear in the right place.
+  const STAGE_ORDER = PRODUCTION_STAGES.reduce((m, s, i) => { m[s.no] = i; return m; }, {});
+  const stages = [...(checklist?.stages || [])].sort(
+    (a, b) => (STAGE_ORDER[a.stage_no] ?? a.stage_no) - (STAGE_ORDER[b.stage_no] ?? b.stage_no)
+  );
   const completedStages = stages.filter(s => s.done).length;
   const progressPercent = stages.length > 0 ? Math.round((completedStages / stages.length) * 100) : 0;
   const stagePhotos = stages.filter(s => (s.photo_file || s.rejection_photo_file) && s.done);
