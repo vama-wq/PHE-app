@@ -5,14 +5,16 @@ import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import ImportModal from '../../components/ui/ImportModal';
 import { downloadExcel } from '../../lib/utils';
-import { Plus, Search, AlertTriangle, Download, Upload } from 'lucide-react';
+import { Plus, Search, AlertTriangle, Download, Upload, X } from 'lucide-react';
 
 export default function InventoryList() {
   const { user } = useAuthStore();
   const [items, setItems] = useState([]);
   const [filtered, setFiltered] = useState([]);
   const [search, setSearch] = useState('');
-  const [filterLow, setFilterLow] = useState(false);
+  const [category, setCategory] = useState('all');
+  const [stockStatus, setStockStatus] = useState('all'); // all | in | low | out
+  const [sortBy, setSortBy] = useState('code'); // code | name | stock_asc | value_desc
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -23,14 +25,26 @@ export default function InventoryList() {
   useEffect(() => {
     let r = items;
     if (search) r = r.filter(i => i.item_code.toLowerCase().includes(search.toLowerCase()) || i.name.toLowerCase().includes(search.toLowerCase()) || i.category?.toLowerCase().includes(search.toLowerCase()));
-    if (filterLow) r = r.filter(i => i.current_stock <= i.reorder_level);
+    if (category !== 'all') r = r.filter(i => (i.category || '') === category);
+    if (stockStatus === 'in')  r = r.filter(i => i.current_stock > i.reorder_level);
+    if (stockStatus === 'low') r = r.filter(i => i.current_stock <= i.reorder_level && i.current_stock > 0);
+    if (stockStatus === 'out') r = r.filter(i => i.current_stock <= 0);
+    r = [...r].sort((a, b) => {
+      if (sortBy === 'name')       return (a.name || '').localeCompare(b.name || '');
+      if (sortBy === 'stock_asc')  return Number(a.current_stock) - Number(b.current_stock);
+      if (sortBy === 'value_desc') return (Number(b.current_stock) * (Number(b.unit_cost) || 0)) - (Number(a.current_stock) * (Number(a.unit_cost) || 0));
+      return (a.item_code || '').localeCompare(b.item_code || ''); // 'code'
+    });
     setFiltered(r);
-  }, [items, search, filterLow]);
+  }, [items, search, category, stockStatus, sortBy]);
 
   const lowCount = items.filter(i => i.current_stock <= i.reorder_level).length;
   const canManage = ['accounts', 'owner'].includes(user.role);
   const showCost = user.role !== 'design'; // landed cost / valuation hidden from QC
   const totalValue = items.reduce((s, i) => s + Number(i.current_stock) * (Number(i.unit_cost) || 0), 0);
+  const categories = [...new Set(items.map(i => i.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const filtersActive = search || category !== 'all' || stockStatus !== 'all' || sortBy !== 'code';
+  const resetFilters = () => { setSearch(''); setCategory('all'); setStockStatus('all'); setSortBy('code'); };
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -60,16 +74,34 @@ export default function InventoryList() {
         </div>
       </div>
 
-      <div className="flex gap-3 mb-5">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex gap-2 mb-5 flex-wrap items-center">
+        <div className="relative flex-1 min-w-[14rem] max-w-sm">
           <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
           <input className="input pl-9" placeholder="Search code, name, category..." value={search}
             onChange={e => setSearch(e.target.value)} />
         </div>
-        <button className={`btn-sm ${filterLow ? 'btn-danger' : 'btn-secondary'}`} onClick={() => setFilterLow(f => !f)}>
-          <AlertTriangle size={14} />
-          {filterLow ? 'Show All' : `Low Stock (${lowCount})`}
-        </button>
+        <select className="input w-auto text-sm" value={category} onChange={e => setCategory(e.target.value)}>
+          <option value="all">All categories</option>
+          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select className="input w-auto text-sm" value={stockStatus} onChange={e => setStockStatus(e.target.value)}>
+          <option value="all">All stock</option>
+          <option value="in">In stock</option>
+          <option value="low">Low stock ({lowCount})</option>
+          <option value="out">Out of stock</option>
+        </select>
+        <select className="input w-auto text-sm" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <option value="code">Sort: Code</option>
+          <option value="name">Sort: Name</option>
+          <option value="stock_asc">Sort: Stock (low → high)</option>
+          {showCost && <option value="value_desc">Sort: Value (high → low)</option>}
+        </select>
+        {filtersActive && (
+          <button className="btn-sm btn-secondary flex items-center gap-1" onClick={resetFilters}>
+            <X size={14} /> Clear
+          </button>
+        )}
+        <span className="text-xs text-gray-400 ml-auto">{filtered.length} of {items.length}</span>
       </div>
 
       <div className="card overflow-hidden">

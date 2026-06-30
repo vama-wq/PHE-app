@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import { fmtDate } from '../../lib/utils';
-import { Plus, Search, ShoppingCart, Trash2 } from 'lucide-react';
+import { Plus, Search, ShoppingCart, Trash2, X } from 'lucide-react';
 
 const STATUS_STYLES = {
   draft:    'bg-gray-100 text-gray-600',
@@ -23,6 +23,10 @@ export default function PurchaseOrderList() {
   const [filtered, setFiltered] = useState([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [supplier, setSupplier] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sortBy, setSortBy] = useState('newest'); // newest | oldest | total_desc | total_asc
   const [loading, setLoading] = useState(true);
 
   const load = () => api.get('/purchase-orders').then(r => { setPos(r.data); setFiltered(r.data); }).finally(() => setLoading(false));
@@ -42,12 +46,25 @@ export default function PurchaseOrderList() {
   useEffect(() => {
     let r = pos;
     if (statusFilter !== 'all') r = r.filter(p => p.status === statusFilter);
+    if (supplier !== 'all') r = r.filter(p => p.supplier_name === supplier);
+    if (dateFrom) r = r.filter(p => (p.created_at || '').slice(0, 10) >= dateFrom);
+    if (dateTo)   r = r.filter(p => (p.created_at || '').slice(0, 10) <= dateTo);
     if (search) {
       const q = search.toLowerCase();
-      r = r.filter(p => p.po_number.toLowerCase().includes(q) || p.supplier_name.toLowerCase().includes(q));
+      r = r.filter(p => p.po_number.toLowerCase().includes(q) || (p.supplier_name || '').toLowerCase().includes(q));
     }
+    r = [...r].sort((a, b) => {
+      if (sortBy === 'oldest')     return new Date(a.created_at) - new Date(b.created_at);
+      if (sortBy === 'total_desc') return Number(b.grand_total) - Number(a.grand_total);
+      if (sortBy === 'total_asc')  return Number(a.grand_total) - Number(b.grand_total);
+      return new Date(b.created_at) - new Date(a.created_at); // newest
+    });
     setFiltered(r);
-  }, [pos, search, statusFilter]);
+  }, [pos, search, statusFilter, supplier, dateFrom, dateTo, sortBy]);
+
+  const suppliers = [...new Set(pos.map(p => p.supplier_name).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const filtersActive = search || statusFilter !== 'all' || supplier !== 'all' || dateFrom || dateTo || sortBy !== 'newest';
+  const resetFilters = () => { setSearch(''); setStatusFilter('all'); setSupplier('all'); setDateFrom(''); setDateTo(''); setSortBy('newest'); };
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -63,12 +80,12 @@ export default function PurchaseOrderList() {
         </Link>
       </div>
 
-      <div className="flex gap-3 mb-5 flex-wrap">
+      <div className="flex gap-3 mb-3 flex-wrap">
         <div className="relative flex-1 max-w-sm">
           <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
           <input className="input pl-9" placeholder="Search PO number, supplier..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex gap-1.5 flex-wrap">
           {['all','draft','sent','approved','rejected','received'].map(s => (
             <button
               key={s}
@@ -83,6 +100,31 @@ export default function PurchaseOrderList() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="flex gap-2 mb-5 flex-wrap items-center">
+        <select className="input w-auto text-sm" value={supplier} onChange={e => setSupplier(e.target.value)}>
+          <option value="all">All suppliers</option>
+          {suppliers.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <label className="flex items-center gap-1.5 text-xs text-gray-500">
+          From <input type="date" className="input w-auto text-sm py-1.5" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-gray-500">
+          To <input type="date" className="input w-auto text-sm py-1.5" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+        </label>
+        <select className="input w-auto text-sm" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <option value="newest">Sort: Newest</option>
+          <option value="oldest">Sort: Oldest</option>
+          <option value="total_desc">Sort: Total (high → low)</option>
+          <option value="total_asc">Sort: Total (low → high)</option>
+        </select>
+        {filtersActive && (
+          <button className="btn-sm btn-secondary flex items-center gap-1" onClick={resetFilters}>
+            <X size={14} /> Clear
+          </button>
+        )}
+        <span className="text-xs text-gray-400 ml-auto">{filtered.length} of {pos.length}</span>
       </div>
 
       <div className="card overflow-hidden">
