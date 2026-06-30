@@ -6,7 +6,7 @@ import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES } from '../../lib/utils';
-import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle } from 'lucide-react';
+import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle, Truck } from 'lucide-react';
 
 const JC_STATUSES = [
   'created','drawing_pending','drawing_done','inventory_check',
@@ -28,8 +28,11 @@ export default function JobCardDetail() {
   const [showPackageModal, setShowPackageModal] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
   const [editAssembly, setEditAssembly] = useState(null);
+  const [splitRequests, setSplitRequests] = useState([]);
+  const [showSplitModal, setShowSplitModal] = useState(false);
 
-  const load = () => api.get(`/job-cards/${id}`).then(r => setJc(r.data)).finally(() => setLoading(false));
+  const loadSplits = () => api.get(`/job-cards/${id}/split-requests`).then(r => setSplitRequests(r.data)).catch(() => {});
+  const load = () => { loadSplits(); return api.get(`/job-cards/${id}`).then(r => setJc(r.data)).finally(() => setLoading(false)); };
   useEffect(() => { load(); }, [id]);
 
   if (loading) return <div className="p-8 text-center text-gray-400">Loading job card...</div>;
@@ -44,6 +47,8 @@ export default function JobCardDetail() {
   const canAddQC = ['design', 'owner'].includes(user.role);
   const canUploadPackage = ['production', 'owner'].includes(user.role);
   const canViewDispatch = ['accounts', 'owner'].includes(user.role);
+  const canRequestSplit = ['production', 'admin', 'owner'].includes(user.role) && ['pending', 'in_progress', 'on_hold'].includes(jc.status);
+  const pendingSplit = splitRequests.find(s => s.status === 'pending');
 
   const tabs = [
     { key: 'overview',    label: 'Overview' },
@@ -93,6 +98,11 @@ export default function JobCardDetail() {
               <CheckCircle size={14} /> Approve to Resume
             </button>
           )}
+          {canRequestSplit && !pendingSplit && (
+            <button className="btn-secondary btn-sm" onClick={() => setShowSplitModal(true)}>
+              <Truck size={14} /> Partial Dispatch
+            </button>
+          )}
           {canUpdateStatus && (
             <button className="btn-secondary btn-sm" onClick={() => setShowStatusModal(true)}>
               <Wrench size={14} /> Update Status
@@ -115,6 +125,55 @@ export default function JobCardDetail() {
           )}
         </div>
       </div>
+
+      {/* Partial-dispatch split requests */}
+      {splitRequests.length > 0 && (
+        <div className="mb-5 card p-4 no-print">
+          <h3 className="font-semibold text-gray-900 mb-2 flex items-center gap-2 text-sm">
+            <Truck size={15} className="text-brand-600" /> Partial Dispatch
+          </h3>
+          <div className="space-y-2">
+            {splitRequests.map(sr => (
+              <div key={sr.id} className={`rounded-lg border px-3 py-2 text-sm ${
+                sr.status === 'pending' ? 'bg-amber-50 border-amber-200'
+                : sr.status === 'approved' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <span className="font-medium text-gray-800">Dispatch {sr.qty} early</span>
+                    <span className="text-xs text-gray-500 ml-2">· requested by {sr.requested_by_name || '—'}</span>
+                  </div>
+                  {sr.status === 'pending' ? (
+                    user.role === 'owner' ? (
+                      <div className="flex gap-2">
+                        <button className="btn-primary btn-sm text-xs"
+                          onClick={async () => {
+                            if (!window.confirm(`Approve dispatching ${sr.qty} early? A split job card will be created and this one's qty reduced.`)) return;
+                            try { await api.put(`/job-cards/split-requests/${sr.id}/approve`); load(); }
+                            catch (e) { alert(e.response?.data?.error || 'Failed'); }
+                          }}>Approve</button>
+                        <button className="btn-secondary btn-sm text-xs text-red-600 border-red-200"
+                          onClick={async () => {
+                            const reason = window.prompt('Reason for rejecting this partial dispatch?');
+                            if (!reason) return;
+                            try { await api.put(`/job-cards/split-requests/${sr.id}/reject`, { reason }); load(); }
+                            catch (e) { alert(e.response?.data?.error || 'Failed'); }
+                          }}>Reject</button>
+                      </div>
+                    ) : <span className="text-xs text-amber-700 font-medium">Awaiting owner approval</span>
+                  ) : sr.status === 'approved' ? (
+                    <span className="text-xs text-green-700">
+                      ✓ Approved → {sr.child_job_card_no
+                        ? <Link to={`/job-cards/${sr.child_job_card_id}`} className="text-brand-600 hover:underline font-medium">{sr.child_job_card_no}</Link>
+                        : 'split created'}
+                    </span>
+                  ) : <span className="text-xs text-red-700">✕ Rejected{sr.rejection_reason ? `: ${sr.rejection_reason}` : ''}</span>}
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">Reason: {sr.reason}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Customer Query Warning Banner — Full Details */}
       {jc.active_query_no && (
@@ -414,6 +473,10 @@ export default function JobCardDetail() {
       {showStatusModal && (
         <StatusModal currentStatus={jc.status} jcId={id}
           onClose={() => setShowStatusModal(false)} onSave={() => { setShowStatusModal(false); load(); }} />
+      )}
+      {showSplitModal && (
+        <SplitRequestModal jcId={id} maxQty={jc.qty}
+          onClose={() => setShowSplitModal(false)} onSave={() => { setShowSplitModal(false); load(); }} />
       )}
       {showQCModal && (
         <QCModal jcId={id}
@@ -1661,6 +1724,48 @@ function DrawingModal({ jcId, assemblies, onClose, onSave }) {
           <button type="submit" className="btn-primary flex-1" disabled={saving}>{saving ? 'Uploading...' : 'Upload'}</button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+function SplitRequestModal({ jcId, maxQty, onClose, onSave }) {
+  const [qty, setQty] = useState('');
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async () => {
+    setError('');
+    const n = parseInt(qty, 10);
+    if (!n || n < 1) return setError('Enter the quantity to dispatch early');
+    if (n >= maxQty) return setError(`Must be less than ${maxQty} — at least 1 must remain on this job card`);
+    if (!reason.trim()) return setError('A reason is required');
+    setSaving(true);
+    try {
+      await api.post(`/job-cards/${jcId}/split-request`, { qty: n, reason });
+      onSave();
+    } catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
+  };
+  return (
+    <Modal open title="Request Partial Dispatch" onClose={onClose} size="sm">
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600">
+          Request to dispatch part of this job card early. The owner must approve. On approval, those units
+          become a separate job card (skipping production, straight to QC → dispatch) and this card's qty drops.
+        </p>
+        <div>
+          <label className="label">Quantity to dispatch early <span className="text-red-500">*</span></label>
+          <input className="input" type="number" min="1" max={maxQty - 1} value={qty} onChange={e => setQty(e.target.value)} placeholder={`of ${maxQty}`} />
+        </div>
+        <div>
+          <label className="label">Reason <span className="text-red-500">*</span></label>
+          <textarea className="input h-20 resize-none" value={reason} onChange={e => setReason(e.target.value)} placeholder="Why is part of this order being dispatched early?" />
+        </div>
+        {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+        <div className="flex gap-3">
+          <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button className="btn-primary flex-1" disabled={saving} onClick={submit}>{saving ? 'Sending…' : 'Send for Approval'}</button>
+        </div>
+      </div>
     </Modal>
   );
 }

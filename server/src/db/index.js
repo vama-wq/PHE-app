@@ -244,6 +244,25 @@ async function initDB(retries = 20, delayMs = 10000) {
 
       await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS min_order_qty NUMERIC DEFAULT 0`);
 
+      // Partial dispatch: production can request to split N units off a job card for
+      // early dispatch; owner approves → a child job card (skips production, starts at
+      // QC) is created and the parent qty reduces.
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS parent_job_card_id INTEGER`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS job_card_split_requests (
+          id SERIAL PRIMARY KEY,
+          job_card_id INTEGER NOT NULL REFERENCES job_cards(id),
+          qty INTEGER NOT NULL,
+          reason TEXT,
+          status TEXT DEFAULT 'pending',
+          child_job_card_id INTEGER REFERENCES job_cards(id),
+          rejection_reason TEXT,
+          created_by INTEGER REFERENCES users(id),
+          approved_by INTEGER REFERENCES users(id),
+          approved_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )`);
+
       // A PO priced above the agreed/last rate needs owner approval before it can be sent.
       await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS rate_increase_pending BOOLEAN DEFAULT FALSE`);
       await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS rate_increase_approved_by INTEGER`);

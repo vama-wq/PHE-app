@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromStorage } = require('../middleware/upload');
+const { createNotification } = require('./notifications');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
 // Optional stages excluded: 2,15(Brazing),18(HeaterCleaning),21(NipplePress),22(3hrsOven).
@@ -852,6 +853,118 @@ router.put('/:id/hold/approve', authenticate, authorize('owner', 'admin'), async
   await syncOrderStatus(db, jc.order_id, req.user.id);
 
   res.json({ message: 'Hold approved, work resumed' });
+});
+
+// ── Partial-dispatch split requests ────────────────────────────────────────────
+// Production asks to dispatch part of a job card early (qty + reason). Owner
+// approves → a child job card (qty = requested) is created at 'qc_pending' (it
+// skips production) and the parent's qty is reduced. Requestable any time while
+// the parent is still in production.
+const SPLIT_REQUESTABLE = ['pending', 'in_progress', 'on_hold'];
+
+router.post('/:id/split-request', authenticate, authorize('production', 'admin', 'owner'), async (req, res) => {
+  const db = getDB();
+  const qty = parseInt(req.body.qty, 10);
+  const reason = (req.body.reason || '').trim();
+  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.id]);
+  if (!jc) return res.status(404).json({ error: 'Job card not found' });
+  if (!SPLIT_REQUESTABLE.includes(jc.status)) return res.status(400).json({ error: 'Partial dispatch can only be requested while the job card is in production' });
+  if (!qty || qty < 1) return res.status(400).json({ error: 'Enter the quantity to dispatch early' });
+  if (qty >= jc.qty) return res.status(400).json({ error: `Quantity must be less than the job card qty (${jc.qty}) — at least 1 must remain` });
+  if (!reason) return res.status(400).json({ error: 'A reason is required' });
+  const existing = await db.get("SELECT id FROM job_card_split_requests WHERE job_card_id=$1 AND status='pending'", [jc.id]);
+  if (existing) return res.status(400).json({ error: 'A partial-dispatch request is already pending owner approval for this job card' });
+
+  await db.insert('INSERT INTO job_card_split_requests (job_card_id, qty, reason, created_by) VALUES ($1,$2,$3,$4)', [jc.id, qty, reason, req.user.id]);
+  const recipients = await db.all(`SELECT id FROM users WHERE role IN ('owner','admin')`);
+  for (const u of recipients) {
+    await createNotification(db, {
+      userId: u.id, type: 'split_request',
+      title: `Partial dispatch request — ${jc.job_card_no}`,
+      body: `Dispatch ${qty} of ${jc.qty} early. Reason: ${reason}`,
+      link: `/job-cards/${jc.id}`, sourceUserId: req.user.id,
+    });
+  }
+  await logActivity(jc.order_id, jc.id, 'split_requested', `Partial dispatch requested: ${qty} of ${jc.qty} — ${reason}`, req.user.id);
+  res.status(201).json({ message: 'Partial dispatch request sent for owner approval' });
+});
+
+router.get('/split-requests/pending', authenticate, authorize('owner', 'admin'), async (req, res) => {
+  const rows = await getDB().all(`
+    SELECT sr.*, jc.job_card_no, jc.qty AS jc_qty, jc.product_name, jc.drawing_no,
+           o.order_code, u.name AS requested_by_name
+    FROM job_card_split_requests sr
+    JOIN job_cards jc ON jc.id = sr.job_card_id
+    JOIN orders o ON o.id = jc.order_id
+    LEFT JOIN users u ON u.id = sr.created_by
+    WHERE sr.status='pending'
+    ORDER BY sr.created_at ASC`);
+  res.json(rows);
+});
+
+router.get('/:id/split-requests', authenticate, async (req, res) => {
+  const rows = await getDB().all(
+    `SELECT sr.*, u.name AS requested_by_name, a.name AS approved_by_name, ch.job_card_no AS child_job_card_no
+     FROM job_card_split_requests sr
+     LEFT JOIN users u ON u.id = sr.created_by
+     LEFT JOIN users a ON a.id = sr.approved_by
+     LEFT JOIN job_cards ch ON ch.id = sr.child_job_card_id
+     WHERE sr.job_card_id=$1 ORDER BY sr.created_at DESC`,
+    [req.params.id]
+  );
+  res.json(rows);
+});
+
+router.put('/split-requests/:reqId/approve', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const sr = await db.get("SELECT * FROM job_card_split_requests WHERE id=$1 AND status='pending'", [req.params.reqId]);
+  if (!sr) return res.status(404).json({ error: 'Pending request not found' });
+  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [sr.job_card_id]);
+  if (!jc) return res.status(404).json({ error: 'Job card not found' });
+  if (sr.qty >= jc.qty) return res.status(400).json({ error: `Job card qty is now ${jc.qty}; cannot split off ${sr.qty}` });
+
+  const childCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE parent_job_card_id=$1', [jc.id]);
+  const childNo = `${jc.job_card_no}-P${parseInt(childCount.n, 10) + 1}`;
+  const child = await db.insert(
+    `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'qc_pending',$9,$10,$11)`,
+    [childNo, jc.order_id, sr.qty, jc.dispatch_date, jc.current_stage || 0, jc.punching, jc.drawing_no, jc.product_name,
+     `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id]
+  );
+  await db.run('UPDATE job_cards SET qty = qty - $1 WHERE id=$2', [sr.qty, jc.id]);
+  await db.run('UPDATE job_card_split_requests SET status=$1, child_job_card_id=$2, approved_by=$3, approved_at=NOW() WHERE id=$4',
+    ['approved', child.lastInsertRowid, req.user.id, sr.id]);
+
+  if (sr.created_by) {
+    await createNotification(db, {
+      userId: sr.created_by, type: 'split_approved',
+      title: `Partial dispatch approved — ${childNo}`,
+      body: `${sr.qty} units split off as ${childNo} (now in QC). ${jc.job_card_no} continues with ${jc.qty - sr.qty}.`,
+      link: `/job-cards/${child.lastInsertRowid}`, sourceUserId: req.user.id,
+    });
+  }
+  await logActivity(jc.order_id, jc.id, 'split_approved', `Partial dispatch approved: ${sr.qty} → ${childNo}; ${jc.job_card_no} now ${jc.qty - sr.qty}`, req.user.id);
+  res.json({ message: 'Approved', child_job_card_id: child.lastInsertRowid, child_job_card_no: childNo });
+});
+
+router.put('/split-requests/:reqId/reject', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const reason = (req.body.reason || '').trim();
+  if (!reason) return res.status(400).json({ error: 'A rejection reason is required' });
+  const sr = await db.get("SELECT * FROM job_card_split_requests WHERE id=$1 AND status='pending'", [req.params.reqId]);
+  if (!sr) return res.status(404).json({ error: 'Pending request not found' });
+  await db.run("UPDATE job_card_split_requests SET status='rejected', rejection_reason=$1, approved_by=$2, approved_at=NOW() WHERE id=$3",
+    [reason, req.user.id, sr.id]);
+  const jc = await db.get('SELECT order_id, job_card_no FROM job_cards WHERE id=$1', [sr.job_card_id]);
+  if (sr.created_by) {
+    await createNotification(db, {
+      userId: sr.created_by, type: 'split_rejected',
+      title: `Partial dispatch rejected — ${jc?.job_card_no || ''}`,
+      body: `Reason: ${reason}`, link: `/job-cards/${sr.job_card_id}`, sourceUserId: req.user.id,
+    });
+  }
+  await logActivity(jc?.order_id, sr.job_card_id, 'split_rejected', `Partial dispatch rejected: ${reason}`, req.user.id);
+  res.json({ message: 'Rejected' });
 });
 
 module.exports = router;
