@@ -3,14 +3,21 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadItemDrawing, deleteFromStorage } = require('../middleware/upload');
 
+// QC (design) can manage stock but must not see unit cost — strip it for them.
+const stripCost = (req, data) => {
+  if (req.user.role !== 'design' || !data) return data;
+  const omit = (o) => { const { unit_cost, ...rest } = o; return rest; };
+  return Array.isArray(data) ? data.map(omit) : omit(data);
+};
+
 router.get('/', authenticate, async (req, res) => {
-  res.json(await getDB().all('SELECT * FROM inventory_items ORDER BY category, item_code'));
+  res.json(stripCost(req, await getDB().all('SELECT * FROM inventory_items ORDER BY category, item_code')));
 });
 
 router.get('/low-stock', authenticate, async (req, res) => {
-  res.json(await getDB().all(
+  res.json(stripCost(req, await getDB().all(
     'SELECT * FROM inventory_items WHERE current_stock <= reorder_level ORDER BY category, item_code'
-  ));
+  )));
 });
 
 router.get('/:id', authenticate, async (req, res) => {
@@ -27,7 +34,7 @@ router.get('/:id', authenticate, async (req, res) => {
      ORDER BY t.created_at DESC LIMIT 100`,
     [req.params.id]
   );
-  res.json(item);
+  res.json(stripCost(req, item));
 });
 
 router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadItemDrawing, async (req, res) => {
@@ -96,7 +103,7 @@ router.put('/:id', authenticate, authorize('accounts', 'owner'), ...uploadItemDr
   }
 });
 
-router.post('/:id/transactions', authenticate, authorize('accounts', 'owner'), async (req, res) => {
+router.post('/:id/transactions', authenticate, authorize('accounts', 'owner', 'design'), async (req, res) => {
   const { transaction_type, quantity, job_card_id, supplier_name, po_number, notes } = req.body;
   if (!transaction_type || !quantity) return res.status(400).json({ error: 'Type and quantity required' });
 

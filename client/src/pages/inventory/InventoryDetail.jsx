@@ -23,6 +23,7 @@ export default function InventoryDetail() {
 
   const isLow = item.current_stock <= item.reorder_level;
   const canManage = ['accounts', 'owner', 'admin'].includes(user.role);
+  const canTransact = ['accounts', 'owner', 'admin', 'design'].includes(user.role); // QC can add stock transactions (no cost shown)
   const canDelete = ['owner', 'admin'].includes(user.role);
 
   const handleDelete = async () => {
@@ -48,12 +49,12 @@ export default function InventoryDetail() {
         </div>
         <div className="flex gap-2">
           {canManage && (
-            <>
-              <button className="btn-secondary btn-sm" onClick={() => setShowEdit(true)}>Edit</button>
-              <button className="btn-primary" onClick={() => setShowTransaction(true)}>
-                <Plus size={16} /> Transaction
-              </button>
-            </>
+            <button className="btn-secondary btn-sm" onClick={() => setShowEdit(true)}>Edit</button>
+          )}
+          {canTransact && (
+            <button className="btn-primary" onClick={() => setShowTransaction(true)}>
+              <Plus size={16} /> Transaction
+            </button>
           )}
           {canDelete && (
             <button className="btn-danger btn-sm flex items-center gap-1.5" onClick={handleDelete}>
