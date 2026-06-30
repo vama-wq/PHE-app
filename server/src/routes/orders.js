@@ -429,16 +429,23 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
       [copy_from_item_id]
     );
     if (src && src.file_path) {
+      // Always create the drawing record so it comes in for approval. Try to
+      // duplicate the file in storage; if that fails, fall back to referencing
+      // the source file so the copy never silently drops the drawing.
+      let newPath = src.file_path, newName = src.file_name;
       try {
-        const newName = `${Date.now()}_copy_item${itemId}.${ext(src.file_name, 'pdf')}`;
-        const newPath = await copyInStorage(src.file_path, 'order-drawings', newName);
+        const copyName = `${Date.now()}_copy_item${itemId}.${ext(src.file_name, 'pdf')}`;
+        newPath = await copyInStorage(src.file_path, 'order-drawings', copyName);
+        newName = copyName;
+      } catch (e) { console.error('[orders] drawing file copy failed, referencing source file:', e.message); }
+      try {
         await db.run(
           `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
            VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
           [req.params.id, itemId, newPath, newName, src.original_name, src.notes || null, req.user.id]
         );
         drawingCopied = true;
-      } catch (e) { console.error('[orders] drawing copy failed:', e.message); }
+      } catch (e) { console.error('[orders] drawing record insert failed:', e.message); }
     }
     const srcImages = await db.all(`SELECT * FROM order_item_images WHERE item_id=$1`, [copy_from_item_id]);
     for (const img of srcImages) {
