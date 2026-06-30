@@ -29,13 +29,18 @@ export default function InventoryList() {
 
   const lowCount = items.filter(i => i.current_stock <= i.reorder_level).length;
   const canManage = ['accounts', 'owner'].includes(user.role);
+  const showCost = user.role !== 'design'; // landed cost / valuation hidden from QC
+  const totalValue = items.reduce((s, i) => s + Number(i.current_stock) * (Number(i.unit_cost) || 0), 0);
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Inventory</h1>
-          <p className="text-gray-500 text-sm mt-0.5">{items.length} items · {lowCount} low stock</p>
+          <p className="text-gray-500 text-sm mt-0.5">
+            {items.length} items · {lowCount} low stock
+            {showCost && totalValue > 0 && <> · Total Value <span className="font-semibold text-gray-700">₹{totalValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></>}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {['accounts','owner','admin'].includes(user.role) && (
@@ -76,14 +81,16 @@ export default function InventoryList() {
               <th className="table-header text-left">Category</th>
               <th className="table-header text-right">Stock</th>
               <th className="table-header text-right">Reorder Level</th>
+              {showCost && <th className="table-header text-right">Landed Cost</th>}
+              {showCost && <th className="table-header text-right">Value</th>}
               <th className="table-header text-center">Status</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={6} className="table-cell text-center text-gray-400 py-12">Loading...</td></tr>
+              <tr><td colSpan={showCost ? 8 : 6} className="table-cell text-center text-gray-400 py-12">Loading...</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={6} className="table-cell text-center text-gray-400 py-12">No items found</td></tr>
+              <tr><td colSpan={showCost ? 8 : 6} className="table-cell text-center text-gray-400 py-12">No items found</td></tr>
             ) : filtered.map(item => {
               const isLow = item.current_stock <= item.reorder_level;
               return (
@@ -95,6 +102,8 @@ export default function InventoryList() {
                     {item.current_stock} <span className="font-normal text-gray-400">{item.unit}</span>
                   </td>
                   <td className="table-cell text-right text-gray-500">{item.reorder_level} {item.unit}</td>
+                  {showCost && <td className="table-cell text-right text-gray-700">{Number(item.unit_cost) > 0 ? `₹${Number(item.unit_cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}</td>}
+                  {showCost && <td className="table-cell text-right text-gray-700">{Number(item.unit_cost) > 0 ? `₹${(Number(item.current_stock) * Number(item.unit_cost)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</td>}
                   <td className="table-cell text-center">
                     {isLow ? (
                       <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">

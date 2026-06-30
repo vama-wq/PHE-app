@@ -34,6 +34,19 @@ router.get('/:id', authenticate, async (req, res) => {
      ORDER BY t.created_at DESC LIMIT 100`,
     [req.params.id]
   );
+
+  // Open FIFO lots show the landed cost (rate + transport/other) of stock still
+  // on hand. Cost-bearing, so never expose to design (QC).
+  if (req.user.role !== 'design') {
+    item.fifo_lots = await db.all(
+      `SELECT l.id, l.qty_original, l.qty_remaining, l.unit_cost, l.received_at, po.po_number
+       FROM inventory_fifo_lots l
+       LEFT JOIN purchase_orders po ON l.po_id = po.id
+       WHERE l.item_id = $1 AND l.qty_remaining > 0
+       ORDER BY l.received_at`,
+      [req.params.id]
+    );
+  }
   res.json(stripCost(req, item));
 });
 

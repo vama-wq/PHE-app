@@ -25,6 +25,7 @@ export default function InventoryDetail() {
   const canManage = ['accounts', 'owner', 'admin'].includes(user.role);
   const canTransact = ['accounts', 'owner', 'admin', 'design'].includes(user.role); // QC can add stock transactions (no cost shown)
   const canDelete = ['owner', 'admin'].includes(user.role);
+  const showCost = user.role !== 'design'; // hide all landed-cost figures from QC
 
   const handleDelete = async () => {
     if (!window.confirm(`Delete inventory item "${item.item_code} — ${item.name}"?\n\nThis cannot be undone.`)) return;
@@ -73,7 +74,8 @@ export default function InventoryDetail() {
             <div className="mt-3 pt-3 border-t border-gray-100">
               <div className="text-xs text-gray-500">Reorder Level: <span className="font-medium text-gray-700">{item.reorder_level} {item.unit}</span></div>
               {Number(item.min_order_qty) > 0 && <div className="text-xs text-gray-500 mt-1">Min Order Qty: <span className="font-medium text-gray-700">{item.min_order_qty} {item.unit}</span></div>}
-              {item.unit_cost > 0 && <div className="text-xs text-gray-500 mt-1">Unit Price: <span className="font-medium text-gray-700">₹{Number(item.unit_cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>}
+              {showCost && item.unit_cost > 0 && <div className="text-xs text-gray-500 mt-1">Avg Landed Cost: <span className="font-medium text-gray-700">₹{Number(item.unit_cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/{item.unit}</span></div>}
+              {showCost && item.unit_cost > 0 && <div className="text-xs text-gray-500 mt-1">Stock Value: <span className="font-semibold text-gray-800">₹{(Number(item.current_stock) * Number(item.unit_cost)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>}
               {item.category && <div className="text-xs text-gray-500 mt-1">Category: <span className="font-medium text-gray-700">{item.category}</span></div>}
             </div>
           </div>
@@ -143,6 +145,41 @@ export default function InventoryDetail() {
           </div>
         </div>
       </div>
+
+      {showCost && item.fifo_lots?.length > 0 && (
+        <div className="card overflow-hidden mb-6">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+            <h2 className="section-title text-sm">Landed Cost — Open Lots (FIFO)</h2>
+            <span className="text-xs text-gray-500">
+              Total Value: <span className="font-semibold text-gray-800">₹{item.fifo_lots.reduce((s, l) => s + Number(l.qty_remaining) * Number(l.unit_cost), 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="table-header text-left">Received</th>
+                  <th className="table-header text-left">PO</th>
+                  <th className="table-header text-right">Qty Remaining</th>
+                  <th className="table-header text-right">Landed Cost / {item.unit}</th>
+                  <th className="table-header text-right">Lot Value</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {item.fifo_lots.map(l => (
+                  <tr key={l.id}>
+                    <td className="table-cell text-gray-500 text-xs whitespace-nowrap">{fmtDate(l.received_at)}</td>
+                    <td className="table-cell text-xs text-brand-600">{l.po_number || '—'}</td>
+                    <td className="table-cell text-right text-gray-700">{l.qty_remaining} <span className="text-gray-400">/ {l.qty_original}</span></td>
+                    <td className="table-cell text-right font-medium text-gray-800">₹{Number(l.unit_cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                    <td className="table-cell text-right text-gray-700">₹{(Number(l.qty_remaining) * Number(l.unit_cost)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {showTransaction && <TransactionModal itemId={id} item={item} onClose={() => setShowTransaction(false)} onSave={() => { setShowTransaction(false); load(); }} />}
       {showEdit && <EditItemModal item={item} onClose={() => setShowEdit(false)} onSave={() => { setShowEdit(false); load(); }} />}
