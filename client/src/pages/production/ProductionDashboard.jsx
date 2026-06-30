@@ -8,7 +8,7 @@ import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS
 import {
   Wrench, Calendar, Plus, CheckSquare, Square, CheckCircle,
   X, ExternalLink, ClipboardList, Check, Image as ImageIcon,
-  AlertTriangle, ChevronRight, ArrowLeft, Lock, Download, HelpCircle
+  AlertTriangle, ChevronRight, ArrowLeft, Lock, Download, HelpCircle, Truck
 } from 'lucide-react';
 
 export default function ProductionDashboard() {
@@ -550,6 +550,27 @@ function ChecklistModal({ card, onClose, onSave }) {
 
   const canManage = ['production', 'owner', 'admin'].includes(user.role);
   const canApproveHold = ['owner', 'admin'].includes(user.role);
+  const canRequestSplit = canManage && ['pending', 'in_progress', 'on_hold'].includes(card.status);
+  const [splitOpen, setSplitOpen] = useState(false);
+  const [splitQty, setSplitQty] = useState('');
+  const [splitReason, setSplitReason] = useState('');
+  const [splitSaving, setSplitSaving] = useState(false);
+  const [splitErr, setSplitErr] = useState('');
+
+  const submitSplit = async () => {
+    setSplitErr('');
+    const n = parseInt(splitQty, 10);
+    if (!n || n < 1) return setSplitErr('Enter the quantity to dispatch early');
+    if (n >= card.qty) return setSplitErr(`Must be less than ${card.qty} — at least 1 must remain`);
+    if (!splitReason.trim()) return setSplitErr('A reason is required');
+    setSplitSaving(true);
+    try {
+      await api.post(`/job-cards/${card.id}/split-request`, { qty: n, reason: splitReason });
+      setSplitOpen(false); setSplitQty(''); setSplitReason(''); setSplitSaving(false);
+      alert('Partial dispatch request sent to the owner for approval.');
+      onSave(); onClose();
+    } catch (e) { setSplitErr(e.response?.data?.error || 'Failed'); setSplitSaving(false); }
+  };
 
   const loadChecklist = async () => {
     const r = await api.get(`/job-cards/${card.id}/checklist`);
@@ -691,6 +712,31 @@ function ChecklistModal({ card, onClose, onSave }) {
         <div className="text-center py-12 text-gray-400">Loading checklist...</div>
       ) : view === 'list' ? (
         <>
+          {/* Partial dispatch request */}
+          {canRequestSplit && (
+            <div className="mb-4">
+              {!splitOpen ? (
+                <button className="btn-secondary btn-sm flex items-center gap-1.5" onClick={() => setSplitOpen(true)}>
+                  <Truck size={14} /> Request Partial Dispatch
+                </button>
+              ) : (
+                <div className="rounded-xl border border-brand-200 bg-brand-50 p-3 space-y-2">
+                  <div className="text-sm font-semibold text-gray-800">Request partial dispatch (needs owner approval)</div>
+                  <p className="text-xs text-gray-500">Dispatch some units of this job card early. On approval they become a separate job card (skips production → QC → dispatch) and this card's qty reduces.</p>
+                  <div className="flex gap-2">
+                    <input className="input text-sm w-32" type="number" min="1" max={card.qty - 1} placeholder={`Qty (of ${card.qty})`} value={splitQty} onChange={e => setSplitQty(e.target.value)} />
+                    <input className="input text-sm flex-1" placeholder="Reason" value={splitReason} onChange={e => setSplitReason(e.target.value)} />
+                  </div>
+                  {splitErr && <p className="text-red-600 text-xs">{splitErr}</p>}
+                  <div className="flex gap-2">
+                    <button className="btn-secondary btn-sm text-xs" onClick={() => { setSplitOpen(false); setSplitErr(''); }}>Cancel</button>
+                    <button className="btn-primary btn-sm text-xs" disabled={splitSaving} onClick={submitSplit}>{splitSaving ? 'Sending…' : 'Send for Approval'}</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Customer Query banner — Detailed */}
           {card.active_query_no && (
             <div className="mb-4 rounded-xl bg-amber-50 border border-amber-300 overflow-hidden">
