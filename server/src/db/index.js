@@ -213,6 +213,8 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE production_checklist ADD CONSTRAINT production_checklist_stage_no_check CHECK (stage_no BETWEEN 1 AND 30)`);
       // Add notes column for rework/notes per stage
       await pool.query(`ALTER TABLE production_checklist ADD COLUMN IF NOT EXISTS notes TEXT`);
+      // Stage 3 (Ohms) captures the total weight of all coils produced for the job card
+      await pool.query(`ALTER TABLE production_checklist ADD COLUMN IF NOT EXISTS coil_weight NUMERIC`);
       // Add unique constraint on supplier_code to prevent duplicates
       try {
         await pool.query(`ALTER TABLE suppliers ADD CONSTRAINT suppliers_supplier_code_unique UNIQUE (supplier_code)`);

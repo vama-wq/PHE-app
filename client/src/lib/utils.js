@@ -8,7 +8,7 @@ export const SCRAP_VALUE_STAGES = new Set([1, 3, 4, 5, 11, 21, 26]);
 export const PRODUCTION_STAGES = [
   { no: 1,  name: 'Coil' },
   { no: 2,  name: 'Coil + Tube Cutting', optional: true },
-  { no: 3,  name: 'Ohms',               fields: [{ key: 'value1', label: 'Ohms Value' }, { key: 'value2', label: 'Coil Length' }] },
+  { no: 3,  name: 'Ohms',               fields: [{ key: 'value1', label: 'Ohms Value' }, { key: 'value2', label: 'Coil Length' }], coilWeight: true },
   { no: 4,  name: 'Spot',               fields: [{ key: 'value1', label: 'Spot Value' }] },
   { no: 5,  name: 'Tube Cutting',       fields: [{ key: 'value1', label: 'Value' }] },
   { no: 6,  name: 'Filling' },

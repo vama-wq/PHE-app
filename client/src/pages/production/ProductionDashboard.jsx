@@ -915,7 +915,7 @@ function ChecklistModal({ card, onClose, onSave }) {
                         <span className="text-xs text-green-500 ml-auto flex-shrink-0">{fmtDateTime(sData.done_at)}</span>
                       )}
                     </div>
-                    {isDone && (sData.value1 || sData.value2 || hasRejection || sData.worker_name || sData.scrap_value) && (
+                    {isDone && (sData.value1 || sData.value2 || hasRejection || sData.worker_name || sData.scrap_value || sData.coil_weight != null) && (
                       <div className="ml-7 text-xs text-gray-500 mt-0.5 flex flex-wrap gap-2">
                         {sData.worker_name && <span className="font-medium text-gray-600">{sData.worker_name}</span>}
                         {def.heaterAdjust && sData.value1 === 'adjusted' && (
@@ -951,6 +951,7 @@ function ChecklistModal({ card, onClose, onSave }) {
                           </>
                         )}
                         {sData.scrap_value && <span className="text-amber-600">Scrap: {sData.scrap_value}</span>}
+                        {sData.coil_weight != null && <span className="text-blue-600 font-medium">Coil Wt: {sData.coil_weight} kg</span>}
                         {hasRejection && (
                           <span className="text-orange-600 font-medium">
                             Rej: {sData.rejection_qty} · Remade: {sData.remade_qty || 0}
@@ -1109,6 +1110,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const { user } = useAuthStore();
   const [value1, setValue1] = useState(stageData.value1 || '');
   const [value2, setValue2] = useState(stageData.value2 || '');
+  const [coilWeight, setCoilWeight] = useState(stageData.coil_weight != null ? String(stageData.coil_weight) : '');
   const [workerName, setWorkerName] = useState(stageData.worker_name || '');
   const [scrapValue, setScrapValue] = useState(stageData.scrap_value || '');
   const [rejQty, setRejQty] = useState(String(stageData.rejection_qty || 0));
@@ -1204,6 +1206,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       // For non-required fields, check at least one value if field exists
       if (!field1?.required && !value1.trim() && stageDef.fields.length > 0) return false;
     }
+    if (stageDef.coilWeight && !(parseFloat(coilWeight) > 0)) return false; // total coil weight required (stage 3)
     if (photoAlwaysRequired) return false; // photo upload IS the done action for these stages
     if (photoRequiredForStage && !stagePhotoFile) return false; // stage requires photo before marking done
     if (photoRequiredAfter6pm && !stagePhotoFile) return false; // need photo first, then Mark Done
@@ -1297,6 +1300,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         worker_name: workerName || null,
         scrap_value: scrapValue || null,
         notes: notes || null,
+        ...(stageDef.coilWeight ? { coil_weight: coilWeight } : {}),
         ...(isDispatch ? { dispatched_qty: finalDispatchQty } : {}),
       });
       await onSaved();
@@ -1332,6 +1336,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         value2: stageData.value2,
         rejection_qty: stageData.rejection_qty || 0,
         remade_qty: stageData.remade_qty || 0,
+        ...(stageDef.coilWeight ? { coil_weight: stageData.coil_weight } : {}),
       });
       await onSaved();
     } catch (e) {
@@ -1678,6 +1683,31 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               />
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Total weight of all coils produced (stage 3 — required to mark done) */}
+      {stageDef.coilWeight && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Total Weight of All Coils (kg) <span className="text-red-500">*</span>
+          </label>
+          {isDone ? (
+            <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+              {stageData.coil_weight != null ? `${stageData.coil_weight} kg` : '—'}
+            </div>
+          ) : (
+            <input
+              className="input w-full"
+              type="number"
+              step="any"
+              min="0"
+              placeholder="e.g. 12.5"
+              value={coilWeight}
+              onChange={e => setCoilWeight(e.target.value)}
+            />
+          )}
+          <p className="text-xs text-gray-400 mt-1">Combined weight of every coil made for this job card.</p>
         </div>
       )}
 

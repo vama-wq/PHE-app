@@ -596,7 +596,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   const stageNo   = parseInt(req.params.stage, 10);
   if (isNaN(stageNo) || stageNo < 1 || stageNo > 29) return res.status(400).json({ error: 'Invalid stage' });
 
-  const { done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes } = req.body;
+  const { done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, coil_weight } = req.body;
   const db = getDB();
 
   // Block if card is on hold and trying to mark done
@@ -654,12 +654,21 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     });
   }
 
+  // Stage 3 (Ohms) requires the total weight of all coils produced for this job card
+  const coilWeightNum = (coil_weight === '' || coil_weight == null) ? null : Number(coil_weight);
+  if (stageNo === 3 && done && !(coilWeightNum > 0)) {
+    return res.status(400).json({
+      error: 'Total weight of all coils is required before marking this stage done.',
+      code: 'COIL_WEIGHT_REQUIRED'
+    });
+  }
+
   const now = new Date().toISOString();
 
   await db.run(`
     INSERT INTO production_checklist
-      (job_card_id, stage_no, done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, done_at, updated_by, updated_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
+      (job_card_id, stage_no, done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, coil_weight, done_at, updated_by, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
     ON CONFLICT(job_card_id, stage_no) DO UPDATE SET
       done          = EXCLUDED.done,
       value1        = EXCLUDED.value1,
@@ -669,6 +678,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
       worker_name   = EXCLUDED.worker_name,
       scrap_value   = EXCLUDED.scrap_value,
       notes         = EXCLUDED.notes,
+      coil_weight   = EXCLUDED.coil_weight,
       done_at = CASE
         WHEN EXCLUDED.done = 1 AND production_checklist.done_at IS NULL THEN EXCLUDED.done_at
         WHEN EXCLUDED.done = 0 THEN NULL
@@ -677,7 +687,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
       updated_by  = EXCLUDED.updated_by,
       updated_at  = NOW()
   `, [jobCardId, stageNo, done ? 1 : 0, value1 ?? null, value2 ?? null, rejQty, remQty,
-    worker_name || null, scrap_value || null, notes || null, done ? now : null, req.user.id]);
+    worker_name || null, scrap_value || null, notes || null, coilWeightNum, done ? now : null, req.user.id]);
 
   // When stage 29 is re-submitted to QC, clear the QC rejection flag
   if (stageNo === 29 && done) {

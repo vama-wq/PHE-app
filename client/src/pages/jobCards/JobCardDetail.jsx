@@ -602,7 +602,7 @@ function OverviewTab({ jc, userRole }) {
             const def = PRODUCTION_STAGES.find(d => d.no === s.stage_no);
             const isDone = !!s.done;
             const isExpanded = expandedStage === s.stage_no;
-            const hasDetails = s.worker_name || s.value1 || s.value2 || s.scrap_value || s.rejection_qty || s.photo_file || s.rejection_photo_file || s.notes;
+            const hasDetails = s.worker_name || s.value1 || s.value2 || s.scrap_value || s.rejection_qty || s.photo_file || s.rejection_photo_file || s.notes || s.coil_weight != null;
             const parsed = def ? parseStageValue(def, s) : null;
 
             return (
@@ -684,6 +684,12 @@ function OverviewTab({ jc, userRole }) {
                       <div className="flex gap-2 text-sm">
                         <span className="text-gray-500 font-medium w-28 flex-shrink-0">Scrap Value:</span>
                         <span className="text-amber-700">{s.scrap_value}</span>
+                      </div>
+                    )}
+                    {s.coil_weight != null && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">Coil Weight:</span>
+                        <span className="text-blue-700 font-medium">{s.coil_weight} kg</span>
                       </div>
                     )}
                     {s.rejection_qty > 0 && (
