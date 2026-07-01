@@ -1258,7 +1258,8 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
     if (!p) return;
     setF({
       product_code: p.product_code || '', drawing_number: p.drawing_number || '',
-      tube_material: p.tube_material || '', tube_diameter: p.tube_diameter || '',
+      tube_material: '', // not carried forward — must be re-selected from the Tube list
+      tube_diameter: p.tube_diameter || '',
       wattage: p.wattage || '', voltage: p.voltage || '',
       plating_instructions: p.plating_instructions || '',
       quantity: '', // left blank on purpose — quantity varies per order
@@ -1289,6 +1290,9 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
   });
   const setInvQty = (id, qty) => setSelectedInventory(prev => ({ ...prev, [id]: qty }));
   const selectedInventoryItems = inventoryItems.filter(i => i.id in selectedInventory);
+
+  // Tube Material options come from the "Tube" inventory category (stores the item code).
+  const tubeItems = inventoryItems.filter(i => (i.category || '').toLowerCase().trim() === 'tube');
 
   const addFiles = (e) => {
     const files = Array.from(e.target.files);
@@ -1412,12 +1416,13 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
         <div>
           <label className="label">Tube Material <span className="text-red-500">*</span></label>
           <select className="input" value={f.tube_material} onChange={set('tube_material')}>
-            <option value="">— Select material —</option>
-            <option value="SS 304">SS 304</option>
-            <option value="SS 316">SS 316</option>
-            <option value="Incoloy">Incoloy</option>
-            <option value="Copper">Copper</option>
-            <option value="Titanium">Titanium</option>
+            <option value="">— Select tube —</option>
+            {f.tube_material && !tubeItems.some(i => i.item_code === f.tube_material) && (
+              <option value={f.tube_material}>{f.tube_material} (existing)</option>
+            )}
+            {tubeItems.map(i => (
+              <option key={i.id} value={i.item_code}>{i.item_code} — {i.name}</option>
+            ))}
           </select>
         </div>
         <div>
