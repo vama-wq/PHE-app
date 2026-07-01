@@ -6,8 +6,9 @@ const { createNotification } = require('./notifications');
 const { applyMaterialDeductions } = require('../lib/materialDeduction');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
-// Optional stages excluded: 2,15(Brazing),18(HeaterCleaning),21(NipplePress),22(3hrsOven).
-const MANDATORY_STAGES = [1,3,4,5,6,7,8,9,10,11,12,14,16,17,19,20,23,24,25,26,27,28];
+// Must match client MANDATORY_STAGE_NOS. Optional/excluded: 2, 13(Buffing), 15(Brazing),
+// 16(In Plating), 17(Plating Completed), 18(Heater Cleaning), 21(Nipple Press), 22(3hrs Oven).
+const MANDATORY_STAGES = [1,3,4,5,6,7,8,9,10,11,12,14,19,20,23,24,25,26,27,28];
 
 const TODAY = () => new Date().toISOString().split('T')[0];
 
