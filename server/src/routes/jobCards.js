@@ -3,6 +3,7 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
+const { applyMaterialDeductions } = require('../lib/materialDeduction');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
 // Optional stages excluded: 2,15(Brazing),18(HeaterCleaning),21(NipplePress),22(3hrsOven).
@@ -15,7 +16,7 @@ router.get('/', authenticate, async (req, res) => {
   const today = TODAY();
   const db = getDB();
   const cards = await db.all(`
-    SELECT jc.*, o.order_code, c.customer_code, u.name as uploaded_by_name,
+    SELECT jc.*, o.order_code, o.material_deduction, c.customer_code, u.name as uploaded_by_name,
       (jc.dispatch_date::date - CURRENT_DATE) as days_until_dispatch,
       (SELECT COUNT(*) FROM production_daily_reports WHERE job_card_id = jc.id) as report_count,
       EXISTS(SELECT 1 FROM production_day_picks WHERE job_card_id = jc.id AND pick_date = $1) as picked_today,
@@ -666,6 +667,20 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     });
   }
 
+  // Stage 1 (Coil): gauge selection is required for material-tracked (new) orders,
+  // since the spring-gauge deduction depends on it. Existing orders are unaffected.
+  if (stageNo === 1 && done && !value1?.trim()) {
+    const ord = await db.get(
+      'SELECT o.material_deduction FROM job_cards jc JOIN orders o ON o.id=jc.order_id WHERE jc.id=$1', [jobCardId]
+    );
+    if (ord?.material_deduction) {
+      return res.status(400).json({
+        error: 'Gauge selection is required before marking this stage done.',
+        code: 'GAUGE_REQUIRED'
+      });
+    }
+  }
+
   const now = new Date().toISOString();
 
   await db.run(`
@@ -701,6 +716,11 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
       );
     } catch (_) { /* column may not exist yet — ignore */ }
   }
+
+  // New orders: deduct tube (Stage 5) / spring-gauge (Stage 3) from stock via FIFO,
+  // based on the checklist. Wrapped so it can never block saving the stage.
+  try { await applyMaterialDeductions(db, jobCardId, stageNo, !!done, req.user.id); }
+  catch (e) { console.error('[checklist] material deduction failed:', e.message); }
 
   if (done && rejQty > 2) {
     await triggerHold(db, jobCardId, stageNo, rejQty, req.user.id);

@@ -265,6 +265,16 @@ async function initDB(retries = 20, delayMs = 10000) {
           AND oi.drawing_number IS NOT NULL
           AND jc.drawing_no = oi.drawing_number
       `);
+
+      // Checklist-driven tube & spring-gauge consumption (new orders only). The flag
+      // gates the whole feature so existing orders are untouched (default FALSE).
+      await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS material_deduction BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS tube_deducted BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS coil_deducted BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS tube_used_qty NUMERIC`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS tube_scrap_qty NUMERIC`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS coil_used_qty NUMERIC`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS coil_scrap_qty NUMERIC`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS job_card_split_requests (
           id SERIAL PRIMARY KEY,

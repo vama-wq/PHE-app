@@ -292,10 +292,11 @@ router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => 
 
   try {
     const r = await db.insert(
-      `INSERT INTO orders (order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      `INSERT INTO orders (order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type, created_by, material_deduction)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE)`,
       [order_code.toUpperCase(), custId, inquiry_id||null, order_date, dispatch_date||null, notes||null, order_type||'local_he', req.user.id]
     // valid: local_he, export_he, inventory_order, io_export_he, io_local_he
+    // material_deduction=TRUE: new orders deduct tube & spring-gauge from the checklist
     );
 
     await logActivity(r.lastInsertRowid, null, 'order_created', `Order ${order_code} submitted for approval`, req.user.id);

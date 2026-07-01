@@ -1221,6 +1221,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (!field1?.required && !value1.trim() && stageDef.fields.length > 0) return false;
     }
     if (stageDef.coilWeight && !(parseFloat(coilWeight) > 0)) return false; // total coil weight required (stage 3)
+    if (stageDef.gaugeSelect && card.material_deduction && !value1) return false; // gauge required for material-tracked orders (stage 1)
     if (photoAlwaysRequired) return false; // photo upload IS the done action for these stages
     if (photoRequiredForStage && !stagePhotoFile) return false; // stage requires photo before marking done
     if (photoRequiredAfter6pm && !stagePhotoFile) return false; // need photo first, then Mark Done
@@ -1685,7 +1686,9 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       {stageDef.gaugeSelect && (
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Gauge <span className="text-xs text-gray-400 font-normal">(optional)</span>
+            Gauge {card.material_deduction
+              ? <span className="text-red-500">*</span>
+              : <span className="text-xs text-gray-400 font-normal">(optional)</span>}
           </label>
           {isDone ? (
             <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
