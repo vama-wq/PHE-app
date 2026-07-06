@@ -275,6 +275,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS tube_scrap_qty NUMERIC`);
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS coil_used_qty NUMERIC`);
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS coil_scrap_qty NUMERIC`);
+      // Allow 'scrap' transactions (tube/coil scrap consumption) alongside the existing types.
+      await pool.query(`ALTER TABLE inventory_transactions DROP CONSTRAINT IF EXISTS inventory_transactions_transaction_type_check`);
+      await pool.query(`ALTER TABLE inventory_transactions ADD CONSTRAINT inventory_transactions_transaction_type_check
+        CHECK (transaction_type IN ('opening_stock','purchase_in','dispatch_to_production','return_from_production','adjustment','scrap'))`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS job_card_split_requests (
           id SERIAL PRIMARY KEY,

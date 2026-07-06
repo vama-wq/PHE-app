@@ -654,9 +654,18 @@ function OverviewTab({ jc, userRole }) {
                     {def?.hvLight && parsed && (
                       <div className="flex gap-2 text-sm">
                         <span className="text-gray-500 font-medium w-28 flex-shrink-0">HV + Light:</span>
-                        <span className="text-gray-800">
-                          {parsed.hv && `HV: ${parsed.hv}`}{parsed.hv && parsed.light && ' · '}{parsed.light && `Light: ${parsed.light}`}
-                          {parsed.ir && ` · IR: ${parsed.ir}`}
+                        <span className="text-gray-800 flex flex-wrap gap-x-3">
+                          {parsed.hv && (
+                            <span className={parsed.hv === 'pass' ? 'text-green-700' : 'text-red-700'}>
+                              HV: {parsed.hv}{parsed.hv === 'fail' && parsed.hvCount ? ` (${parsed.hvCount}${parsed.hvReason ? ' — ' + parsed.hvReason : ''})` : ''}
+                            </span>
+                          )}
+                          {parsed.light && (
+                            <span className={parsed.light === 'pass' ? 'text-green-700' : 'text-red-700'}>
+                              Light: {parsed.light}{parsed.light === 'fail' && parsed.lightCount ? ` (${parsed.lightCount}${parsed.lightReason ? ' — ' + parsed.lightReason : ''})` : ''}
+                            </span>
+                          )}
+                          {parsed.ohms && <span>Ohms: <span className="font-medium">{parsed.ohms}</span></span>}
                         </span>
                       </div>
                     )}

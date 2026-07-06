@@ -43,6 +43,14 @@ async function recomputeItemCost(db, itemId, newStock) {
 async function consumeFifo(db, itemId, qty, { type, note, userId }) {
   const q = r4(qty);
   if (!(q > 0)) return;
+  const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [itemId]);
+  const newStock = r4((Number(inv.current_stock) || 0) - q);
+  // Log the transaction FIRST — if it's rejected, stock/lots stay untouched.
+  await db.insert(
+    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [itemId, type, q, newStock, note, userId]
+  );
   const lots = await db.all(
     'SELECT id, qty_remaining FROM inventory_fifo_lots WHERE item_id=$1 AND qty_remaining > 0 ORDER BY received_at ASC, id ASC',
     [itemId]
@@ -54,20 +62,20 @@ async function consumeFifo(db, itemId, qty, { type, note, userId }) {
     await db.run('UPDATE inventory_fifo_lots SET qty_remaining = qty_remaining - $1 WHERE id=$2', [take, lot.id]);
     remaining -= take;
   }
-  const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [itemId]);
-  const newStock = r4((Number(inv.current_stock) || 0) - q);
   await recomputeItemCost(db, itemId, newStock);
-  await db.insert(
-    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6)`,
-    [itemId, type, q, newStock, note, userId]
-  );
 }
 
 // Reverse a consumption: add `qty` back to the oldest lots (up to their original size).
 async function returnFifo(db, itemId, qty, { note, userId }) {
   const q = r4(qty);
   if (!(q > 0)) return;
+  const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [itemId]);
+  const newStock = r4((Number(inv.current_stock) || 0) + q);
+  await db.insert(
+    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+     VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
+    [itemId, q, newStock, note, userId]
+  );
   const lots = await db.all(
     'SELECT id, qty_original, qty_remaining FROM inventory_fifo_lots WHERE item_id=$1 ORDER BY received_at ASC, id ASC',
     [itemId]
@@ -81,14 +89,7 @@ async function returnFifo(db, itemId, qty, { note, userId }) {
     await db.run('UPDATE inventory_fifo_lots SET qty_remaining = qty_remaining + $1 WHERE id=$2', [add, lot.id]);
     remaining -= add;
   }
-  const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [itemId]);
-  const newStock = r4((Number(inv.current_stock) || 0) + q);
   await recomputeItemCost(db, itemId, newStock);
-  await db.insert(
-    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-     VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
-    [itemId, q, newStock, note, userId]
-  );
 }
 
 // Called from the checklist PUT after a stage is marked done / undone.
