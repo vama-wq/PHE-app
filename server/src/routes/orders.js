@@ -97,11 +97,12 @@ router.get('/next-code', authenticate, async (req, res) => {
 // ── Drawings pending status (for sidebar badge + drawings page) ───────────────
 router.get('/drawings/pending', authenticate, async (req, res) => {
   const db = getDB();
+  const canSeeNames = withCustomerVisibility(req); // design/QC see only the customer code
   const rows = await db.all(`
     SELECT
       o.id, o.order_code, o.status, o.drawing_status, o.drawing_rejection_reason,
       o.created_at, o.order_date,
-      c.customer_code, c.name AS customer_name,
+      c.customer_code, ${canSeeNames ? 'c.name AS customer_name,' : ''}
       u.name AS created_by_name,
       (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count,
       (SELECT COUNT(*) FROM order_drawings od WHERE od.order_id = o.id) AS drawing_count,

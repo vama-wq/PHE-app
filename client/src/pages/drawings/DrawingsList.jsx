@@ -222,7 +222,7 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
       {/* Customer */}
       <td className="table-cell">
         <div className="text-sm font-medium text-gray-800">{order.customer_code}</div>
-        <div className="text-xs text-gray-400">{order.customer_name}</div>
+        {order.customer_name && <div className="text-xs text-gray-400">{order.customer_name}</div>}
       </td>
 
       {/* Items count */}
