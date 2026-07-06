@@ -750,7 +750,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
         {/* Job card info + qty summary */}
         <div className={`border rounded-lg p-3 text-sm ${card.net_qty < card.qty ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-100'}`}>
           <p className={`font-semibold ${card.net_qty < card.qty ? 'text-orange-800' : 'text-green-800'}`}>{card.job_card_no} · {card.order_code}</p>
-          <p className={`mt-0.5 ${card.net_qty < card.qty ? 'text-orange-700' : 'text-green-700'}`}>{card.customer_name || card.customer_code}</p>
+          <p className={`mt-0.5 ${card.net_qty < card.qty ? 'text-orange-700' : 'text-green-700'}`}>{card.customer_code}</p>
           <div className={`mt-2 pt-2 border-t space-y-1 ${card.net_qty < card.qty ? 'border-orange-200' : 'border-green-200'}`}>
             <div className="flex justify-between text-xs">
               <span className="text-gray-600">Original Qty</span>
