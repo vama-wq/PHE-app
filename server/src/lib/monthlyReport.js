@@ -68,7 +68,13 @@ async function buildMonth(db, startISO, endISO) {
         (workers[w] ||= { items:new Set(), rejects:0 }); workers[w].items.add(c.id); workers[w].rejects += rq;
       }
     });
-    const designed = (c.voltage && c.wattage) ? round(c.voltage*c.voltage/c.wattage) : null;
+    // "2in1"/"3in1" etc. in the item name means N heaters share the stated wattage,
+    // so per-heater wattage = total / N and the designed Ω (V²/W) uses the per-heater value.
+    const _name = `${c.drawing_no||''} ${c.product_name||''} ${c.product_code||''}`;
+    const _combo = (_name.match(/(\d+)\s*-?\s*in\s*-?\s*1/i) || [])[1];
+    const heaters = _combo ? Math.max(1, parseInt(_combo, 10)) : 1;
+    const wattPer = c.wattage ? round(c.wattage / heaters) : null;
+    const designed = (c.voltage && wattPer) ? round(c.voltage*c.voltage/wattPer) : null;
     const actual = parseOhms(stg(27)?.value1);
     const dev = (designed && actual) ? round((actual-designed)/designed*100, 1) : null;
     const gauge = (stg(1)?.value1 || '').toUpperCase();
@@ -97,7 +103,7 @@ async function buildMonth(db, startISO, endISO) {
       jc: c.job_card_no, order: c.order_code, customer: c.customer_code,
       product: c.product_code || '', drawing: c.drawing_no || c.product_name || '', type: c.order_type,
       qty: c.qty, netQty: Math.max((c.qty||0)-rejects+remades, 0),
-      voltage: c.voltage||'', wattage: c.wattage||'',
+      voltage: c.voltage||'', wattage: c.wattage||'', wattPer: wattPer ?? '',
       ohmsDes: designed ?? '', ohmsAct: actual ?? '', ohmsDev: dev ?? '', ohmsFlag: dev==null ? '' : (Math.abs(dev)>5 ? 'OUT' : 'OK'),
       megger: stg(28)?.value1 || '', drawLen: stg(8)?.value1 || '', tubeCut: stg(5)?.value1 || '',
       rejects, remakes: remades,
@@ -237,7 +243,7 @@ async function generate(db, month) {
     { header:'Job Card', key:'jc', width:22 }, { header:'Order', key:'order', width:13 }, { header:'Customer', key:'customer', width:10 },
     { header:'Product Code', key:'product', width:16 }, { header:'Drawing', key:'drawing', width:20 }, { header:'Type', key:'type', width:11 },
     { header:'Qty', key:'qty', width:6 }, { header:'Net Qty', key:'netQty', width:8 },
-    { header:'V', key:'voltage', width:6 }, { header:'W', key:'wattage', width:7 },
+    { header:'V', key:'voltage', width:6 }, { header:'W (total)', key:'wattage', width:9 }, { header:'W/Heater', key:'wattPer', width:9 },
     { header:'Designed Ω', key:'ohmsDes', width:11 }, { header:'Actual Ω', key:'ohmsAct', width:10 },
     { header:'Ω Dev %', key:'ohmsDev', width:9 }, { header:'Ω ±5%', key:'ohmsFlag', width:8 },
     { header:'Megger', key:'megger', width:12 }, { header:'Draw Len (St.8)', key:'drawLen', width:13 }, { header:'Tube Cut (St.5)', key:'tubeCut', width:13 },
