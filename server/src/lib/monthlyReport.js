@@ -16,6 +16,9 @@ const round = (x, n=2) => (x==null || isNaN(x)) ? null : Math.round(x * 10**n) /
 const parseOhms = (v1) => { try { const d = JSON.parse(v1); const o = parseFloat(d?.ohms); return isNaN(o) ? null : o; } catch { return null; } };
 const dstr = (d) => d ? new Date(d).toISOString().slice(0,10) : '';
 const daysBetween = (a, b) => (a && b) ? Math.round((new Date(b) - new Date(a)) / 864e5) : null;
+// Finished Goods is keyed by the job-card/drawing name (base_drawing_no), i.e. the
+// drawing name with any trailing -N split/duplicate suffix removed — NOT the product code.
+const baseDrawing = (s) => s ? (String(s).trim().replace(/-\d+$/, '') || String(s).trim()) : '';
 
 // ── Colours ──
 const FILL = (argb) => ({ type:'pattern', pattern:'solid', fgColor:{ argb } });
@@ -86,7 +89,7 @@ async function buildMonth(db, startISO, endISO) {
       else if (onTime === 'Pending') { delay = 'Still in production / not yet dispatched'; }
       else { delay = 'Dispatched late (no hold or rejection recorded)'; }
     }
-    const pkey = c.product_code || c.drawing_no || '—';
+    const pkey = baseDrawing(c.drawing_no || c.product_name || c.job_card_no) || '—'; // FG groups by job-card/drawing name
     (products[pkey] ||= { qty:0, count:0, customers:new Set() });
     products[pkey].count++; products[pkey].qty += num(c.qty); products[pkey].customers.add(c.customer_code);
 
@@ -299,10 +302,10 @@ async function generate(db, month) {
 
   // ── Sheet 6: Finished-Goods Candidates ──
   const fgs = wb.addWorksheet('Finished-Goods Candidates');
-  fgs.columns = [{ header:'Product Code / Drawing', key:'p', width:26 }, { header:'Times Made (12 mo)', key:'count', width:16 },
+  fgs.columns = [{ header:'Job Card / Drawing (FG group)', key:'p', width:30 }, { header:'Times Made (12 mo)', key:'count', width:16 },
     { header:'Months Made', key:'months', width:12 }, { header:'Customers', key:'cust', width:10 }, { header:'Total Qty', key:'qty', width:10 },
     { header:'Recommendation', key:'rec', width:20 }, { header:'Why', key:'why', width:56 }];
-  fgs.addRow({ p:'Products you make repeatedly are the safest to keep as ready finished-goods stock (ship instantly, smooth production). One-offs should stay make-to-order.' });
+  fgs.addRow({ p:'Grouped by job-card/drawing name (same as your Finished Goods inventory), not product code. Job cards you make repeatedly are the safest to keep as ready finished-goods stock (ship instantly, smooth production). One-offs should stay make-to-order.' });
   Object.entries(fg).map(([k, v]) => {
     const custs = v.customers.size; let rec, why;
     if (v.months >= 3 || (v.count >= 3 && custs >= 2)) { rec = '✅ Stock it'; why = 'Made often across several months/customers — steady, predictable demand.'; }
