@@ -383,4 +383,174 @@ router.get('/qc-reports', authenticate, authorize('owner', 'admin', 'design'), a
   sendXlsx(res, wb, `qc_reports_${Date.now()}.xlsx`);
 });
 
+// ── Monthly Production Report (multi-sheet: Item Detail · Analysis · 12-Mo Trend) ──
+// Correct stage numbers (the STAGE_NAMES map above is legacy/misaligned).
+const RPT_STAGES = {
+  1:'Coil',2:'Coil + Tube Cutting',3:'Ohms',4:'Spot',5:'Tube Cutting',6:'Filling',
+  7:'HV + Light (1)',8:'Draw',9:'HV + Light (2)',10:'Straightening',11:'Trimming',
+  12:'Annealing',13:'Buffing',14:'Bending',15:'Brazing',16:'In Plating',17:'Plating Completed',
+  18:'Heater Cleaning',19:'Overnight Oven',20:'HV + Light (3)',21:'Nipple Press',22:'3 Hours Oven',
+  23:'Sealing',24:'HV + Light (4)',25:'Cleaning',26:'Nut Washer',27:'HV + Light (5)',
+  28:'Megger',29:'Ready in Production',30:'Kharoch Process',
+};
+const rptRound = (x, n=2) => (x==null || isNaN(x)) ? null : Math.round(x * 10**n) / 10**n;
+const rptOhms = (v1) => { try { const dd = JSON.parse(v1); const o = parseFloat(dd?.ohms); return isNaN(o) ? null : o; } catch { return null; } };
+const rptDate = (dt) => dt ? new Date(dt).toISOString().slice(0,10) : '';
+
+async function rptBuildMonth(db, startISO, endISO) {
+  const cards = await db.all(`
+    SELECT jc.id, jc.job_card_no, jc.qty, jc.dispatch_date, jc.drawing_no, jc.product_name, jc.created_at,
+           jc.tube_used_qty, jc.tube_scrap_qty, jc.coil_used_qty, jc.coil_scrap_qty,
+           o.order_code, o.order_type, c.customer_code,
+           oi.voltage, oi.wattage, oi.tube_material,
+           s29.done_at AS produced_at
+    FROM job_cards jc
+    JOIN production_checklist s29 ON s29.job_card_id = jc.id AND s29.stage_no = 29 AND s29.done = 1
+    JOIN orders o ON o.id = jc.order_id
+    JOIN customers c ON c.id = o.customer_id
+    LEFT JOIN order_items oi ON oi.id = jc.order_item_id
+    WHERE s29.done_at::timestamptz >= $1::timestamptz AND s29.done_at::timestamptz < $2::timestamptz
+    ORDER BY s29.done_at`, [startISO, endISO]);
+  if (!cards.length) return { rows: [], stageRejects: {}, workers: {} };
+  const ids = cards.map(c => c.id);
+  const cl = await db.all(
+    `SELECT job_card_id, stage_no, value1, worker_name, rejection_qty, remade_qty
+     FROM production_checklist WHERE job_card_id = ANY($1)`, [ids]);
+  const disp = await db.all(
+    `SELECT job_card_id, MAX(dispatch_date) AS dispatched_at FROM dispatch_documents
+     WHERE job_card_id = ANY($1) GROUP BY job_card_id`, [ids]);
+  const dispMap = {}; disp.forEach(x => dispMap[x.job_card_id] = x.dispatched_at);
+  const invCost = {};
+  (await db.all(`SELECT upper(item_code) code, unit_cost FROM inventory_items
+                 WHERE lower(trim(category)) IN ('tube','spring guage')`))
+    .forEach(i => invCost[i.code] = Number(i.unit_cost) || 0);
+  const byCard = {}; cl.forEach(r => (byCard[r.job_card_id] ||= []).push(r));
+
+  const stageRejects = {}, workers = {};
+  const rows = cards.map(c => {
+    const cs = byCard[c.id] || [];
+    const stg = n => cs.find(r => r.stage_no === n);
+    let rejects = 0, remades = 0; const wset = new Set();
+    cs.forEach(r => {
+      const rq = parseInt(r.rejection_qty,10)||0;
+      rejects += rq;
+      if (r.stage_no !== 29) remades += parseInt(r.remade_qty,10)||0;
+      if (rq > 0) stageRejects[r.stage_no] = (stageRejects[r.stage_no]||0) + rq;
+      if (r.worker_name && r.worker_name.trim()) {
+        const w = r.worker_name.trim(); wset.add(w);
+        (workers[w] ||= { items: new Set(), rejects: 0 });
+        workers[w].items.add(c.id); workers[w].rejects += rq;
+      }
+    });
+    const designed = (c.voltage && c.wattage) ? rptRound(c.voltage*c.voltage/c.wattage) : null;
+    const actual = rptOhms(stg(27)?.value1);
+    const dev = (designed && actual) ? rptRound((actual-designed)/designed*100, 1) : null;
+    const gaugeCode = (stg(1)?.value1 || '').toUpperCase();
+    const matVal = rptRound(
+      ((Number(c.tube_used_qty)||0)+(Number(c.tube_scrap_qty)||0)) * (invCost[(c.tube_material||'').toUpperCase()]||0) +
+      ((Number(c.coil_used_qty)||0)+(Number(c.coil_scrap_qty)||0)) * (invCost[gaugeCode]||0));
+    const dispatchedAt = dispMap[c.id] || null;
+    const onTime = dispatchedAt ? (new Date(dispatchedAt) <= new Date(c.dispatch_date) ? 'Yes' : 'No') : 'Pending';
+    return {
+      'Job Card': c.job_card_no, 'Order': c.order_code, 'Customer': c.customer_code,
+      'Drawing / Product': c.drawing_no || c.product_name || '', 'Type': c.order_type,
+      'Qty': c.qty, 'Net Qty': Math.max((c.qty||0)-rejects+remades, 0),
+      'Voltage': c.voltage||'', 'Wattage': c.wattage||'',
+      'Designed Ω (V²/W)': designed ?? '', 'Actual Ω (St.27)': actual ?? '',
+      'Ω Dev %': dev ?? '', 'Ω ±5%': dev==null ? '' : (Math.abs(dev)>5 ? 'OUT' : 'OK'),
+      'Megger (St.28)': stg(28)?.value1 || '',
+      'Draw Length (St.8)': stg(8)?.value1 || '', 'Tube Cut (St.5)': stg(5)?.value1 || '',
+      'Rejects': rejects, 'Remakes': remades,
+      'Tube Used (ft)': c.tube_used_qty ?? '', 'Tube Scrap (ft)': c.tube_scrap_qty ?? '',
+      'Wire Used (kg)': c.coil_used_qty ?? '', 'Wire Scrap (kg)': c.coil_scrap_qty ?? '',
+      'Material ₹': matVal ?? '',
+      'Produced': rptDate(c.produced_at), 'Due': c.dispatch_date || '',
+      'Dispatched': rptDate(dispatchedAt), 'On-Time': onTime,
+      'Cycle Days': (c.produced_at && c.created_at) ? Math.round((new Date(c.produced_at)-new Date(c.created_at))/864e5) : '',
+      'Workers': [...wset].join(', '),
+    };
+  });
+  return { rows, stageRejects, workers };
+}
+
+function rptSummary(rows) {
+  const n = rows.length, num = (r,k) => Number(r[k]) || 0;
+  const qty = rows.reduce((s,r)=>s+num(r,'Qty'),0);
+  const rejects = rows.reduce((s,r)=>s+num(r,'Rejects'),0);
+  const firstPass = rows.filter(r=>num(r,'Rejects')===0).length;
+  const dispatched = rows.filter(r=>r['On-Time']!=='Pending');
+  const ontime = dispatched.filter(r=>r['On-Time']==='Yes').length;
+  const devs = rows.map(r=>r['Ω Dev %']).filter(v=>v!=='' && v!=null).map(Number);
+  const cyc = rows.map(r=>r['Cycle Days']).filter(v=>v!=='' && v!=null).map(Number);
+  return {
+    items:n, qty, netQty: rows.reduce((s,r)=>s+num(r,'Net Qty'),0),
+    rejects, remades: rows.reduce((s,r)=>s+num(r,'Remakes'),0),
+    rejectRatePct: qty ? rptRound(rejects/qty*100,1) : 0,
+    firstPassYieldPct: n ? rptRound(firstPass/n*100,1) : 0,
+    onTimePct: dispatched.length ? rptRound(ontime/dispatched.length*100,1) : 0,
+    dispatchedCount: dispatched.length,
+    scrapTubeFt: rptRound(rows.reduce((s,r)=>s+num(r,'Tube Scrap (ft)'),0)),
+    scrapWireKg: rptRound(rows.reduce((s,r)=>s+num(r,'Wire Scrap (kg)'),0),3),
+    materialCost: rptRound(rows.reduce((s,r)=>s+num(r,'Material ₹'),0)),
+    avgAbsOhmsDev: devs.length ? rptRound(devs.reduce((s,v)=>s+Math.abs(v),0)/devs.length,1) : null,
+    ohmsOutOfSpec: rows.filter(r=>r['Ω ±5%']==='OUT').length,
+    avgCycleDays: cyc.length ? rptRound(cyc.reduce((s,v)=>s+v,0)/cyc.length,1) : null,
+  };
+}
+
+router.get('/monthly-production', authenticate, authorize('owner','admin','accounts'), async (req, res) => {
+  const db = getDB();
+  const month = /^\d{4}-\d{2}$/.test(req.query.month||'') ? req.query.month : new Date().toISOString().slice(0,7);
+  const [y,m] = month.split('-').map(Number);
+  const mStart = (yy,mm) => new Date(Date.UTC(yy, mm, 1)).toISOString();
+  const cur  = await rptBuildMonth(db, mStart(y, m-1), mStart(y, m));
+  const prev = await rptBuildMonth(db, mStart(y, m-2), mStart(y, m-1));
+  const curS = rptSummary(cur.rows), prevS = rptSummary(prev.rows);
+
+  const trend = [];
+  for (let i = 11; i >= 0; i--) {
+    const su = rptSummary((await rptBuildMonth(db, mStart(y, m-1-i), mStart(y, m-i))).rows);
+    trend.push({ 'Month': mStart(y, m-1-i).slice(0,7), 'Items': su.items, 'Qty': su.qty, 'Reject %': su.rejectRatePct,
+      'First-Pass %': su.firstPassYieldPct, 'On-Time %': su.onTimePct, 'Scrap Tube (ft)': su.scrapTubeFt,
+      'Scrap Wire (kg)': su.scrapWireKg, 'Avg |Ω Dev| %': su.avgAbsOhmsDev ?? '', 'Ω Out-of-Spec': su.ohmsOutOfSpec,
+      'Avg Cycle Days': su.avgCycleDays ?? '', 'Material ₹': su.materialCost });
+  }
+
+  const d = (a,b) => (a==null||b==null||a===''||b==='') ? '' : rptRound(a-b,1);
+  const A = [
+    [`Monthly Production Report — ${month}`],
+    ['Basis: job cards whose production completed (Stage 29) in the month.'],
+    [], ['KPI', 'This Month', 'Last Month', 'Change'],
+    ['Items produced', curS.items, prevS.items, d(curS.items, prevS.items)],
+    ['Units (qty)', curS.qty, prevS.qty, d(curS.qty, prevS.qty)],
+    ['Net units', curS.netQty, prevS.netQty, d(curS.netQty, prevS.netQty)],
+    [], ['— QUALITY —'],
+    ['Rejections', curS.rejects, prevS.rejects, d(curS.rejects, prevS.rejects)],
+    ['Reject rate %', curS.rejectRatePct, prevS.rejectRatePct, d(curS.rejectRatePct, prevS.rejectRatePct)],
+    ['Remakes', curS.remades, prevS.remades, d(curS.remades, prevS.remades)],
+    ['First-pass yield %', curS.firstPassYieldPct, prevS.firstPassYieldPct, d(curS.firstPassYieldPct, prevS.firstPassYieldPct)],
+    ['Avg |Ω deviation| %', curS.avgAbsOhmsDev ?? '', prevS.avgAbsOhmsDev ?? '', d(curS.avgAbsOhmsDev, prevS.avgAbsOhmsDev)],
+    ['Ω out-of-spec (>±5%)', curS.ohmsOutOfSpec, prevS.ohmsOutOfSpec, d(curS.ohmsOutOfSpec, prevS.ohmsOutOfSpec)],
+    [], ['— ON-TIME DELIVERY —'],
+    ['On-time dispatch %', curS.onTimePct, prevS.onTimePct, d(curS.onTimePct, prevS.onTimePct)],
+    ['Dispatched count', curS.dispatchedCount, prevS.dispatchedCount, d(curS.dispatchedCount, prevS.dispatchedCount)],
+    ['Avg cycle days', curS.avgCycleDays ?? '', prevS.avgCycleDays ?? '', d(curS.avgCycleDays, prevS.avgCycleDays)],
+    [], ['— MATERIAL & COST —'],
+    ['Tube scrap (ft)', curS.scrapTubeFt, prevS.scrapTubeFt, d(curS.scrapTubeFt, prevS.scrapTubeFt)],
+    ['Wire scrap (kg)', curS.scrapWireKg, prevS.scrapWireKg, d(curS.scrapWireKg, prevS.scrapWireKg)],
+    ['Material consumed ₹', curS.materialCost, prevS.materialCost, d(curS.materialCost, prevS.materialCost)],
+    [], ['— REJECTIONS BY STAGE (this month, worst first) —'], ['Stage', 'Rejects'],
+    ...Object.entries(cur.stageRejects).sort((a,b)=>b[1]-a[1]).map(([s,nn])=>[`${s} · ${RPT_STAGES[s]||''}`, nn]),
+    [], ['— WORKERS (this month) —'], ['Worker', 'Items', 'Rejects'],
+    ...Object.entries(cur.workers).sort((a,b)=>b[1].items.size-a[1].items.size).map(([w,x])=>[w, x.items.size, x.rejects]),
+  ];
+
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.json_to_sheet(cur.rows.length ? cur.rows : [{ 'Job Card': `No production completed in ${month}` }]);
+  autoWidth(ws1); XLSX.utils.book_append_sheet(wb, ws1, 'Item Detail');
+  const ws2 = XLSX.utils.aoa_to_sheet(A); autoWidth(ws2); XLSX.utils.book_append_sheet(wb, ws2, 'Monthly Analysis');
+  const ws3 = XLSX.utils.json_to_sheet(trend); autoWidth(ws3); XLSX.utils.book_append_sheet(wb, ws3, '12-Month Trend');
+  sendXlsx(res, wb, `production_report_${month}.xlsx`);
+});
+
 module.exports = router;

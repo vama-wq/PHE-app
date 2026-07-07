@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../lib/api';
-import { fmtDate, fmtDateTime } from '../../lib/utils';
+import { fmtDate, fmtDateTime, downloadExcel } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
 import {
   BarChart2, ClipboardList, FileText, FlaskConical, Truck,
@@ -934,6 +934,15 @@ export default function ReportsDashboard() {
   const [editTpl, setEditTpl]         = useState(null);   // template being edited (null = new)
   const [showBuilder, setShowBuilder] = useState(false);  // show new template builder
 
+  // Monthly Production Report (multi-sheet Excel)
+  const [reportMonth, setReportMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [dlReport, setDlReport] = useState(false);
+  const downloadMonthly = async () => {
+    setDlReport(true);
+    try { await downloadExcel(`monthly-production?month=${reportMonth}`, `production_report_${reportMonth}.xlsx`); }
+    finally { setDlReport(false); }
+  };
+
   const loadTemplates = useCallback(async () => {
     setLoadingTpl(true);
     try {
@@ -1005,6 +1014,30 @@ export default function ReportsDashboard() {
           )}
         </button>
       </div>
+
+      {/* Monthly Production Report (featured, multi-sheet Excel) */}
+      {tab === 'standard' && (
+        <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-5 flex flex-col sm:flex-row sm:items-end gap-4">
+          <div className="flex-1">
+            <h2 className="font-bold text-gray-900 flex items-center gap-2">
+              <BarChart2 size={18} className="text-blue-600" /> Monthly Production Report
+            </h2>
+            <p className="text-sm text-gray-600 mt-1 max-w-2xl">
+              Per-item detail (designed vs actual Ω, Megger, draw length, rejects, scrap, on-time, workers) plus a
+              monthly analysis (quality · on-time · material) and a 12-month trend. Excel workbook, 3 sheets.
+            </p>
+          </div>
+          <div className="flex items-end gap-2">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Month</label>
+              <input type="month" className="input" value={reportMonth} onChange={e => setReportMonth(e.target.value)} />
+            </div>
+            <button className="btn-primary flex items-center gap-2 whitespace-nowrap" onClick={downloadMonthly} disabled={dlReport}>
+              <Download size={16} /> {dlReport ? 'Generating…' : 'Download Excel'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Standard Reports */}
       {tab === 'standard' && (
