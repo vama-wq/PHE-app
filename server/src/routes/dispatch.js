@@ -86,24 +86,47 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
     return res.status(400).json({ error: 'Cannot dispatch — job card has a pending hold that must be approved first.' });
   }
 
-  // Require at least an invoice document before dispatching
+  // Is this a repaired return being re-dispatched? The original dispatch already had an
+  // invoice, so accounts can dispatch without raising a new one.
+  const repairQuery = await db.get(
+    `SELECT id, query_no FROM customer_queries
+     WHERE job_card_id=$1 AND status='product_return' AND return_type='repair'
+       AND return_status NOT IN ('repaired_dispatched','debit_note_issued')
+     ORDER BY id DESC LIMIT 1`,
+    [req.params.jobCardId]
+  );
+  const isRepairDispatch = !!repairQuery;
+
+  // Require an invoice before dispatching — except for repaired returns (already invoiced).
   const invoiceDoc = await db.get(
     "SELECT id FROM dispatch_documents WHERE job_card_id=$1 AND doc_type='invoice' LIMIT 1",
     [req.params.jobCardId]
   );
-  if (!invoiceDoc) {
+  if (!invoiceDoc && !isRepairDispatch) {
     return res.status(400).json({ error: 'An invoice document is required before dispatching. Please upload an invoice first.' });
   }
 
-  // Save shipping details on the invoice document
-  await db.run(
-    `UPDATE dispatch_documents SET shipping_carrier=$1, tracking_number=$2, dispatch_date=$3
-     WHERE id=$4`,
-    [shipping_carrier || null, tracking_number || null, dispatch_date || null, invoiceDoc.id]
-  );
+  // Save shipping details on the invoice document (if one exists)
+  if (invoiceDoc) {
+    await db.run(
+      `UPDATE dispatch_documents SET shipping_carrier=$1, tracking_number=$2, dispatch_date=$3
+       WHERE id=$4`,
+      [shipping_carrier || null, tracking_number || null, dispatch_date || null, invoiceDoc.id]
+    );
+  }
 
   await db.run("UPDATE job_cards SET status='dispatched' WHERE id=$1", [req.params.jobCardId]);
   await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [jc.order_id]);
+
+  // Repaired return: close the customer query now that it's re-dispatched.
+  if (isRepairDispatch) {
+    await db.run(
+      `UPDATE customer_queries SET status='resolved', return_status='repaired_dispatched', updated_at=NOW() WHERE id=$1`,
+      [repairQuery.id]
+    );
+    await logActivity(jc.order_id, jc.id, 'repair_dispatched',
+      `Repaired product re-dispatched (query ${repairQuery.query_no})${invoiceDoc ? '' : ' — no new invoice required'}`, req.user.id);
+  }
 
   // Settle this item's inventory. For a partially-dispatched (split) item this is
   // where the full BOM finally deducts — once every split is dispatched / in FG.

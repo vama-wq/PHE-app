@@ -646,6 +646,8 @@ function DispatchDocModal({ jc, onClose, onSave }) {
 
   const invoiceDoc = docs.find(d => d.doc_type === 'invoice');
   const otherDocs = docs.filter(d => d.doc_type !== 'invoice');
+  // Repaired returns were already invoiced on the original dispatch — invoice optional here.
+  const isRepair = jc.active_query_status === 'product_return' && jc.active_query_return_type === 'repair';
 
   return (
     <Modal open title={`Dispatch — ${jc.job_card_no}`} onClose={onClose} size="lg">
@@ -658,15 +660,15 @@ function DispatchDocModal({ jc, onClose, onSave }) {
       </div>
 
       <div className="space-y-5">
-        {/* ── Step 1: Invoice (mandatory) ── */}
-        <div className={`rounded-xl border-2 p-4 ${invoiceUploaded ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+        {/* ── Step 1: Invoice (mandatory, except repaired returns) ── */}
+        <div className={`rounded-xl border-2 p-4 ${invoiceUploaded ? 'border-green-200 bg-green-50' : isRepair ? 'border-gray-200 bg-gray-50' : 'border-red-200 bg-red-50'}`}>
           <div className="flex items-center gap-2 mb-2">
             {invoiceUploaded
               ? <CheckCircle size={18} className="text-green-600" />
-              : <AlertTriangle size={18} className="text-red-500" />
+              : <AlertTriangle size={18} className={isRepair ? 'text-gray-400' : 'text-red-500'} />
             }
             <h3 className="font-semibold text-sm">
-              {invoiceUploaded ? 'Invoice Uploaded' : 'Invoice Required *'}
+              {invoiceUploaded ? 'Invoice Uploaded' : isRepair ? 'Invoice (optional — repaired return)' : 'Invoice Required *'}
             </h3>
           </div>
 
@@ -776,8 +778,8 @@ function DispatchDocModal({ jc, onClose, onSave }) {
         <div className="flex gap-3">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button className="btn-primary flex-1" onClick={handleDispatch}
-            disabled={saving || !invoiceUploaded}
-            title={!invoiceUploaded ? 'Upload an invoice first' : ''}>
+            disabled={saving || (!invoiceUploaded && !isRepair)}
+            title={!invoiceUploaded && !isRepair ? 'Upload an invoice first' : ''}>
             {saving ? 'Dispatching...' : 'Mark as Dispatched'}
           </button>
         </div>

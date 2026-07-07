@@ -347,11 +347,11 @@ export default function CustomerQueryDetail() {
                     Submit QC Result
                   </button>
                 )}
-                {canManage && query.return_status === 'in_repair' && (
-                  <button className="btn-primary w-full text-sm flex items-center justify-center gap-1"
-                    onClick={() => setShowRepairComplete(true)}>
-                    <Truck size={14} /> Mark Repair Complete
-                  </button>
+                {query.return_status === 'in_repair' && (
+                  <div className="w-full text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg p-2.5 text-center flex items-start gap-1.5">
+                    <Truck size={13} className="flex-shrink-0 mt-0.5" />
+                    <span>In repair in <strong>Production</strong>. Complete its production checklist → it goes to <strong>QC</strong> for approval, then <strong>Dispatch</strong> (no new invoice needed).</span>
+                  </div>
                 )}
                 {canManage && query.return_type === 'debit_note' && query.debit_note_no && query.return_status !== 'debit_note_issued' && (
                   <button className="btn-primary w-full text-sm" onClick={async () => {

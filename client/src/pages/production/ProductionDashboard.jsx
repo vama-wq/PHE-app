@@ -49,7 +49,11 @@ export default function ProductionDashboard() {
   };
 
   const todayPickIds = new Set(todayPicks.map(p => p.id));
-  const activeCards = allCards.filter(c => c.status !== 'dispatched');
+  // Production shows only cards being actively made or repaired. Everything past that
+  // (awaiting QC, QC-approved, completed, and any resolved/returned query) lives in its
+  // own section (QC / Dispatch / Finished Goods / Customer Queries), not here.
+  const PRODUCTION_STATUSES = ['pending', 'in_progress', 'on_hold', 'repair_in_progress'];
+  const activeCards = allCards.filter(c => PRODUCTION_STATUSES.includes(c.status));
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
