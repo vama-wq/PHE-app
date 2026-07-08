@@ -5,8 +5,9 @@
 //   • Stage 5 (Tube Cutting): tube used  = value1 (mm)  × qty  → feet  (÷304.8)
 //                             tube scrap = scrap (inches)× qty  → feet  (÷12)
 //     Tube inventory item = the order item's Tube Material (item code, category "Tube").
-//   • Stage 3 (Ohms):         coil used  = coil_weight (g, total)  → Kgs (÷1000)
-//                             coil scrap = scrap (g, total)        → Kgs (÷1000)
+//   • Stage 4 (Spot) done — deducted once Stage 4 completes, using the data entered
+//     at Stage 3 (Ohms): coil used  = coil_weight (g, total)  → Kgs (÷1000)
+//                        coil scrap = scrap (g, total)        → Kgs (÷1000)
 //     Gauge inventory item = Stage 1 gauge pick (item code, category "Spring Guage").
 //   • Stage 6 (Filling):      PVC bush   = 2 pcs/piece × qty — PVC-FB08-M4 (8mm dia) or
 //                                          PVC-FB11-M5 (11mm dia), by the order item's Tube Diameter.
@@ -98,9 +99,10 @@ async function returnFifo(db, itemId, qty, { note, userId }) {
 }
 
 // Called from the checklist PUT after a stage is marked done / undone.
-// Stage 5 → tube; Stage 3 → coil (spring gauge). No-op for existing orders.
+// Stage 5 → tube; Stage 4 → coil/spring-gauge (using Stage 3 data); Stage 6 → filling.
+// No-op for existing orders.
 async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
-  if (stageNo !== 5 && stageNo !== 3 && stageNo !== 6) return;
+  if (stageNo !== 5 && stageNo !== 4 && stageNo !== 6) return;
   const jc = await db.get(
     `SELECT jc.*, o.material_deduction, o.order_code
      FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1`,
@@ -144,7 +146,11 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
     }
   }
 
-  if (stageNo === 3) {
+  if (stageNo === 4) {
+    // Triggered by Stage 4 (Spot) completion, but the coil weight/scrap figures are
+    // entered at Stage 3 (Ohms) — read from there (should already be filled in by the
+    // time Stage 4 is done, since Stage 3 requires the coil weight before it can be
+    // marked done itself and production runs through the stages in order).
     const s1 = await db.get('SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=1', [jobCardId]);
     const gauge = await invByCode(db, s1?.value1, 'spring guage');
     if (isDone && !jc.coil_deducted) {
@@ -159,8 +165,8 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
       await db.run('UPDATE job_cards SET coil_deducted=TRUE, coil_used_qty=$1, coil_scrap_qty=$2 WHERE id=$3', [usedKg, scrapKg, jobCardId]);
     } else if (!isDone && jc.coil_deducted) {
       if (gauge) {
-        if (Number(jc.coil_used_qty) > 0) await returnFifo(db, gauge.id, jc.coil_used_qty, { note: `Reverted coil wire (Stage 3 undone) — ${detail}`, userId });
-        if (Number(jc.coil_scrap_qty) > 0) await returnFifo(db, gauge.id, jc.coil_scrap_qty, { note: `Reverted coil scrap (Stage 3 undone) — ${detail}`, userId });
+        if (Number(jc.coil_used_qty) > 0) await returnFifo(db, gauge.id, jc.coil_used_qty, { note: `Reverted coil wire (Stage 4 undone) — ${detail}`, userId });
+        if (Number(jc.coil_scrap_qty) > 0) await returnFifo(db, gauge.id, jc.coil_scrap_qty, { note: `Reverted coil scrap (Stage 4 undone) — ${detail}`, userId });
       }
       await db.run('UPDATE job_cards SET coil_deducted=FALSE, coil_used_qty=NULL, coil_scrap_qty=NULL WHERE id=$1', [jobCardId]);
     }
