@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../lib/api';
+import { useAuthStore } from '../../store/authStore';
 import { fmtDate, fmtDateTime, downloadExcel } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
 import {
@@ -924,6 +925,7 @@ function TemplateCard({ tpl, onRun, onEdit, onDelete }) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ReportsDashboard() {
+  const { user } = useAuthStore();
   const [tab, setTab] = useState('standard'); // 'standard' | 'templates'
   const [templates, setTemplates] = useState([]);
   const [loadingTpl, setLoadingTpl] = useState(false);
@@ -1015,8 +1017,8 @@ export default function ReportsDashboard() {
         </button>
       </div>
 
-      {/* Monthly Production Report (featured, multi-sheet Excel) */}
-      {tab === 'standard' && (
+      {/* Monthly Production Report (featured, multi-sheet Excel) — owner only */}
+      {tab === 'standard' && user?.role === 'owner' && (
         <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-5 flex flex-col sm:flex-row sm:items-end gap-4">
           <div className="flex-1">
             <h2 className="font-bold text-gray-900 flex items-center gap-2">

@@ -386,7 +386,7 @@ router.get('/qc-reports', authenticate, authorize('owner', 'admin', 'design'), a
 // ── Monthly Production Report — rich Excel (filters, conditional formatting, guide,
 // per-item detail, days-to-dispatch by product, finished-goods suggestions, delay reasons) ──
 const monthlyReport = require('../lib/monthlyReport');
-router.get('/monthly-production', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+router.get('/monthly-production', authenticate, authorize('owner'), async (req, res) => {
   const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : new Date().toISOString().slice(0, 7);
   try {
     const buf = await monthlyReport.generate(getDB(), month);
