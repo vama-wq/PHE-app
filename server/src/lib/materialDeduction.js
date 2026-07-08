@@ -15,13 +15,14 @@
 // Only runs for orders flagged material_deduction=TRUE (created after this feature).
 
 const { resolveJobCardItemId } = require('./inventoryDeduction');
+const { logActivity } = require('../db');
 
 const r4 = (n) => Math.round(Number(n) * 1e4) / 1e4;
 
 async function invByCode(db, code, category) {
   if (!code) return null;
   return db.get(
-    'SELECT id, unit FROM inventory_items WHERE upper(item_code)=upper($1) AND lower(trim(category))=$2 LIMIT 1',
+    'SELECT id, unit, name, item_code FROM inventory_items WHERE upper(item_code)=upper($1) AND lower(trim(category))=$2 LIMIT 1',
     [String(code).trim(), category]
   );
 }
@@ -118,7 +119,17 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
       if (!tube) return; // Tube Material isn't a "Tube" inventory code — nothing to deduct
       const s5 = await db.get('SELECT value1, scrap_value FROM production_checklist WHERE job_card_id=$1 AND stage_no=5', [jobCardId]);
       const lenMm = parseFloat(s5?.value1) || 0;
-      const scrapIn = parseFloat(s5?.scrap_value) || 0;
+      let scrapIn = parseFloat(s5?.scrap_value) || 0; // per-piece scrap, inches
+      // Abnormally large scrap (a bad cut/rework, not normal trim waste) is excluded from
+      // scrap accounting entirely — not deducted. Copper: 14in or more; other tube
+      // materials: above 16in. Checked on the per-piece value before scaling by qty.
+      const isCopper = /copper/i.test(tube.name || '') || /-cu-/i.test(tube.item_code || '');
+      const scrapExcluded = isCopper ? scrapIn >= 14 : scrapIn > 16;
+      if (scrapExcluded) {
+        await logActivity(jc.order_id, jobCardId, 'scrap_excluded',
+          `Tube scrap of ${scrapIn}in excluded from deduction (${isCopper ? 'copper ≥14in' : '>16in'} threshold) — ${detail}`, userId);
+        scrapIn = 0;
+      }
       const usedFt = r4((lenMm * qty) / 304.8);   // per-piece length × qty → feet
       const scrapFt = r4((scrapIn * qty) / 12);    // per-piece scrap × qty → feet
       if (usedFt > 0) await consumeFifo(db, tube.id, usedFt, { type: 'dispatch_to_production', note: `Tube used ${usedFt} ft (${lenMm}mm × ${qty} pcs) — ${detail}`, userId });
