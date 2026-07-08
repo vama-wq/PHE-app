@@ -38,25 +38,36 @@ async function main() {
   }
 
   const db = getDB();
-  let inserted = 0, skipped = 0;
+  let inserted = 0, updated = 0, skipped = 0;
   for (const p of list) {
     const company = (p.company || p.co || '').trim();
     const segment = (segmentArg || p.segment || p.seg || '').trim();
     if (!company || !segment) { skipped++; continue; }
-    const r = await db.run(
-      `INSERT INTO prospects (company, city, state, country, segment, email, phone, contact_role, product_fit, priority, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       ON CONFLICT (lower(company), lower(coalesce(email,''))) DO NOTHING`,
-      [company, p.city || null, p.state || null, p.country || 'India', segment,
-       p.email || null, p.phone || null, p.role || p.contact_role || null,
-       p.fit || p.product_fit || null, (p.priority || 'M').toUpperCase().slice(0, 1),
-       p.source || 'claude-research']
+    const v = [
+      p.city || null, p.state || null, p.country || 'India',
+      p.email || null, p.phone || null, p.role || p.contact_role || null,
+      p.fit || p.product_fit || null, (p.priority || 'M').toUpperCase().slice(0, 1),
+      p.source || 'claude-research', p.notes || null,
+    ];
+    // Upsert keyed on company+segment so re-runs (e.g. after a verification pass)
+    // refresh contact details in place instead of creating duplicates.
+    const upd = await db.run(
+      `UPDATE prospects SET city=$1, state=$2, country=$3, email=$4, phone=$5,
+         contact_role=$6, product_fit=$7, priority=$8, source=$9, notes=$10
+       WHERE lower(company)=lower($11) AND segment=$12`,
+      [...v, company, segment]
     );
-    r.rowCount ? inserted++ : skipped++;
+    if (upd.rowCount > 0) { updated++; continue; }
+    await db.run(
+      `INSERT INTO prospects (city, state, country, email, phone, contact_role, product_fit, priority, source, notes, company, segment)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [...v, company, segment]
+    );
+    inserted++;
   }
 
   console.log(`✅ Seeded prospects from ${path.basename(abs)}`);
-  console.log(`   Inserted: ${inserted}   Skipped (dupes/invalid): ${skipped}   Total in file: ${list.length}`);
+  console.log(`   Inserted: ${inserted}   Updated in place: ${updated}   Skipped (invalid): ${skipped}   Total in file: ${list.length}`);
   await db.pool.end();
 }
 
