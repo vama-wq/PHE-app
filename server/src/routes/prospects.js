@@ -117,11 +117,11 @@ router.get('/export.csv', authenticate, authorize(...SALES), async (req, res) =>
   // SMS campaigns send to the "Mobile" field, so the number goes there.
   let header, lines;
   if (type === 'sms') {
-    header = ['Mobile', 'Contact Email', 'First Name', 'Last Name', 'Company Name', 'City', 'Priority'];
+    header = ['Mobile', 'Contact Email', 'First Name', 'Last Name', 'Company', 'City', 'Priority'];
     lines = [header.join(',')];
     for (const p of rows) lines.push([p.phone, p.email, '', '', p.company, p.city, p.priority].map(esc).join(','));
   } else {
-    header = ['Contact Email', 'First Name', 'Last Name', 'Company Name', 'Phone', 'City', 'State', 'Priority'];
+    header = ['Contact Email', 'First Name', 'Last Name', 'Company', 'Phone', 'City', 'State', 'Priority'];
     lines = [header.join(',')];
     for (const p of rows) lines.push([p.email, '', '', p.company, p.phone, p.city, p.state, p.priority].map(esc).join(','));
   }
