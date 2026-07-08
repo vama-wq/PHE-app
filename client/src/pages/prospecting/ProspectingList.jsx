@@ -1,6 +1,53 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
-import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star } from 'lucide-react';
+import Modal from '../../components/ui/Modal';
+import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload } from 'lucide-react';
+
+// Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
+// header row; a "Company" column is mandatory, the rest are optional.
+function parseTable(text) {
+  const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return { error: 'Add a header row plus at least one data row.' };
+  const delim = lines[0].includes('\t') ? '\t' : ',';
+  const parseLine = line => {
+    if (delim === '\t') return line.split('\t').map(c => c.trim());
+    const out = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (q) {
+        if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+        else cur += ch;
+      } else if (ch === '"') q = true;
+      else if (ch === ',') { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out.map(c => c.trim());
+  };
+  const header = parseLine(lines[0]).map(h => h.toLowerCase());
+  const idx = names => header.findIndex(h => names.includes(h));
+  const map = {
+    company: idx(['company', 'company name', 'co', 'name', 'organisation', 'organization']),
+    city: idx(['city', 'location']),
+    state: idx(['state', 'region']),
+    email: idx(['email', 'contact email', 'email address', 'e-mail']),
+    phone: idx(['phone', 'mobile', 'mobile number', 'contact number', 'tel', 'telephone']),
+    role: idx(['role', 'contact', 'contact role', 'title', 'designation', 'contact person']),
+    fit: idx(['fit', 'product fit', 'product_fit', 'notes', 'remarks']),
+    priority: idx(['priority', 'prio']),
+  };
+  if (map.company < 0) return { error: 'Could not find a "Company" column in the header row.' };
+  const normPrio = v => { v = (v || '').trim().toUpperCase(); if (v.startsWith('H')) return 'H'; if (v.startsWith('L')) return 'L'; return 'M'; };
+  const prospects = lines.slice(1).map(parseLine).map(cells => {
+    const g = i => (i >= 0 ? (cells[i] || '').trim() : '');
+    return {
+      company: g(map.company), city: g(map.city), state: g(map.state),
+      email: g(map.email), phone: g(map.phone), role: g(map.role),
+      fit: g(map.fit), priority: normPrio(g(map.priority)),
+    };
+  }).filter(p => p.company);
+  return { prospects };
+}
 
 // Default 2-email sequence (editable per session; mirrors the standalone tool).
 const DEFAULT_EMAILS = {
@@ -73,6 +120,12 @@ export default function ProspectingList() {
   const [emails, setEmails] = useState(DEFAULT_EMAILS);
   const [activeEmail, setActiveEmail] = useState('e1');
   const [busy, setBusy] = useState(false);
+  // Manual import
+  const [showImport, setShowImport] = useState(false);
+  const [impSegment, setImpSegment] = useState('');
+  const [impText, setImpText] = useState('');
+  const [impBusy, setImpBusy] = useState(false);
+  const [impResult, setImpResult] = useState(null);
 
   const loadSegments = () =>
     api.get('/prospects/segments').then(r => {
@@ -148,6 +201,29 @@ export default function ProspectingList() {
     } finally { setBusy(false); }
   };
 
+  const parsed = useMemo(() => (impText.trim() ? parseTable(impText) : null), [impText]);
+  const onImpFile = e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => setImpText(reader.result);
+    reader.readAsText(f);
+  };
+  const doImport = async () => {
+    const seg = impSegment.trim();
+    if (!seg || !parsed || parsed.error || !parsed.prospects?.length) return;
+    setImpBusy(true); setImpResult(null);
+    try {
+      const rows = parsed.prospects.map(p => ({ ...p, source: 'manual' }));
+      const r = await api.post('/prospects/bulk', { prospects: rows, segment: seg });
+      setImpResult(r.data);
+      loadSegments();
+      if (seg === segment) loadProspects();
+    } catch (e) {
+      setImpResult({ error: e.response?.data?.error || 'Import failed' });
+    } finally { setImpBusy(false); }
+  };
+
   const segLabel = segments.find(s => s.segment === segment)?.segment || segment;
   const renderSubject = e => emails[e].subject.replace(/{{segment}}/g, segLabel || 'your segment');
 
@@ -162,9 +238,14 @@ export default function ProspectingList() {
             B2B lead lists researched &amp; contact-verified in Claude Code — review, then export Zoho-ready CSVs.
           </p>
         </div>
-        <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={loadProspects}>
-          <RefreshCw size={15} /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => { setImpResult(null); setShowImport(true); }}>
+            <Upload size={15} /> Import
+          </button>
+          <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={loadProspects}>
+            <RefreshCw size={15} /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -310,6 +391,41 @@ export default function ProspectingList() {
           </p>
         </>
       )}
+
+      <Modal open={showImport} onClose={() => setShowImport(false)} title="Import prospects" size="lg">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">List / segment name</label>
+            <input className="input w-full" list="imp-seg-list" placeholder="e.g. pharma, defence, kitchen-uae"
+              value={impSegment} onChange={e => setImpSegment(e.target.value)} />
+            <datalist id="imp-seg-list">{segments.map(s => <option key={s.segment} value={s.segment} />)}</datalist>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Paste rows (CSV, or copy straight from Excel)</label>
+            <textarea className="input w-full font-mono text-xs" rows={8}
+              placeholder={'Company,City,State,Email,Phone,Priority\nAcme Ltd,Mumbai,Maharashtra,info@acme.com,+91-9876543210,H'}
+              value={impText} onChange={e => setImpText(e.target.value)} />
+            <div className="flex items-center gap-3 mt-2 flex-wrap">
+              <label className="btn-secondary text-xs flex items-center gap-1.5 cursor-pointer">
+                <Upload size={14} /> Choose .csv file
+                <input type="file" accept=".csv,text/csv" className="hidden" onChange={onImpFile} />
+              </label>
+              <span className="text-xs text-gray-400">First row must be a header. A <strong>Company</strong> column is required; City, State, Email, Phone, Role, Fit, Priority are optional.</span>
+            </div>
+          </div>
+          {parsed?.error && <p className="text-sm text-red-600">{parsed.error}</p>}
+          {parsed && !parsed.error && <p className="text-sm text-emerald-700">{parsed.prospects.length} valid row(s) detected.</p>}
+          {impResult && !impResult.error && <p className="text-sm text-emerald-700">✓ Imported {impResult.inserted}, skipped {impResult.skipped} duplicate(s) of {impResult.total}.</p>}
+          {impResult?.error && <p className="text-sm text-red-600">{impResult.error}</p>}
+          <div className="flex justify-end gap-2 pt-2">
+            <button className="btn-secondary" onClick={() => setShowImport(false)}>Close</button>
+            <button className="btn-primary" disabled={impBusy || !impSegment.trim() || !parsed || parsed.error || !parsed.prospects?.length}
+              onClick={doImport}>
+              {impBusy ? 'Importing…' : `Import ${parsed && !parsed.error ? parsed.prospects.length : 0} rows`}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
