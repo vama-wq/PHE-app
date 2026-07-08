@@ -41,7 +41,7 @@ async function main() {
   let inserted = 0, skipped = 0;
   for (const p of list) {
     const company = (p.company || p.co || '').trim();
-    const segment = (p.segment || p.seg || segmentArg || '').trim();
+    const segment = (segmentArg || p.segment || p.seg || '').trim();
     if (!company || !segment) { skipped++; continue; }
     const r = await db.run(
       `INSERT INTO prospects (company, city, state, country, segment, email, phone, contact_role, product_fit, priority, source)
