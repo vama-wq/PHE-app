@@ -113,15 +113,17 @@ router.get('/export.csv', authenticate, authorize(...SALES), async (req, res) =>
      ORDER BY CASE priority WHEN 'H' THEN 0 WHEN 'M' THEN 1 ELSE 2 END, company`, params);
 
   const esc = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+  // Headers use Zoho Campaigns' native field names so the import auto-maps.
+  // SMS campaigns send to the "Mobile" field, so the number goes there.
   let header, lines;
   if (type === 'sms') {
-    header = ['Mobile Number', 'First Name', 'Company', 'City', 'Segment', 'Priority'];
+    header = ['Mobile', 'Contact Email', 'First Name', 'Last Name', 'Company Name', 'City', 'Priority'];
     lines = [header.join(',')];
-    for (const p of rows) lines.push([p.phone, p.company, p.company, p.city, p.segment, p.priority].map(esc).join(','));
+    for (const p of rows) lines.push([p.phone, p.email, '', '', p.company, p.city, p.priority].map(esc).join(','));
   } else {
-    header = ['First Name', 'Last Name', 'Email Address', 'Phone', 'City', 'State', 'Company', 'Segment', 'Priority'];
+    header = ['Contact Email', 'First Name', 'Last Name', 'Company Name', 'Phone', 'City', 'State', 'Priority'];
     lines = [header.join(',')];
-    for (const p of rows) lines.push([p.company, '', p.email, p.phone, p.city, p.state, p.company, p.segment, p.priority].map(esc).join(','));
+    for (const p of rows) lines.push([p.email, '', '', p.company, p.phone, p.city, p.state, p.priority].map(esc).join(','));
   }
   const fname = `PHE-${(segment || 'prospects').replace(/[^a-z0-9]+/gi, '-')}-${type}.csv`;
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
