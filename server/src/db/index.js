@@ -89,6 +89,30 @@ async function initDB(retries = 20, delayMs = 10000) {
 
       // Run idempotent migrations
       await pool.query(`ALTER TABLE job_card_holds ADD COLUMN IF NOT EXISTS notes TEXT`);
+      // Sales prospecting: B2B lead lists researched in Claude Code, reviewed & exported in-app
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS prospects (
+          id            SERIAL PRIMARY KEY,
+          company       TEXT NOT NULL,
+          city          TEXT,
+          state         TEXT,
+          country       TEXT DEFAULT 'India',
+          segment       TEXT NOT NULL,
+          email         TEXT,
+          phone         TEXT,
+          contact_role  TEXT,
+          product_fit   TEXT,
+          priority      TEXT NOT NULL DEFAULT 'M',
+          status        TEXT NOT NULL DEFAULT 'new',
+          source        TEXT DEFAULT 'claude-research',
+          notes         TEXT,
+          created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_prospects_segment ON prospects(segment)`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_prospects_status  ON prospects(status)`);
+      // De-dupe guard: same company+email won't be inserted twice by the seeder
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_prospect_company_email ON prospects(lower(company), lower(coalesce(email,'')))`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS backup_log (
           id SERIAL PRIMARY KEY,

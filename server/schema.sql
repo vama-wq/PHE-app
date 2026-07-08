@@ -501,3 +501,26 @@ CREATE TABLE IF NOT EXISTS customer_query_mentions (
   is_read INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Sales prospecting: B2B lead lists researched in Claude Code, reviewed & exported in-app
+CREATE TABLE IF NOT EXISTS prospects (
+  id            SERIAL PRIMARY KEY,
+  company       TEXT NOT NULL,
+  city          TEXT,
+  state         TEXT,
+  country       TEXT DEFAULT 'India',
+  segment       TEXT NOT NULL,
+  email         TEXT,
+  phone         TEXT,
+  contact_role  TEXT,
+  product_fit   TEXT,
+  priority      TEXT NOT NULL DEFAULT 'M',   -- H / M / L
+  status        TEXT NOT NULL DEFAULT 'new', -- new / exported / contacted
+  source        TEXT DEFAULT 'claude-research',
+  notes         TEXT,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_prospects_segment ON prospects(segment);
+CREATE INDEX IF NOT EXISTS idx_prospects_status  ON prospects(status);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_prospect_company_email ON prospects(lower(company), lower(coalesce(email,'')));

@@ -7,7 +7,7 @@ import {
   UserCog, Plus, RotateCcw, Pencil, Trash2, ShieldAlert,
   LayoutDashboard, ClipboardList, FileText, Package, Users,
   Box, Wrench, Truck, FlaskConical, ShoppingCart, Building2,
-  CheckSquare, Square, Shield, BarChart2
+  CheckSquare, Square, Shield, BarChart2, Target
 } from 'lucide-react';
 
 const ROLES = ['owner', 'admin', 'accounts', 'design', 'production'];
@@ -23,6 +23,7 @@ const ALL_MODULES = [
   { id: 'inventory',  label: 'Inventory',       icon: Package,          roles: ['owner','admin','accounts','design'] },
   { id: 'purchases',  label: 'Purchases',       icon: ShoppingCart,     roles: ['owner','admin','accounts'] },
   { id: 'suppliers',  label: 'Suppliers',       icon: Building2,        roles: ['owner','admin','accounts'] },
+  { id: 'prospecting',label: 'Prospecting',     icon: Target,           roles: ['owner','admin','accounts'] },
   { id: 'customers',  label: 'Customers',       icon: Users,            roles: ['admin','owner'] },
   { id: 'products',   label: 'Products',        icon: Box,              roles: null },
   { id: 'reports',    label: 'Reports',         icon: BarChart2,        roles: null },

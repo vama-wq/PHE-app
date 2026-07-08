@@ -29,6 +29,7 @@ import DrawingsList from './pages/drawings/DrawingsList';
 import CustomerQueryList from './pages/customerQueries/CustomerQueryList';
 import CustomerQueryDetail from './pages/customerQueries/CustomerQueryDetail';
 import OrderTimeline from './pages/customerQueries/OrderTimeline';
+import ProspectingList from './pages/prospecting/ProspectingList';
 import PolicyGuide from './pages/PolicyGuide';
 
 const ManufacturingPlan = lazy(() => import('./pages/manufacturing/ManufacturingPlan'));
@@ -131,6 +132,12 @@ export default function App() {
           <Route path="suppliers" element={
             <ProtectedRoute roles={['owner','admin','accounts']} module="suppliers">
               <SupplierList />
+            </ProtectedRoute>
+          } />
+
+          <Route path="prospecting" element={
+            <ProtectedRoute roles={['owner','admin','accounts']} module="prospecting">
+              <ProspectingList />
             </ProtectedRoute>
           } />
 
