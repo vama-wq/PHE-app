@@ -303,6 +303,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE inventory_transactions DROP CONSTRAINT IF EXISTS inventory_transactions_transaction_type_check`);
       await pool.query(`ALTER TABLE inventory_transactions ADD CONSTRAINT inventory_transactions_transaction_type_check
         CHECK (transaction_type IN ('opening_stock','purchase_in','dispatch_to_production','return_from_production','adjustment','scrap'))`);
+      // Stage 6 (Filling): PVC bush + MGO powder consumption, tracked for reversal.
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fill_deducted BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fill_pvc_qty NUMERIC`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fill_mgo_qty NUMERIC`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS job_card_split_requests (
           id SERIAL PRIMARY KEY,

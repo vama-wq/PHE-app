@@ -8,6 +8,10 @@
 //   • Stage 3 (Ohms):         coil used  = coil_weight (g, total)  → Kgs (÷1000)
 //                             coil scrap = scrap (g, total)        → Kgs (÷1000)
 //     Gauge inventory item = Stage 1 gauge pick (item code, category "Spring Guage").
+//   • Stage 6 (Filling):      PVC bush   = 2 pcs/piece × qty — PVC-FB08-M4 (8mm dia) or
+//                                          PVC-FB11-M5 (11mm dia), by the order item's Tube Diameter.
+//                             MGO-65A powder = (stage-5 length(mm) × qty) → inches ÷25.4, then
+//                                          × rate-per-inch (8mm: 0.018g/5in; 11mm: 0.027g/5in) → Kgs (÷1000).
 // Only runs for orders flagged material_deduction=TRUE (created after this feature).
 
 const { resolveJobCardItemId } = require('./inventoryDeduction');
@@ -95,7 +99,7 @@ async function returnFifo(db, itemId, qty, { note, userId }) {
 // Called from the checklist PUT after a stage is marked done / undone.
 // Stage 5 → tube; Stage 3 → coil (spring gauge). No-op for existing orders.
 async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
-  if (stageNo !== 5 && stageNo !== 3) return;
+  if (stageNo !== 5 && stageNo !== 3 && stageNo !== 6) return;
   const jc = await db.get(
     `SELECT jc.*, o.material_deduction, o.order_code
      FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1`,
@@ -148,6 +152,37 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
         if (Number(jc.coil_scrap_qty) > 0) await returnFifo(db, gauge.id, jc.coil_scrap_qty, { note: `Reverted coil scrap (Stage 3 undone) — ${detail}`, userId });
       }
       await db.run('UPDATE job_cards SET coil_deducted=FALSE, coil_used_qty=NULL, coil_scrap_qty=NULL WHERE id=$1', [jobCardId]);
+    }
+  }
+
+  if (stageNo === 6) {
+    const itemId = await resolveJobCardItemId(db, jc);
+    const oi = itemId ? await db.get('SELECT tube_diameter FROM order_items WHERE id=$1', [itemId]) : null;
+    const dia = String(oi?.tube_diameter || '').trim();
+    // Tube Diameter is a required 8mm/11mm dropdown at order-item creation, so this is
+    // expected to always resolve for material-tracked orders; falls through safely if not.
+    const pvcCode = dia === '8' ? 'PVC-FB08-M4' : dia === '11' ? 'PVC-FB11-M5' : null;
+    const mgoGPerInch = dia === '8' ? 0.018 / 5 : dia === '11' ? 0.027 / 5 : null;
+    const pvc = pvcCode ? await invByCode(db, pvcCode, 'bush') : null;
+    const mgo = await invByCode(db, 'MGO-65A', 'powder');
+
+    if (isDone && !jc.fill_deducted) {
+      if (!pvc && !mgo) return; // no matching bush/powder items — nothing to deduct
+      const s5 = await db.get('SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=5', [jobCardId]);
+      const lenMm = parseFloat(s5?.value1) || 0;
+      const pvcQty = pvc ? r4(2 * qty) : 0; // 2 bushes per piece × qty
+      let mgoKg = 0;
+      if (mgo && mgoGPerInch != null && lenMm > 0) {
+        const totalInches = (lenMm * qty) / 25.4;
+        mgoKg = r4((totalInches * mgoGPerInch) / 1000);
+      }
+      if (pvcQty > 0) await consumeFifo(db, pvc.id, pvcQty, { type: 'dispatch_to_production', note: `Filling bush ${pvcQty} pcs (${dia}mm dia × ${qty} pcs) — ${detail}`, userId });
+      if (mgoKg > 0) await consumeFifo(db, mgo.id, mgoKg, { type: 'dispatch_to_production', note: `MGO powder ${mgoKg} kg (${dia}mm dia, ${lenMm}mm × ${qty} pcs) — ${detail}`, userId });
+      await db.run('UPDATE job_cards SET fill_deducted=TRUE, fill_pvc_qty=$1, fill_mgo_qty=$2 WHERE id=$3', [pvcQty || null, mgoKg || null, jobCardId]);
+    } else if (!isDone && jc.fill_deducted) {
+      if (pvc && Number(jc.fill_pvc_qty) > 0) await returnFifo(db, pvc.id, jc.fill_pvc_qty, { note: `Reverted filling bush (Stage 6 undone) — ${detail}`, userId });
+      if (mgo && Number(jc.fill_mgo_qty) > 0) await returnFifo(db, mgo.id, jc.fill_mgo_qty, { note: `Reverted MGO powder (Stage 6 undone) — ${detail}`, userId });
+      await db.run('UPDATE job_cards SET fill_deducted=FALSE, fill_pvc_qty=NULL, fill_mgo_qty=NULL WHERE id=$1', [jobCardId]);
     }
   }
 }
