@@ -100,7 +100,7 @@ router.get('/picks/today', authenticate, async (req, res) => {
     JOIN job_cards jc ON pdp.job_card_id = jc.id
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
-    WHERE jc.status NOT IN ('dispatched','completed')
+    WHERE jc.status IN ('pending','in_progress','on_hold','repair_in_progress')
     ORDER BY jc.id, jc.dispatch_date ASC
   `, [today]);
   res.json(picks);
