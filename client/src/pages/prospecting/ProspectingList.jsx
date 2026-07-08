@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
-import { Target, Download, RefreshCw, Filter, Mail, CheckCircle2, Star } from 'lucide-react';
+import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star } from 'lucide-react';
 
 // Default 2-email sequence (editable per session; mirrors the standalone tool).
 const DEFAULT_EMAILS = {
@@ -54,10 +54,19 @@ const PRIORITY_BADGE = {
 };
 const PRIORITY_LABEL = { H: 'High', M: 'Med', L: 'Low' };
 
+// Contact-verification badge. `verified` = real email confirmed from the
+// company site; `phone-only` = phone found but email hidden; else unverified.
+const SOURCE_BADGE = {
+  'verified':   { cls: 'bg-emerald-100 text-emerald-800', label: '✓ Verified' },
+  'phone-only': { cls: 'bg-amber-100 text-amber-800',     label: '☎ Phone only' },
+};
+const sourceBadge = s => SOURCE_BADGE[s] || { cls: 'bg-gray-100 text-gray-500', label: 'Unverified' };
+
 export default function ProspectingList() {
   const [segments, setSegments] = useState([]);
   const [segment, setSegment] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('');       // '', verified, phone-only, unverified
   const [prospects, setProspects] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [loading, setLoading] = useState(true);
@@ -85,11 +94,24 @@ export default function ProspectingList() {
   useEffect(() => { loadSegments(); }, []);
   useEffect(() => { if (segment) loadProspects(); /* eslint-disable-line */ }, [segment, statusFilter]);
 
+  const hasEmail = p => !!(p.email && p.email.trim());
+  const hasPhone = p => !!(p.phone && p.phone.trim());
+  const rowSource = p => (p.source === 'verified' || p.source === 'phone-only') ? p.source : 'unverified';
+
+  // Source filter is applied client-side so it's instant.
+  const visible = useMemo(() =>
+    prospects.filter(p => !sourceFilter || rowSource(p) === sourceFilter),
+    [prospects, sourceFilter]);
+
+  const selectedVisible = useMemo(() => visible.filter(p => selected.has(p.id)), [visible, selected]);
+  const emailableSel = useMemo(() => selectedVisible.filter(hasEmail).map(p => p.id), [selectedVisible]);
+  const smsableSel  = useMemo(() => selectedVisible.filter(hasPhone).map(p => p.id), [selectedVisible]);
+
   const stats = useMemo(() => ({
     total: prospects.length,
-    high: prospects.filter(p => p.priority === 'H').length,
+    emailable: prospects.filter(hasEmail).length,
+    smsable: prospects.filter(hasPhone).length,
     selected: selected.size,
-    cities: new Set(prospects.map(p => p.city).filter(Boolean)).size,
   }), [prospects, selected]);
 
   const toggle = id => {
@@ -97,42 +119,37 @@ export default function ProspectingList() {
     next.has(id) ? next.delete(id) : next.add(id);
     setSelected(next);
   };
-  const selectAll = () => setSelected(new Set(prospects.map(p => p.id)));
+  const selectAll = () => setSelected(new Set(visible.map(p => p.id)));
   const selectNone = () => setSelected(new Set());
-  const selectHigh = () => setSelected(new Set(prospects.filter(p => p.priority === 'H').map(p => p.id)));
 
-  const exportCSV = async () => {
-    if (!selected.size) return;
+  const download = async (type, ids) => {
+    if (!ids.length) return;
     setBusy(true);
     try {
-      const ids = [...selected].join(',');
-      const res = await api.get('/prospects/export.csv', { params: { segment, ids }, responseType: 'blob' });
+      const res = await api.get('/prospects/export.csv', { params: { segment, type, ids: ids.join(',') }, responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `PHE-${(segment || 'prospects').replace(/[^a-z0-9]+/gi, '-')}-contacts.csv`;
+      a.download = `PHE-${(segment || 'prospects').replace(/[^a-z0-9]+/gi, '-')}-${type}.csv`;
       a.click();
       URL.revokeObjectURL(url);
-      // Mark exported so the team can see what's already gone out
-      await api.post('/prospects/bulk-status', { ids: [...selected], status: 'exported' });
+      await api.post('/prospects/bulk-status', { ids, status: 'exported' });
       loadProspects();
     } finally { setBusy(false); }
   };
 
   const markStatus = async status => {
-    if (!selected.size) return;
+    const ids = [...selected];
+    if (!ids.length) return;
     setBusy(true);
     try {
-      await api.post('/prospects/bulk-status', { ids: [...selected], status });
+      await api.post('/prospects/bulk-status', { ids, status });
       loadProspects();
     } finally { setBusy(false); }
   };
 
   const segLabel = segments.find(s => s.segment === segment)?.segment || segment;
-  const renderEmail = e => ({
-    subject: emails[e].subject.replace(/{{segment}}/g, segLabel || 'your segment'),
-    body: emails[e].body.replace(/{{company}}/g, 'your company').replace(/{{segment}}/g, (segLabel || 'your segment').toLowerCase()),
-  });
+  const renderSubject = e => emails[e].subject.replace(/{{segment}}/g, segLabel || 'your segment');
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -142,7 +159,7 @@ export default function ProspectingList() {
             <Target size={22} className="text-brand-700" /> Prospecting
           </h1>
           <p className="text-xs text-gray-500 mt-1">
-            B2B lead lists researched in Claude Code — review, then export a Zoho-ready CSV.
+            B2B lead lists researched &amp; contact-verified in Claude Code — review, then export Zoho-ready CSVs.
           </p>
         </div>
         <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={loadProspects}>
@@ -161,6 +178,12 @@ export default function ProspectingList() {
             ))}
           </select>
         </div>
+        <select className="input" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
+          <option value="">All contacts</option>
+          <option value="verified">✓ Verified email only</option>
+          <option value="phone-only">☎ Phone only</option>
+          <option value="unverified">Unverified</option>
+        </select>
         <select className="input" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
           <option value="">All statuses</option>
           <option value="new">New</option>
@@ -179,18 +202,17 @@ export default function ProspectingList() {
           {/* Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
             <Stat label="Prospects" value={stats.total} />
-            <Stat label="High priority" value={stats.high} />
+            <Stat label="Emailable" value={stats.emailable} accent="text-emerald-600" />
+            <Stat label="SMS-able" value={stats.smsable} accent="text-amber-600" />
             <Stat label="Selected" value={stats.selected} />
-            <Stat label="Cities" value={stats.cities} />
           </div>
 
           {/* Table */}
           <div className="card overflow-hidden mb-6">
             <div className="flex items-center justify-between px-4 py-3 border-b">
-              <h3 className="text-sm font-semibold">{loading ? 'Loading…' : `${prospects.length} prospects`}</h3>
+              <h3 className="text-sm font-semibold">{loading ? 'Loading…' : `${visible.length} shown`}</h3>
               <div className="flex gap-2">
-                <button className="btn-secondary text-xs" onClick={selectHigh}>High only</button>
-                <button className="btn-secondary text-xs" onClick={selectAll}>Select all</button>
+                <button className="btn-secondary text-xs" onClick={selectAll}>Select shown</button>
                 <button className="btn-secondary text-xs" onClick={selectNone}>Clear</button>
               </div>
             </div>
@@ -201,34 +223,39 @@ export default function ProspectingList() {
                     <th className="px-3 py-2 w-8"></th>
                     <th className="px-3 py-2">Company</th>
                     <th className="px-3 py-2">City</th>
-                    <th className="px-3 py-2">Segment</th>
                     <th className="px-3 py-2">Email</th>
+                    <th className="px-3 py-2">Phone</th>
+                    <th className="px-3 py-2">Contact</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Priority</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {prospects.map(p => (
-                    <tr key={p.id} className="border-b last:border-0 hover:bg-gray-50">
-                      <td className="px-3 py-2">
-                        <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggle(p.id)} />
-                      </td>
-                      <td className="px-3 py-2 font-medium text-gray-900">{p.company}</td>
-                      <td className="px-3 py-2 text-gray-600">{p.city}</td>
-                      <td className="px-3 py-2 text-gray-500">{p.segment}</td>
-                      <td className="px-3 py-2 text-gray-500 font-mono text-xs">{p.email}</td>
-                      <td className="px-3 py-2">
-                        <span className="text-xs text-gray-500 capitalize">{p.status}</span>
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${PRIORITY_BADGE[p.priority] || PRIORITY_BADGE.L}`}>
-                          {PRIORITY_LABEL[p.priority] || p.priority}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                  {!loading && prospects.length === 0 && (
-                    <tr><td colSpan={7} className="px-3 py-10 text-center text-gray-400">No prospects for this filter</td></tr>
+                  {visible.map(p => {
+                    const sb = sourceBadge(rowSource(p));
+                    return (
+                      <tr key={p.id} className="border-b last:border-0 hover:bg-gray-50">
+                        <td className="px-3 py-2">
+                          <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggle(p.id)} />
+                        </td>
+                        <td className="px-3 py-2 font-medium text-gray-900">{p.company}</td>
+                        <td className="px-3 py-2 text-gray-600">{p.city}</td>
+                        <td className="px-3 py-2 text-gray-500 font-mono text-xs">{p.email || <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 text-gray-500 font-mono text-xs">{p.phone || <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${sb.cls}`}>{sb.label}</span>
+                        </td>
+                        <td className="px-3 py-2"><span className="text-xs text-gray-500 capitalize">{p.status}</span></td>
+                        <td className="px-3 py-2">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${PRIORITY_BADGE[p.priority] || PRIORITY_BADGE.L}`}>
+                            {PRIORITY_LABEL[p.priority] || p.priority}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!loading && visible.length === 0 && (
+                    <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-400">No prospects for this filter</td></tr>
                   )}
                 </tbody>
               </table>
@@ -257,14 +284,19 @@ export default function ProspectingList() {
               value={emails[activeEmail].body}
               onChange={e => setEmails({ ...emails, [activeEmail]: { ...emails[activeEmail], body: e.target.value } })} />
             <p className="text-xs text-gray-400 mt-2">
-              Preview with tags filled: <span className="italic">{renderEmail(activeEmail).subject}</span>
+              Subject preview: <span className="italic">{renderSubject(activeEmail)}</span>
             </p>
           </div>
 
           {/* Actions */}
           <div className="flex flex-wrap items-center gap-3">
-            <button className="btn-primary flex items-center gap-1.5" disabled={!selected.size || busy} onClick={exportCSV}>
-              <Download size={16} /> Export CSV ({selected.size})
+            <button className="btn-primary flex items-center gap-1.5" disabled={!emailableSel.length || busy}
+              onClick={() => download('email', emailableSel)}>
+              <Mail size={16} /> Export Email list ({emailableSel.length})
+            </button>
+            <button className="btn-secondary flex items-center gap-1.5" disabled={!smsableSel.length || busy}
+              onClick={() => download('sms', smsableSel)}>
+              <MessageSquare size={16} /> Export SMS list ({smsableSel.length})
             </button>
             <button className="btn-secondary flex items-center gap-1.5" disabled={!selected.size || busy} onClick={() => markStatus('contacted')}>
               <CheckCircle2 size={16} /> Mark contacted
@@ -272,18 +304,20 @@ export default function ProspectingList() {
             <button className="btn-secondary flex items-center gap-1.5" disabled={!selected.size || busy} onClick={() => markStatus('new')}>
               <Star size={16} /> Reset to new
             </button>
-            <span className="text-xs text-gray-400">Export downloads a Zoho-ready CSV and marks the selected prospects “exported”.</span>
           </div>
+          <p className="text-xs text-gray-400 mt-2">
+            Email list = selected rows with a verified email (for Zoho email campaign). SMS list = selected rows with a phone number (for Zoho SMS campaign). Both mark those rows “exported”.
+          </p>
         </>
       )}
     </div>
   );
 }
 
-function Stat({ label, value }) {
+function Stat({ label, value, accent }) {
   return (
     <div className="card px-4 py-3">
-      <div className="text-2xl font-bold text-brand-700">{value}</div>
+      <div className={`text-2xl font-bold ${accent || 'text-brand-700'}`}>{value}</div>
       <div className="text-xs text-gray-500">{label}</div>
     </div>
   );

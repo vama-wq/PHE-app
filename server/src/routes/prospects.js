@@ -7,12 +7,13 @@ const SALES = ['owner', 'admin', 'accounts'];
 
 /** List prospects, optionally filtered by segment / priority / status. */
 router.get('/', authenticate, authorize(...SALES), async (req, res) => {
-  const { segment, priority, status } = req.query;
+  const { segment, priority, status, source } = req.query;
   const where = [];
   const params = [];
   if (segment)  { params.push(segment);  where.push(`segment = $${params.length}`); }
   if (priority) { params.push(priority); where.push(`priority = $${params.length}`); }
   if (status)   { params.push(status);   where.push(`status = $${params.length}`); }
+  if (source)   { params.push(source);   where.push(`source = $${params.length}`); }
   const sql = `
     SELECT * FROM prospects
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -85,11 +86,17 @@ router.delete('/:id', authenticate, authorize(...SALES), async (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-/** Zoho Campaigns-ready CSV. Optional ?segment= and ?ids=1,2,3 to scope the export. */
+/**
+ * Zoho-ready CSV. ?type=email (default) → contacts with an email, for an email
+ * campaign. ?type=sms → contacts with a phone, for an SMS campaign. Optional
+ * ?segment=, ?source=, and ?ids=1,2,3 to scope the export.
+ */
 router.get('/export.csv', authenticate, authorize(...SALES), async (req, res) => {
-  const { segment, ids } = req.query;
+  const { segment, ids, source } = req.query;
+  const type = req.query.type === 'sms' ? 'sms' : 'email';
   const where = [], params = [];
   if (segment) { params.push(segment); where.push(`segment = $${params.length}`); }
+  if (source)  { params.push(source);  where.push(`source = $${params.length}`); }
   if (ids) {
     const idList = String(ids).split(',').map(s => parseInt(s, 10)).filter(Boolean);
     if (idList.length) {
@@ -98,17 +105,25 @@ router.get('/export.csv', authenticate, authorize(...SALES), async (req, res) =>
       params.push(...idList);
     }
   }
+  // Only export rows that actually have the channel's contact field.
+  where.push(type === 'sms' ? `coalesce(phone,'') <> ''` : `coalesce(email,'') <> ''`);
+
   const rows = await getDB().all(
     `SELECT * FROM prospects ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
      ORDER BY CASE priority WHEN 'H' THEN 0 WHEN 'M' THEN 1 ELSE 2 END, company`, params);
 
   const esc = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
-  const header = ['First Name', 'Last Name', 'Email Address', 'Phone', 'City', 'State', 'Company', 'Segment', 'Priority'];
-  const lines = [header.join(',')];
-  for (const p of rows) {
-    lines.push([p.company, '', p.email, p.phone, p.city, p.state, p.company, p.segment, p.priority].map(esc).join(','));
+  let header, lines;
+  if (type === 'sms') {
+    header = ['Mobile Number', 'First Name', 'Company', 'City', 'Segment', 'Priority'];
+    lines = [header.join(',')];
+    for (const p of rows) lines.push([p.phone, p.company, p.company, p.city, p.segment, p.priority].map(esc).join(','));
+  } else {
+    header = ['First Name', 'Last Name', 'Email Address', 'Phone', 'City', 'State', 'Company', 'Segment', 'Priority'];
+    lines = [header.join(',')];
+    for (const p of rows) lines.push([p.company, '', p.email, p.phone, p.city, p.state, p.company, p.segment, p.priority].map(esc).join(','));
   }
-  const fname = `PHE-${(segment || 'prospects').replace(/[^a-z0-9]+/gi, '-')}-contacts.csv`;
+  const fname = `PHE-${(segment || 'prospects').replace(/[^a-z0-9]+/gi, '-')}-${type}.csv`;
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
   res.send(lines.join('\n'));
