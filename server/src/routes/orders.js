@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
-const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, deleteFromStorage, copyInStorage } = require('../middleware/upload');
+const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, uploadQC, deleteFromStorage, copyInStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 // Inventory consumption is centralised in lib/inventoryDeduction. Deduction is no
 // longer tied to drawing approval — it now fires when the item clears QC (single
@@ -828,6 +828,158 @@ router.post('/inquiries/:id/quotation', authenticate, authorize('admin', 'owner'
   );
   await db.run("UPDATE inquiries SET status='quotation_sent' WHERE id=$1", [req.params.id]);
   res.status(201).json({ id: r.lastInsertRowid, file_name: req.file.filename });
+});
+
+// ---------------------------------------------------------------------------
+// Finished Goods order flow
+// FG orders skip production/job-cards. After the order + item drawings are
+// approved, admin/design uploads an "inventory QC report", which sends the order
+// to QC. QC picks the finished-goods stock + storage location per item. Dispatch
+// then deducts the stock (blocked if short) and logs the outward movement.
+// ---------------------------------------------------------------------------
+
+const baseDrawingNo = (s) => (s ? String(s).trim().replace(/-\d+$/, '') : '');
+
+// Upload the inventory QC report -> order goes to QC
+router.post('/:id/fg-qc-report', authenticate, authorize('design', 'admin', 'owner'), ...uploadQC, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Inventory QC report file is required' });
+    const db = getDB();
+    const order = await db.get('SELECT * FROM orders WHERE id=$1', [req.params.id]);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.order_type !== 'finished_goods') return res.status(400).json({ error: 'Not a Finished Goods order' });
+    if (order.status !== 'approved' && order.status !== 'fg_qc_pending') {
+      return res.status(400).json({ error: 'Order must be approved (with drawings approved) before uploading the inventory QC report' });
+    }
+    await db.run(
+      "UPDATE orders SET fg_qc_report_file=$1, fg_qc_report_original_name=$2, status='fg_qc_pending' WHERE id=$3",
+      [req.file.storagePath, req.file.originalname, req.params.id]
+    );
+    await logActivity(req.params.id, null, 'fg_qc_report_uploaded', 'Inventory QC report uploaded — order sent to QC', req.user.id);
+    try {
+      const qcUsers = await db.all("SELECT id FROM users WHERE role='design'");
+      for (const u of qcUsers) {
+        await createNotification(db, { userId: u.id, type: 'fg_qc_pending', title: 'Finished Goods order for QC',
+          body: `${order.order_code} is ready for finished-goods QC approval.`, link: '/qc', sourceUserId: req.user.id });
+      }
+    } catch (_) { /* notifications are best-effort */ }
+    res.json({ message: 'Inventory QC report uploaded — order sent to QC' });
+  } catch (e) {
+    console.error('fg-qc-report error:', e);
+    res.status(500).json({ error: 'Failed to upload inventory QC report' });
+  }
+});
+
+// List FG orders waiting for QC
+router.get('/fg/pending-qc', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
+  const showNames = withCustomerVisibility(req);
+  const rows = await getDB().all(`
+    SELECT o.id, o.order_code, o.status, o.created_at, o.fg_qc_report_file, o.fg_qc_report_original_name,
+           c.customer_code${showNames ? ', c.name AS customer_name' : ''},
+           (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count
+    FROM orders o JOIN customers c ON c.id = o.customer_id
+    WHERE o.order_type='finished_goods' AND o.status='fg_qc_pending'
+    ORDER BY o.created_at ASC`);
+  res.json(rows);
+});
+
+// Detail for the QC modal: items + available FG stock + locations
+router.get('/:id/fg-qc-detail', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
+  const db = getDB();
+  const order = await db.get('SELECT id, order_code, order_type, status, fg_qc_report_file, fg_qc_report_original_name FROM orders WHERE id=$1', [req.params.id]);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  const items = await db.all('SELECT id, drawing_number, product_code, quantity, fg_source_id, fg_location, fg_qc_qty FROM order_items WHERE order_id=$1 ORDER BY id', [req.params.id]);
+  for (const it of items) it.base_drawing_no = baseDrawingNo(it.drawing_number);
+  const fgStock = await db.all('SELECT id, base_drawing_no, drawing_no, qty_available, location FROM finished_goods WHERE qty_available > 0 ORDER BY base_drawing_no');
+  const locations = await db.all("SELECT name FROM finished_goods_locations WHERE active = TRUE ORDER BY name");
+  res.json({ order, items, fgStock, locations: locations.map((l) => l.name) });
+});
+
+// QC approval: record chosen FG stock + location + qty per item
+router.put('/:id/fg-qc-approve', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
+  try {
+    const db = getDB();
+    const order = await db.get('SELECT * FROM orders WHERE id=$1', [req.params.id]);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.order_type !== 'finished_goods') return res.status(400).json({ error: 'Not a Finished Goods order' });
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!items.length) return res.status(400).json({ error: 'Select the finished-goods stock and location for each item' });
+    // Validate everything first (fail-fast, block short stock)
+    for (const it of items) {
+      const oi = await db.get('SELECT id FROM order_items WHERE id=$1 AND order_id=$2', [it.order_item_id, req.params.id]);
+      if (!oi) return res.status(400).json({ error: 'Invalid order item in request' });
+      const qty = parseInt(it.qty, 10);
+      if (!(qty > 0)) return res.status(400).json({ error: 'Enter a valid quantity for each item' });
+      if (!it.fg_source_id) return res.status(400).json({ error: 'Select the Finished Goods stock for each item' });
+      if (!it.location) return res.status(400).json({ error: 'Select a storage location for each item' });
+      const fg = await db.get('SELECT qty_available, base_drawing_no FROM finished_goods WHERE id=$1', [it.fg_source_id]);
+      if (!fg) return res.status(400).json({ error: 'Selected Finished Goods stock not found' });
+      if (Number(fg.qty_available) < qty) return res.status(400).json({ error: `Only ${fg.qty_available} available in stock for ${fg.base_drawing_no}` });
+    }
+    for (const it of items) {
+      await db.run('UPDATE order_items SET fg_source_id=$1, fg_location=$2, fg_qc_qty=$3, fg_qc_done=TRUE WHERE id=$4',
+        [it.fg_source_id, it.location, parseInt(it.qty, 10), it.order_item_id]);
+    }
+    await db.run("UPDATE orders SET status='fg_qc_approved' WHERE id=$1", [req.params.id]);
+    await logActivity(req.params.id, null, 'fg_qc_approved', 'Finished-Goods order QC-approved — stock & storage locations selected', req.user.id);
+    res.json({ message: 'Finished Goods order QC approved — ready for dispatch' });
+  } catch (e) {
+    console.error('fg-qc-approve error:', e);
+    res.status(500).json({ error: 'Failed to approve Finished Goods order' });
+  }
+});
+
+// List FG orders ready for dispatch (QC approved)
+router.get('/fg/ready-dispatch', authenticate, authorize('accounts', 'owner'), async (req, res) => {
+  const rows = await getDB().all(`
+    SELECT o.id, o.order_code, o.status, o.created_at, c.customer_code, c.name AS customer_name,
+           (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count
+    FROM orders o JOIN customers c ON c.id = o.customer_id
+    WHERE o.order_type='finished_goods' AND o.status='fg_qc_approved'
+    ORDER BY o.created_at ASC`);
+  res.json(rows);
+});
+
+// Dispatch a FG order: deduct finished-goods stock (block if short) + log outward
+router.put('/:id/fg-dispatch', authenticate, authorize('accounts', 'owner'), async (req, res) => {
+  const db = getDB();
+  try {
+    const order = await db.get('SELECT * FROM orders WHERE id=$1', [req.params.id]);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.order_type !== 'finished_goods') return res.status(400).json({ error: 'Not a Finished Goods order' });
+    if (order.status !== 'fg_qc_approved') return res.status(400).json({ error: 'Order is not QC-approved for dispatch' });
+    const cust = await db.get('SELECT customer_code, name FROM customers WHERE id=$1', [order.customer_id]);
+    const items = await db.all('SELECT id, drawing_number, fg_source_id, fg_location, fg_qc_qty, fg_dispatched FROM order_items WHERE order_id=$1', [req.params.id]);
+    const pending = items.filter((it) => !it.fg_dispatched && it.fg_source_id);
+    if (!pending.length) return res.status(400).json({ error: 'Nothing left to dispatch on this order' });
+    // Validate stock for every pending item first (block short stock before deducting any)
+    for (const it of pending) {
+      if (!(Number(it.fg_qc_qty) > 0)) return res.status(400).json({ error: 'Order item is missing its QC stock selection' });
+      const fg = await db.get('SELECT qty_available, base_drawing_no FROM finished_goods WHERE id=$1', [it.fg_source_id]);
+      if (!fg) return res.status(400).json({ error: 'Finished Goods stock record not found' });
+      if (Number(fg.qty_available) < Number(it.fg_qc_qty)) {
+        return res.status(400).json({ error: `Insufficient stock for ${fg.base_drawing_no}: need ${it.fg_qc_qty}, only ${fg.qty_available} available` });
+      }
+    }
+    // Deduct + log
+    for (const it of pending) {
+      await db.run('UPDATE finished_goods SET qty_available = qty_available - $1 WHERE id=$2', [it.fg_qc_qty, it.fg_source_id]);
+      await db.insert(
+        `INSERT INTO finished_goods_log
+           (finished_good_id, movement_type, qty, outward_type, client_code, client_name, location, order_code, notes, created_by)
+         VALUES ($1,'outward',$2,'dispatch',$3,$4,$5,$6,$7,$8)`,
+        [it.fg_source_id, it.fg_qc_qty, cust?.customer_code || null, cust?.name || null,
+         it.fg_location || null, order.order_code, `Dispatched on order ${order.order_code}`, req.user.id]
+      );
+      await db.run('UPDATE order_items SET fg_dispatched=TRUE WHERE id=$1', [it.id]);
+    }
+    await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [req.params.id]);
+    await logActivity(req.params.id, null, 'fg_dispatched', 'Finished-Goods order dispatched — stock deducted', req.user.id);
+    res.json({ message: 'Finished Goods order dispatched — stock deducted' });
+  } catch (e) {
+    console.error('fg-dispatch error:', e);
+    res.status(500).json({ error: 'Failed to dispatch Finished Goods order' });
+  }
 });
 
 module.exports = router;

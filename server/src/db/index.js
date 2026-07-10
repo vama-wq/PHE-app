@@ -154,6 +154,17 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE finished_goods ADD COLUMN IF NOT EXISTS location TEXT`);       // latest/primary storage location
       await pool.query(`ALTER TABLE finished_goods_log ADD COLUMN IF NOT EXISTS location TEXT`);   // location per movement
 
+      // Finished-Goods order type: not a production order (no job card). After drawing
+      // approval an "inventory QC report" is uploaded, then it goes to QC which picks the
+      // FG stock + location per item; dispatch deducts the FG stock.
+      await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS fg_qc_report_file TEXT`);
+      await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS fg_qc_report_original_name TEXT`);
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_source_id INTEGER`);   // chosen finished_goods.id
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_location TEXT`);        // chosen storage location
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_qc_qty INTEGER`);       // qty approved from stock
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_qc_done BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_dispatched BOOLEAN DEFAULT FALSE`);
+
       // ── Consolidate finished_goods: one row per base_drawing_no ──────────────
       // 1. Fill base_drawing_no by stripping trailing job-card suffix (-1, -2, etc.)
       await pool.query(`

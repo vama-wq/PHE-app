@@ -642,6 +642,7 @@ function NewOrderModal({ onClose, onSave }) {
                   <option value="inventory_order">Inventory Order (IO)</option>
                   <option value="io_export_he">IO + Export HE</option>
                   <option value="io_local_he">IO + Local HE</option>
+                  <option value="finished_goods">Finished Goods (from stock)</option>
                 </select>
               </div>
               <div>

@@ -51,6 +51,7 @@ export default function OrderDetail() {
   const [editingOrder, setEditingOrder] = useState(false);
   const [editFields, setEditFields] = useState({});
   const [resubmitting, setResubmitting] = useState(false);
+  const [fgUploading, setFgUploading] = useState(false);
 
   const load = () =>
     api.get(`/orders/${id}`).then(r => setOrder(r.data)).finally(() => setLoading(false));
@@ -70,6 +71,9 @@ export default function OrderDetail() {
   const itemDrawingStatus    = order.item_drawing_status || {};
   const allItemsApproved     = (order.items || []).length > 0 &&
     (order.items || []).every(it => itemDrawingStatus[it.id] === 'approved');
+  // Finished Goods orders skip production/job cards — they need an inventory QC report instead
+  const isFG                 = order.order_type === 'finished_goods';
+  const canUploadFgReport    = ['design', 'admin', 'owner'].includes(user.role);
   const canManageItems       = ['admin', 'owner'].includes(user.role) || canResubmit;
   const canEditInventory     = ['design', 'admin', 'owner'].includes(user.role);
   const canUploadQuotation   = ['admin', 'owner'].includes(user.role) && !restrictedRole;
@@ -615,8 +619,8 @@ export default function OrderDetail() {
             </div>
           </div>
 
-          {/* ── Job Cards ── */}
-          <div className="card p-5">
+          {/* ── Job Cards ── (production orders only) */}
+          {!isFG && <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="section-title">Job Cards
@@ -739,7 +743,81 @@ export default function OrderDetail() {
                 })}
               </div>
             )}
-          </div>
+          </div>}
+
+          {/* ── Inventory QC Report ── (Finished Goods orders only) */}
+          {isFG && <div className="card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="section-title">Inventory QC Report</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Finished-goods order — upload the inventory QC report to send it to QC (no job card needed)</p>
+              </div>
+            </div>
+
+            {order.status === 'pending_approval' && (
+              <p className="text-gray-400 text-sm">Order must be approved first.</p>
+            )}
+            {order.status === 'rejected' && (
+              <p className="text-gray-400 text-sm">Order was rejected.</p>
+            )}
+            {order.status === 'approved' && !allItemsApproved && (
+              <p className="text-amber-600 text-sm flex items-center gap-1">
+                <AlertTriangle size={13} /> All item drawings must be approved before the inventory QC report can be uploaded.
+              </p>
+            )}
+
+            {order.status === 'approved' && allItemsApproved && (
+              canUploadFgReport ? (
+                <label className="btn-primary btn-sm cursor-pointer inline-flex">
+                  <Upload size={14} /> Upload Inventory QC Report
+                  <input type="file" className="hidden" disabled={fgUploading}
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setFgUploading(true);
+                      try {
+                        const fd = new FormData();
+                        fd.append('file', file);
+                        await api.post(`/orders/${id}/fg-qc-report`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                        await load();
+                      } catch (err) {
+                        alert(err.response?.data?.error || 'Upload failed');
+                      } finally {
+                        setFgUploading(false);
+                        e.target.value = '';
+                      }
+                    }} />
+                </label>
+              ) : (
+                <p className="text-gray-400 text-sm">Waiting for the inventory QC report to be uploaded.</p>
+              )
+            )}
+
+            {['fg_qc_pending', 'fg_qc_approved', 'dispatched'].includes(order.status) && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-3 p-3 rounded-xl border bg-gray-50 border-gray-200">
+                  <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
+                    <FileText size={20} className="text-gray-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm text-gray-600">Inventory QC Report</div>
+                    <div className="text-xs text-gray-400 mt-0.5 truncate">{order.fg_qc_report_original_name || 'Uploaded'}</div>
+                  </div>
+                  {order.fg_qc_report_file && (
+                    <a href={`/uploads/${order.fg_qc_report_file}`} target="_blank" rel="noopener noreferrer"
+                      className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1">
+                      <ExternalLink size={12} /> View
+                    </a>
+                  )}
+                </div>
+                <p className="text-sm flex items-center gap-1.5">
+                  {order.status === 'fg_qc_pending' && <><Clock size={13} className="text-blue-500" /><span className="text-blue-600 font-medium">Awaiting QC approval — QC will select the finished-goods stock &amp; storage location.</span></>}
+                  {order.status === 'fg_qc_approved' && <><CheckCircle2 size={13} className="text-green-500" /><span className="text-green-600 font-medium">QC approved — ready for dispatch.</span></>}
+                  {order.status === 'dispatched' && <><CheckCircle2 size={13} className="text-green-500" /><span className="text-green-600 font-medium">Dispatched — finished-goods stock deducted.</span></>}
+                </p>
+              </div>
+            )}
+          </div>}
 
           {/* ── Quotations ── (hidden from design/qc/production) */}
           {!restrictedRole && <div className="card p-5">
