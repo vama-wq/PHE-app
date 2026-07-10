@@ -505,6 +505,17 @@ async function initDB(retries = 20, delayMs = 10000) {
         'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'
       ))`);
 
+      // Enable Row-Level Security on every public table. The app connects as a
+      // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
+      // auto-generated public REST API (anon key), which this app doesn't use.
+      // No policies are defined: deny-by-default. Covers future tables too.
+      const rlsOff = await pool.query(
+        `SELECT tablename FROM pg_tables WHERE schemaname='public' AND NOT rowsecurity`);
+      for (const { tablename } of rlsOff.rows) {
+        await pool.query(`ALTER TABLE "${tablename}" ENABLE ROW LEVEL SECURITY`);
+      }
+      if (rlsOff.rows.length) console.log(`RLS enabled on ${rlsOff.rows.length} table(s)`);
+
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
       if (parseInt(rows[0].c, 10) === 0) {

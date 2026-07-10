@@ -102,3 +102,14 @@ server.on('error', (err) => {
 initDB()
   .then(() => console.log('Database migrations complete'))
   .catch((err) => console.error('initDB failed (server still running, will work once DB is reachable):', err.message));
+
+// Async route handlers here mostly lack try/catch; without these handlers a
+// single rejected promise (e.g. a transient DB error mid-request) kills the
+// whole process on modern Node (exit 1) and takes the app down for everyone.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection (request likely failed, server kept alive):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception — exiting so the platform restarts us cleanly:', err);
+  process.exit(1);
+});
