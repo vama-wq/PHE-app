@@ -129,6 +129,58 @@ function EmptyRow({ message }) {
   return <div className="px-5 py-8 text-center text-gray-400 text-sm">{message}</div>;
 }
 
+// Shared across all role dashboards. Shows a preview of rejections with a
+// "show more / show less" toggle, and each row links to its job card.
+const REJECTIONS_PREVIEW = 8;
+function RejectionsSection({ rejections }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!rejections.length) return null;
+  const critical = rejections.filter(r => r.rejection_qty > 2);
+  const shown = expanded ? rejections : rejections.slice(0, REJECTIONS_PREVIEW);
+  const hasMore = rejections.length > REJECTIONS_PREVIEW;
+  return (
+    <SectionCard
+      title="Production Rejections" icon={XCircle} iconColor="text-orange-500"
+      action={critical.length > 0 && (
+        <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">
+          {critical.length} critical
+        </span>
+      )}
+    >
+      <div className="divide-y divide-gray-50">
+        {shown.map((r, i) => {
+          const isCritical = r.rejection_qty > 2;
+          const stageName  = PRODUCTION_STAGES.find(s => s.no === r.stage_no)?.name || '';
+          return (
+            <Link key={i} to={`/job-cards/${r.job_card_id}`}
+              className={`flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors ${isCritical ? 'bg-red-50/40' : ''}`}>
+              <div className="flex items-center gap-3 min-w-0">
+                {isCritical && <AlertTriangle size={14} className="text-red-500 flex-shrink-0" />}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-sm text-gray-900">{r.job_card_no}</span>
+                    <span className="text-xs text-gray-500">{r.order_code} · {r.customer_code}</span>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5">Stage {r.stage_no}: {stageName}</div>
+                </div>
+              </div>
+              <div className={`text-sm font-bold flex-shrink-0 ml-3 ${isCritical ? 'text-red-600' : 'text-orange-600'}`}>
+                {r.rejection_qty} rejected
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+      {hasMore && (
+        <button type="button" onClick={() => setExpanded(e => !e)}
+          className="w-full px-5 py-2.5 text-xs font-medium text-brand-600 hover:bg-gray-50 border-t border-gray-100 transition-colors">
+          {expanded ? 'Show less' : `Show all ${rejections.length} (+${rejections.length - REJECTIONS_PREVIEW} more)`}
+        </button>
+      )}
+    </SectionCard>
+  );
+}
+
 function ActivityFeed({ items }) {
   return (
     <SectionCard title="Recent Activity" icon={Clock} iconColor="text-gray-400">
@@ -328,7 +380,6 @@ function OwnerAdminDashboard() {
     return d !== null && d <= 5 && !['dispatched'].includes(jc.status);
   });
 
-  const criticalRejections = rejections.filter(r => r.rejection_qty > 2);
   const pendingPOs  = purchaseOrders.filter(po => ['pending','approved'].includes(po.status));
 
   return (
@@ -470,43 +521,7 @@ function OwnerAdminDashboard() {
           )}
 
           {/* Rejections */}
-          {hasJobCards && rejections.length > 0 && (
-            <SectionCard
-              title="Production Rejections" icon={XCircle} iconColor="text-orange-500"
-              action={criticalRejections.length > 0 && (
-                <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">
-                  {criticalRejections.length} critical
-                </span>
-              )}
-            >
-              <div className="divide-y divide-gray-50">
-                {rejections.slice(0, 8).map((r, i) => {
-                  const isCritical = r.rejection_qty > 2;
-                  const stageName  = PRODUCTION_STAGES.find(s => s.no === r.stage_no)?.name || '';
-                  return (
-                    <div key={i} className={`flex items-center justify-between px-5 py-3 ${isCritical ? 'bg-red-50/40' : ''}`}>
-                      <div className="flex items-center gap-3 min-w-0">
-                        {isCritical && <AlertTriangle size={14} className="text-red-500 flex-shrink-0" />}
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-semibold text-sm text-gray-900">{r.job_card_no}</span>
-                            <span className="text-xs text-gray-500">{r.order_code} · {r.customer_code}</span>
-                          </div>
-                          <div className="text-xs text-gray-500 mt-0.5">Stage {r.stage_no}: {stageName}</div>
-                        </div>
-                      </div>
-                      <div className={`text-sm font-bold flex-shrink-0 ml-3 ${isCritical ? 'text-red-600' : 'text-orange-600'}`}>
-                        {r.rejection_qty} rejected
-                      </div>
-                    </div>
-                  );
-                })}
-                {rejections.length > 8 && (
-                  <div className="px-5 py-2 text-xs text-gray-400 text-center">+{rejections.length - 8} more</div>
-                )}
-              </div>
-            </SectionCard>
-          )}
+          {hasJobCards && <RejectionsSection rejections={rejections} />}
 
           {/* Pending Approvals */}
           {hasOrders && pending.length > 0 && (
@@ -921,42 +936,7 @@ function DesignDashboard() {
           )}
 
           {/* Rejections */}
-          {rejections.length > 0 && (
-            <SectionCard title="Production Rejections" icon={XCircle} iconColor="text-orange-500"
-              action={rejections.filter(r => r.rejection_qty > 2).length > 0 && (
-                <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">
-                  {rejections.filter(r => r.rejection_qty > 2).length} critical
-                </span>
-              )}
-            >
-              <div className="divide-y divide-gray-50">
-                {rejections.slice(0, 8).map((r, i) => {
-                  const isCritical = r.rejection_qty > 2;
-                  const stageName  = PRODUCTION_STAGES.find(s => s.no === r.stage_no)?.name || '';
-                  return (
-                    <div key={i} className={`flex items-center justify-between px-5 py-3 ${isCritical ? 'bg-red-50/40' : ''}`}>
-                      <div className="flex items-center gap-3 min-w-0">
-                        {isCritical && <AlertTriangle size={14} className="text-red-500 flex-shrink-0" />}
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-semibold text-sm text-gray-900">{r.job_card_no}</span>
-                            <span className="text-xs text-gray-500">{r.order_code} · {r.customer_code}</span>
-                          </div>
-                          <div className="text-xs text-gray-500 mt-0.5">Stage {r.stage_no}: {stageName}</div>
-                        </div>
-                      </div>
-                      <div className={`text-sm font-bold flex-shrink-0 ml-3 ${isCritical ? 'text-red-600' : 'text-orange-600'}`}>
-                        {r.rejection_qty} rejected
-                      </div>
-                    </div>
-                  );
-                })}
-                {rejections.length > 8 && (
-                  <div className="px-5 py-2 text-xs text-gray-400 text-center">+{rejections.length - 8} more</div>
-                )}
-              </div>
-            </SectionCard>
-          )}
+          <RejectionsSection rejections={rejections} />
         </div>
 
         {/* Side */}
@@ -1139,42 +1119,7 @@ function ProductionDashboard() {
             </SectionCard>
           )}
           {/* Rejections */}
-          {rejections.length > 0 && (
-            <SectionCard title="Production Rejections" icon={XCircle} iconColor="text-orange-500"
-              action={rejections.filter(r => r.rejection_qty > 2).length > 0 && (
-                <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">
-                  {rejections.filter(r => r.rejection_qty > 2).length} critical
-                </span>
-              )}
-            >
-              <div className="divide-y divide-gray-50">
-                {rejections.slice(0, 8).map((r, i) => {
-                  const isCritical = r.rejection_qty > 2;
-                  const stageName  = PRODUCTION_STAGES.find(s => s.no === r.stage_no)?.name || '';
-                  return (
-                    <div key={i} className={`flex items-center justify-between px-5 py-3 ${isCritical ? 'bg-red-50/40' : ''}`}>
-                      <div className="flex items-center gap-3 min-w-0">
-                        {isCritical && <AlertTriangle size={14} className="text-red-500 flex-shrink-0" />}
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-semibold text-sm text-gray-900">{r.job_card_no}</span>
-                            <span className="text-xs text-gray-500">{r.order_code} · {r.customer_code}</span>
-                          </div>
-                          <div className="text-xs text-gray-500 mt-0.5">Stage {r.stage_no}: {stageName}</div>
-                        </div>
-                      </div>
-                      <div className={`text-sm font-bold flex-shrink-0 ml-3 ${isCritical ? 'text-red-600' : 'text-orange-600'}`}>
-                        {r.rejection_qty} rejected
-                      </div>
-                    </div>
-                  );
-                })}
-                {rejections.length > 8 && (
-                  <div className="px-5 py-2 text-xs text-gray-400 text-center">+{rejections.length - 8} more</div>
-                )}
-              </div>
-            </SectionCard>
-          )}
+          <RejectionsSection rejections={rejections} />
         </div>
 
         {/* Side */}
