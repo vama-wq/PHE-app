@@ -247,7 +247,10 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   }
 
   // ── Route based on order type + heater_destination ────────────────────────
-  if (orderType === 'local_he' || orderType === 'export_he') {
+  // io_* combo orders honor the QC user's destination choice too; the legacy
+  // forced-split branch below only handles old calls without heater_destination.
+  if (orderType === 'local_he' || orderType === 'export_he' ||
+      ((orderType === 'io_export_he' || orderType === 'io_local_he') && heater_destination)) {
     const dest = heater_destination || 'dispatch';
 
     if (dest === 'finished_goods') {
