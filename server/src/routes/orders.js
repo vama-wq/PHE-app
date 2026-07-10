@@ -527,9 +527,15 @@ router.get('/:id/drawings', authenticate, async (req, res) => {
 });
 
 router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner'), ...uploadOrderDrawing, async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'File required' });
   const { notes, item_id } = req.body;
   if (!item_id) return res.status(400).json({ error: 'Item is required for the drawing' });
+
+  // Finished-Goods orders may record the inventory selection without a drawing
+  // file; every other order type still requires the file.
+  if (!req.file) {
+    const ord = await getDB().get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]);
+    if (ord?.order_type !== 'finished_goods') return res.status(400).json({ error: 'File required' });
+  }
 
   // Design selects the inventory consumed by this item along with the drawing.
   // It arrives as a JSON string in the multipart form.
@@ -542,7 +548,7 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
   const r = await db.insert(
     `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
      VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
-    [req.params.id, parseInt(item_id), req.file.storagePath, req.file.filename, req.file.originalname, notes||null, req.user.id]
+    [req.params.id, parseInt(item_id), req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null, notes||null, req.user.id]
   );
 
   // Replace this item's inventory selection with what design just chose.
@@ -554,8 +560,9 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     );
   }
 
-  await logActivity(req.params.id, null, 'drawing_uploaded', `Reference drawing uploaded: ${req.file.originalname}`, req.user.id);
-  res.status(201).json({ id: r.lastInsertRowid, file_name: req.file.filename, original_name: req.file.originalname });
+  await logActivity(req.params.id, null, 'drawing_uploaded',
+    req.file ? `Reference drawing uploaded: ${req.file.originalname}` : 'Drawing entry recorded without file (finished-goods order)', req.user.id);
+  res.status(201).json({ id: r.lastInsertRowid, file_name: req.file?.filename || null, original_name: req.file?.originalname || null });
 });
 
 // ── Drawing review: owner approves or rejects individual drawings ──────────────
@@ -567,7 +574,7 @@ router.put('/:id/drawings/:drawingId/approve', authenticate, authorize('owner'),
   // NOTE: inventory is NOT deducted here anymore. The item's selected inventory is
   // confirmed/edited and deducted at the QC stage (single job card) or once the
   // whole qty is dispatched for a partially-dispatched item.
-  await logActivity(req.params.id, null, 'drawing_approved', `Drawing approved: ${d.original_name || d.file_name}`, req.user.id);
+  await logActivity(req.params.id, null, 'drawing_approved', `Drawing approved: ${d.original_name || d.file_name || 'entry without file'}`, req.user.id);
   res.json({ message: 'Drawing approved' });
 });
 

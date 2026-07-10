@@ -601,10 +601,14 @@ export default function OrderDetail() {
                               : <div className="w-9 h-9 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0"><FileText size={16} className="text-red-400" /></div>
                             }
                             <div className="flex-1 min-w-0">
-                              <a href={`/uploads/order-drawings/${d.file_name}`} target="_blank" rel="noopener noreferrer"
-                                className="text-xs font-medium text-brand-600 hover:underline block truncate">
-                                {d.original_name || d.file_name}
-                              </a>
+                              {d.file_name ? (
+                                <a href={`/uploads/order-drawings/${d.file_name}`} target="_blank" rel="noopener noreferrer"
+                                  className="text-xs font-medium text-brand-600 hover:underline block truncate">
+                                  {d.original_name || d.file_name}
+                                </a>
+                              ) : (
+                                <span className="text-xs font-medium text-gray-500 block truncate">No drawing file — inventory only</span>
+                              )}
                               <div className="text-xs text-gray-400">{d.uploaded_by_name} · {fmtDate(d.created_at)}</div>
                             </div>
                             {canUploadDrawing && !itemApproved && (
@@ -907,6 +911,7 @@ export default function OrderDetail() {
       {showDrawingModal && (
         <DrawingUploadModal orderId={id}
           item={drawingUploadItem}
+          fileOptional={isFG}
           onClose={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); }}
           onDone={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); load(); }}
         />

@@ -280,7 +280,7 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
               {bestStatus === 'rejected' && (
                 <span className="text-xs text-red-500 font-medium">Rejected</span>
               )}
-              {itemDrawings.length > 0 && itemDrawings[0] && (
+              {itemDrawings.length > 0 && itemDrawings[0]?.file_name && (
                 <a
                   href={`/uploads/order-drawings/${itemDrawings[0].file_name}`}
                   target="_blank"
@@ -300,7 +300,7 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
       {tab === 'ready' && (
         <td className="table-cell">
           <div className="flex flex-col gap-1">
-            {drawings.map(d => (
+            {drawings.map(d => d.file_name ? (
               <a
                 key={d.id}
                 href={`/uploads/order-drawings/${d.file_name}`}
@@ -312,6 +312,10 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
                 {d.original_name || d.file_name}
                 <ExternalLink size={10} />
               </a>
+            ) : (
+              <span key={d.id} className="flex items-center gap-1.5 text-xs text-gray-500">
+                <FileImage size={12} /> No file — inventory only
+              </span>
             ))}
           </div>
         </td>

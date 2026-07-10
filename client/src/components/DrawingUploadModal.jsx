@@ -5,7 +5,8 @@ import { Upload, Package, X, FileText } from 'lucide-react';
 
 // Design uploads a reference drawing for an order item AND selects the inventory
 // that item consumes. Inventory deducts when the owner approves the drawing.
-export default function DrawingUploadModal({ orderId, item, label = 'Upload Drawing', onClose, onDone }) {
+// fileOptional: finished-goods orders may record the inventory without a file.
+export default function DrawingUploadModal({ orderId, item, label = 'Upload Drawing', fileOptional = false, onClose, onDone }) {
   const [file, setFile] = useState(null);
   const [inventoryItems, setInventoryItems] = useState([]);
   const [selected, setSelected] = useState({}); // { [id]: qty }
@@ -44,7 +45,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   const selectedList = inventoryItems.filter(i => i.id in selected);
 
   const handleUpload = async () => {
-    if (!file) return setError('Please choose a drawing file');
+    if (!file && !fileOptional) return setError('Please choose a drawing file');
     const ids = Object.keys(selected);
     if (ids.length === 0) return setError('Select at least one inventory item for this drawing');
     const missingQty = ids.filter(id => !selected[id] || parseFloat(selected[id]) <= 0);
@@ -52,7 +53,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
 
     const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: parseFloat(selected[id]) }));
     const fd = new FormData();
-    fd.append('file', file);
+    if (file) fd.append('file', file);
     fd.append('item_id', item.id);
     fd.append('inventory_item_ids', JSON.stringify(inventory_item_ids));
     if (notes) fd.append('notes', notes);
@@ -77,7 +78,9 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
 
         {/* File picker */}
         <div>
-          <label className="label">Drawing file <span className="text-red-500">*</span></label>
+          <label className="label">Drawing file {fileOptional
+            ? <span className="text-gray-400 font-normal">(optional for finished-goods orders)</span>
+            : <span className="text-red-500">*</span>}</label>
           <div
             className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-colors ${
               file ? 'border-green-300 bg-green-50' : 'border-gray-200 hover:border-brand-400 hover:bg-brand-50'
@@ -158,7 +161,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
         <div className="flex gap-3 pt-1">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button type="button" className="btn-primary flex-1" onClick={handleUpload} disabled={uploading}>
-            {uploading ? 'Uploading…' : 'Upload Drawing'}
+            {uploading ? 'Uploading…' : (!file && fileOptional) ? 'Save Inventory Selection' : 'Upload Drawing'}
           </button>
         </div>
       </div>
