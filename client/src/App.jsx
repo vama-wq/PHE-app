@@ -152,7 +152,7 @@ export default function App() {
             </ProtectedRoute>
           } />
           <Route path="purchases/:id" element={
-            <ProtectedRoute roles={['owner','admin','accounts']} module="purchases">
+            <ProtectedRoute roles={['owner','admin','accounts','design']} module="purchases">
               <PurchaseOrderDetail />
             </ProtectedRoute>
           } />
