@@ -709,9 +709,12 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   const [error,        setError]       = useState('');
   const [bom,          setBom]         = useState(null); // inventory the item consumes
   const [showInvEdit,  setShowInvEdit] = useState(false);
+  const [fgLocation,   setFgLocation]  = useState('');   // storage location for FG intake
+  const [locations,    setLocations]   = useState([]);
 
   const loadBom = () => api.get(`/qc/${card.id}/bom`).then(r => setBom(r.data)).catch(() => setBom(null));
   useEffect(() => { loadBom(); }, [card.id]);
+  useEffect(() => { api.get('/finished-goods/locations').then(r => setLocations(r.data.filter(l => l.active))).catch(() => {}); }, []);
 
   const handleSubmit = async () => {
     setError('');
@@ -729,6 +732,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
       fd.append('heater_destination', destination);
       if (destination === 'finished_goods' || destination === 'both') fd.append('io_qty', parseInt(fgQty));
       if (destination === 'both') fd.append('dispatch_qty', parseInt(dispatchQty));
+      if ((destination === 'finished_goods' || destination === 'both') && fgLocation) fd.append('fg_location', fgLocation);
       await api.put(`/qc/${card.id}/approve`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSaved();
     } catch (e) {
@@ -849,12 +853,22 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
 
         {/* Qty inputs for FG / Both */}
         {(destination === 'finished_goods' || destination === 'both') && (
-          <div>
-            <label className="label">Qty → Finished Goods <span className="text-red-500">*</span></label>
-            <input className="input" type="number" min="1"
-              value={fgQty} onChange={e => setFgQty(e.target.value)}
-              placeholder={`Dispatchable: ${card.net_qty ?? card.qty} pcs`} />
-          </div>
+          <>
+            <div>
+              <label className="label">Qty → Finished Goods <span className="text-red-500">*</span></label>
+              <input className="input" type="number" min="1"
+                value={fgQty} onChange={e => setFgQty(e.target.value)}
+                placeholder={`Dispatchable: ${card.net_qty ?? card.qty} pcs`} />
+            </div>
+            <div>
+              <label className="label">Storage Location <span className="text-xs text-gray-400 font-normal">(optional)</span></label>
+              <select className="input" value={fgLocation} onChange={e => setFgLocation(e.target.value)}>
+                <option value="">— Where is it stored? —</option>
+                {locations.map(l => <option key={l.id} value={l.name}>{l.name}</option>)}
+              </select>
+              {locations.length === 0 && <p className="text-xs text-gray-400 mt-1">No locations set up yet (add them under Finished Goods).</p>}
+            </div>
+          </>
         )}
         {destination === 'both' && (
           <div>

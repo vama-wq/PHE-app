@@ -2,6 +2,42 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 
+// ── Storage locations (predefined labels) ─────────────────────────────────────
+// NOTE: defined before '/:id' so "locations" isn't captured as an :id.
+router.get('/locations', authenticate, async (req, res) => {
+  res.json(await getDB().all('SELECT * FROM finished_goods_locations ORDER BY active DESC, name ASC'));
+});
+router.post('/locations', authenticate, authorize('owner', 'admin'), async (req, res) => {
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Location name is required' });
+  try {
+    const r = await getDB().insert('INSERT INTO finished_goods_locations (name) VALUES ($1)', [name]);
+    res.status(201).json({ id: r.lastInsertRowid, name });
+  } catch (e) {
+    if (/unique|duplicate/i.test(e.message)) return res.status(409).json({ error: 'That location already exists' });
+    throw e;
+  }
+});
+router.put('/locations/:id', authenticate, authorize('owner', 'admin'), async (req, res) => {
+  const { name, active } = req.body;
+  const db = getDB();
+  const loc = await db.get('SELECT * FROM finished_goods_locations WHERE id=$1', [req.params.id]);
+  if (!loc) return res.status(404).json({ error: 'Not found' });
+  try {
+    await db.run('UPDATE finished_goods_locations SET name=$1, active=$2 WHERE id=$3',
+      [name?.trim() || loc.name, active !== undefined ? !!active : loc.active, req.params.id]);
+    res.json({ message: 'Updated' });
+  } catch (e) {
+    if (/unique|duplicate/i.test(e.message)) return res.status(409).json({ error: 'That location already exists' });
+    throw e;
+  }
+});
+router.delete('/locations/:id', authenticate, authorize('owner', 'admin'), async (req, res) => {
+  // Soft-deactivate rather than hard-delete, so historical movement labels stay intact.
+  await getDB().run('UPDATE finished_goods_locations SET active=FALSE WHERE id=$1', [req.params.id]);
+  res.json({ message: 'Location deactivated' });
+});
+
 // ── Global movement log (all inward + outward across all FG items) ────────────
 router.get('/logs', authenticate, async (req, res) => {
   const rows = await getDB().all(`
@@ -129,7 +165,7 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (r
 
 // ── Manual inward (add stock to existing FG item) ────────────────────────────
 router.post('/:id/inward', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
-  const { qty, notes } = req.body;
+  const { qty, notes, location } = req.body;
   const parsedQty = parseInt(qty);
   if (!parsedQty || parsedQty <= 0) return res.status(400).json({ error: 'Valid quantity required' });
 
@@ -137,16 +173,17 @@ router.post('/:id/inward', authenticate, authorize('owner', 'admin', 'accounts')
   const fg = await db.get('SELECT * FROM finished_goods WHERE id=$1', [req.params.id]);
   if (!fg) return res.status(404).json({ error: 'Not found' });
 
+  const loc = (location || '').trim() || null;
   await db.run(
-    'UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1 WHERE id = $2',
-    [parsedQty, fg.id]
+    'UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1, location = COALESCE($3, location) WHERE id = $2',
+    [parsedQty, fg.id, loc]
   );
 
   await db.insert(
     `INSERT INTO finished_goods_log
-       (finished_good_id, movement_type, qty, notes, created_by)
-     VALUES ($1,'inward',$2,$3,$4)`,
-    [fg.id, parsedQty, notes ? `Manual entry: ${notes}` : 'Manual entry', req.user.id]
+       (finished_good_id, movement_type, qty, notes, location, created_by)
+     VALUES ($1,'inward',$2,$3,$4,$5)`,
+    [fg.id, parsedQty, notes ? `Manual entry: ${notes}` : 'Manual entry', loc, req.user.id]
   );
 
   res.json({ message: 'Inward stock recorded' });
@@ -154,7 +191,7 @@ router.post('/:id/inward', authenticate, authorize('owner', 'admin', 'accounts')
 
 // ── Manual outward (dispatch / sampling from finished goods) ──────────────────
 router.post('/:id/outward', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
-  const { qty, outward_type, client_code, client_name, reason, reference, notes } = req.body;
+  const { qty, outward_type, client_code, client_name, reason, reference, notes, location } = req.body;
   if (!qty || parseInt(qty) <= 0) return res.status(400).json({ error: 'Valid quantity required' });
   if (!outward_type || !['dispatch', 'sampling'].includes(outward_type))
     return res.status(400).json({ error: 'Outward type must be dispatch or sampling' });
@@ -176,10 +213,10 @@ router.post('/:id/outward', authenticate, authorize('owner', 'admin', 'accounts'
   );
   await db.insert(
     `INSERT INTO finished_goods_log
-       (finished_good_id, movement_type, qty, outward_type, client_code, client_name, reason, reference, notes, created_by)
-     VALUES ($1,'outward',$2,$3,$4,$5,$6,$7,$8,$9)`,
+       (finished_good_id, movement_type, qty, outward_type, client_code, client_name, reason, reference, notes, location, created_by)
+     VALUES ($1,'outward',$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [fg.id, parsedQty, outward_type, client_code || null, client_name.trim(),
-     reason || null, reference || null, notes || null, req.user.id]
+     reason || null, reference || null, notes || null, (location || '').trim() || null, req.user.id]
   );
 
   res.json({ message: 'Outward recorded' });

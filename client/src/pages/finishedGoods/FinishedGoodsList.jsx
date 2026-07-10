@@ -4,7 +4,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import ImportModal from '../../components/ui/ImportModal';
-import { Search, AlertTriangle, ClipboardList, Upload, Plus } from 'lucide-react';
+import { Search, AlertTriangle, ClipboardList, Upload, Plus, MapPin, X, Check } from 'lucide-react';
 
 export default function FinishedGoodsList() {
   const navigate  = useNavigate();
@@ -16,6 +16,7 @@ export default function FinishedGoodsList() {
   const [outwardModal, setOutwardModal] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [showLocations, setShowLocations] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -67,6 +68,13 @@ export default function FinishedGoodsList() {
               className="btn-secondary flex items-center gap-1.5 text-sm"
               onClick={() => setShowImport(true)}>
               <Upload size={15} /> Import Excel
+            </button>
+          )}
+          {canManage && (
+            <button
+              className="btn-secondary flex items-center gap-1.5 text-sm"
+              onClick={() => setShowLocations(true)}>
+              <MapPin size={15} /> Locations
             </button>
           )}
           <Link to="/finished-goods/logs"
@@ -196,7 +204,53 @@ export default function FinishedGoodsList() {
           onDone={() => { setOutwardModal(null); load(); }}
         />
       )}
+      {showLocations && <LocationsModal onClose={() => setShowLocations(false)} />}
     </div>
+  );
+}
+
+// ── Manage predefined storage locations ───────────────────────────────────────
+function LocationsModal({ onClose }) {
+  const [locations, setLocations] = useState([]);
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = () => api.get('/finished-goods/locations').then(r => setLocations(r.data)).catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  const add = async () => {
+    if (!name.trim()) return;
+    setBusy(true); setError('');
+    try { await api.post('/finished-goods/locations', { name: name.trim() }); setName(''); load(); }
+    catch (e) { setError(e.response?.data?.error || 'Failed to add'); }
+    finally { setBusy(false); }
+  };
+  const toggle = async (l) => { await api.put(`/finished-goods/locations/${l.id}`, { active: !l.active }); load(); };
+
+  return (
+    <Modal open title="Storage Locations" onClose={onClose} size="sm">
+      <p className="text-xs text-gray-500 mb-3">Predefined places where finished goods are stored. QC picks one when routing heaters to stock; Dispatch records which place an order is pulled from.</p>
+      <div className="flex gap-2 mb-4">
+        <input className="input flex-1" placeholder="e.g. Rack A / Godown 2" value={name}
+          onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} />
+        <button className="btn-primary btn-sm px-4" onClick={add} disabled={busy || !name.trim()}>Add</button>
+      </div>
+      {error && <p className="text-red-600 text-sm mb-2">{error}</p>}
+      <div className="space-y-1.5 max-h-72 overflow-y-auto">
+        {locations.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-4">No locations yet — add your first above.</p>
+        ) : locations.map(l => (
+          <div key={l.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border ${l.active ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50'}`}>
+            <span className={`text-sm flex items-center gap-1.5 ${l.active ? 'text-gray-800' : 'text-gray-400 line-through'}`}>
+              <MapPin size={13} className="text-gray-400" /> {l.name}
+            </span>
+            <button className="text-xs text-brand-600 hover:underline flex items-center gap-1" onClick={() => toggle(l)}>
+              {l.active ? <><X size={12} /> Deactivate</> : <><Check size={12} /> Reactivate</>}
+            </button>
+          </div>
+        ))}
+      </div>
+    </Modal>
   );
 }
 

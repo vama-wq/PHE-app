@@ -157,8 +157,9 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   const reportRow = await db.get('SELECT COUNT(*) AS c FROM qc_reports WHERE job_card_id=$1', [req.params.id]);
   if (parseInt(reportRow.c, 10) === 0) return res.status(400).json({ error: 'Upload a QC report before approving' });
 
-  const { io_qty, dispatch_qty, heater_destination } = req.body;
+  const { io_qty, dispatch_qty, heater_destination, fg_location } = req.body;
   const orderType = jc.order_type || 'local_he';
+  const fgLocation = (fg_location || '').trim() || null; // storage location for FG intake (optional label)
 
   // Calculate net finished qty from production (original qty - total rejections + remade)
   const prodRow = await db.get(`
@@ -201,10 +202,10 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
 
     let fgId;
     if (existing) {
-      // Add stock to the existing product entry
+      // Add stock to the existing product entry (update the stored location label to the latest)
       await db.run(
-        `UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1 WHERE id = $2`,
-        [qty, existing.id]
+        `UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1, location = COALESCE($3, location) WHERE id = $2`,
+        [qty, existing.id, fgLocation]
       );
       fgId = existing.id;
     } else {
@@ -213,8 +214,8 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
         INSERT INTO finished_goods
           (job_card_id, order_id, order_code, order_type, customer_code, customer_name,
            drawing_no, base_drawing_no, tube_material, tube_diameter, wattage, voltage, plating_instructions,
-           qty_in, qty_available, notes, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,$16)
+           qty_in, qty_available, notes, location, created_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,$16,$17)
       `, [
         jc.id, jc.order_id, jc.order_code, jc.order_type,
         jc.customer_code, jc.customer_name,
@@ -222,21 +223,22 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
         asm?.tube_material || null, asm?.tube_diameter_mm || null,
         asm?.wattage_actual || null, asm?.voltage_actual || null,
         asm?.plating_description || null,
-        qty, null, req.user.id,
+        qty, null, fgLocation, req.user.id,
       ]);
       fgId = fg.lastInsertRowid;
     }
 
-    // Log this inward batch with full traceability (job card + order + customer)
+    // Log this inward batch with full traceability (job card + order + customer + location)
     await db.insert(
       `INSERT INTO finished_goods_log
-         (finished_good_id, movement_type, qty, job_card_no, order_code, customer_code, reference, notes, created_by)
-       VALUES ($1,'inward',$2,$3,$4,$5,$6,$7,$8)`,
+         (finished_good_id, movement_type, qty, job_card_no, order_code, customer_code, reference, notes, location, created_by)
+       VALUES ($1,'inward',$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
         fgId, qty,
         jc.job_card_no, jc.order_code, jc.customer_code,
         jc.job_card_no,   // reference = job card number for easy lookup
         splitNotes || null,
+        fgLocation,
         req.user.id,
       ]
     );

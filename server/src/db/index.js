@@ -141,6 +141,19 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE finished_goods_log ADD COLUMN IF NOT EXISTS order_code TEXT`);
       await pool.query(`ALTER TABLE finished_goods_log ADD COLUMN IF NOT EXISTS customer_code TEXT`);
 
+      // Finished Goods storage locations (predefined labels). Location is a recorded
+      // label only — stock is still one total qty per product (base_drawing_no).
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS finished_goods_locations (
+          id         SERIAL PRIMARY KEY,
+          name       TEXT NOT NULL,
+          active     BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_fg_location_name ON finished_goods_locations(lower(name))`);
+      await pool.query(`ALTER TABLE finished_goods ADD COLUMN IF NOT EXISTS location TEXT`);       // latest/primary storage location
+      await pool.query(`ALTER TABLE finished_goods_log ADD COLUMN IF NOT EXISTS location TEXT`);   // location per movement
+
       // ── Consolidate finished_goods: one row per base_drawing_no ──────────────
       // 1. Fill base_drawing_no by stripping trailing job-card suffix (-1, -2, etc.)
       await pool.query(`
