@@ -164,6 +164,11 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_qc_qty INTEGER`);       // qty approved from stock
       await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_qc_done BOOLEAN DEFAULT FALSE`);
       await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_dispatched BOOLEAN DEFAULT FALSE`);
+      // The order_type CHECK predates finished_goods — recreate it. (The status
+      // CHECK is recreated in the customer-query migration further below.)
+      await pool.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_order_type_check`);
+      await pool.query(`ALTER TABLE orders ADD CONSTRAINT orders_order_type_check CHECK (order_type = ANY (ARRAY[
+        'local_he','export_he','inventory_order','io_export_he','io_local_he','finished_goods']))`);
 
       // ── Consolidate finished_goods: one row per base_drawing_no ──────────────
       // 1. Fill base_drawing_no by stripping trailing job-card suffix (-1, -2, etc.)
@@ -491,7 +496,8 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK(status IN (
         'pending_approval','approved','rejected','job_card_created','in_progress',
         'qc_pending','qc_approved','packaging','dispatched','on_hold',
-        'customer_query','resolved_dispatched','product_return'
+        'customer_query','resolved_dispatched','product_return',
+        'fg_qc_pending','fg_qc_approved'
       ))`);
       await pool.query(`ALTER TABLE job_cards DROP CONSTRAINT IF EXISTS job_cards_status_check`);
       await pool.query(`ALTER TABLE job_cards ADD CONSTRAINT job_cards_status_check CHECK(status IN (
