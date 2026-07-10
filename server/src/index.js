@@ -28,7 +28,7 @@ app.use(cookieParser());
 // No DB / auth — returns instantly. Used by the keep-alive pinger (GitHub
 // Actions) to stop Render's free tier from sleeping the container, and is handy
 // for uptime monitoring.
-app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now(), rev: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || undefined }));
 
 // ── Serve uploaded files via Supabase Storage proxy ──────────────────────────
 // Maintains backward compat: frontend still uses /uploads/folder/filename URLs
