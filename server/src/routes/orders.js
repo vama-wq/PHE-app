@@ -527,42 +527,47 @@ router.get('/:id/drawings', authenticate, async (req, res) => {
 });
 
 router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner'), ...uploadOrderDrawing, async (req, res) => {
-  const { notes, item_id } = req.body;
-  if (!item_id) return res.status(400).json({ error: 'Item is required for the drawing' });
+  try {
+    const { notes, item_id } = req.body;
+    if (!item_id) return res.status(400).json({ error: 'Item is required for the drawing' });
 
-  // Finished-Goods orders may record the inventory selection without a drawing
-  // file; every other order type still requires the file.
-  if (!req.file) {
-    const ord = await getDB().get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]);
-    if (ord?.order_type !== 'finished_goods') return res.status(400).json({ error: 'File required' });
-  }
+    // Finished-Goods orders may record the inventory selection without a drawing
+    // file; every other order type still requires the file.
+    if (!req.file) {
+      const ord = await getDB().get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]);
+      if (ord?.order_type !== 'finished_goods') return res.status(400).json({ error: 'File required' });
+    }
 
-  // Design selects the inventory consumed by this item along with the drawing.
-  // It arrives as a JSON string in the multipart form.
-  let invSelections = [];
-  try { invSelections = JSON.parse(req.body.inventory_item_ids || '[]'); } catch { invSelections = []; }
-  invSelections = (invSelections || []).filter(s => s && s.id && parseFloat(s.qty) > 0);
-  if (!invSelections.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing' });
+    // Design selects the inventory consumed by this item along with the drawing.
+    // It arrives as a JSON string in the multipart form.
+    let invSelections = [];
+    try { invSelections = JSON.parse(req.body.inventory_item_ids || '[]'); } catch { invSelections = []; }
+    invSelections = (invSelections || []).filter(s => s && s.id && parseFloat(s.qty) > 0);
+    if (!invSelections.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing' });
 
-  const db = getDB();
-  const r = await db.insert(
-    `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
-    [req.params.id, parseInt(item_id), req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null, notes||null, req.user.id]
-  );
-
-  // Replace this item's inventory selection with what design just chose.
-  await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [parseInt(item_id)]);
-  for (const sel of invSelections) {
-    await db.run(
-      'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
-      [parseInt(item_id), parseInt(sel.id), parseFloat(sel.qty) || 0]
+    const db = getDB();
+    const r = await db.insert(
+      `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
+      [req.params.id, parseInt(item_id), req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null, notes||null, req.user.id]
     );
-  }
 
-  await logActivity(req.params.id, null, 'drawing_uploaded',
-    req.file ? `Reference drawing uploaded: ${req.file.originalname}` : 'Drawing entry recorded without file (finished-goods order)', req.user.id);
-  res.status(201).json({ id: r.lastInsertRowid, file_name: req.file?.filename || null, original_name: req.file?.originalname || null });
+    // Replace this item's inventory selection with what design just chose.
+    await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [parseInt(item_id)]);
+    for (const sel of invSelections) {
+      await db.run(
+        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+        [parseInt(item_id), parseInt(sel.id), parseFloat(sel.qty) || 0]
+      );
+    }
+
+    await logActivity(req.params.id, null, 'drawing_uploaded',
+      req.file ? `Reference drawing uploaded: ${req.file.originalname}` : 'Drawing entry recorded without file (finished-goods order)', req.user.id);
+    res.status(201).json({ id: r.lastInsertRowid, file_name: req.file?.filename || null, original_name: req.file?.originalname || null });
+  } catch (e) {
+    console.error('drawing upload error:', e);
+    res.status(500).json({ error: 'Failed to save drawing' });
+  }
 });
 
 // ── Drawing review: owner approves or rejects individual drawings ──────────────

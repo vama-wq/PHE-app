@@ -164,6 +164,9 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_qc_qty INTEGER`);       // qty approved from stock
       await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_qc_done BOOLEAN DEFAULT FALSE`);
       await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fg_dispatched BOOLEAN DEFAULT FALSE`);
+      // FG orders may record a drawing entry (inventory selection) without a file
+      await pool.query(`ALTER TABLE order_drawings ALTER COLUMN file_path DROP NOT NULL`);
+      await pool.query(`ALTER TABLE order_drawings ALTER COLUMN file_name DROP NOT NULL`);
       // The order_type CHECK predates finished_goods — recreate it. (The status
       // CHECK is recreated in the customer-query migration further below.)
       await pool.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_order_type_check`);
