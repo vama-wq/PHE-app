@@ -784,7 +784,9 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
             <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
               <Package size={14} className="text-brand-500" /> Inventory to consume
             </span>
-            {bom?.item_id && !bom?.deducted && (
+            {/* Always allow adding inventory when nothing is selected yet — the "already
+                deducted" lock only makes sense once there's a real BOM to protect. */}
+            {bom?.item_id && (bom.inventory_items.length === 0 || !bom?.deducted) && (
               <button type="button" className="text-xs text-brand-600 hover:underline"
                 onClick={() => setShowInvEdit(true)}>Edit inventory</button>
             )}
@@ -803,7 +805,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
               ))}
             </ul>
           )}
-          {bom && (
+          {bom && bom.inventory_items.length > 0 && (
             <p className="text-[11px] mt-2 pt-2 border-t border-gray-100 text-gray-500">
               {bom.deducted
                 ? '✓ Inventory already deducted for this item.'
