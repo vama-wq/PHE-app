@@ -165,7 +165,7 @@ export default function DrawingsList() {
 // ── Per-item upload button ─────────────────────────────────────────────────────
 // Opens a modal where design picks the drawing file AND the inventory the item
 // consumes (inventory deducts when the owner approves the drawing).
-function ItemUploadBtn({ orderId, item, onUploaded, label }) {
+function ItemUploadBtn({ orderId, item, onUploaded, label, fileOptional }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="flex items-center gap-1.5">
@@ -181,6 +181,7 @@ function ItemUploadBtn({ orderId, item, onUploaded, label }) {
           orderId={orderId}
           item={item}
           label={label === 'Re-upload' ? 'Re-upload Drawing' : 'Upload Drawing'}
+          fileOptional={fileOptional}
           onClose={() => setOpen(false)}
           onDone={() => { setOpen(false); onUploaded(); }}
         />
@@ -335,7 +336,8 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
                     <CheckCircle2 size={11} /> Done
                   </span>
                 ) : (
-                  <ItemUploadBtn orderId={order.id} item={item} onUploaded={onUploaded} />
+                  <ItemUploadBtn orderId={order.id} item={item} onUploaded={onUploaded}
+                    fileOptional={order.order_type === 'finished_goods'} />
                 )}
               </div>
             ))}
@@ -347,7 +349,8 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
                 <span className="text-xs text-red-600 font-mono min-w-0 truncate max-w-[120px]" title={item.drawing_number}>
                   {item.drawing_number || `Item ${idx + 1}`}
                 </span>
-                <ItemUploadBtn orderId={order.id} item={item} onUploaded={onUploaded} label="Re-upload" />
+                <ItemUploadBtn orderId={order.id} item={item} onUploaded={onUploaded} label="Re-upload"
+                  fileOptional={order.order_type === 'finished_goods'} />
               </div>
             ))}
           </div>

@@ -100,7 +100,7 @@ router.get('/drawings/pending', authenticate, async (req, res) => {
   const canSeeNames = withCustomerVisibility(req); // design/QC see only the customer code
   const rows = await db.all(`
     SELECT
-      o.id, o.order_code, o.status, o.drawing_status, o.drawing_rejection_reason,
+      o.id, o.order_code, o.status, o.order_type, o.drawing_status, o.drawing_rejection_reason,
       o.created_at, o.order_date,
       c.customer_code, ${canSeeNames ? 'c.name AS customer_name,' : ''}
       u.name AS created_by_name,
