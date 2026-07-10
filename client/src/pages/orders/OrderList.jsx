@@ -162,12 +162,14 @@ export default function OrderList() {
                     o.order_type === 'inventory_order' ? 'bg-amber-100 text-amber-700' :
                     o.order_type === 'io_export_he'    ? 'bg-orange-100 text-orange-700' :
                     o.order_type === 'io_local_he'     ? 'bg-teal-100 text-teal-700' :
+                    o.order_type === 'finished_goods'  ? 'bg-emerald-100 text-emerald-700' :
                                                          'bg-blue-50 text-blue-700'
                   }`}>
                     {o.order_type === 'export_he'       ? 'Export HE' :
                      o.order_type === 'inventory_order' ? 'IO' :
                      o.order_type === 'io_export_he'    ? 'IO + Export HE' :
                      o.order_type === 'io_local_he'     ? 'IO + Local HE' :
+                     o.order_type === 'finished_goods'  ? 'Finished Goods' :
                                                           'Local HE'}
                   </span>
                 </td>
