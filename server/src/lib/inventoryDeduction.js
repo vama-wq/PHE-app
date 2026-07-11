@@ -60,6 +60,46 @@ async function deductStageCategories(db, jc, stageNo, userId) {
   }
 }
 
+// Partial-dispatch deduction at QC approval: when an item is split into multiple
+// job cards, each card's QC approval deducts the NON-stage-timed BOM lines at the
+// ratio of the QC-approved qty (dispatch + FG) to the item qty. Stage-timed
+// categories are left alone — their card share went out at stage 15/21, and any
+// remainder (e.g. skipped optional stage) is swept up by the final settle.
+async function deductPartialAtQC(db, jc, userId) {
+  if (!jc) return;
+  const itemId = await resolveJobCardItemId(db, jc);
+  if (!itemId) return;
+  const item = await db.get('SELECT id, drawing_number, quantity, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
+  if (!item || item.inventory_deducted) return;
+  const cardCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE order_item_id=$1', [itemId]);
+  if (parseInt(cardCount.n, 10) <= 1) return; // single card → full settle handles it
+
+  const fresh = await db.get('SELECT * FROM job_cards WHERE id=$1', [jc.id]); // qc_* qtys were just written
+  const approvedQty = (Number(fresh?.qc_dispatch_qty) || 0) + (Number(fresh?.qc_fg_qty) || 0);
+  const baseQty = approvedQty > 0 ? approvedQty : (Number(jc.qty) || 0);
+  const ratio = Number(item.quantity) > 0 ? Math.min(1, baseQty / Number(item.quantity)) : 0;
+  if (ratio <= 0) return;
+
+  const stageCats = Object.values(STAGE_CATEGORY_MAP).flat();
+  const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
+  const orderCode = o?.order_code || `Order #${jc.order_id}`;
+  const sels = await db.all(
+    `SELECT oii.* FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+     WHERE oii.order_item_id=$1 AND (ii.category IS NULL OR TRIM(ii.category) <> ALL($2))`,
+    [itemId, stageCats]
+  );
+  for (const sel of sels) {
+    const total = parseFloat(sel.qty || 0);
+    const already = parseFloat(sel.qty_deducted || 0);
+    const ded = Math.min(total * ratio, total - already);
+    if (ded <= 0) continue;
+    const noteParts = [`Order: ${orderCode}`];
+    if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
+    noteParts.push(`Partial dispatch QC-approved (JC ${jc.job_card_no})`);
+    await deductLine(db, sel, ded, noteParts.join(' | '), userId);
+  }
+}
+
 // QC-time deduction: everything not already consumed by a stage trigger.
 async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = 'Consumed for production') {
   const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
@@ -161,4 +201,4 @@ async function settleItemInventory(db, orderItemId, userId, orderCode) {
   if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)');
 }
 
-module.exports = { deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras };
+module.exports = { deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, deductPartialAtQC };
