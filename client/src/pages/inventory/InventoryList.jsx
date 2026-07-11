@@ -29,7 +29,7 @@ export default function InventoryList() {
     }).catch(() => {});
   };
 
-  const load = () => api.get('/inventory').then(r => { setItems(r.data); setFiltered(r.data); }).finally(() => setLoading(false));
+  const load = () => api.get('/inventory?include_pending=1').then(r => { setItems(r.data); setFiltered(r.data); }).finally(() => setLoading(false));
   useEffect(() => { load(); }, []);
   useEffect(() => {
     let r = items;
@@ -159,7 +159,30 @@ export default function InventoryList() {
                   {showCost && <td className="table-cell text-right text-gray-700">{Number(item.unit_cost) > 0 ? `₹${Number(item.unit_cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}</td>}
                   {showCost && <td className="table-cell text-right text-gray-700">{Number(item.unit_cost) > 0 ? `₹${(Number(item.current_stock) * Number(item.unit_cost)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</td>}
                   <td className="table-cell text-center">
-                    {isLow ? (
+                    {item.approval_status === 'pending_approval' ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">Pending Approval</span>
+                        {user.role === 'owner' && (
+                          <>
+                            <button className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-semibold hover:bg-green-200"
+                              title="Approve item"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                try { await api.put(`/inventory/${item.id}/approve`); load(); }
+                                catch (err) { alert(err.response?.data?.error || 'Failed'); }
+                              }}>✓</button>
+                            <button className="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold hover:bg-red-200"
+                              title="Reject & remove item"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (!window.confirm(`Reject and remove "${item.name}"?`)) return;
+                                try { await api.put(`/inventory/${item.id}/reject`); load(); }
+                                catch (err) { alert(err.response?.data?.error || 'Failed'); }
+                              }}>✕</button>
+                          </>
+                        )}
+                      </span>
+                    ) : isLow ? (
                       <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
                         <AlertTriangle size={11} /> Low
                       </span>
@@ -181,6 +204,7 @@ export default function InventoryList() {
 }
 
 function NewItemModal({ onClose, onSave }) {
+  const { user } = useAuthStore();
   const [f, setF] = useState({ item_code: '', name: '', name_gu: '', category: '', unit: '', current_stock: 0, reorder_level: 0, min_order_qty: 0, unit_cost: '', notes: '' });
   const [drawing, setDrawing] = useState(null);
   const [error, setError] = useState('');
@@ -229,6 +253,11 @@ function NewItemModal({ onClose, onSave }) {
             </label>
           </div>
         </div>
+        {user.role !== 'owner' && (
+          <p className="text-amber-700 text-sm bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
+            The item will be sent to the owner for approval — it becomes usable in orders and purchases once approved.
+          </p>
+        )}
         {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
         <div className="flex gap-3 pt-2">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>

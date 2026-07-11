@@ -106,7 +106,7 @@ router.get('/job-cards', authenticate, authorize('owner', 'admin', 'accounts', '
 router.get('/inventory', authenticate, authorize('owner', 'admin', 'accounts', 'design'), async (req, res) => {
   const rows = await getDB().all(`
     SELECT item_code, name, name_gu, category, unit, current_stock, reorder_level, min_order_qty, unit_cost, notes
-    FROM inventory_items ORDER BY category, item_code
+    FROM inventory_items WHERE COALESCE(approval_status,'approved')='approved' ORDER BY category, item_code
   `);
 
   const showCost = req.user.role !== 'design'; // QC/design never sees costs

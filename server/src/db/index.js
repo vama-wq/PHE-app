@@ -169,6 +169,8 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE order_drawings ALTER COLUMN file_name DROP NOT NULL`);
       // Gujarati item name for the shopfloor — copyable in the UI, included in exports
       await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS name_gu TEXT`);
+      // Accounts-added items need owner approval before they become usable
+      await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved'`);
       // The order_type CHECK predates finished_goods — recreate it. (The status
       // CHECK is recreated in the customer-query migration further below.)
       await pool.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_order_type_check`);
