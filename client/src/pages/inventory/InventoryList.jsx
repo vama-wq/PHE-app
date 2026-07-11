@@ -66,7 +66,7 @@ export default function InventoryList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {['accounts','owner','admin'].includes(user.role) && (
+          {['accounts','owner','admin','design'].includes(user.role) && (
             <button className="btn-secondary flex items-center gap-1.5 text-sm"
               onClick={() => downloadExcel('inventory', 'inventory.xlsx')}>
               <Download size={15} /> Export Excel

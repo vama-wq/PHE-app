@@ -103,12 +103,13 @@ router.get('/job-cards', authenticate, authorize('owner', 'admin', 'accounts', '
 });
 
 // ── Inventory ─────────────────────────────────────────────────────────────────
-router.get('/inventory', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+router.get('/inventory', authenticate, authorize('owner', 'admin', 'accounts', 'design'), async (req, res) => {
   const rows = await getDB().all(`
     SELECT item_code, name, name_gu, category, unit, current_stock, reorder_level, min_order_qty, unit_cost, notes
     FROM inventory_items ORDER BY category, item_code
   `);
 
+  const showCost = req.user.role !== 'design'; // QC/design never sees costs
   const data = rows.map(r => ({
     'Item Code':      r.item_code,
     'Name':           r.name,
@@ -118,7 +119,7 @@ router.get('/inventory', authenticate, authorize('owner', 'admin', 'accounts'), 
     'Current Stock':  r.current_stock,
     'Reorder Level':  r.reorder_level,
     'Min Order Qty':  r.min_order_qty || 0,
-    'Unit Cost':      r.unit_cost || 0,
+    ...(showCost ? { 'Unit Cost': r.unit_cost || 0 } : {}),
     'Status':         r.current_stock <= r.reorder_level ? 'LOW STOCK' : 'OK',
     'Notes':          r.notes || '',
   }));
