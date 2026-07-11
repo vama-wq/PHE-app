@@ -1,45 +1,118 @@
 // ── Inventory consumption for order items ──────────────────────────────────────
 // The inventory an order item consumes (its BOM) is selected by design at
-// drawing-upload time and stored in order_item_inventory. It is NO LONGER
-// deducted at drawing approval — deduction now happens when the item clears QC
-// (single job card) or, for a partially-dispatched item (split into multiple job
-// cards), only once the whole ordered qty has been dispatched / moved to Finished
-// Goods. order_items.inventory_deducted guards against double-deduction.
+// drawing-upload time and stored in order_item_inventory. Deduction timing is
+// split by inventory category:
+//   • Stage 21 (Nipple Press) completes  → nipple categories deduct
+//   • Stage 15 (Brazing)      completes  → flange + brazing categories deduct
+//   • QC clearance (split-aware)         → everything still remaining deducts
+// order_item_inventory.qty_deducted tracks how much of each BOM line has been
+// consumed so far (stage triggers prorate by job-card qty / item qty), and
+// order_items.inventory_deducted marks the item fully settled.
 
+const STAGE_CATEGORY_MAP = {
+  15: ['Flange', 'Flange Cap', 'Flange Spare', 'Brazing EQ'],
+  21: ['Nipple Fastner', 'Nipple Washer', 'Nipple Nut+Washer'],
+};
+const STAGE_LABEL = { 15: 'Stage 15 Brazing', 21: 'Stage 21 Nipple Press' };
+
+async function deductLine(db, sel, dedQty, note, userId) {
+  const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
+  if (!inv || !(dedQty > 0)) return;
+  const newStock = (inv.current_stock || 0) - dedQty; // allow negative so shortages are visible
+  await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+  await db.run('UPDATE order_item_inventory SET qty_deducted = COALESCE(qty_deducted,0) + $1 WHERE id=$2', [dedQty, sel.id]);
+  await db.insert(
+    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+     VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
+    [sel.inventory_item_id, dedQty, newStock, note, userId]
+  );
+}
+
+// Stage-triggered deduction: when a job card completes stage 15 or 21, deduct
+// the mapped categories' BOM lines, prorated by the card's share of the item
+// qty (e.g. 100 pcs BOM for 50 ordered → a 25-pc card deducts 50).
+async function deductStageCategories(db, jc, stageNo, userId) {
+  const cats = STAGE_CATEGORY_MAP[stageNo];
+  if (!cats || !jc) return;
+  const itemId = await resolveJobCardItemId(db, jc);
+  if (!itemId) return;
+  const item = await db.get('SELECT id, drawing_number, quantity, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
+  if (!item || item.inventory_deducted) return;
+  const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
+  const orderCode = o?.order_code || `Order #${jc.order_id}`;
+  const ratio = Number(item.quantity) > 0 ? Math.min(1, (Number(jc.qty) || 0) / Number(item.quantity)) : 1;
+
+  const sels = await db.all(
+    `SELECT oii.*, TRIM(ii.category) AS category
+     FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+     WHERE oii.order_item_id=$1 AND TRIM(ii.category) = ANY($2)`,
+    [itemId, cats]
+  );
+  for (const sel of sels) {
+    const total = parseFloat(sel.qty || 0);
+    const already = parseFloat(sel.qty_deducted || 0);
+    const ded = Math.min(total * ratio, total - already);
+    if (ded <= 0) continue;
+    const noteParts = [`Order: ${orderCode}`];
+    if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
+    noteParts.push(`${STAGE_LABEL[stageNo]} (JC ${jc.job_card_no})`);
+    await deductLine(db, sel, ded, noteParts.join(' | '), userId);
+  }
+}
+
+// QC-time deduction: everything not already consumed by a stage trigger.
 async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = 'Consumed for production') {
   const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
   if (!item || item.inventory_deducted) return; // never double-deduct
   const sels = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [itemId]);
   for (const sel of sels) {
-    const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
-    if (!inv) continue;
-    const newStock = (inv.current_stock || 0) - parseFloat(sel.qty || 0); // allow negative so shortages are visible
-    await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+    const remaining = parseFloat(sel.qty || 0) - parseFloat(sel.qty_deducted || 0);
+    if (remaining <= 0) continue;
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
     noteParts.push(reasonNote);
-    await db.insert(
-      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-       VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
-      [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, noteParts.join(' | '), userId]
-    );
+    await deductLine(db, sel, remaining, noteParts.join(' | '), userId);
   }
   if (sels.length) await db.run('UPDATE order_items SET inventory_deducted=TRUE WHERE id=$1', [itemId]);
 }
 
+// Extra consumption entered by QC for remade pieces — deducts immediately.
+async function applyRemakeExtras(db, jc, extras, userId) {
+  if (!Array.isArray(extras) || !extras.length) return;
+  const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
+  const orderCode = o?.order_code || `Order #${jc.order_id}`;
+  for (const ex of extras) {
+    const qty = parseFloat(ex?.qty);
+    const invId = parseInt(ex?.inventory_item_id, 10);
+    if (!(qty > 0) || !invId) continue;
+    const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [invId]);
+    if (!inv) continue;
+    const newStock = (inv.current_stock || 0) - qty;
+    await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, invId]);
+    await db.insert(
+      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+       VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
+      [invId, qty, newStock, `Order: ${orderCode} | Extra consumption for remade qty (QC approval, JC ${jc.job_card_no})`, userId]
+    );
+  }
+}
+
 async function restoreItemInventory(db, itemId, orderCode, userId, reasonNote) {
   const item = await db.get('SELECT id, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
-  if (!item || !item.inventory_deducted) return; // only restore what was actually deducted
+  if (!item) return;
   const sels = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [itemId]);
   for (const sel of sels) {
+    const deducted = parseFloat(sel.qty_deducted || 0); // restore only what actually went out
+    if (deducted <= 0) continue;
     const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
     if (!inv) continue;
-    const newStock = (inv.current_stock || 0) + parseFloat(sel.qty || 0);
+    const newStock = (inv.current_stock || 0) + deducted;
     await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+    await db.run('UPDATE order_item_inventory SET qty_deducted = 0 WHERE id=$1', [sel.id]);
     await db.insert(
       `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
        VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
-      [sel.inventory_item_id, parseFloat(sel.qty || 0), newStock, `${reasonNote} — ${orderCode}`, userId]
+      [sel.inventory_item_id, deducted, newStock, `${reasonNote} — ${orderCode}`, userId]
     );
   }
   await db.run('UPDATE order_items SET inventory_deducted=FALSE WHERE id=$1', [itemId]);
@@ -88,4 +161,4 @@ async function settleItemInventory(db, orderItemId, userId, orderCode) {
   if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)');
 }
 
-module.exports = { deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory };
+module.exports = { deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras };

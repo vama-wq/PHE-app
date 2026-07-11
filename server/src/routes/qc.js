@@ -2,13 +2,15 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQC, uploadChecklistPhoto } = require('../middleware/upload');
-const { settleItemInventory, resolveJobCardItemId } = require('../lib/inventoryDeduction');
+const { settleItemInventory, resolveJobCardItemId, applyRemakeExtras } = require('../lib/inventoryDeduction');
 
 // Deduct the job card's order item from stock once it qualifies (split-aware).
 // Wrapped so a failure here can never block QC approval. No-op when the item is
 // not yet fully settled or already deducted.
 async function settleAfterQC(db, jc, userId) {
   try {
+    // Extra inventory recorded for remade pieces (stashed on jc by the approve route)
+    if (jc._remakeExtras?.length) await applyRemakeExtras(db, jc, jc._remakeExtras, userId);
     const itemId = await resolveJobCardItemId(db, jc);
     if (!itemId) return;
     let orderCode = jc.order_code;
@@ -160,6 +162,10 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   const { io_qty, dispatch_qty, heater_destination, fg_location } = req.body;
   const orderType = jc.order_type || 'local_he';
   const fgLocation = (fg_location || '').trim() || null; // storage location for FG intake (optional label)
+
+  // Extra inventory consumed for remade pieces, entered by QC in the approval
+  // modal. Deducted in settleAfterQC (runs on every success path exactly once).
+  try { jc._remakeExtras = JSON.parse(req.body.remake_extras || '[]'); } catch { jc._remakeExtras = []; }
 
   // Calculate net finished qty from production (original qty - total rejections + remade)
   const prodRow = await db.get(`
@@ -380,7 +386,7 @@ router.get('/:id/bom', authenticate, authorize('design', 'owner', 'admin'), asyn
   }
   const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
   const inventory_items = await db.all(
-    `SELECT ii.id, ii.item_code, ii.name, ii.unit, oii.qty
+    `SELECT ii.id, ii.item_code, ii.name, ii.unit, TRIM(ii.category) AS category, oii.qty, COALESCE(oii.qty_deducted,0) AS qty_deducted
      FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
      WHERE oii.order_item_id=$1 ORDER BY ii.item_code`,
     [itemId]

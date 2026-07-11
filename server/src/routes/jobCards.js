@@ -4,6 +4,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { applyMaterialDeductions } = require('../lib/materialDeduction');
+const { deductStageCategories } = require('../lib/inventoryDeduction');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
 // Must match client MANDATORY_STAGE_NOS. Optional/excluded: 2, 13(Buffing), 15(Brazing),
@@ -722,6 +723,15 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   // based on the checklist. Wrapped so it can never block saving the stage.
   try { await applyMaterialDeductions(db, jobCardId, stageNo, !!done, req.user.id); }
   catch (e) { console.error('[checklist] material deduction failed:', e.message); }
+
+  // Category-timed BOM deduction: Stage 15 (Brazing) → flange/brazing categories,
+  // Stage 21 (Nipple Press) → nipple categories, prorated by the card's qty share.
+  if (done && (stageNo === 15 || stageNo === 21)) {
+    try {
+      const jcFull = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
+      await deductStageCategories(db, jcFull, stageNo, req.user.id);
+    } catch (e) { console.error('[checklist] stage-category deduction failed:', e.message); }
+  }
 
   if (done && rejQty > 2) {
     await triggerHold(db, jobCardId, stageNo, rejQty, req.user.id);

@@ -171,6 +171,13 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS name_gu TEXT`);
       // Accounts-added items need owner approval before they become usable
       await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved'`);
+      // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
+      // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
+      await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);
+      await pool.query(`
+        UPDATE order_item_inventory oii SET qty_deducted = oii.qty
+        FROM order_items oi
+        WHERE oi.id = oii.order_item_id AND oi.inventory_deducted = TRUE AND COALESCE(oii.qty_deducted,0) = 0`);
       // The order_type CHECK predates finished_goods — recreate it. (The status
       // CHECK is recreated in the customer-query migration further below.)
       await pool.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_order_type_check`);

@@ -894,6 +894,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   const [showInvEdit,  setShowInvEdit] = useState(false);
   const [fgLocation,   setFgLocation]  = useState('');   // storage location for FG intake
   const [locations,    setLocations]   = useState([]);
+  const [remakeExtras, setRemakeExtras] = useState({});  // inventory_item_id -> extra qty for remade pcs
 
   const loadBom = () => api.get(`/qc/${card.id}/bom`).then(r => setBom(r.data)).catch(() => setBom(null));
   useEffect(() => { loadBom(); }, [card.id]);
@@ -916,6 +917,10 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
       if (destination === 'finished_goods' || destination === 'both') fd.append('io_qty', parseInt(fgQty));
       if (destination === 'both') fd.append('dispatch_qty', parseInt(dispatchQty));
       if ((destination === 'finished_goods' || destination === 'both') && fgLocation) fd.append('fg_location', fgLocation);
+      const extras = Object.entries(remakeExtras)
+        .map(([id, q]) => ({ inventory_item_id: parseInt(id), qty: parseFloat(q) }))
+        .filter(x => x.qty > 0);
+      if (extras.length) fd.append('remake_extras', JSON.stringify(extras));
       await api.put(`/qc/${card.id}/approve`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSaved();
     } catch (e) {
@@ -987,7 +992,12 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
               {bom.inventory_items.map(i => (
                 <li key={i.id} className="flex justify-between text-xs text-gray-700">
                   <span><span className="font-mono">{i.item_code}</span> — {i.name}</span>
-                  <span className="font-medium">{i.qty} {i.unit}</span>
+                  <span className="font-medium">
+                    {i.qty} {i.unit}
+                    {Number(i.qty_deducted) > 0 && Number(i.qty_deducted) < Number(i.qty) && (
+                      <span className="text-gray-400 font-normal"> ({i.qty_deducted} deducted at stage)</span>
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -998,10 +1008,32 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
                 ? '✓ Inventory already deducted for this item.'
                 : bom.is_split
                   ? 'Partially dispatched — inventory deducts once the whole qty is dispatched.'
-                  : 'Approving will deduct this inventory from stock.'}
+                  : 'Approving will deduct the remaining inventory from stock.'}
             </p>
           )}
         </div>
+
+        {/* Remade qty — extra inventory consumed (if any) */}
+        {bom?.inventory_items?.length > 0 && (
+          <div className="border border-amber-200 bg-amber-50/40 rounded-lg p-3">
+            <span className="text-sm font-medium text-gray-700">Remade pieces — extra inventory used <span className="text-gray-400 font-normal">(if any)</span></span>
+            <p className="text-[11px] text-gray-500 mt-0.5 mb-2">If pieces were remade, enter the additional inventory consumed. It deducts on approval, on top of the BOM.</p>
+            <ul className="space-y-1.5">
+              {bom.inventory_items.map(i => (
+                <li key={i.id} className="flex items-center justify-between gap-2 text-xs text-gray-700">
+                  <span className="truncate"><span className="font-mono">{i.item_code}</span> — {i.name}</span>
+                  <span className="flex items-center gap-1 flex-shrink-0">
+                    <input type="number" min="0" step="any" placeholder="0"
+                      className="input w-20 text-xs py-1 text-right"
+                      value={remakeExtras[i.id] || ''}
+                      onChange={e => setRemakeExtras(p => ({ ...p, [i.id]: e.target.value }))} />
+                    <span className="text-gray-400 w-8">{i.unit}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* Destination selector */}
         <div>
