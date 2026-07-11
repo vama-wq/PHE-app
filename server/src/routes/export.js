@@ -105,13 +105,14 @@ router.get('/job-cards', authenticate, authorize('owner', 'admin', 'accounts', '
 // ── Inventory ─────────────────────────────────────────────────────────────────
 router.get('/inventory', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const rows = await getDB().all(`
-    SELECT item_code, name, category, unit, current_stock, reorder_level, min_order_qty, unit_cost, notes
+    SELECT item_code, name, name_gu, category, unit, current_stock, reorder_level, min_order_qty, unit_cost, notes
     FROM inventory_items ORDER BY category, item_code
   `);
 
   const data = rows.map(r => ({
     'Item Code':      r.item_code,
     'Name':           r.name,
+    'Name (ગુજરાતી)': r.name_gu || '',
     'Category':       r.category || '',
     'Unit':           r.unit,
     'Current Stock':  r.current_stock,

@@ -246,7 +246,7 @@ function TransactionModal({ itemId, item, onClose, onSave }) {
 }
 
 function EditItemModal({ item, onClose, onSave }) {
-  const [f, setF] = useState({ item_code: item.item_code, name: item.name, category: item.category || '', unit: item.unit, reorder_level: item.reorder_level, min_order_qty: item.min_order_qty || 0, unit_cost: item.unit_cost || '', notes: item.notes || '' });
+  const [f, setF] = useState({ item_code: item.item_code, name: item.name, name_gu: item.name_gu || '', category: item.category || '', unit: item.unit, reorder_level: item.reorder_level, min_order_qty: item.min_order_qty || 0, unit_cost: item.unit_cost || '', notes: item.notes || '' });
   const [drawing, setDrawing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -275,6 +275,7 @@ function EditItemModal({ item, onClose, onSave }) {
           <div><label className="label">Item Code</label><input className="input" value={f.item_code} onChange={set('item_code')} /></div>
           <div><label className="label">Unit</label><input className="input" value={f.unit} onChange={set('unit')} /></div>
           <div className="col-span-2"><label className="label">Name</label><input className="input" value={f.name} onChange={set('name')} /></div>
+          <div className="col-span-2"><label className="label">Name (ગુજરાતી)</label><input className="input" placeholder="દા.ત. ટર્મિનલ પિન 3&quot; હેડ સાથે" value={f.name_gu} onChange={set('name_gu')} /></div>
           <div><label className="label">Category</label><input className="input" value={f.category} onChange={set('category')} /></div>
           <div><label className="label">Reorder Level</label><input className="input" type="number" step="any" value={f.reorder_level} onChange={set('reorder_level')} /></div>
           <div><label className="label">Min Order Qty</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 100" value={f.min_order_qty} onChange={set('min_order_qty')} /></div>

@@ -18,7 +18,16 @@ export default function InventoryList() {
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [copiedId, setCopiedId] = useState(null);
   const navigate = useNavigate();
+
+  const copyGujarati = (e, item) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(`${item.item_code} — ${item.name_gu}`).then(() => {
+      setCopiedId(item.id);
+      setTimeout(() => setCopiedId(c => (c === item.id ? null : c)), 1200);
+    }).catch(() => {});
+  };
 
   const load = () => api.get('/inventory').then(r => { setItems(r.data); setFiltered(r.data); }).finally(() => setLoading(false));
   useEffect(() => { load(); }, []);
@@ -128,7 +137,20 @@ export default function InventoryList() {
               return (
                 <tr key={item.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/inventory/${item.id}`)}>
                   <td className="table-cell font-semibold text-brand-700">{item.item_code}</td>
-                  <td className="table-cell">{item.name}</td>
+                  <td className="table-cell">
+                    {item.name}
+                    {item.name_gu && (
+                      <button
+                        className={`ml-1.5 text-[10px] font-bold px-1 py-0.5 rounded align-middle transition-colors ${
+                          copiedId === item.id ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500 hover:bg-brand-100 hover:text-brand-700'
+                        }`}
+                        title={`${item.name_gu} — ક્લિક કરી કૉપિ કરો`}
+                        onClick={e => copyGujarati(e, item)}
+                      >
+                        {copiedId === item.id ? '✓' : 'ગુ'}
+                      </button>
+                    )}
+                  </td>
                   <td className="table-cell text-gray-500">{item.category || '—'}</td>
                   <td className={`table-cell text-right font-semibold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
                     {item.current_stock} <span className="font-normal text-gray-400">{item.unit}</span>
@@ -159,7 +181,7 @@ export default function InventoryList() {
 }
 
 function NewItemModal({ onClose, onSave }) {
-  const [f, setF] = useState({ item_code: '', name: '', category: '', unit: '', current_stock: 0, reorder_level: 0, min_order_qty: 0, unit_cost: '', notes: '' });
+  const [f, setF] = useState({ item_code: '', name: '', name_gu: '', category: '', unit: '', current_stock: 0, reorder_level: 0, min_order_qty: 0, unit_cost: '', notes: '' });
   const [drawing, setDrawing] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -188,6 +210,7 @@ function NewItemModal({ onClose, onSave }) {
           <div><label className="label">Item Code *</label><input className="input" placeholder="e.g. WR-26SWG" value={f.item_code} onChange={set('item_code')} required /></div>
           <div><label className="label">Unit *</label><input className="input" placeholder="e.g. kg, mtr, nos" value={f.unit} onChange={set('unit')} required /></div>
           <div className="col-span-2"><label className="label">Name *</label><input className="input" placeholder="e.g. Resistance Wire 26 SWG" value={f.name} onChange={set('name')} required /></div>
+          <div className="col-span-2"><label className="label">Name (ગુજરાતી) <span className="font-normal normal-case text-gray-400">(optional — shown on copy & export)</span></label><input className="input" placeholder="દા.ત. રેઝિસ્ટન્સ વાયર 26 SWG" value={f.name_gu} onChange={set('name_gu')} /></div>
           <div><label className="label">Category</label><input className="input" placeholder="e.g. Wire, Tube, Terminal" value={f.category} onChange={set('category')} /></div>
           <div><label className="label">Opening Stock</label><input className="input" type="number" step="any" value={f.current_stock} onChange={set('current_stock')} /></div>
           <div><label className="label">Reorder Level</label><input className="input" type="number" step="any" value={f.reorder_level} onChange={set('reorder_level')} /></div>
