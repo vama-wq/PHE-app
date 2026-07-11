@@ -971,10 +971,12 @@ router.put('/split-requests/:reqId/approve', authenticate, authorize('owner'), a
   const childCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE parent_job_card_id=$1', [jc.id]);
   const childNo = `${jc.job_card_no}-P${parseInt(childCount.n, 10) + 1}`;
   const child = await db.insert(
-    `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'qc_pending',$9,$10,$11,$12)`,
+    `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'qc_pending',$9,$10,$11,$12,$13,$14,$15)`,
     [childNo, jc.order_id, sr.qty, jc.dispatch_date, jc.current_stage || 0, jc.punching, jc.drawing_no, jc.product_name,
-     `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id, jc.order_item_id]
+     `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id, jc.order_item_id,
+     // Carry the parent's job-card document so the shopfloor can open it on the child too
+     jc.file_path, jc.file_name, jc.original_name]
   );
   await db.run('UPDATE job_cards SET qty = qty - $1 WHERE id=$2', [sr.qty, jc.id]);
   await db.run('UPDATE job_card_split_requests SET status=$1, child_job_card_id=$2, approved_by=$3, approved_at=NOW() WHERE id=$4',
