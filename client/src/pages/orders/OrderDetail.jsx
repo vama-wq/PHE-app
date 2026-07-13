@@ -824,10 +824,18 @@ export default function OrderDetail() {
                         {jc.qty && `Qty: ${jc.qty} · `}Dispatch: {fmtDate(jc.dispatch_date)} · From Finished Goods stock
                       </div>
                     </div>
-                    <Link to={`/job-cards/${jc.id}`}
-                      className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1 flex-shrink-0">
-                      <ClipboardList size={12} /> Checklist
-                    </Link>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <Link to={`/job-cards/${jc.id}`}
+                        className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1">
+                        <ClipboardList size={12} /> Checklist
+                      </Link>
+                      {jc.file_name && (
+                        <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+                          className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1">
+                          <ExternalLink size={12} /> View
+                        </a>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1908,6 +1916,7 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
   const [qty, setQty] = useState(item.quantity || '');
   const [dispatchDate, setDispatchDate] = useState(order.dispatch_date ? order.dispatch_date.slice(0, 10) : '');
   const [notes, setNotes] = useState('');
+  const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -1932,13 +1941,18 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
     if (!(parseInt(qty, 10) > 0)) return setError('Enter a valid quantity.');
     if (short) return setError(`Only ${chosen.qty_available} available in stock.`);
     if (!dispatchDate) return setError('Dispatch date is required.');
+    if (!file) return setError('Upload the job card file.');
     setSaving(true);
     try {
-      await api.post('/job-cards/fg', {
-        order_id: order.id, order_item_id: item.id,
-        fg_source_id: parseInt(sourceId), qty: parseInt(qty, 10),
-        dispatch_date: dispatchDate, notes: notes || undefined,
-      });
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('order_id', order.id);
+      fd.append('order_item_id', item.id);
+      fd.append('fg_source_id', parseInt(sourceId));
+      fd.append('qty', parseInt(qty, 10));
+      fd.append('dispatch_date', dispatchDate);
+      if (notes) fd.append('notes', notes);
+      await api.post('/job-cards/fg', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSaved();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create inventory job card');
@@ -1981,13 +1995,22 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
           </div>
         </div>
         <div>
+          <label className="label">Job Card File <span className="text-red-500">*</span></label>
+          <label className="flex items-center gap-2 cursor-pointer border border-gray-200 rounded-lg px-3 py-2 hover:border-brand-400 transition-colors bg-gray-50">
+            <Upload size={15} className="text-gray-400 flex-shrink-0" />
+            <span className="text-sm text-gray-600 flex-1 truncate">{file ? file.name : 'Click to attach the job card…'}</span>
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx" className="hidden"
+              onChange={e => { setFile(e.target.files[0] || null); setError(''); }} />
+          </label>
+        </div>
+        <div>
           <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
           <input className="input" value={notes} onChange={e => setNotes(e.target.value)} />
         </div>
         {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
         <div className="flex gap-3 pt-1">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn-primary flex-1" disabled={saving || short}>
+          <button type="submit" className="btn-primary flex-1" disabled={saving || short || !file}>
             {saving ? 'Creating…' : 'Create & Deduct Stock'}
           </button>
         </div>

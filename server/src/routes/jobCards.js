@@ -1058,9 +1058,10 @@ router.put('/split-requests/:reqId/reject', authenticate, authorize('owner'), as
 // picks which Finished Goods stock the material comes from — that stock deducts
 // immediately (blocked if short) and the card runs the short 4-stage checklist
 // (Nut Washer → HV+Light+Ohms → Megger → Ready) before normal QC → dispatch.
-router.post('/fg', authenticate, authorize('admin', 'owner'), async (req, res) => {
+router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, async (req, res) => {
   try {
     const { order_id, order_item_id, fg_source_id, qty, dispatch_date, notes } = req.body;
+    if (!req.file) return res.status(400).json({ error: 'Job card file is required' });
     const db = getDB();
     const order = await db.get('SELECT * FROM orders WHERE id=$1', [order_id]);
     if (!order) return res.status(404).json({ error: 'Order not found' });
@@ -1085,9 +1086,10 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), async (req, res) =
     const jobCardNo = parseInt(dup.n, 10) > 0 ? `${base}${parseInt(dup.n, 10) + 1}` : base;
 
     const r = await db.insert(
-      `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, notes, drawing_no, product_name, uploaded_by, order_item_id, is_fg, fg_source_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,$10)`,
-      [jobCardNo, order_id, parsedQty, dispatch_date, notes || null, item.drawing_number || null, item.product_code || null,
+      `INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, drawing_no, product_name, uploaded_by, order_item_id, is_fg, fg_source_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,TRUE,$13)`,
+      [jobCardNo, order_id, req.file.storagePath, req.file.filename, req.file.originalname,
+       parsedQty, dispatch_date, notes || null, item.drawing_number || null, item.product_code || null,
        req.user.id, order_item_id, fg.id]
     );
 
