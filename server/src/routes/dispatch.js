@@ -78,6 +78,11 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
   if (jc.status === 'on_hold') {
     return res.status(400).json({ error: 'Cannot dispatch — job card is on hold. Owner must approve the hold first.' });
   }
+
+  // Cards QC-routed entirely into Finished Goods have nothing to dispatch
+  if (jc.status === 'qc_approved' && jc.qc_route === 'finished_goods' && (Number(jc.qc_dispatch_qty) || 0) === 0) {
+    return res.status(400).json({ error: 'Nothing to dispatch — QC sent the entire quantity to Finished Goods.' });
+  }
   const pendingHold = await db.get(
     "SELECT id FROM job_card_holds WHERE job_card_id=$1 AND status='pending' LIMIT 1",
     [req.params.jobCardId]

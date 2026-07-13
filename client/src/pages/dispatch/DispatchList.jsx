@@ -43,6 +43,8 @@ export default function DispatchList() {
     const relevant = r.data.filter(jc =>
       ['qc_approved','packaging','ready_for_dispatch','dispatched',
        'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'].includes(jc.status)
+      // Cards QC-routed entirely into Finished Goods have nothing to dispatch
+      && !(jc.status === 'qc_approved' && jc.qc_route === 'finished_goods' && (Number(jc.qc_dispatch_qty) || 0) === 0)
     );
     setCards(relevant);
   }).finally(() => setLoading(false));
