@@ -538,6 +538,9 @@ function OverviewTab({ jc, userRole }) {
     if (stageDef?.hvLight && sData.value1) {
       try { const d = JSON.parse(sData.value1); return d; } catch { return { light: sData.value1 }; }
     }
+    if (stageDef?.fgHvOhms && sData.value1) {
+      try { return { fgHvOhms: true, ...JSON.parse(sData.value1) }; } catch { return null; }
+    }
     if (stageDef?.brazing && sData.value1) {
       try { return JSON.parse(sData.value1); } catch { return null; }
     }
@@ -669,6 +672,19 @@ function OverviewTab({ jc, userRole }) {
                         </span>
                       </div>
                     )}
+                    {def?.fgHvOhms && parsed && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">HV / Ohms:</span>
+                        <span className="text-gray-800 flex flex-wrap gap-x-3">
+                          {parsed.hv && (
+                            <span className={parsed.hv === 'pass' ? 'text-green-700' : 'text-red-700'}>
+                              HV: {parsed.hv === 'pass' ? 'All Passed' : `Failed (${parsed.hvFailCount || '?'})`}
+                            </span>
+                          )}
+                          {parsed.ohms && <span>Ohms: <span className="font-medium">{parsed.ohms}</span></span>}
+                        </span>
+                      </div>
+                    )}
                     {def?.heaterAdjust && parsed?.adjusted && (
                       <div className="flex gap-2 text-sm">
                         <span className="text-gray-500 font-medium w-28 flex-shrink-0">Adjustment:</span>
@@ -684,7 +700,7 @@ function OverviewTab({ jc, userRole }) {
                         </span>
                       </div>
                     )}
-                    {!def?.hvLight && !def?.heaterAdjust && !def?.brazing && (s.value1 || s.value2) && (
+                    {!def?.hvLight && !def?.fgHvOhms && !def?.heaterAdjust && !def?.brazing && (s.value1 || s.value2) && (
                       <div className="flex gap-2 text-sm">
                         <span className="text-gray-500 font-medium w-28 flex-shrink-0">
                           {def?.fields?.[0]?.label || 'Value'}:

@@ -50,7 +50,7 @@ export const MANDATORY_STAGE_NOS = [1,3,4,5,6,7,8,9,10,11,12,14,19,20,23,24,25,2
 // material comes from the Finished Goods store, so only finishing + tests run.
 export const FG_STAGES = [
   { no: 1, name: 'Nut Washer' },
-  { no: 2, name: 'HV + Light Check + Ohms' },
+  { no: 2, name: 'HV + Light Check + Ohms', fgHvOhms: true },
   { no: 3, name: 'Megger', fields: [{ key: 'value1', label: 'Megger Value', required: true }] },
   { no: 4, name: 'Ready for Dispatch', triggerQC: true, isDispatch: true },
 ];

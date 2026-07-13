@@ -1151,6 +1151,17 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [hvLightFailReason, setHvLightFailReason] = useState(hvData.lightReason || '');
   const [hvOhms, setHvOhms] = useState(hvData.ohms || '');
 
+  // FG inventory card stage 2 — leaner HV Passed + Ohms remark, JSON in value1
+  // { hv: 'pass'|'fail', hvFailCount, ohms }
+  const isFgHvOhms = !!stageDef.fgHvOhms;
+  const fgHvData = (() => {
+    if (!isFgHvOhms || !stageData.value1) return {};
+    try { return JSON.parse(stageData.value1); } catch { return {}; }
+  })();
+  const [fgHvResult, setFgHvResult] = useState(fgHvData.hv || '');
+  const [fgHvFailCount, setFgHvFailCount] = useState(fgHvData.hvFailCount || '');
+  const [fgOhms, setFgOhms] = useState(fgHvData.ohms || '');
+
   // Bending (14) — Heater Adjustment checkbox
   const isBending = stageDef.no === 14;
   const [heaterAdjustDone, setHeaterAdjustDone] = useState(() => stageData.value1 === 'adjusted');
@@ -1215,6 +1226,10 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (hvTestResult === 'fail' && (!hvTestFailCount || !hvTestFailReason.trim())) return false;
       if (hvLightResult === 'fail' && (!hvLightFailCount || !hvLightFailReason.trim())) return false;
     }
+    if (isFgHvOhms) {
+      if (!fgHvResult) return false;
+      if (fgHvResult === 'fail' && !(parseInt(fgHvFailCount, 10) > 0)) return false;
+    }
     if (stageDef.fields) {
       // Check required fields
       const field1 = stageDef.fields[0];
@@ -1239,6 +1254,10 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const buildValues = () => {
     if (isHvLight) return {
       v1: JSON.stringify({ hv: hvTestResult, hvCount: hvTestFailCount, hvReason: hvTestFailReason, light: hvLightResult, lightCount: hvLightFailCount, lightReason: hvLightFailReason, ohms: hvOhms }),
+      v2: null,
+    };
+    if (isFgHvOhms) return {
+      v1: JSON.stringify({ hv: fgHvResult, hvFailCount: fgHvResult === 'fail' ? fgHvFailCount : '', ohms: fgOhms }),
       v2: null,
     };
     if (isBrazing) return {
@@ -1569,6 +1588,56 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
             ) : (
               <input className="input w-full" placeholder="Enter ohms value or remark"
                 value={hvOhms} onChange={e => setHvOhms(e.target.value)} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* FG stage 2 — HV Passed + Ohms remark */}
+      {isFgHvOhms && (
+        <div className="mb-4 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">HV Passed <span className="text-red-500">*</span></label>
+            {isDone ? (
+              <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+                {fgHvData.hv === 'pass' ? 'All Passed'
+                  : fgHvData.hv === 'fail' ? `Failed — ${fgHvData.hvFailCount || '?'} piece(s)`
+                  : '—'}
+              </div>
+            ) : (
+              <>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setFgHvResult('pass')}
+                    className={`flex-1 py-2 px-3 rounded-lg border-2 text-sm font-medium transition-colors ${
+                      fgHvResult === 'pass' ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                    }`}>All Passed</button>
+                  <button type="button" onClick={() => setFgHvResult('fail')}
+                    className={`flex-1 py-2 px-3 rounded-lg border-2 text-sm font-medium transition-colors ${
+                      fgHvResult === 'fail' ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                    }`}>Fail</button>
+                </div>
+                {fgHvResult === 'fail' && (
+                  <div className="mt-2">
+                    <label className="block text-xs text-gray-500 mb-1">How many failed? <span className="text-red-500">*</span></label>
+                    <input type="number" min="1" className="input w-full" placeholder="No. of pieces that failed HV"
+                      value={fgHvFailCount} onChange={e => setFgHvFailCount(e.target.value)} />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Ohms Value <span className="text-xs text-gray-400 font-normal">(remark)</span>
+            </label>
+            {isDone ? (
+              <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+                {fgHvData.ohms || '—'}
+              </div>
+            ) : (
+              <input className="input w-full" placeholder="Enter ohms value or remark"
+                value={fgOhms} onChange={e => setFgOhms(e.target.value)} />
             )}
           </div>
         </div>
