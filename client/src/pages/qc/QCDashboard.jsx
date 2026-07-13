@@ -25,20 +25,16 @@ export default function QCDashboard() {
   // Purchase material QC
   const [materialPOs, setMaterialPOs] = useState([]);
   const [materialQCModal, setMaterialQCModal] = useState(null);
-  const [fgOrders, setFgOrders] = useState([]);
-  const [fgQcModal, setFgQcModal] = useState(null); // FG order to QC-approve
 
   const load = async () => {
     setLoading(true);
     try {
-      const [qcRes, matRes, fgRes] = await Promise.all([
+      const [qcRes, matRes] = await Promise.all([
         api.get('/qc'),
         api.get('/purchase-orders/pending-material-qc'),
-        api.get('/orders/fg/pending-qc').catch(() => ({ data: [] })),
       ]);
       setCards(qcRes.data);
       setMaterialPOs(matRes.data);
-      setFgOrders(fgRes.data);
     } finally {
       setLoading(false);
     }
@@ -104,47 +100,6 @@ export default function QCDashboard() {
                     >
                       <CheckCircle size={13} /> Inspect & QC items
                     </Link>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <hr className="my-6 border-gray-200" />
-        </div>
-      )}
-
-      {/* ── Finished Goods Orders QC Section ── */}
-      {fgOrders.length > 0 && (
-        <div className="mb-6">
-          <h2 className="font-semibold text-gray-800 text-sm mb-3 flex items-center gap-2">
-            <Package size={15} className="text-emerald-500" />
-            Finished Goods Orders — QC Pending ({fgOrders.length})
-          </h2>
-          <div className="space-y-2">
-            {fgOrders.map(o => (
-              <div key={o.id} className="card border-l-4 border-l-emerald-400 p-4">
-                <div className="flex items-center justify-between gap-4 flex-wrap">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-bold text-gray-900">{o.order_code}</span>
-                      <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">Finished Goods</span>
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      {(o.customer_name || o.customer_code) && <>Customer: <span className="font-medium">{o.customer_name || o.customer_code}</span> · </>}
-                      <span className="text-gray-400">{o.item_count} item{o.item_count !== 1 ? 's' : ''} to allocate from stock</span>
-                    </div>
-                    {o.fg_qc_report_file && (
-                      <a href={`/uploads/${o.fg_qc_report_file}`} target="_blank" rel="noopener noreferrer"
-                        className="text-xs text-emerald-700 font-medium hover:underline mt-0.5 inline-block">
-                        View inventory QC report →
-                      </a>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button className="btn-primary btn-sm flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 border-emerald-600"
-                      onClick={() => setFgQcModal(o)}>
-                      <CheckCircle size={13} /> Select stock & approve
-                    </button>
                   </div>
                 </div>
               </div>
@@ -397,143 +352,6 @@ export default function QCDashboard() {
         />
       )}
 
-      {fgQcModal && (
-        <FgQcModal
-          order={fgQcModal}
-          onClose={() => setFgQcModal(null)}
-          onSaved={() => { setFgQcModal(null); load(); }}
-        />
-      )}
-    </div>
-  );
-}
-
-// ── Finished Goods order QC: pick stock + storage location per item ───────────
-function FgQcModal({ order, onClose, onSaved }) {
-  const [detail, setDetail] = useState(null);
-  const [rows, setRows] = useState({}); // order_item_id -> { fg_source_id, location, qty }
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    api.get(`/orders/${order.id}/fg-qc-detail`).then(r => {
-      setDetail(r.data);
-      // Pre-select the FG stock whose base drawing matches the item, and default qty to item qty
-      const init = {};
-      for (const it of r.data.items) {
-        const match = (r.data.fgStock || []).find(f =>
-          f.base_drawing_no && it.base_drawing_no &&
-          f.base_drawing_no.toUpperCase() === it.base_drawing_no.toUpperCase());
-        init[it.id] = {
-          fg_source_id: it.fg_source_id || match?.id || '',
-          location: it.fg_location || match?.location || '',
-          qty: it.fg_qc_qty || it.quantity || '',
-        };
-      }
-      setRows(init);
-    }).catch(() => setError('Failed to load order detail'));
-  }, [order.id]);
-
-  const setRow = (itemId, patch) => setRows(p => ({ ...p, [itemId]: { ...p[itemId], ...patch } }));
-
-  const submit = async () => {
-    setError('');
-    const items = (detail?.items || []).map(it => ({
-      order_item_id: it.id,
-      fg_source_id: rows[it.id]?.fg_source_id || null,
-      location: rows[it.id]?.location || '',
-      qty: rows[it.id]?.qty,
-    }));
-    if (items.some(i => !i.fg_source_id)) return setError('Select the finished-goods stock for every item.');
-    if (items.some(i => !i.location)) return setError('Select a storage location for every item.');
-    if (items.some(i => !(parseInt(i.qty, 10) > 0))) return setError('Enter a valid quantity for every item.');
-    setSaving(true);
-    try {
-      await api.put(`/orders/${order.id}/fg-qc-approve`, { items });
-      onSaved();
-    } catch (e) {
-      setError(e.response?.data?.error || 'Approval failed');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
-          <div>
-            <h3 className="font-bold text-gray-900">Finished Goods QC — {order.order_code}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">Select which finished-goods stock and storage location fulfils each item. Stock is deducted at dispatch.</p>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
-        </div>
-
-        {!detail ? (
-          <div className="p-8 text-center text-gray-400">Loading…</div>
-        ) : (
-          <div className="p-6 space-y-4">
-            {detail.fgStock.length === 0 && (
-              <div className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                No finished-goods stock is currently available. Add inward stock before approving.
-              </div>
-            )}
-            {detail.items.map((it, idx) => {
-              const row = rows[it.id] || {};
-              const chosen = (detail.fgStock || []).find(f => String(f.id) === String(row.fg_source_id));
-              return (
-                <div key={it.id} className="border border-gray-200 rounded-xl p-4">
-                  <div className="font-semibold text-sm text-gray-800 mb-2">
-                    {it.drawing_number || `Item ${idx + 1}`}
-                    {it.product_code && <span className="ml-2 text-xs text-gray-400">{it.product_code}</span>}
-                    <span className="ml-2 text-xs text-gray-400">Ordered qty: {it.quantity}</span>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">Finished Goods stock</label>
-                      <select className="input text-sm" value={row.fg_source_id || ''}
-                        onChange={e => {
-                          const f = (detail.fgStock || []).find(x => String(x.id) === e.target.value);
-                          setRow(it.id, { fg_source_id: e.target.value, location: f?.location || row.location || '' });
-                        }}>
-                        <option value="">— select stock —</option>
-                        {(detail.fgStock || []).map(f => (
-                          <option key={f.id} value={f.id}>{f.base_drawing_no} (avail: {f.qty_available})</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">Storage location</label>
-                      <select className="input text-sm" value={row.location || ''}
-                        onChange={e => setRow(it.id, { location: e.target.value })}>
-                        <option value="">— select location —</option>
-                        {(detail.locations || []).map(l => <option key={l} value={l}>{l}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">Qty from stock</label>
-                      <input type="number" min="1" className="input text-sm" value={row.qty || ''}
-                        onChange={e => setRow(it.id, { qty: e.target.value })} />
-                    </div>
-                  </div>
-                  {chosen && parseInt(row.qty, 10) > Number(chosen.qty_available) && (
-                    <p className="text-xs text-red-600 mt-1">Only {chosen.qty_available} available in stock.</p>
-                  )}
-                </div>
-              );
-            })}
-            {error && <p className="text-sm text-red-600">{error}</p>}
-          </div>
-        )}
-
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2 sticky bottom-0 bg-white">
-          <button onClick={onClose} className="btn-secondary btn-sm">Cancel</button>
-          <button onClick={submit} disabled={saving || !detail}
-            className="btn-primary btn-sm bg-emerald-600 hover:bg-emerald-700 border-emerald-600">
-            {saving ? 'Approving…' : 'Approve for dispatch'}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -879,6 +697,7 @@ function MaterialQCModal({ po, onClose, onSaved }) {
 function ApproveDestinationModal({ card, onClose, onSaved }) {
   // Default destination based on order type
   const defaultDest = () => {
+    if (card.order_type === 'finished_goods') return 'dispatch'; // FG inventory cards always dispatch
     if (card.order_type === 'inventory_order') return 'finished_goods';
     if (card.order_type === 'io_export_he' || card.order_type === 'io_local_he') return 'both';
     return 'dispatch'; // local_he, export_he, etc.
@@ -1035,8 +854,8 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
           </div>
         )}
 
-        {/* Destination selector */}
-        <div>
+        {/* Destination selector — FG-order inventory cards always go to dispatch */}
+        {card.order_type !== 'finished_goods' && <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Heater Destination <span className="text-red-500">*</span>
           </label>
@@ -1064,7 +883,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
               </button>
             ))}
           </div>
-        </div>
+        </div>}
 
         {/* Qty inputs for FG / Both */}
         {(destination === 'finished_goods' || destination === 'both') && (

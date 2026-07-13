@@ -4,7 +4,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
-import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS, getStageLabel, downloadExcel, WORKER_NAME_STAGES, SCRAP_VALUE_STAGES } from '../../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS, getStageLabel, stagesFor, downloadExcel, WORKER_NAME_STAGES, SCRAP_VALUE_STAGES } from '../../lib/utils';
 import {
   Wrench, Calendar, Plus, CheckSquare, Square, CheckCircle,
   X, ExternalLink, ClipboardList, Check, Image as ImageIcon,
@@ -165,7 +165,7 @@ function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore }) {
         const days = daysUntil(jc.dispatch_date);
         const isOverdue = days < 0;
         const isUrgent  = days >= 0 && days <= 3;
-        const stageLabel = getStageLabel(jc.current_stage);
+        const stageLabel = getStageLabel(jc.current_stage, jc);
         const isOnHold = jc.status === 'on_hold';
         return (
           <div key={jc.id} className={`card p-5 border-l-4 ${
@@ -357,7 +357,7 @@ function AllCardsTab({ cards, todayPickIds, canManage, onPick, onUnpick, onCheck
             const isOverdue = days < 0;
             const isUrgent  = days >= 0 && days <= 3;
             const isPicked  = todayPickIds.has(jc.id);
-            const stageLabel = getStageLabel(jc.current_stage);
+            const stageLabel = getStageLabel(jc.current_stage, jc);
             return (
               <tr key={jc.id} className={`hover:bg-gray-50 ${isOverdue ? 'bg-red-50/30' : ''}`}>
                 <td className="table-cell">
@@ -613,8 +613,8 @@ function ChecklistModal({ card, onClose, onSave }) {
 
   const completedCount = data?.stages?.filter(s => s.done).length || 0;
   const visibleCount = data
-    ? PRODUCTION_STAGES.filter(def => !(def.hideIfDone && stageMap[def.hideIfDone]?.done)).length
-    : 29;
+    ? stagesFor(card).filter(def => !(def.hideIfDone && stageMap[def.hideIfDone]?.done)).length
+    : (card?.is_fg ? 4 : 29);
   const progress = visibleCount > 0 ? Math.round(completedCount / visibleCount * 100) : 0;
   const isOnHold = !!data?.hold;
 
@@ -695,7 +695,7 @@ function ChecklistModal({ card, onClose, onSave }) {
           {card.current_stage && (
             <div>
               <dt className="text-xs text-gray-500 font-medium uppercase">Current Stage</dt>
-              <dd className="text-sm text-blue-700 font-medium mt-0.5">{getStageLabel(card.current_stage)}</dd>
+              <dd className="text-sm text-blue-700 font-medium mt-0.5">{getStageLabel(card.current_stage, card)}</dd>
             </div>
           )}
           {card.file_name && (
@@ -842,7 +842,7 @@ function ChecklistModal({ card, onClose, onSave }) {
                         <>
                           {data.hold.rejection_qty} rejection{data.hold.rejection_qty > 1 ? 's' : ''} reported
                           at Stage {data.hold.stage_no}{' '}
-                          ({PRODUCTION_STAGES.find(s => s.no === data.hold.stage_no)?.name})
+                          ({stagesFor(card).find(s => s.no === data.hold.stage_no)?.name})
                           {data.hold.hold_photo_file && (
                             <a href={`/uploads/rejection-photos/${data.hold.hold_photo_file}`}
                               target="_blank" rel="noopener noreferrer"
@@ -883,7 +883,7 @@ function ChecklistModal({ card, onClose, onSave }) {
 
           {/* Stage list */}
           <div className="space-y-1 max-h-[55vh] overflow-y-auto pr-1">
-            {PRODUCTION_STAGES.map(def => {
+            {stagesFor(card).map(def => {
               if (def.hideIfDone && stageMap[def.hideIfDone]?.done) return null;
               const sData = stageMap[def.no] || { done: 0, value1: null, value2: null, photo_file: null, rejection_qty: 0, remade_qty: 0 };
               const isDone = sData.done === 1;

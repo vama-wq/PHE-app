@@ -46,9 +46,23 @@ export const PRODUCTION_STAGES = [
 // Optional stages excluded: 2 (Coil+Tube), 15 (Brazing), 16 (In Plating), 17 (Plating Completed), 18 (Heater Cleaning), 21 (Nipple Press), 22 (3hrs Oven).
 export const MANDATORY_STAGE_NOS = [1,3,4,5,6,7,8,9,10,11,12,14,19,20,23,24,25,26,27,28];
 
-export function getStageLabel(stageNo) {
+// Short checklist for finished-goods inventory job cards (jc.is_fg):
+// material comes from the Finished Goods store, so only finishing + tests run.
+export const FG_STAGES = [
+  { no: 1, name: 'Nut Washer' },
+  { no: 2, name: 'HV + Light Check + Ohms' },
+  { no: 3, name: 'Megger', fields: [{ key: 'value1', label: 'Megger Value', required: true }] },
+  { no: 4, name: 'Ready for Dispatch', triggerQC: true, isDispatch: true },
+];
+
+// Stage list for a job card — FG inventory cards run the short checklist.
+export function stagesFor(jc) {
+  return jc?.is_fg ? FG_STAGES : PRODUCTION_STAGES;
+}
+
+export function getStageLabel(stageNo, jc) {
   if (!stageNo) return null;
-  const s = PRODUCTION_STAGES.find(st => st.no === stageNo);
+  const s = stagesFor(jc).find(st => st.no === stageNo);
   return s ? `Stage ${stageNo}: ${s.name}` : null;
 }
 

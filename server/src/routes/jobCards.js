@@ -466,19 +466,20 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   );
   const maxStage = maxRow?.m || 0;
 
-  // Stage 29 = Dispatch (triggers QC). No stage 30 — QC approval handled separately.
-  const stage29 = (await db.get(
-    'SELECT done FROM production_checklist WHERE job_card_id=$1 AND stage_no=29',
-    [jobCardId]
-  ))?.done;
-
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
   if (!jc) return;
+
+  // Stage 29 = Dispatch (triggers QC); FG inventory cards trigger QC at stage 4 (Ready).
+  const readyStageNo = jc.is_fg ? 4 : 29;
+  const readyDone = (await db.get(
+    'SELECT done FROM production_checklist WHERE job_card_id=$1 AND stage_no=$2',
+    [jobCardId, readyStageNo]
+  ))?.done;
 
   let newStatus;
   if (jc.status === 'on_hold')     newStatus = 'on_hold';     // preserve hold — owner must approve
   else if (jc.status === 'qc_approved') newStatus = 'qc_approved'; // preserve QC approval
-  else if (stage29)                newStatus = 'qc_pending';  // dispatch done → awaiting QC
+  else if (readyDone)              newStatus = 'qc_pending';  // ready → awaiting QC
   else if (maxStage)               newStatus = 'in_progress';
   else                             newStatus = 'pending';
 
@@ -574,7 +575,11 @@ router.get('/:id/checklist', authenticate, async (req, res) => {
 
   // Stage numbers in display order. 30 = Kharoch Process — an optional stage shown
   // right after Bending (14); it keeps a high id so existing data is never renumbered.
-  const STAGE_NOS = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,30,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29];
+  // FG inventory cards run the short 4-stage checklist instead.
+  const jcType = await db.get('SELECT is_fg FROM job_cards WHERE id=$1', [req.params.id]);
+  const STAGE_NOS = jcType?.is_fg
+    ? [1,2,3,4]
+    : [1,2,3,4,5,6,7,8,9,10,11,12,13,14,30,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29];
   const map = {};
   rows.forEach(r => { map[r.stage_no] = r; });
   const stages = STAGE_NOS.map(n => map[n] || {
@@ -605,23 +610,43 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   const { done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, coil_weight } = req.body;
   const db = getDB();
 
+  const jcCard = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
+  if (!jcCard) return res.status(404).json({ error: 'Job card not found' });
+  // Finished-goods inventory cards run a short 4-stage checklist
+  // (1 Nut Washer, 2 HV+Light+Ohms, 3 Megger, 4 Ready → QC)
+  const isFg = !!jcCard.is_fg;
+  if (isFg && stageNo > 4) return res.status(400).json({ error: 'Finished-goods cards only have stages 1-4' });
+
   // Block if card is on hold and trying to mark done
-  if (done) {
-    const jcRow = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);
-    const jcStatus = jcRow?.status;
-    if (jcStatus === 'on_hold') {
-      return res.status(400).json({
-        error: 'Work is on hold. Owner must approve before continuing.',
-        code: 'ON_HOLD'
-      });
-    }
+  if (done && jcCard.status === 'on_hold') {
+    return res.status(400).json({
+      error: 'Work is on hold. Owner must approve before continuing.',
+      code: 'ON_HOLD'
+    });
   }
 
   const rejQty = parseInt(rejection_qty, 10) || 0;
   const remQty = parseInt(remade_qty, 10) || 0;
 
+  // FG cards: stage 4 (Ready → QC) requires stages 1-3 complete
+  if (isFg && stageNo === 4 && done) {
+    const doneRows = await db.all(
+      'SELECT stage_no FROM production_checklist WHERE job_card_id=$1 AND done=1 AND stage_no < 4',
+      [jobCardId]
+    );
+    const doneSet = new Set(doneRows.map(r => r.stage_no));
+    const missing = [1, 2, 3].filter(s => !doneSet.has(s));
+    if (missing.length > 0) {
+      return res.status(400).json({
+        error: `Cannot send to QC — complete stages first: ${missing.map(n => 'Stage ' + n).join(', ')}`,
+        code: 'MISSING_STAGES',
+        missing
+      });
+    }
+  }
+
   // Gate stage 29 (Dispatch Preparation → triggers QC): all mandatory stages must be complete
-  if (stageNo === 29 && done) {
+  if (!isFg && stageNo === 29 && done) {
     const mandatory = [...MANDATORY_STAGES];
     const doneRows = await db.all(
       'SELECT stage_no FROM production_checklist WHERE job_card_id=$1 AND done=1',
@@ -652,8 +677,8 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     }
   }
 
-  // Stage 28 (Megger) requires a value to be entered
-  if (stageNo === 28 && done && !value1?.trim()) {
+  // Stage 28 (Megger) requires a value to be entered (FG cards: Megger is stage 3)
+  if (((!isFg && stageNo === 28) || (isFg && stageNo === 3)) && done && !value1?.trim()) {
     return res.status(400).json({
       error: 'Megger value is required before marking this stage done.',
       code: 'MEGGER_VALUE_REQUIRED'
@@ -662,7 +687,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
 
   // Stage 3 (Ohms) requires the total weight of all coils produced for this job card
   const coilWeightNum = (coil_weight === '' || coil_weight == null) ? null : Number(coil_weight);
-  if (stageNo === 3 && done && !(coilWeightNum > 0)) {
+  if (!isFg && stageNo === 3 && done && !(coilWeightNum > 0)) {
     return res.status(400).json({
       error: 'Total weight of all coils is required before marking this stage done.',
       code: 'COIL_WEIGHT_REQUIRED'
@@ -671,7 +696,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
 
   // Stage 1 (Coil): gauge selection is required for material-tracked (new) orders,
   // since the spring-gauge deduction depends on it. Existing orders are unaffected.
-  if (stageNo === 1 && done && !value1?.trim()) {
+  if (!isFg && stageNo === 1 && done && !value1?.trim()) {
     const ord = await db.get(
       'SELECT o.material_deduction FROM job_cards jc JOIN orders o ON o.id=jc.order_id WHERE jc.id=$1', [jobCardId]
     );
@@ -709,8 +734,8 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   `, [jobCardId, stageNo, done ? 1 : 0, value1 ?? null, value2 ?? null, rejQty, remQty,
     worker_name || null, scrap_value || null, notes || null, coilWeightNum, done ? now : null, req.user.id]);
 
-  // When stage 29 is re-submitted to QC, clear the QC rejection flag
-  if (stageNo === 29 && done) {
+  // When the ready stage is re-submitted to QC, clear the QC rejection flag
+  if (((stageNo === 29 && !isFg) || (stageNo === 4 && isFg)) && done) {
     try {
       await db.run(
         `UPDATE job_cards SET qc_rejected=FALSE, qc_rejection_notes=NULL WHERE id=$1`,
@@ -721,16 +746,20 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
 
   // New orders: deduct tube (Stage 5) / spring-gauge (Stage 3) from stock via FIFO,
   // based on the checklist. Wrapped so it can never block saving the stage.
-  try { await applyMaterialDeductions(db, jobCardId, stageNo, !!done, req.user.id); }
-  catch (e) { console.error('[checklist] material deduction failed:', e.message); }
+  // FG cards skip these — their stage numbers (1-4) mean something else, and their
+  // material came from the Finished Goods store at card creation.
+  if (!isFg) {
+    try { await applyMaterialDeductions(db, jobCardId, stageNo, !!done, req.user.id); }
+    catch (e) { console.error('[checklist] material deduction failed:', e.message); }
 
-  // Category-timed BOM deduction: Stage 15 (Brazing) → flange/brazing categories,
-  // Stage 21 (Nipple Press) → nipple categories, prorated by the card's qty share.
-  if (done && (stageNo === 15 || stageNo === 21)) {
-    try {
-      const jcFull = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
-      await deductStageCategories(db, jcFull, stageNo, req.user.id);
-    } catch (e) { console.error('[checklist] stage-category deduction failed:', e.message); }
+    // Category-timed BOM deduction: Stage 15 (Brazing) → flange/brazing categories,
+    // Stage 21 (Nipple Press) → nipple categories, prorated by the card's qty share.
+    if (done && (stageNo === 15 || stageNo === 21)) {
+      try {
+        const jcFull = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
+        await deductStageCategories(db, jcFull, stageNo, req.user.id);
+      } catch (e) { console.error('[checklist] stage-category deduction failed:', e.message); }
+    }
   }
 
   if (done && rejQty > 2) {
@@ -1022,6 +1051,64 @@ router.put('/split-requests/:reqId/reject', authenticate, authorize('owner'), as
   }
   await logActivity(jc?.order_id, sr.job_card_id, 'split_rejected', `Partial dispatch rejected: ${reason}`, req.user.id);
   res.json({ message: 'Rejected' });
+});
+
+// ── Finished-Goods inventory job card ─────────────────────────────────────────
+// For finished_goods orders: each item gets an "inventory job card". The admin
+// picks which Finished Goods stock the material comes from — that stock deducts
+// immediately (blocked if short) and the card runs the short 4-stage checklist
+// (Nut Washer → HV+Light+Ohms → Megger → Ready) before normal QC → dispatch.
+router.post('/fg', authenticate, authorize('admin', 'owner'), async (req, res) => {
+  try {
+    const { order_id, order_item_id, fg_source_id, qty, dispatch_date, notes } = req.body;
+    const db = getDB();
+    const order = await db.get('SELECT * FROM orders WHERE id=$1', [order_id]);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.order_type !== 'finished_goods') return res.status(400).json({ error: 'Not a Finished Goods order' });
+    const item = await db.get('SELECT * FROM order_items WHERE id=$1 AND order_id=$2', [order_item_id, order_id]);
+    if (!item) return res.status(400).json({ error: 'Order item not found' });
+    const parsedQty = parseInt(qty, 10);
+    if (!(parsedQty > 0)) return res.status(400).json({ error: 'Valid quantity required' });
+    if (!dispatch_date) return res.status(400).json({ error: 'Dispatch date is required' });
+    const existing = await db.get('SELECT id FROM job_cards WHERE order_item_id=$1', [order_item_id]);
+    if (existing) return res.status(409).json({ error: 'This item already has an inventory job card' });
+
+    const fg = await db.get('SELECT * FROM finished_goods WHERE id=$1', [fg_source_id]);
+    if (!fg) return res.status(400).json({ error: 'Select the Finished Goods stock to draw from' });
+    if (Number(fg.qty_available) < parsedQty) {
+      return res.status(400).json({ error: `Insufficient Finished Goods stock: need ${parsedQty}, only ${fg.qty_available} available` });
+    }
+
+    // Unique job card number: DRAWING-FG, -FG2, -FG3 ...
+    const base = `${(item.drawing_number || `ITEM-${item.id}`).toUpperCase()}-FG`;
+    const dup = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE job_card_no LIKE $1', [`${base}%`]);
+    const jobCardNo = parseInt(dup.n, 10) > 0 ? `${base}${parseInt(dup.n, 10) + 1}` : base;
+
+    const r = await db.insert(
+      `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, notes, drawing_no, product_name, uploaded_by, order_item_id, is_fg, fg_source_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,$10)`,
+      [jobCardNo, order_id, parsedQty, dispatch_date, notes || null, item.drawing_number || null, item.product_code || null,
+       req.user.id, order_item_id, fg.id]
+    );
+
+    // Deduct the Finished Goods stock now — material is issued to production
+    await db.run('UPDATE finished_goods SET qty_available = qty_available - $1 WHERE id=$2', [parsedQty, fg.id]);
+    await db.insert(
+      `INSERT INTO finished_goods_log
+         (finished_good_id, movement_type, qty, outward_type, notes, location, order_code, job_card_no, created_by)
+       VALUES ($1,'outward',$2,'production',$3,$4,$5,$6,$7)`,
+      [fg.id, parsedQty, `Issued to production for FG order ${order.order_code}`, fg.location || null,
+       order.order_code, jobCardNo, req.user.id]
+    );
+
+    await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [order_id]);
+    await logActivity(order_id, r.lastInsertRowid, 'job_card_created',
+      `Inventory job card ${jobCardNo} created — ${parsedQty} pcs drawn from Finished Goods (${fg.base_drawing_no || fg.drawing_no})`, req.user.id);
+    res.status(201).json({ id: r.lastInsertRowid, job_card_no: jobCardNo });
+  } catch (e) {
+    console.error('fg job card create error:', e);
+    res.status(500).json({ error: 'Failed to create inventory job card' });
+  }
 });
 
 module.exports = router;

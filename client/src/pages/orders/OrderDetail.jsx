@@ -55,7 +55,7 @@ export default function OrderDetail() {
   const [editingOrder, setEditingOrder] = useState(false);
   const [editFields, setEditFields] = useState({});
   const [resubmitting, setResubmitting] = useState(false);
-  const [fgUploading, setFgUploading] = useState(false);
+  const [fgJobCardItem, setFgJobCardItem] = useState(null); // item to create an FG inventory job card for
 
   const load = () =>
     api.get(`/orders/${id}`).then(r => setOrder(r.data)).finally(() => setLoading(false));
@@ -77,7 +77,6 @@ export default function OrderDetail() {
     (order.items || []).every(it => itemDrawingStatus[it.id] === 'approved');
   // Finished Goods orders skip production/job cards — they need an inventory QC report instead
   const isFG                 = order.order_type === 'finished_goods';
-  const canUploadFgReport    = ['design', 'admin', 'owner'].includes(user.role);
   const canManageItems       = ['admin', 'owner'].includes(user.role) || canResubmit;
   const canEditInventory     = ['design', 'admin', 'owner'].includes(user.role);
   const canUploadQuotation   = ['admin', 'owner'].includes(user.role) && !restrictedRole;
@@ -753,12 +752,16 @@ export default function OrderDetail() {
             )}
           </div>}
 
-          {/* ── Inventory QC Report ── (Finished Goods orders only) */}
+          {/* ── Inventory Job Cards ── (Finished Goods orders only) */}
           {isFG && <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className="section-title">Inventory QC Report</h2>
-                <p className="text-xs text-gray-400 mt-0.5">Finished-goods order — upload the inventory QC report to send it to QC (no job card needed)</p>
+                <h2 className="section-title">Inventory Job Cards
+                  {order.job_cards?.length > 0 && (
+                    <span className="ml-1 text-sm font-normal text-gray-400">({order.job_cards.length})</span>
+                  )}
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">One per item — material is drawn from the Finished Goods store, then runs the short 4-stage checklist before QC &amp; dispatch</p>
               </div>
             </div>
 
@@ -768,61 +771,65 @@ export default function OrderDetail() {
             {order.status === 'rejected' && (
               <p className="text-gray-400 text-sm">Order was rejected.</p>
             )}
-            {order.status === 'approved' && !allItemsApproved && (
-              <p className="text-amber-600 text-sm flex items-center gap-1">
-                <AlertTriangle size={13} /> All item drawings must be approved before the inventory QC report can be uploaded.
-              </p>
+
+            {canUploadJobCardBase && !['pending_approval','rejected'].includes(order.status) && (
+              <div className="space-y-2 mb-3">
+                {(order.items || []).map((item, idx) => {
+                  const itemDrawings = (order.order_drawings || []).filter(d => d.item_id === item.id);
+                  const drawingStatus = itemDrawingStatus[item.id]
+                    ?? (itemDrawings.some(d => d.drawing_status === 'approved') ? 'approved'
+                      : itemDrawings.length > 0 ? 'pending_review' : null);
+                  const hasJC = (order.job_cards || []).some(jc => jc.order_item_id === item.id);
+                  return (
+                    <div key={item.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${
+                      hasJC ? 'border-gray-200 bg-gray-50' : drawingStatus === 'approved' ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'
+                    }`}>
+                      <div>
+                        <span className={`font-medium ${hasJC ? 'text-gray-500' : 'text-gray-800'}`}>{item.drawing_number || `Item ${idx + 1}`}</span>
+                        <span className="ml-2 text-xs text-gray-400">Qty: {item.quantity}</span>
+                      </div>
+                      {hasJC ? (
+                        <span className="text-xs text-gray-500 font-medium flex items-center gap-1">
+                          <CheckCircle2 size={11} className="text-green-500" /> Job Card Created
+                        </span>
+                      ) : drawingStatus === 'approved' ? (
+                        <button className="btn-primary btn-sm py-1 px-2 text-xs"
+                          onClick={() => setFgJobCardItem(item)}>
+                          <Plus size={12} /> Create Inventory Job Card
+                        </button>
+                      ) : (
+                        <span className="text-xs text-blue-600 font-medium flex items-center gap-1">
+                          <Clock size={11} /> Drawing awaiting approval
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
 
-            {order.status === 'approved' && allItemsApproved && (
-              canUploadFgReport ? (
-                <label className="btn-primary btn-sm cursor-pointer inline-flex">
-                  <Upload size={14} /> Upload Inventory QC Report
-                  <input type="file" className="hidden" disabled={fgUploading}
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      setFgUploading(true);
-                      try {
-                        const fd = new FormData();
-                        fd.append('file', file);
-                        await api.post(`/orders/${id}/fg-qc-report`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-                        await load();
-                      } catch (err) {
-                        alert(err.response?.data?.error || 'Upload failed');
-                      } finally {
-                        setFgUploading(false);
-                        e.target.value = '';
-                      }
-                    }} />
-                </label>
-              ) : (
-                <p className="text-gray-400 text-sm">Waiting for the inventory QC report to be uploaded.</p>
-              )
-            )}
-
-            {['fg_qc_pending', 'fg_qc_approved', 'dispatched'].includes(order.status) && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-3 p-3 rounded-xl border bg-gray-50 border-gray-200">
-                  <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
-                    <FileText size={20} className="text-gray-400" />
+            {order.job_cards?.length > 0 && (
+              <div className="space-y-2">
+                {order.job_cards.map(jc => (
+                  <div key={jc.id} className="flex items-center gap-3 p-3 rounded-xl border bg-gray-50 border-gray-200">
+                    <div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center flex-shrink-0">
+                      <Package size={20} className="text-emerald-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm text-gray-600">{jc.job_card_no}</span>
+                        <StatusBadge status={jc.status} />
+                      </div>
+                      <div className="text-xs text-gray-500 mt-0.5">
+                        {jc.qty && `Qty: ${jc.qty} · `}Dispatch: {fmtDate(jc.dispatch_date)} · From Finished Goods stock
+                      </div>
+                    </div>
+                    <Link to={`/job-cards/${jc.id}`}
+                      className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1 flex-shrink-0">
+                      <ClipboardList size={12} /> Checklist
+                    </Link>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-sm text-gray-600">Inventory QC Report</div>
-                    <div className="text-xs text-gray-400 mt-0.5 truncate">{order.fg_qc_report_original_name || 'Uploaded'}</div>
-                  </div>
-                  {order.fg_qc_report_file && (
-                    <a href={`/uploads/${order.fg_qc_report_file}`} target="_blank" rel="noopener noreferrer"
-                      className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1">
-                      <ExternalLink size={12} /> View
-                    </a>
-                  )}
-                </div>
-                <p className="text-sm flex items-center gap-1.5">
-                  {order.status === 'fg_qc_pending' && <><Clock size={13} className="text-blue-500" /><span className="text-blue-600 font-medium">Awaiting QC approval — QC will select the finished-goods stock &amp; storage location.</span></>}
-                  {order.status === 'fg_qc_approved' && <><CheckCircle2 size={13} className="text-green-500" /><span className="text-green-600 font-medium">QC approved — ready for dispatch.</span></>}
-                  {order.status === 'dispatched' && <><CheckCircle2 size={13} className="text-green-500" /><span className="text-green-600 font-medium">Dispatched — finished-goods stock deducted.</span></>}
-                </p>
+                ))}
               </div>
             )}
           </div>}
@@ -914,6 +921,14 @@ export default function OrderDetail() {
           fileOptional={isFG}
           onClose={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); }}
           onDone={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); load(); }}
+        />
+      )}
+      {fgJobCardItem && (
+        <FgJobCardModal
+          order={order}
+          item={fgJobCardItem}
+          onClose={() => setFgJobCardItem(null)}
+          onSaved={() => { setFgJobCardItem(null); load(); }}
         />
       )}
       {showJobCardModal && (
@@ -1876,6 +1891,104 @@ function UploadJobCardModal({ orderId, orderCode, defaultDispatchDate, items, jo
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary flex-1" disabled={saving}>
             {saving ? 'Uploading...' : 'Upload Job Card'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// ── FG inventory job card creation ──────────────────────────────────────────
+// Admin picks which Finished Goods stock the item's material comes from; the
+// stock deducts immediately (blocked if short) and the card enters production
+// with the short 4-stage checklist.
+function FgJobCardModal({ order, item, onClose, onSaved }) {
+  const [fgStock, setFgStock] = useState(null);
+  const [sourceId, setSourceId] = useState('');
+  const [qty, setQty] = useState(item.quantity || '');
+  const [dispatchDate, setDispatchDate] = useState(order.dispatch_date ? order.dispatch_date.slice(0, 10) : '');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const baseDrawing = (item.drawing_number || '').trim().replace(/-\d+$/, '').toUpperCase();
+
+  useEffect(() => {
+    api.get('/finished-goods').then(r => {
+      const rows = (r.data || []).filter(f => Number(f.qty_available) > 0);
+      setFgStock(rows);
+      const match = rows.find(f => (f.base_drawing_no || '').toUpperCase() === baseDrawing);
+      if (match) setSourceId(String(match.id));
+    }).catch(() => setFgStock([]));
+  }, []);
+
+  const chosen = (fgStock || []).find(f => String(f.id) === String(sourceId));
+  const short = chosen && parseInt(qty, 10) > Number(chosen.qty_available);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!sourceId) return setError('Select the Finished Goods stock to draw from.');
+    if (!(parseInt(qty, 10) > 0)) return setError('Enter a valid quantity.');
+    if (short) return setError(`Only ${chosen.qty_available} available in stock.`);
+    if (!dispatchDate) return setError('Dispatch date is required.');
+    setSaving(true);
+    try {
+      await api.post('/job-cards/fg', {
+        order_id: order.id, order_item_id: item.id,
+        fg_source_id: parseInt(sourceId), qty: parseInt(qty, 10),
+        dispatch_date: dispatchDate, notes: notes || undefined,
+      });
+      onSaved();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to create inventory job card');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title={`Inventory Job Card — ${item.drawing_number || 'Item'}`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <p className="text-sm text-gray-500">
+          Select which Finished Goods stock this item's material comes from. The stock deducts immediately and the card runs the 4-stage checklist (Nut Washer → HV+Light+Ohms → Megger → Ready) before QC.
+        </p>
+        <div>
+          <label className="label">Finished Goods stock <span className="text-red-500">*</span></label>
+          {!fgStock ? (
+            <p className="text-sm text-gray-400">Loading stock…</p>
+          ) : fgStock.length === 0 ? (
+            <p className="text-sm text-amber-600">No Finished Goods stock available.</p>
+          ) : (
+            <select className="input" value={sourceId} onChange={e => setSourceId(e.target.value)} required>
+              <option value="">— select stock —</option>
+              {fgStock.map(f => (
+                <option key={f.id} value={f.id}>
+                  {f.base_drawing_no || f.drawing_no} (avail: {f.qty_available}{f.location ? ` · ${f.location}` : ''})
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">Qty <span className="text-red-500">*</span></label>
+            <input className="input" type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} required />
+            {short && <p className="text-xs text-red-600 mt-1">Only {chosen.qty_available} available — cannot draw more.</p>}
+          </div>
+          <div>
+            <label className="label">Dispatch Date <span className="text-red-500">*</span></label>
+            <input className="input" type="date" value={dispatchDate} onChange={e => setDispatchDate(e.target.value)} required />
+          </div>
+        </div>
+        <div>
+          <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
+          <input className="input" value={notes} onChange={e => setNotes(e.target.value)} />
+        </div>
+        {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+        <div className="flex gap-3 pt-1">
+          <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving || short}>
+            {saving ? 'Creating…' : 'Create & Deduct Stock'}
           </button>
         </div>
       </form>

@@ -22,8 +22,6 @@ export default function DispatchList() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
   const [cards, setCards] = useState([]);
-  const [fgOrders, setFgOrders] = useState([]);
-  const [fgDispatching, setFgDispatching] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(null);   // job card object
   const [showSummary, setShowSummary] = useState(null); // job card object
@@ -49,9 +47,7 @@ export default function DispatchList() {
     setCards(relevant);
   }).finally(() => setLoading(false));
 
-  const loadFg = () => api.get('/orders/fg/ready-dispatch').then(r => setFgOrders(r.data)).catch(() => setFgOrders([]));
-
-  useEffect(() => { load(); loadFg(); }, []);
+  useEffect(() => { load(); }, []);
 
   // Unique filter options
   const clientOptions = useMemo(() =>
@@ -117,53 +113,6 @@ export default function DispatchList() {
           </button>
         )}
       </div>
-
-      {/* ── Finished Goods Orders ready for dispatch ── */}
-      {fgOrders.length > 0 && (
-        <div className="mb-6">
-          <h2 className="font-semibold text-gray-800 text-sm mb-3 flex items-center gap-2">
-            <CheckCircle size={15} className="text-emerald-500" />
-            Finished Goods Orders — Ready for Dispatch ({fgOrders.length})
-          </h2>
-          <div className="space-y-2">
-            {fgOrders.map(o => (
-              <div key={o.id} className="card border-l-4 border-l-emerald-400 p-4">
-                <div className="flex items-center justify-between gap-4 flex-wrap">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <Link to={`/orders/${o.id}`} className="font-bold text-gray-900 hover:underline">{o.order_code}</Link>
-                      <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">Finished Goods · QC approved</span>
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      Customer: <span className="font-medium">{o.customer_name || o.customer_code}</span>
-                      <span className="text-gray-400 ml-2">· {o.item_count} item{o.item_count !== 1 ? 's' : ''}</span>
-                    </div>
-                  </div>
-                  {canManage && (
-                    <button className="btn-primary btn-sm flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 border-emerald-600"
-                      disabled={fgDispatching === o.id}
-                      onClick={async () => {
-                        if (!window.confirm(`Dispatch ${o.order_code}? This will deduct the finished-goods stock.`)) return;
-                        setFgDispatching(o.id);
-                        try {
-                          await api.put(`/orders/${o.id}/fg-dispatch`);
-                          loadFg();
-                        } catch (e) {
-                          alert(e.response?.data?.error || 'Dispatch failed');
-                        } finally {
-                          setFgDispatching(null);
-                        }
-                      }}>
-                      <ArrowRight size={13} /> {fgDispatching === o.id ? 'Dispatching…' : 'Dispatch & deduct stock'}
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-          <hr className="my-6 border-gray-200" />
-        </div>
-      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 mb-5">

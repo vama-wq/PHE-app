@@ -5,7 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
-import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES } from '../../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor } from '../../lib/utils';
 import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle, Truck } from 'lucide-react';
 
 const JC_STATUSES = [
@@ -521,7 +521,7 @@ function OverviewTab({ jc, userRole }) {
 
   // Order by the canonical checklist sequence (not raw stage_no) so out-of-sequence
   // stages like Kharoch (id 30, shown after Bending) appear in the right place.
-  const STAGE_ORDER = PRODUCTION_STAGES.reduce((m, s, i) => { m[s.no] = i; return m; }, {});
+  const STAGE_ORDER = stagesFor(jc).reduce((m, s, i) => { m[s.no] = i; return m; }, {});
   const stages = [...(checklist?.stages || [])].sort(
     (a, b) => (STAGE_ORDER[a.stage_no] ?? a.stage_no) - (STAGE_ORDER[b.stage_no] ?? b.stage_no)
   );
@@ -604,7 +604,7 @@ function OverviewTab({ jc, userRole }) {
         </div>
         <div className="divide-y divide-gray-100">
           {stages.map(s => {
-            const def = PRODUCTION_STAGES.find(d => d.no === s.stage_no);
+            const def = stagesFor(jc).find(d => d.no === s.stage_no);
             const isDone = !!s.done;
             const isExpanded = expandedStage === s.stage_no;
             const hasDetails = s.worker_name || s.value1 || s.value2 || s.scrap_value || s.rejection_qty || s.photo_file || s.rejection_photo_file || s.notes || s.coil_weight != null;
@@ -751,7 +751,7 @@ function OverviewTab({ jc, userRole }) {
           <h2 className="section-title mb-4">Production Photos ({stagePhotos.length})</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {stagePhotos.map(stage => {
-              const def = PRODUCTION_STAGES.find(d => d.no === stage.stage_no);
+              const def = stagesFor(jc).find(d => d.no === stage.stage_no);
               return (
                 <div key={`photo-${stage.stage_no}`} className="space-y-2">
                   {stage.photo_file && (

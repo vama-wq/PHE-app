@@ -171,6 +171,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS name_gu TEXT`);
       // Accounts-added items need owner approval before they become usable
       await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved'`);
+      // Finished-goods inventory job cards: short 4-stage checklist, material drawn
+      // from the Finished Goods store (fg_source_id) at creation.
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS is_fg BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fg_source_id INTEGER`);
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);
