@@ -1103,6 +1103,12 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
        order.order_code, jobCardNo, req.user.id]
     );
 
+    // Surface it in production's Today's Work immediately (admin-created, ready to run)
+    try {
+      await db.run('INSERT INTO production_day_picks (pick_date, job_card_id, picked_by) VALUES ($1,$2,$3)',
+        [TODAY(), r.lastInsertRowid, req.user.id]);
+    } catch (e) { if (e.code !== '23505') console.error('fg pick failed:', e.message); }
+
     await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [order_id]);
     await logActivity(order_id, r.lastInsertRowid, 'job_card_created',
       `Inventory job card ${jobCardNo} created — ${parsedQty} pcs drawn from Finished Goods (${fg.base_drawing_no || fg.drawing_no})`, req.user.id);
