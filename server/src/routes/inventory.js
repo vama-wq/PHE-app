@@ -178,7 +178,7 @@ router.put('/:id', authenticate, authorize('accounts', 'owner', 'admin'), ...upl
   }
 });
 
-router.post('/:id/transactions', authenticate, authorize('accounts', 'owner', 'design'), async (req, res) => {
+router.post('/:id/transactions', authenticate, authorize('accounts', 'owner', 'design', 'admin'), async (req, res) => {
   const { transaction_type, quantity, job_card_id, supplier_name, po_number, notes } = req.body;
   if (!transaction_type || !quantity) return res.status(400).json({ error: 'Type and quantity required' });
 
