@@ -4,6 +4,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import ImportModal from '../../components/ui/ImportModal';
+import CategorySelect from '../../components/CategorySelect';
 import { downloadExcel } from '../../lib/utils';
 import { Plus, Search, AlertTriangle, Download, Upload, X } from 'lucide-react';
 
@@ -234,8 +235,8 @@ function NewItemModal({ onClose, onSave }) {
           <div><label className="label">Item Code *</label><input className="input" placeholder="e.g. WR-26SWG" value={f.item_code} onChange={set('item_code')} required /></div>
           <div><label className="label">Unit *</label><input className="input" placeholder="e.g. kg, mtr, nos" value={f.unit} onChange={set('unit')} required /></div>
           <div className="col-span-2"><label className="label">Name *</label><input className="input" placeholder="e.g. Resistance Wire 26 SWG" value={f.name} onChange={set('name')} required /></div>
-          <div className="col-span-2"><label className="label">Name (ગુજરાતી) <span className="font-normal normal-case text-gray-400">(optional — shown on copy & export)</span></label><input className="input" placeholder="દા.ત. રેઝિસ્ટન્સ વાયર 26 SWG" value={f.name_gu} onChange={set('name_gu')} /></div>
-          <div><label className="label">Category</label><input className="input" placeholder="e.g. Wire, Tube, Terminal" value={f.category} onChange={set('category')} /></div>
+          <div className="col-span-2"><label className="label">Name (ગુજરાતી) <span className="font-normal normal-case text-gray-400">(auto-generated if left blank)</span></label><input className="input" placeholder="ખાલી છોડો — આપમેળે બનશે" value={f.name_gu} onChange={set('name_gu')} /></div>
+          <div><label className="label">Category</label><CategorySelect value={f.category} onChange={v => setF(p => ({ ...p, category: v }))} /></div>
           <div><label className="label">Opening Stock</label><input className="input" type="number" step="any" value={f.current_stock} onChange={set('current_stock')} /></div>
           <div><label className="label">Reorder Level</label><input className="input" type="number" step="any" value={f.reorder_level} onChange={set('reorder_level')} /></div>
           <div><label className="label">Min Order Qty</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 100" value={f.min_order_qty} onChange={set('min_order_qty')} /></div>

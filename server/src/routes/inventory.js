@@ -3,6 +3,7 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadItemDrawing, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
+const { gujaratiName } = require('../lib/gujarati');
 
 // QC (design) can manage stock but must not see unit cost — strip it for them.
 const stripCost = (req, data) => {
@@ -23,6 +24,15 @@ router.get('/low-stock', authenticate, async (req, res) => {
   res.json(stripCost(req, await getDB().all(
     `SELECT * FROM inventory_items WHERE current_stock <= reorder_level AND COALESCE(approval_status,'approved')='approved' ORDER BY category, item_code`
   )));
+});
+
+// Existing category labels for the add/edit item dropdown
+router.get('/categories', authenticate, async (req, res) => {
+  const rows = await getDB().all(
+    `SELECT DISTINCT TRIM(category) AS category FROM inventory_items
+     WHERE category IS NOT NULL AND TRIM(category) <> '' ORDER BY 1`
+  );
+  res.json(rows.map(r => r.category));
 });
 
 router.get('/:id', authenticate, async (req, res) => {
@@ -62,8 +72,10 @@ router.post('/', authenticate, authorize('owner', 'admin'), ...uploadItemDrawing
   const db = getDB();
   const drawingFile = req.file?.storagePath || null;
   const drawingOriginalName = req.file?.originalname || null;
-  // Accounts' additions need the owner's sign-off before the item becomes usable
+  // Non-owner additions need the owner's sign-off before the item becomes usable
   const approvalStatus = req.user.role === 'owner' ? 'approved' : 'pending_approval';
+  // Gujarati name auto-generates from the English name when left blank
+  const guName = (name_gu || '').trim() || gujaratiName(name);
 
   try {
     const r = await db.insert(
@@ -71,7 +83,7 @@ router.post('/', authenticate, authorize('owner', 'admin'), ...uploadItemDrawing
          (item_code, name, name_gu, category, unit, current_stock, reorder_level, unit_cost, min_order_qty, notes, drawing_file, drawing_original_name, created_by, approval_status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
-        item_code.toUpperCase(), name, name_gu||null, category||null, unit,
+        item_code.toUpperCase(), name, guName||null, category||null, unit,
         Number(current_stock)||0, Number(reorder_level)||0, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null,
         drawingFile, drawingOriginalName, req.user.id, approvalStatus
       ]
@@ -155,6 +167,9 @@ router.put('/:id', authenticate, authorize('owner', 'admin'), ...uploadItemDrawi
   const existing = await db.get('SELECT id FROM inventory_items WHERE item_code=$1 AND id!=$2', [item_code?.toUpperCase(), req.params.id]);
   if (existing) return res.status(409).json({ error: 'Item code already exists' });
 
+  // Gujarati name auto-generates from the English name when left blank
+  const guName = (name_gu || '').trim() || gujaratiName(name);
+
   try {
     if (req.file) {
       await db.run(
@@ -162,13 +177,13 @@ router.put('/:id', authenticate, authorize('owner', 'admin'), ...uploadItemDrawi
          SET item_code=$1, name=$2, name_gu=$3, category=$4, unit=$5, reorder_level=$6, unit_cost=$7, min_order_qty=$8, notes=$9,
              drawing_file=$10, drawing_original_name=$11
          WHERE id=$12`,
-        [item_code?.toUpperCase(), name, name_gu||null, category||null, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null,
+        [item_code?.toUpperCase(), name, guName||null, category||null, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null,
          req.file.storagePath, req.file.originalname, req.params.id]
       );
     } else {
       await db.run(
         `UPDATE inventory_items SET item_code=$1, name=$2, name_gu=$3, category=$4, unit=$5, reorder_level=$6, unit_cost=$7, min_order_qty=$8, notes=$9 WHERE id=$10`,
-        [item_code?.toUpperCase(), name, name_gu||null, category||null, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null, req.params.id]
+        [item_code?.toUpperCase(), name, guName||null, category||null, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null, req.params.id]
       );
     }
     res.json({ message: 'Updated' });

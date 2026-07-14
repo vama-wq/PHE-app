@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
+import CategorySelect from '../../components/CategorySelect';
 import { fmtDateTime, fmtDate } from '../../lib/utils';
 import { ArrowLeft, Plus, TrendingUp, TrendingDown, Upload, ExternalLink, FileText, Trash2 } from 'lucide-react';
 
@@ -275,8 +276,8 @@ function EditItemModal({ item, onClose, onSave }) {
           <div><label className="label">Item Code</label><input className="input" value={f.item_code} onChange={set('item_code')} /></div>
           <div><label className="label">Unit</label><input className="input" value={f.unit} onChange={set('unit')} /></div>
           <div className="col-span-2"><label className="label">Name</label><input className="input" value={f.name} onChange={set('name')} /></div>
-          <div className="col-span-2"><label className="label">Name (ગુજરાતી)</label><input className="input" placeholder="દા.ત. ટર્મિનલ પિન 3&quot; હેડ સાથે" value={f.name_gu} onChange={set('name_gu')} /></div>
-          <div><label className="label">Category</label><input className="input" value={f.category} onChange={set('category')} /></div>
+          <div className="col-span-2"><label className="label">Name (ગુજરાતી) <span className="font-normal normal-case text-gray-400">(auto-generated if left blank)</span></label><input className="input" placeholder="ખાલી છોડો — આપમેળે બનશે" value={f.name_gu} onChange={set('name_gu')} /></div>
+          <div><label className="label">Category</label><CategorySelect value={f.category} onChange={v => setF(p => ({ ...p, category: v }))} /></div>
           <div><label className="label">Reorder Level</label><input className="input" type="number" step="any" value={f.reorder_level} onChange={set('reorder_level')} /></div>
           <div><label className="label">Min Order Qty</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 100" value={f.min_order_qty} onChange={set('min_order_qty')} /></div>
           <div><label className="label">Unit Price (₹)</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 12.50" value={f.unit_cost} onChange={set('unit_cost')} /></div>

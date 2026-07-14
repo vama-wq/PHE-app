@@ -6,6 +6,7 @@ const path = require('path');
 const { getDB } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadToStorage, deleteFromStorage } = require('../middleware/upload');
+const { gujaratiName } = require('../lib/gujarati');
 
 /**
  * Extract images embedded in an xlsx file, keyed by 0-based data-row index.
@@ -429,7 +430,7 @@ router.get('/inventory/template', authenticate, (req, res) => {
     'inventory_template.xlsx');
 });
 
-router.post('/inventory', authenticate, authorize('accounts', 'owner'), upload.single('file'), async (req, res) => {
+router.post('/inventory', authenticate, authorize('owner', 'admin'), upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const db = getDB();
@@ -505,10 +506,11 @@ router.post('/inventory', authenticate, authorize('accounts', 'owner'), upload.s
 
       try {
         await db.run(`
-          INSERT INTO inventory_items (item_code, name, category, unit, reorder_level, min_order_qty, unit_cost, notes, drawing_file, drawing_original_name, created_by)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          INSERT INTO inventory_items (item_code, name, name_gu, category, unit, reorder_level, min_order_qty, unit_cost, notes, drawing_file, drawing_original_name, created_by, approval_status)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
           ON CONFLICT(item_code) DO UPDATE SET
             name                  = EXCLUDED.name,
+            name_gu               = COALESCE(NULLIF(EXCLUDED.name_gu, ''), inventory_items.name_gu),
             category              = EXCLUDED.category,
             unit                  = EXCLUDED.unit,
             reorder_level         = EXCLUDED.reorder_level,
@@ -523,6 +525,7 @@ router.post('/inventory', authenticate, authorize('accounts', 'owner'), upload.s
                                          ELSE inventory_items.drawing_original_name END
         `, [
           str(row.item_code), str(row.name),
+          strOrNull(row.name_gu) || gujaratiName(str(row.name)),
           strOrNull(row.category), str(row.unit),
           numOrDefault(pick(row, ['reorder_level', 'reorder', 're_order_level', 'reorder_qty'])),
           numOrDefault(pick(row, ['min_order_qty', 'minimum_order_qty', 'minimum_order_quantity', 'min_order_quantity', 'moq'])),
@@ -530,6 +533,7 @@ router.post('/inventory', authenticate, authorize('accounts', 'owner'), upload.s
           strOrNull(row.notes),
           storagePath, drawingFilename,
           req.user.id,
+          req.user.role === 'owner' ? 'approved' : 'pending_approval',
         ]);
         imported++;
       } catch (e) {
