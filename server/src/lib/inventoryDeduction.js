@@ -16,9 +16,10 @@ const STAGE_CATEGORY_MAP = {
 const STAGE_LABEL = { 15: 'Stage 15 Brazing', 21: 'Stage 21 Nipple Press' };
 
 // Fins consume by tube length, not by BOM qty: each code has a known weight per
-// 50.8 mm. At QC approval the card's stage-8 (Draw) Total Length drives the kgs
-// deducted: kgs = length_mm × (weight / 50.8). These lines are excluded from the
-// normal qty-based BOM deduction paths below.
+// 50.8 mm. At QC approval the card's stage-8 (Draw) Total Length gives the
+// PER-PIECE weight — length_mm × (weight / 50.8) — which is multiplied by the
+// QC-approved qty of that card (partial dispatches deduct only their share).
+// These lines are excluded from the normal qty-based BOM deduction paths below.
 const FINS_MM_BASE = 50.8;
 const FINS_WEIGHT_PER_BASE = {
   'FIN-MS-08': 0.011,
@@ -140,15 +141,22 @@ async function deductFinsByLength(db, jc, userId) {
     return;
   }
 
+  // Per-piece weight × QC-approved qty of THIS card (dispatch + FG). A partial
+  // dispatch therefore deducts fins only for the pieces actually approved.
+  const fresh = await db.get('SELECT qc_dispatch_qty, qc_fg_qty, qty FROM job_cards WHERE id=$1', [jc.id]);
+  const approvedQty = (Number(fresh?.qc_dispatch_qty) || 0) + (Number(fresh?.qc_fg_qty) || 0);
+  const pcs = approvedQty > 0 ? approvedQty : (Number(fresh?.qty) || 0);
+  if (!(pcs > 0)) return;
+
   const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
   const orderCode = o?.order_code || `Order #${jc.order_id}`;
   for (const sel of sels) {
     const perBase = FINS_WEIGHT_PER_BASE[sel.item_code];
-    const kgs = Math.round((lengthMm / FINS_MM_BASE) * perBase * 1000) / 1000;
+    const kgs = Math.round((lengthMm / FINS_MM_BASE) * perBase * pcs * 1000) / 1000;
     if (!(kgs > 0)) continue;
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
-    noteParts.push(`Fins by tube length: ${lengthMm}mm × ${perBase}kg/${FINS_MM_BASE}mm = ${kgs}kg (JC ${jc.job_card_no})`);
+    noteParts.push(`Fins by tube length: ${lengthMm}mm × ${perBase}kg/${FINS_MM_BASE}mm × ${pcs} pcs = ${kgs}kg (JC ${jc.job_card_no})`);
     await deductLine(db, sel, kgs, noteParts.join(' | '), userId);
   }
 }
