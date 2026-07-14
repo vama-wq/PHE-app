@@ -327,8 +327,8 @@ function OwnerAdminDashboard() {
 
   const hasOrders    = canSee(user, 'orders');
   const hasJobCards  = canSee(user, 'job-cards');
-  const hasInventory = canSee(user, 'inventory');
-  const hasPurchases = canSee(user, 'purchases');
+  const hasInventory = canSee(user, 'inventory') && ['owner', 'admin', 'design'].includes(user.role);
+  const hasPurchases = canSee(user, 'purchases') && ['owner', 'admin', 'accounts'].includes(user.role);
 
   const loadAll = () => {
     const reqs = [];

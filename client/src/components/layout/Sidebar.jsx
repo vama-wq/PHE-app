@@ -20,7 +20,7 @@ const NAV = [
   { id: 'dispatch',      to: '/dispatch',      icon: Truck,           label: 'Dispatch',        roles: null },
   { id: 'customer-queries', to: '/customer-queries', icon: HelpCircle,   label: 'Customer Queries', roles: null, badge: 'openQueries' },
   { id: 'finished-goods',to: '/finished-goods',icon: Warehouse,       label: 'Finished Goods',  roles: ['owner','admin','production'] },
-  { id: 'inventory',     to: '/inventory',     icon: Package,         label: 'Inventory',       roles: ['owner','admin','accounts','design'] },
+  { id: 'inventory',     to: '/inventory',     icon: Package,         label: 'Inventory',       roles: ['owner','admin','design'] },
   { id: 'purchases',     to: '/purchases',     icon: ShoppingCart,    label: 'Purchases',       roles: ['owner','admin','accounts'] },
   { id: 'suppliers',     to: '/suppliers',     icon: Building2,       label: 'Suppliers',       roles: ['owner','admin','accounts'] },
   { id: 'customers',     to: '/customers',     icon: Users,           label: 'Customers',       roles: ['admin','owner'] },

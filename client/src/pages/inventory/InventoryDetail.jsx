@@ -22,8 +22,8 @@ export default function InventoryDetail() {
   if (!item) return <div className="p-8 text-center text-red-500">Item not found</div>;
 
   const isLow = item.current_stock <= item.reorder_level;
-  const canManage = ['accounts', 'owner', 'admin'].includes(user.role);
-  const canTransact = ['accounts', 'owner', 'admin', 'design'].includes(user.role); // QC can add stock transactions (no cost shown)
+  const canManage = ['owner', 'admin'].includes(user.role);
+  const canTransact = ['owner', 'admin', 'design'].includes(user.role); // QC can add stock transactions (no cost shown)
   const canDelete = ['owner', 'admin'].includes(user.role);
   const showCost = user.role !== 'design'; // hide all landed-cost figures from QC
 

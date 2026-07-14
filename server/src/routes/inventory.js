@@ -55,7 +55,7 @@ router.get('/:id', authenticate, async (req, res) => {
   res.json(stripCost(req, item));
 });
 
-router.post('/', authenticate, authorize('accounts', 'owner', 'admin'), ...uploadItemDrawing, async (req, res) => {
+router.post('/', authenticate, authorize('owner', 'admin'), ...uploadItemDrawing, async (req, res) => {
   const { item_code, name, name_gu, category, unit, current_stock, reorder_level, unit_cost, min_order_qty, notes } = req.body;
   if (!item_code || !name || !unit) return res.status(400).json({ error: 'Code, name and unit required' });
 
@@ -147,7 +147,7 @@ router.put('/:id/reject', authenticate, authorize('owner'), async (req, res) => 
   res.json({ message: 'Item rejected and removed' });
 });
 
-router.put('/:id', authenticate, authorize('accounts', 'owner', 'admin'), ...uploadItemDrawing, async (req, res) => {
+router.put('/:id', authenticate, authorize('owner', 'admin'), ...uploadItemDrawing, async (req, res) => {
   const { item_code, name, name_gu, category, unit, reorder_level, unit_cost, min_order_qty, notes } = req.body;
   const db = getDB();
 
@@ -178,7 +178,7 @@ router.put('/:id', authenticate, authorize('accounts', 'owner', 'admin'), ...upl
   }
 });
 
-router.post('/:id/transactions', authenticate, authorize('accounts', 'owner', 'design', 'admin'), async (req, res) => {
+router.post('/:id/transactions', authenticate, authorize('owner', 'design', 'admin'), async (req, res) => {
   const { transaction_type, quantity, job_card_id, supplier_name, po_number, notes } = req.body;
   if (!transaction_type || !quantity) return res.status(400).json({ error: 'Type and quantity required' });
 

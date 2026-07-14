@@ -107,12 +107,12 @@ export default function App() {
           <Route path="products"   element={<ModuleRoute module="products"><ProductList /></ModuleRoute>} />
 
           <Route path="inventory" element={
-            <ProtectedRoute roles={['owner','admin','accounts','design']} module="inventory">
+            <ProtectedRoute roles={['owner','admin','design']} module="inventory">
               <InventoryList />
             </ProtectedRoute>
           } />
           <Route path="inventory/:id" element={
-            <ProtectedRoute roles={['owner','admin','accounts','design']} module="inventory">
+            <ProtectedRoute roles={['owner','admin','design']} module="inventory">
               <InventoryDetail />
             </ProtectedRoute>
           } />

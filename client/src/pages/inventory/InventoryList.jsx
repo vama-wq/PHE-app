@@ -48,7 +48,7 @@ export default function InventoryList() {
   }, [items, search, category, stockStatus, sortBy]);
 
   const lowCount = items.filter(i => i.current_stock <= i.reorder_level).length;
-  const canManage = ['accounts', 'owner', 'admin'].includes(user.role);
+  const canManage = ['owner', 'admin'].includes(user.role);
   const showCost = user.role !== 'design'; // landed cost / valuation hidden from QC
   const totalValue = items.reduce((s, i) => s + Number(i.current_stock) * (Number(i.unit_cost) || 0), 0);
   const categories = [...new Set(items.map(i => i.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -66,7 +66,7 @@ export default function InventoryList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {['accounts','owner','admin','design'].includes(user.role) && (
+          {['owner','admin','design'].includes(user.role) && (
             <button className="btn-secondary flex items-center gap-1.5 text-sm"
               onClick={() => downloadExcel('inventory', 'inventory.xlsx')}>
               <Download size={15} /> Export Excel
