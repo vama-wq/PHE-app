@@ -113,6 +113,8 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_prospects_status  ON prospects(status)`);
       // De-dupe guard: same company+email won't be inserted twice by the seeder
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_prospect_company_email ON prospects(lower(company), lower(coalesce(email,'')))`);
+      // Application category (e.g. "Boilers & steam") — for region+application filtering & tailored emails
+      await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS application TEXT`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS backup_log (
           id SERIAL PRIMARY KEY,
