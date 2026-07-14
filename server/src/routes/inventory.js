@@ -49,6 +49,10 @@ router.get('/:id', authenticate, async (req, res) => {
      ORDER BY t.created_at DESC LIMIT 100`,
     [req.params.id]
   );
+  // QC/design must never see supplier names
+  if (req.user.role === 'design') {
+    item.transactions = item.transactions.map(({ supplier_name, ...rest }) => rest);
+  }
 
   // Open FIFO lots show the landed cost (rate + transport/other) of stock still
   // on hand. Cost-bearing, so never expose to design (QC).

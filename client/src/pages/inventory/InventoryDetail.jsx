@@ -189,13 +189,17 @@ export default function InventoryDetail() {
 }
 
 function TransactionModal({ itemId, item, onClose, onSave }) {
+  const { user } = useAuthStore();
   const [f, setF] = useState({ transaction_type: 'purchase_in', quantity: '', supplier_name: '', po_number: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [suppliers, setSuppliers] = useState([]);
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+  // QC/design must never see supplier data
+  const canSeeSuppliers = user.role !== 'design';
 
   useEffect(() => {
+    if (!canSeeSuppliers) return;
     api.get('/suppliers').then(r => setSuppliers(r.data)).catch(() => {});
   }, []);
 
@@ -221,7 +225,7 @@ function TransactionModal({ itemId, item, onClose, onSave }) {
           <label className="label">Quantity ({item.unit}) *</label>
           <input className="input" type="number" step="any" value={f.quantity} onChange={set('quantity')} required />
         </div>
-        {['purchase_in'].includes(f.transaction_type) && (
+        {['purchase_in'].includes(f.transaction_type) && canSeeSuppliers && (
           <>
             <div>
               <label className="label">Supplier</label>

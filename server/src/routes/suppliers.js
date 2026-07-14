@@ -2,7 +2,8 @@ const router = require('express').Router();
 const { getDB } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 
-router.get('/', authenticate, async (req, res) => {
+// Supplier data is hidden from QC/design — list & items are purchase-side roles only
+router.get('/', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const suppliers = await getDB().all(`
     SELECT s.*,
       (SELECT COUNT(*) FROM supplier_items si WHERE si.supplier_id = s.id) AS item_count
@@ -11,7 +12,7 @@ router.get('/', authenticate, async (req, res) => {
   res.json(suppliers);
 });
 
-router.get('/:id/items', authenticate, async (req, res) => {
+router.get('/:id/items', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const rows = await getDB().all(`
     SELECT si.*, ii.item_code, ii.name AS item_name, ii.unit, ii.current_stock, ii.drawing_file
     FROM supplier_items si
