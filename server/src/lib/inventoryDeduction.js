@@ -15,6 +15,19 @@ const STAGE_CATEGORY_MAP = {
 };
 const STAGE_LABEL = { 15: 'Stage 15 Brazing', 21: 'Stage 21 Nipple Press' };
 
+// Fins consume by tube length, not by BOM qty: each code has a known weight per
+// 50.8 mm. At QC approval the card's stage-8 (Draw) Total Length drives the kgs
+// deducted: kgs = length_mm × (weight / 50.8). These lines are excluded from the
+// normal qty-based BOM deduction paths below.
+const FINS_MM_BASE = 50.8;
+const FINS_WEIGHT_PER_BASE = {
+  'FIN-MS-08': 0.011,
+  'FIN-MS-11': 0.019,
+  'FIN-SS-08-VE': 0.014,
+  'FIN-SS-11-VE': 0.020,
+};
+const FINS_CODES = Object.keys(FINS_WEIGHT_PER_BASE);
+
 async function deductLine(db, sel, dedQty, note, userId) {
   const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
   if (!inv || !(dedQty > 0)) return;
@@ -85,8 +98,9 @@ async function deductPartialAtQC(db, jc, userId) {
   const orderCode = o?.order_code || `Order #${jc.order_id}`;
   const sels = await db.all(
     `SELECT oii.* FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
-     WHERE oii.order_item_id=$1 AND (ii.category IS NULL OR TRIM(ii.category) <> ALL($2))`,
-    [itemId, stageCats]
+     WHERE oii.order_item_id=$1 AND (ii.category IS NULL OR TRIM(ii.category) <> ALL($2))
+       AND ii.item_code <> ALL($3)`,
+    [itemId, stageCats, FINS_CODES]
   );
   for (const sel of sels) {
     const total = parseFloat(sel.qty || 0);
@@ -100,12 +114,57 @@ async function deductPartialAtQC(db, jc, userId) {
   }
 }
 
+// Fins by tube length: at QC approval, each fins BOM line deducts kgs computed
+// from THIS card's stage-8 (Draw) Total Length — not the BOM qty.
+async function deductFinsByLength(db, jc, userId) {
+  if (!jc || jc.is_fg) return; // FG inventory cards have no Draw stage
+  const itemId = await resolveJobCardItemId(db, jc);
+  if (!itemId) return;
+  const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
+  if (!item || item.inventory_deducted) return;
+
+  const sels = await db.all(
+    `SELECT oii.*, ii.item_code FROM order_item_inventory oii
+     JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+     WHERE oii.order_item_id=$1 AND ii.item_code = ANY($2)`,
+    [itemId, FINS_CODES]
+  );
+  if (!sels.length) return;
+
+  const s8 = await db.get(
+    'SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=8', [jc.id]
+  );
+  const lengthMm = parseFloat(String(s8?.value1 || '').replace(/[^\d.]/g, ''));
+  if (!(lengthMm > 0)) {
+    console.warn(`[fins] JC ${jc.job_card_no}: no stage-8 Total Length — fins not deducted`);
+    return;
+  }
+
+  const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
+  const orderCode = o?.order_code || `Order #${jc.order_id}`;
+  for (const sel of sels) {
+    const perBase = FINS_WEIGHT_PER_BASE[sel.item_code];
+    const kgs = Math.round((lengthMm / FINS_MM_BASE) * perBase * 1000) / 1000;
+    if (!(kgs > 0)) continue;
+    const noteParts = [`Order: ${orderCode}`];
+    if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
+    noteParts.push(`Fins by tube length: ${lengthMm}mm × ${perBase}kg/${FINS_MM_BASE}mm = ${kgs}kg (JC ${jc.job_card_no})`);
+    await deductLine(db, sel, kgs, noteParts.join(' | '), userId);
+  }
+}
+
 // QC-time deduction: everything not already consumed by a stage trigger.
+// Fins lines are excluded — they deduct by tube length (deductFinsByLength).
 async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = 'Consumed for production') {
   const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
   if (!item || item.inventory_deducted) return; // never double-deduct
-  const sels = await db.all('SELECT * FROM order_item_inventory WHERE order_item_id=$1', [itemId]);
+  const sels = await db.all(
+    `SELECT oii.*, ii.item_code FROM order_item_inventory oii
+     JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+     WHERE oii.order_item_id=$1`, [itemId]
+  );
   for (const sel of sels) {
+    if (FINS_CODES.includes(sel.item_code)) continue; // length-based, handled separately
     const remaining = parseFloat(sel.qty || 0) - parseFloat(sel.qty_deducted || 0);
     if (remaining <= 0) continue;
     const noteParts = [`Order: ${orderCode}`];
@@ -201,4 +260,4 @@ async function settleItemInventory(db, orderItemId, userId, orderCode) {
   if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)');
 }
 
-module.exports = { deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, deductPartialAtQC };
+module.exports = { deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, deductPartialAtQC, deductFinsByLength };

@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQC, uploadChecklistPhoto } = require('../middleware/upload');
-const { settleItemInventory, resolveJobCardItemId, applyRemakeExtras, deductPartialAtQC } = require('../lib/inventoryDeduction');
+const { settleItemInventory, resolveJobCardItemId, applyRemakeExtras, deductPartialAtQC, deductFinsByLength } = require('../lib/inventoryDeduction');
 
 // Deduct the job card's order item from stock once it qualifies (split-aware).
 // Wrapped so a failure here can never block QC approval. No-op when the item is
@@ -11,6 +11,8 @@ async function settleAfterQC(db, jc, userId) {
   try {
     // Extra inventory recorded for remade pieces (stashed on jc by the approve route)
     if (jc._remakeExtras?.length) await applyRemakeExtras(db, jc, jc._remakeExtras, userId);
+    // Fins consume by this card's stage-8 tube length, not by BOM qty
+    await deductFinsByLength(db, jc, userId);
     // Split items: this card's QC-approved share of the non-stage BOM goes out now
     await deductPartialAtQC(db, jc, userId);
     const itemId = await resolveJobCardItemId(db, jc);
