@@ -812,9 +812,15 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
                 <li key={i.id} className="flex justify-between text-xs text-gray-700">
                   <span><span className="font-mono">{i.item_code}</span> — {i.name}</span>
                   <span className="font-medium">
-                    {i.qty} {i.unit}
-                    {Number(i.qty_deducted) > 0 && Number(i.qty_deducted) < Number(i.qty) && (
-                      <span className="text-gray-400 font-normal"> ({i.qty_deducted} deducted at stage)</span>
+                    {(i.category || '').trim().toLowerCase() === 'finns' ? (
+                      <span className="text-emerald-700" title="Deducts by tube length (stage 8) × approved qty on approval">auto — by tube length</span>
+                    ) : (
+                      <>
+                        {i.qty} {i.unit}
+                        {Number(i.qty_deducted) > 0 && Number(i.qty_deducted) < Number(i.qty) && (
+                          <span className="text-gray-400 font-normal"> ({i.qty_deducted} deducted at stage)</span>
+                        )}
+                      </>
                     )}
                   </span>
                 </li>

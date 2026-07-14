@@ -9,6 +9,16 @@ const { createNotification } = require('./notifications');
 // dispatch.js). These helpers stay imported for the inventory-edit reconcile path.
 const { deductItemInventory, restoreItemInventory } = require('../lib/inventoryDeduction');
 
+// Which of these inventory ids are Fins? Fins BOM lines carry no qty — they
+// deduct by tube length at QC approval (see lib/inventoryDeduction).
+async function finsIdSet(db, ids) {
+  if (!ids.length) return new Set();
+  const rows = await db.all(
+    `SELECT id FROM inventory_items WHERE id = ANY($1) AND TRIM(category) ILIKE 'finns'`, [ids]
+  );
+  return new Set(rows.map(r => r.id));
+}
+
 // ── Mentions ──────────────────────────────────────────────────────────────────
 router.get('/my-mentions', authenticate, async (req, res) => {
   const db = getDB();
@@ -470,10 +480,12 @@ router.delete('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), a
 // already approved (stock deducted), the old selection is reversed and the new
 // one re-deducted so stock stays accurate.
 router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
-  const sels = (req.body.inventory_item_ids || []).filter(s => s && s.id && parseFloat(s.qty) > 0);
-  if (!sels.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity)' });
-
   const db = getDB();
+  const raw = (req.body.inventory_item_ids || []).filter(s => s && s.id);
+  // Fins consume by tube length at QC — they carry no qty in the BOM
+  const fins = await finsIdSet(db, raw.map(s => parseInt(s.id)));
+  const sels = raw.filter(s => parseFloat(s.qty) > 0 || fins.has(parseInt(s.id)));
+  if (!sels.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity)' });
   const item = await db.get('SELECT id, inventory_deducted FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
   const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
@@ -540,12 +552,14 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
 
     // Design selects the inventory consumed by this item along with the drawing.
     // It arrives as a JSON string in the multipart form.
+    const db = getDB();
     let invSelections = [];
     try { invSelections = JSON.parse(req.body.inventory_item_ids || '[]'); } catch { invSelections = []; }
-    invSelections = (invSelections || []).filter(s => s && s.id && parseFloat(s.qty) > 0);
+    invSelections = (invSelections || []).filter(s => s && s.id);
+    // Fins lines carry no qty — they deduct by tube length at QC approval
+    const finsIds = await finsIdSet(db, invSelections.map(s => parseInt(s.id)));
+    invSelections = invSelections.filter(s => parseFloat(s.qty) > 0 || finsIds.has(parseInt(s.id)));
     if (!invSelections.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing' });
-
-    const db = getDB();
     const r = await db.insert(
       `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,

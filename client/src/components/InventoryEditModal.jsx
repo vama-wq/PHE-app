@@ -30,13 +30,16 @@ export default function InventoryEditModal({ orderId, item, onClose, onDone }) {
   });
   const setQty = (id, qty) => setSelected(prev => ({ ...prev, [id]: qty }));
   const selectedList = inventoryItems.filter(i => i.id in selected);
+  // Fins need no qty — they deduct automatically by tube length at QC approval
+  const isFins = (i) => (i?.category || '').trim().toLowerCase() === 'finns';
+  const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
 
   const handleSave = async () => {
     const ids = Object.keys(selected);
     if (!ids.length) return setError('Select at least one inventory item');
-    const missingQty = ids.filter(id => !selected[id] || parseFloat(selected[id]) <= 0);
+    const missingQty = ids.filter(id => !finsIds.has(String(id)) && (!selected[id] || parseFloat(selected[id]) <= 0));
     if (missingQty.length) return setError('Enter a quantity for every selected item');
-    const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: parseFloat(selected[id]) }));
+    const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : parseFloat(selected[id]) }));
     setSaving(true);
     setError('');
     try {
@@ -83,9 +86,18 @@ export default function InventoryEditModal({ orderId, item, onClose, onDone }) {
             {selectedList.map(i => (
               <div key={i.id} className="flex items-center gap-2 bg-gray-50 rounded-lg px-2.5 py-1.5">
                 <span className="text-sm flex-1 truncate"><span className="font-mono">{i.item_code}</span> — {i.name}</span>
-                <input className="input w-24 text-sm py-1" type="number" min="0" step="any" placeholder="Qty"
-                  value={selected[i.id]} onChange={e => setQty(i.id, e.target.value)} />
-                <span className="text-xs text-gray-400 w-8">{i.unit}</span>
+                {isFins(i) ? (
+                  <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 whitespace-nowrap"
+                    title="Deducts automatically from the tube length at QC approval">
+                    auto — by tube length
+                  </span>
+                ) : (
+                  <>
+                    <input className="input w-24 text-sm py-1" type="number" min="0" step="any" placeholder="Qty"
+                      value={selected[i.id]} onChange={e => setQty(i.id, e.target.value)} />
+                    <span className="text-xs text-gray-400 w-8">{i.unit}</span>
+                  </>
+                )}
                 <button type="button" className="p-1 text-gray-400 hover:text-red-600" onClick={() => toggle(i.id)}>
                   <X size={14} />
                 </button>
