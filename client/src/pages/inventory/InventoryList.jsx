@@ -48,7 +48,7 @@ export default function InventoryList() {
   }, [items, search, category, stockStatus, sortBy]);
 
   const lowCount = items.filter(i => i.current_stock <= i.reorder_level).length;
-  const canManage = ['accounts', 'owner'].includes(user.role);
+  const canManage = ['accounts', 'owner', 'admin'].includes(user.role);
   const showCost = user.role !== 'design'; // landed cost / valuation hidden from QC
   const totalValue = items.reduce((s, i) => s + Number(i.current_stock) * (Number(i.unit_cost) || 0), 0);
   const categories = [...new Set(items.map(i => i.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
