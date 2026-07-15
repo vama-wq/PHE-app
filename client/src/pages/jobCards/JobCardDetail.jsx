@@ -541,6 +541,9 @@ function OverviewTab({ jc, userRole }) {
     if (stageDef?.fgHvOhms && sData.value1) {
       try { return { fgHvOhms: true, ...JSON.parse(sData.value1) }; } catch { return null; }
     }
+    if (stageDef?.pressureCheck && sData.value1) {
+      try { return { pressureCheck: true, ...JSON.parse(sData.value1) }; } catch { return null; }
+    }
     if (stageDef?.brazing && sData.value1) {
       try { return JSON.parse(sData.value1); } catch { return null; }
     }
@@ -685,6 +688,16 @@ function OverviewTab({ jc, userRole }) {
                         </span>
                       </div>
                     )}
+                    {def?.pressureCheck && parsed?.pressure && (
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">Pressure Check:</span>
+                        <span className={parsed.pressure === 'pass' ? 'text-green-700' : 'text-red-700'}>
+                          {parsed.pressure === 'pass'
+                            ? 'All Passed'
+                            : `${parsed.redoCount || '?'} in redo — ${parsed.redoReason || ''}`}
+                        </span>
+                      </div>
+                    )}
                     {def?.heaterAdjust && parsed?.adjusted && (
                       <div className="flex gap-2 text-sm">
                         <span className="text-gray-500 font-medium w-28 flex-shrink-0">Adjustment:</span>
@@ -700,7 +713,7 @@ function OverviewTab({ jc, userRole }) {
                         </span>
                       </div>
                     )}
-                    {!def?.hvLight && !def?.fgHvOhms && !def?.heaterAdjust && !def?.brazing && (s.value1 || s.value2) && (
+                    {!def?.hvLight && !def?.fgHvOhms && !def?.pressureCheck && !def?.heaterAdjust && !def?.brazing && (s.value1 || s.value2) && (
                       <div className="flex gap-2 text-sm">
                         <span className="text-gray-500 font-medium w-28 flex-shrink-0">
                           {def?.fields?.[0]?.label || 'Value'}:

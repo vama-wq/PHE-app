@@ -663,6 +663,31 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     }
   }
 
+  // Stage 14 (Bending): a photo of the bent product is compulsory before done
+  if (!isFg && stageNo === 14 && done) {
+    const row = await db.get(
+      'SELECT photo_file FROM production_checklist WHERE job_card_id=$1 AND stage_no=14', [jobCardId]
+    );
+    if (!row?.photo_file) {
+      return res.status(400).json({
+        error: 'Upload a photo of the bent product before marking Bending done.',
+        code: 'PHOTO_REQUIRED'
+      });
+    }
+  }
+
+  // Stage 21 (Nipple Press): Pressure Check result is compulsory; redo needs count + reason
+  if (!isFg && stageNo === 21 && done) {
+    let pc = {};
+    try { pc = JSON.parse(value1 || '{}'); } catch { pc = {}; }
+    if (pc.pressure !== 'pass' && pc.pressure !== 'fail') {
+      return res.status(400).json({ error: 'Pressure Check result is required before marking this stage done.', code: 'PRESSURE_REQUIRED' });
+    }
+    if (pc.pressure === 'fail' && (!(parseInt(pc.redoCount, 10) > 0) || !String(pc.redoReason || '').trim())) {
+      return res.status(400).json({ error: 'Enter how many pieces are in redo and the process reason.', code: 'PRESSURE_REDO_DETAILS' });
+    }
+  }
+
   // Require rejection photo when any rejection exists
   if (done && rejQty > 0) {
     const existing = await db.get(

@@ -19,7 +19,7 @@ export const PRODUCTION_STAGES = [
   { no: 11, name: 'Trimming' },
   { no: 12, name: 'Spot Annealing or Furnace Annealing' },
   { no: 13, name: 'Buffing',            optional: true },
-  { no: 14, name: 'Bending',            heaterAdjust: true },
+  { no: 14, name: 'Bending',            heaterAdjust: true, photoRequired: true },
   // Kharoch is an optional step right after Bending. It keeps a high stage id (30)
   // so existing checklist data (keyed 1–29) is never renumbered; array position
   // here controls where it shows. Excluded from the linear current_stage tracker.
@@ -30,7 +30,7 @@ export const PRODUCTION_STAGES = [
   { no: 18, name: 'Heater Cleaning',    note: 'Use Alcohol and Thinner', fields: [{ key: 'value1', label: 'Remark' }] },
   { no: 19, name: 'Overnight Oven' },
   { no: 20, name: 'HV + Light Check',   hvLight: true },
-  { no: 21, name: 'Nipple Press',       optional: true },
+  { no: 21, name: 'Nipple Press',       optional: true, pressureCheck: true },
   { no: 22, name: '3 Hours Oven',       optional: true },
   { no: 23, name: 'Sealing' },
   { no: 24, name: 'HV + Light Check',   hvLight: true },

@@ -1002,7 +1002,7 @@ function ChecklistModal({ card, onClose, onSave }) {
 }
 
 // ── Reusable HV / Light pass-fail block ──────────────────────────────────────
-function HvTestBlock({ label, result, failCount, failReason, isDone, doneResult, doneCount, doneReason, onResult, onCount, onReason, passLabel = '✅ All Passed', failLabel = '❌ Some Failed', hideCount = false }) {
+function HvTestBlock({ label, result, failCount, failReason, isDone, doneResult, doneCount, doneReason, onResult, onCount, onReason, passLabel = '✅ All Passed', failLabel = '❌ Some Failed', hideCount = false, countLabel = 'How many failed?', reasonLabel = 'Why did they fail?', failWord = 'failed' }) {
   return (
     <div>
       <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1014,7 +1014,7 @@ function HvTestBlock({ label, result, failCount, failReason, isDone, doneResult,
         }`}>
           {doneResult === 'pass'
             ? passLabel
-            : hideCount ? `❌ Failed — ${doneReason}` : `❌ ${doneCount} failed — ${doneReason}`}
+            : hideCount ? `❌ Failed — ${doneReason}` : `❌ ${doneCount} ${failWord} — ${doneReason}`}
         </div>
       ) : (
         <>
@@ -1032,14 +1032,14 @@ function HvTestBlock({ label, result, failCount, failReason, isDone, doneResult,
             <div className="space-y-3 p-3 bg-red-50 rounded-xl border border-red-100">
               {!hideCount && (
                 <div>
-                  <label className="block text-xs font-medium text-red-700 mb-1">How many failed? <span className="text-red-500">*</span></label>
+                  <label className="block text-xs font-medium text-red-700 mb-1">{countLabel} <span className="text-red-500">*</span></label>
                   <input type="number" min="1" className="input w-32 text-sm"
                     placeholder="e.g. 3" value={failCount} onChange={e => onCount(e.target.value)} />
                 </div>
               )}
               <div>
                 <label className="block text-xs font-medium text-red-700 mb-1">
-                  {hideCount ? 'Reason / Remark' : 'Why did they fail?'} <span className="text-red-500">*</span>
+                  {hideCount ? 'Reason / Remark' : reasonLabel} <span className="text-red-500">*</span>
                 </label>
                 <textarea className="input w-full h-16 resize-none text-sm"
                   placeholder="Describe the reason..."
@@ -1162,6 +1162,17 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [fgHvFailCount, setFgHvFailCount] = useState(fgHvData.hvFailCount || '');
   const [fgOhms, setFgOhms] = useState(fgHvData.ohms || '');
 
+  // Nipple Press (21) — Pressure Check, JSON in value1
+  // { pressure: 'pass'|'fail', redoCount, redoReason }
+  const isPressure = !!stageDef.pressureCheck;
+  const pressureData = (() => {
+    if (!isPressure || !stageData.value1) return {};
+    try { return JSON.parse(stageData.value1); } catch { return {}; }
+  })();
+  const [pressureResult, setPressureResult] = useState(pressureData.pressure || '');
+  const [pressureRedoCount, setPressureRedoCount] = useState(pressureData.redoCount || '');
+  const [pressureRedoReason, setPressureRedoReason] = useState(pressureData.redoReason || '');
+
   // Bending (14) — Heater Adjustment checkbox
   const isBending = stageDef.no === 14;
   const [heaterAdjustDone, setHeaterAdjustDone] = useState(() => stageData.value1 === 'adjusted');
@@ -1230,6 +1241,10 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (!fgHvResult) return false;
       if (fgHvResult === 'fail' && !(parseInt(fgHvFailCount, 10) > 0)) return false;
     }
+    if (isPressure) {
+      if (!pressureResult) return false;
+      if (pressureResult === 'fail' && (!(parseInt(pressureRedoCount, 10) > 0) || !pressureRedoReason.trim())) return false;
+    }
     if (stageDef.fields) {
       // Check required fields
       const field1 = stageDef.fields[0];
@@ -1258,6 +1273,10 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     };
     if (isFgHvOhms) return {
       v1: JSON.stringify({ hv: fgHvResult, hvFailCount: fgHvResult === 'fail' ? fgHvFailCount : '', ohms: fgOhms }),
+      v2: null,
+    };
+    if (isPressure) return {
+      v1: JSON.stringify({ pressure: pressureResult, redoCount: pressureResult === 'fail' ? pressureRedoCount : '', redoReason: pressureResult === 'fail' ? pressureRedoReason : '' }),
       v2: null,
     };
     if (isBrazing) return {
@@ -1590,6 +1609,29 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
                 value={hvOhms} onChange={e => setHvOhms(e.target.value)} />
             )}
           </div>
+        </div>
+      )}
+
+      {/* Nipple Press — Pressure Check */}
+      {isPressure && (
+        <div className="mb-4">
+          <HvTestBlock
+            label="Pressure Check"
+            result={pressureResult}
+            failCount={pressureRedoCount}
+            failReason={pressureRedoReason}
+            isDone={isDone}
+            doneResult={pressureData.pressure}
+            doneCount={pressureData.redoCount}
+            doneReason={pressureData.redoReason}
+            onResult={setPressureResult}
+            onCount={setPressureRedoCount}
+            onReason={setPressureRedoReason}
+            failLabel="❌ Some in Redo"
+            countLabel="How many are in redo?"
+            reasonLabel="Process reason"
+            failWord="in redo"
+          />
         </div>
       )}
 
