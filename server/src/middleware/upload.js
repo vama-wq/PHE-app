@@ -135,7 +135,7 @@ module.exports = {
   uploadDispatch:        [uploaders.dispatch.upload.single('file'),         uploaders.dispatch.pushToStorage],
   uploadQC:              [uploaders.qc.upload.single('file'),               uploaders.qc.pushToStorage],
   uploadOrderDrawing:    [uploaders.orderDrawing.upload.single('file'),     uploaders.orderDrawing.pushToStorage],
-  uploadOrderItemImage:  [uploaders.orderItemImage.upload.array('images',10), uploaders.orderItemImage.pushToStorage],
+  uploadOrderItemImage:  [uploaders.orderItemImage.upload.array('images',40), uploaders.orderItemImage.pushToStorage],
   uploadJobCard:         [uploaders.jobCard.upload.single('file'),          uploaders.jobCard.pushToStorage],
   uploadChecklistPhoto:  [uploaders.checklistPhoto.upload.single('file'),   uploaders.checklistPhoto.pushToStorage],
   uploadRejectionPhoto:  [uploaders.rejectionPhoto.upload.single('file'),   uploaders.rejectionPhoto.pushToStorage],

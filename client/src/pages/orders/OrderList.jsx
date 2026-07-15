@@ -603,13 +603,14 @@ function NewOrderModal({ onClose, onSave }) {
       }
 
       // 3. Save all items, then upload their reference images
+      // (batched — the server accepts up to 40 images per request)
       for (let i = 0; i < items.length; i++) {
         const itemRes = await api.post(`/orders/${orderId}/items`, items[i]);
         const itemId = itemRes.data.id;
-        const files = itemImages[i];
-        if (files?.length) {
+        const files = itemImages[i] || [];
+        for (let j = 0; j < files.length; j += 25) {
           const fd = new FormData();
-          files.forEach(f => fd.append('images', f));
+          files.slice(j, j + 25).forEach(f => fd.append('images', f));
           await api.post(`/orders/${orderId}/items/${itemId}/images`, fd);
         }
       }

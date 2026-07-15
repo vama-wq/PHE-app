@@ -1417,21 +1417,21 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
     const payload = { ...f };
     if (!item?.id && copyFromItemId) payload.copy_from_item_id = copyFromItemId;
     setSaving(true);
+    // Upload in batches — the server accepts up to 40 images per request
+    const uploadImages = async (itemId) => {
+      for (let i = 0; i < newFiles.length; i += 25) {
+        const fd = new FormData();
+        newFiles.slice(i, i + 25).forEach(file => fd.append('images', file));
+        await api.post(`/orders/${orderId}/items/${itemId}/images`, fd);
+      }
+    };
     try {
       if (item?.id) {
         await api.put(`/orders/${orderId}/items/${item.id}`, payload);
-        if (newFiles.length) {
-          const fd = new FormData();
-          newFiles.forEach(file => fd.append('images', file));
-          await api.post(`/orders/${orderId}/items/${item.id}/images`, fd);
-        }
+        if (newFiles.length) await uploadImages(item.id);
       } else {
         const res = await api.post(`/orders/${orderId}/items`, payload);
-        if (newFiles.length) {
-          const fd = new FormData();
-          newFiles.forEach(file => fd.append('images', file));
-          await api.post(`/orders/${orderId}/items/${res.data.id}/images`, fd);
-        }
+        if (newFiles.length) await uploadImages(res.data.id);
       }
       onSave();
     } catch (err) {
