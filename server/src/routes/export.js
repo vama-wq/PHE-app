@@ -245,7 +245,7 @@ router.get('/dispatch-checklist', authenticate, authorize('owner', 'admin', 'acc
   // Get all dispatched (or qc_approved/packaging) job cards
   const cards = await db.all(`
     SELECT jc.id, jc.job_card_no, jc.drawing_no, jc.product_name,
-      jc.qty, jc.dispatch_date, jc.status,
+      jc.qty, jc.dispatch_date, jc.dispatched_at, jc.status,
       o.order_code, o.order_type,
       c.customer_code, ${canSeeNames ? "c.name as customer_name," : ''}
       GREATEST(
@@ -305,6 +305,7 @@ router.get('/dispatch-checklist', authenticate, authorize('owner', 'admin', 'acc
     'Net Qty':          jc.net_qty ?? '',
     'Dispatched Qty':   jc.dispatched_qty ?? '',
     'Dispatch Date':    jc.dispatch_date || '',
+    'Dispatched On (Actual)': jc.dispatched_at || '',
     'Status':           jc.status,
     'Stages Completed': Object.values(stageMap[jc.id] || {}).filter(s => s.done).length,
     'Total Rejected':   Object.values(stageMap[jc.id] || {}).reduce((a, s) => a + (parseInt(s.rejection_qty, 10) || 0), 0),
