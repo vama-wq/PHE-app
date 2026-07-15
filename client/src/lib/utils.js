@@ -66,6 +66,16 @@ export function getStageLabel(stageNo, jc) {
   return s ? `Stage ${stageNo}: ${s.name}` : null;
 }
 
+// True while the card still has a dispatch ahead of it. Terminal states and
+// cards whose entire qty went to Finished Goods have nothing to dispatch, so
+// "Xd overdue / Xd to dispatch" badges are meaningless for them.
+export function dispatchPending(jc) {
+  if (!jc) return false;
+  if (['dispatched', 'completed', 'repaired_dispatched', 'resolved_dispatched'].includes(jc.status)) return false;
+  if (jc.qc_route === 'finished_goods' && (Number(jc.qc_dispatch_qty) || 0) === 0) return false;
+  return true;
+}
+
 export function fmtDate(d) {
   if (!d) return '—';
   try { return format(typeof d === 'string' ? parseISO(d) : d, 'dd MMM yyyy'); }

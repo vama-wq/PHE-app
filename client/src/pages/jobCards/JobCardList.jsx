@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
-import { fmtDate, daysUntil, getStageLabel, downloadExcel } from '../../lib/utils';
+import { fmtDate, daysUntil, dispatchPending, getStageLabel, downloadExcel } from '../../lib/utils';
 import { Search, ExternalLink, Download, Trash2, X } from 'lucide-react';
 
 export default function JobCardList() {
@@ -151,7 +151,7 @@ export default function JobCardList() {
                   </td>
                   <td className="table-cell">
                     <div className="text-sm">{fmtDate(jc.dispatch_date)}</div>
-                    {jc.status !== 'dispatched' && days !== null && (
+                    {dispatchPending(jc) && days !== null && (
                       <div className={`text-xs font-medium ${days < 0 ? 'text-red-600' : days <= 3 ? 'text-orange-500' : 'text-gray-400'}`}>
                         {days < 0 ? `${Math.abs(days)}d overdue` : days === 0 ? 'Today' : `${days}d left`}
                       </div>

@@ -5,7 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
-import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor } from '../../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, dispatchPending, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor } from '../../lib/utils';
 import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle, Truck } from 'lucide-react';
 
 const JC_STATUSES = [
@@ -69,7 +69,7 @@ export default function JobCardDetail() {
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-bold text-gray-900">{jc.job_card_no}</h1>
             <StatusBadge status={jc.status} />
-            {days !== null && !['dispatched'].includes(jc.status) && (
+            {days !== null && dispatchPending(jc) && (
               <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
                 days < 0 ? 'bg-red-100 text-red-700' : days <= 3 ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
               }`}>
