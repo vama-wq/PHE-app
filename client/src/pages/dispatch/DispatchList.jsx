@@ -233,7 +233,12 @@ export default function DispatchList() {
                               </div>
                             )}
                           </td>
-                          <td className="table-cell">{fmtDate(jc.dispatch_date)}</td>
+                          <td className="table-cell">
+                            <div className="text-sm">{fmtDate(jc.dispatch_date)}</div>
+                            {jc.dispatched_at && (
+                              <div className="text-xs text-green-600 font-medium">Dispatched {fmtDate(jc.dispatched_at)}</div>
+                            )}
+                          </td>
                           <td className="table-cell"><StatusBadge status={jc.status} /></td>
                           <td className="table-cell text-right">
                             <div className="flex items-center justify-end gap-2">

@@ -177,6 +177,8 @@ async function initDB(retries = 20, delayMs = 10000) {
       // from the Finished Goods store (fg_source_id) at creation.
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS is_fg BOOLEAN DEFAULT FALSE`);
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fg_source_id INTEGER`);
+      // Actual dispatch moment (dispatch_date is only the planned/target date)
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS dispatched_at TIMESTAMPTZ`);
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);

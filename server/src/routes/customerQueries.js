@@ -320,7 +320,7 @@ router.put('/:id/resolve', authenticate, authorize('owner'), async (req, res) =>
 
     await db.run("UPDATE orders SET status='resolved_dispatched' WHERE id=$1", [q.order_id]);
     if (q.job_card_id) {
-      await db.run("UPDATE job_cards SET status='resolved_dispatched' WHERE id=$1", [q.job_card_id]);
+      await db.run("UPDATE job_cards SET status='resolved_dispatched', dispatched_at=NOW() WHERE id=$1", [q.job_card_id]);
     }
 
     await logActivity(q.order_id, q.job_card_id, 'customer_query_resolved',
@@ -517,7 +517,7 @@ router.put('/:id/repair-complete', authenticate, authorize('owner', 'accounts'),
   `, [req.params.id]);
 
   if (q.job_card_id) {
-    await db.run("UPDATE job_cards SET status='repaired_dispatched' WHERE id=$1", [q.job_card_id]);
+    await db.run("UPDATE job_cards SET status='repaired_dispatched', dispatched_at=NOW() WHERE id=$1", [q.job_card_id]);
   }
   await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [q.order_id]);
 
@@ -539,7 +539,7 @@ router.put('/:id/debit-note-complete', authenticate, authorize('owner', 'account
 
   await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [q.order_id]);
   if (q.job_card_id) {
-    await db.run("UPDATE job_cards SET status='dispatched' WHERE id=$1", [q.job_card_id]);
+    await db.run("UPDATE job_cards SET status='dispatched', dispatched_at=NOW() WHERE id=$1", [q.job_card_id]);
   }
 
   await logActivity(q.order_id, q.job_card_id, 'debit_note_issued',

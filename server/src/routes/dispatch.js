@@ -120,7 +120,7 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
     );
   }
 
-  await db.run("UPDATE job_cards SET status='dispatched' WHERE id=$1", [req.params.jobCardId]);
+  await db.run("UPDATE job_cards SET status='dispatched', dispatched_at=NOW() WHERE id=$1", [req.params.jobCardId]);
   await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [jc.order_id]);
 
   // Repaired return: close the customer query now that it's re-dispatched.
