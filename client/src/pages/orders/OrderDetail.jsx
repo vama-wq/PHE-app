@@ -29,7 +29,7 @@ function validateItem(f) {
 
 // Orders allowed to upload job cards before their drawings are approved.
 // Drawings still show and follow the normal approval flow.
-const DRAWING_BYPASS_ORDERS = ['ORD-020-26', 'ORD-024-26', 'ORD-017-26', 'ORD-053-26'];
+const DRAWING_BYPASS_ORDERS = ['ORD-020-26', 'ORD-024-26', 'ORD-017-26', 'ORD-053-26', 'ORD-064-26'];
 
 export default function OrderDetail() {
   const { id } = useParams();
