@@ -69,7 +69,12 @@ export default function JobCardDetail() {
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-bold text-gray-900">{jc.job_card_no}</h1>
             <StatusBadge status={jc.status} />
-            {days !== null && dispatchPending(jc) && (
+            {jc.replacement_query_id && (
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                Replacement{jc.replacement_query_no ? ` — ${jc.replacement_query_no}` : ''}
+              </span>
+            )}
+            {days !== null && dispatchPending(jc) && ( 
               <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
                 days < 0 ? 'bg-red-100 text-red-700' : days <= 3 ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
               }`}>

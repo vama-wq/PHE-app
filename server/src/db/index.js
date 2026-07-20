@@ -179,6 +179,9 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fg_source_id INTEGER`);
       // Actual dispatch moment (dispatch_date is only the planned/target date)
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS dispatched_at TIMESTAMPTZ`);
+      // Replacement cards: query resolved as "replaced" spawns a fresh production
+      // run tagged with the query; dispatching it needs no new invoice.
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS replacement_query_id INTEGER`);
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);

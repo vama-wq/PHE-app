@@ -102,12 +102,13 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
   );
   const isRepairDispatch = !!repairQuery;
 
-  // Require an invoice before dispatching — except for repaired returns (already invoiced).
+  // Require an invoice before dispatching — except for repaired returns and
+  // replacement cards (the original dispatch was already invoiced).
   const invoiceDoc = await db.get(
     "SELECT id FROM dispatch_documents WHERE job_card_id=$1 AND doc_type='invoice' LIMIT 1",
     [req.params.jobCardId]
   );
-  if (!invoiceDoc && !isRepairDispatch) {
+  if (!invoiceDoc && !isRepairDispatch && !jc.replacement_query_id) {
     return res.status(400).json({ error: 'An invoice document is required before dispatching. Please upload an invoice first.' });
   }
 

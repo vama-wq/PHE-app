@@ -113,11 +113,13 @@ router.get('/:id', authenticate, async (req, res) => {
   const db = getDB();
   const jc = await db.get(`
     SELECT jc.*, o.order_code, c.customer_code, u.name as uploaded_by_name,
+      rq.query_no as replacement_query_no,
       EXISTS(SELECT 1 FROM production_day_picks WHERE job_card_id = jc.id AND pick_date = $1) as picked_today
     FROM job_cards jc
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
     LEFT JOIN users u ON jc.uploaded_by = u.id
+    LEFT JOIN customer_queries rq ON rq.id = jc.replacement_query_id
     WHERE jc.id = $2
   `, [today, req.params.id]);
 

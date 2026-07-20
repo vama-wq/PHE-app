@@ -259,6 +259,9 @@ function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore }) {
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <span className="font-bold text-gray-900 text-base">{jc.job_card_no}</span>
+                  {jc.replacement_query_id && (
+                    <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 align-middle">REPLACEMENT</span>
+                  )}
                   <StatusBadge status={jc.status} />
                   {stageLabel && !isOnHold && (
                     <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium">
@@ -363,6 +366,9 @@ function AllCardsTab({ cards, todayPickIds, canManage, onPick, onUnpick, onCheck
                 <td className="table-cell">
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-brand-700">{jc.job_card_no}</span>
+                    {jc.replacement_query_id && (
+                    <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 align-middle">REPLACEMENT</span>
+                  )}
                     {isPicked && (
                       <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">Today</span>
                     )}

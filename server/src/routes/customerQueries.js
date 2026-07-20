@@ -300,16 +300,73 @@ router.put('/:id', authenticate, authorize('accounts', 'owner', 'admin'), async 
 // ── Resolve query (OWNER ONLY) ─────────────────────────────────────────────
 router.put('/:id/resolve', authenticate, authorize('owner'), async (req, res) => {
   const { resolution_summary, resolution_type } = req.body;
-  // resolution_type: 'resolved' or 'product_return'
+  // resolution_type: 'resolved', 'product_return' or 'replaced' (no return —
+  // a replacement production run starts immediately)
   if (!resolution_summary?.trim()) return res.status(400).json({ error: 'Resolution summary is required' });
-  if (!['resolved', 'product_return'].includes(resolution_type)) {
-    return res.status(400).json({ error: 'Resolution type must be "resolved" or "product_return"' });
+  if (!['resolved', 'product_return', 'replaced'].includes(resolution_type)) {
+    return res.status(400).json({ error: 'Resolution type must be "resolved", "product_return" or "replaced"' });
   }
 
   const db = getDB();
   const q = await db.get('SELECT * FROM customer_queries WHERE id=$1', [req.params.id]);
   if (!q) return res.status(404).json({ error: 'Query not found' });
   if (q.status === 'resolved') return res.status(400).json({ error: 'Query is already resolved' });
+
+  if (resolution_type === 'replaced') {
+    // Replace without waiting for the product to come back: clone the original
+    // job card into a fresh production run (empty checklist), tagged with the
+    // query. The original card's lifecycle is closed as resolved.
+    if (!q.job_card_id) return res.status(400).json({ error: 'This query has no job card to replace' });
+    const orig = await db.get('SELECT * FROM job_cards WHERE id=$1', [q.job_card_id]);
+    if (!orig) return res.status(400).json({ error: 'Original job card not found' });
+
+    const base = `${orig.job_card_no}-RPL`;
+    const dup = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE job_card_no LIKE $1', [`${base}%`]);
+    const jobCardNo = parseInt(dup.n, 10) > 0 ? `${base}${parseInt(dup.n, 10) + 1}` : base;
+
+    // Keep the original target date if it is still ahead; otherwise a week out
+    const dispatchDate = (orig.dispatch_date && new Date(orig.dispatch_date) > new Date())
+      ? orig.dispatch_date
+      : new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+
+    const r = await db.insert(
+      `INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date,
+         notes, punching, drawing_no, product_name, uploaded_by, order_item_id, replacement_query_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [jobCardNo, orig.order_id, orig.file_path, orig.file_name, orig.original_name, orig.qty, dispatchDate,
+       `Replacement for query ${q.query_no} — ${resolution_summary.trim()}`,
+       orig.punching, orig.drawing_no, orig.product_name, req.user.id, orig.order_item_id, q.id]
+    );
+
+    // Straight into today's production work
+    try {
+      await db.run('INSERT INTO production_day_picks (pick_date, job_card_id, picked_by) VALUES ($1,$2,$3)',
+        [new Date().toISOString().split('T')[0], r.lastInsertRowid, req.user.id]);
+    } catch (e) { if (e.code !== '23505') console.error('replacement pick failed:', e.message); }
+
+    await db.run(`
+      UPDATE customer_queries SET status='resolved', resolution_summary=$1, return_status='replacement_issued',
+        resolved_by=$2, resolved_at=NOW(), updated_at=NOW() WHERE id=$3
+    `, [resolution_summary.trim(), req.user.id, req.params.id]);
+    await db.run("UPDATE job_cards SET status='resolved_dispatched' WHERE id=$1", [q.job_card_id]);
+    await db.run("UPDATE orders SET status='in_progress' WHERE id=$1", [q.order_id]);
+
+    await logActivity(q.order_id, r.lastInsertRowid, 'replacement_issued',
+      `Replacement issued for query ${q.query_no} — new job card ${jobCardNo} sent to production`, req.user.id);
+
+    try {
+      const prodUsers = await db.all("SELECT id FROM users WHERE role='production'");
+      for (const u of prodUsers) {
+        await createNotification(db, {
+          userId: u.id, type: 'replacement_issued', title: `Replacement job card — ${jobCardNo}`,
+          body: `Query ${q.query_no}: produce a replacement (${orig.qty} pcs, ${orig.drawing_no || orig.product_name || ''}). Already in Today's Work.`,
+          link: `/job-cards/${r.lastInsertRowid}`, sourceUserId: req.user.id,
+        });
+      }
+    } catch (_) { /* notifications are best-effort */ }
+
+    return res.json({ message: `Replacement job card ${jobCardNo} created and sent to production`, job_card_id: r.lastInsertRowid });
+  }
 
   if (resolution_type === 'resolved') {
     // Mark query resolved, order goes to resolved_dispatched (Query Resolved)

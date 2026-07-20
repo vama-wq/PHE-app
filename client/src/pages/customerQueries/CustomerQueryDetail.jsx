@@ -9,7 +9,7 @@ import {
   ArrowLeft, Send, Camera, Upload, CheckCircle, XCircle, AlertTriangle,
   MessageSquare, Clock, User, AtSign, ChevronRight, Truck, FileText,
   RotateCcw, CreditCard, Package, Wrench, Image, X, Paperclip, Download, File
-} from 'lucide-react';
+, RefreshCw } from 'lucide-react';
 
 const QUERY_STATUS_LABELS = {
   open: 'Open', in_progress: 'In Progress', resolved: 'Resolved', product_return: 'Product Return',
@@ -24,6 +24,7 @@ const RETURN_STATUS_LABELS = {
   pending_return: 'Pending Return', received: 'Received', qc_check: 'QC Check',
   qc_pass: 'QC Passed', qc_fail: 'QC Failed', in_repair: 'In Repair',
   repaired_dispatched: 'Repaired & Dispatched', debit_note_issued: 'Debit Note Issued',
+  replacement_issued: 'Replacement Issued',
 };
 const RETURN_STATUS_COLORS = {
   pending_return: 'bg-yellow-100 text-yellow-800',
@@ -34,6 +35,7 @@ const RETURN_STATUS_COLORS = {
   in_repair: 'bg-orange-100 text-orange-800',
   repaired_dispatched: 'bg-teal-100 text-teal-800',
   debit_note_issued: 'bg-gray-100 text-gray-800',
+  replacement_issued: 'bg-blue-100 text-blue-800',
 };
 const ROLE_COLORS_CHAT = {
   owner: 'bg-purple-50 border-purple-200', admin: 'bg-blue-50 border-blue-200',
@@ -614,7 +616,7 @@ function ResolveModal({ query, onClose, onDone }) {
       <div className="space-y-4">
         <div>
           <label className="label">Resolution Type</label>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <button className={`p-4 rounded-xl border-2 text-left transition-all ${
               type === 'resolved' ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'
             }`} onClick={() => setType('resolved')}>
@@ -629,6 +631,13 @@ function ResolveModal({ query, onClose, onDone }) {
               <div className="font-semibold mt-1">Product Return</div>
               <div className="text-xs text-gray-500 mt-0.5">Product needs to come back (repair or debit note)</div>
             </button>
+            <button className={`p-4 rounded-xl border-2 text-left transition-all ${
+              type === 'replaced' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+            }`} onClick={() => setType('replaced')}>
+              <RefreshCw size={20} className={type === 'replaced' ? 'text-blue-600' : 'text-gray-400'} />
+              <div className="font-semibold mt-1">Replace — No Return</div>
+              <div className="text-xs text-gray-500 mt-0.5">Replacement goes straight to production, tagged with this query</div>
+            </button>
           </div>
         </div>
         <div>
@@ -640,7 +649,7 @@ function ResolveModal({ query, onClose, onDone }) {
         <div className="flex gap-3">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button className="btn-primary flex-1" onClick={handleSubmit} disabled={saving}>
-            {saving ? 'Saving...' : type === 'resolved' ? 'Resolve & Close' : 'Initiate Return'}
+            {saving ? 'Saving...' : type === 'resolved' ? 'Resolve & Close' : type === 'replaced' ? 'Issue Replacement' : 'Initiate Return'}
           </button>
         </div>
       </div>

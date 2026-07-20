@@ -29,6 +29,7 @@ const RETURN_STATUS_LABELS = {
   in_repair: 'In Repair',
   repaired_dispatched: 'Repaired & Dispatched',
   debit_note_issued: 'Debit Note Issued',
+  replacement_issued: 'Replacement Issued',
 };
 
 const PRIORITY_COLORS = {

@@ -845,6 +845,7 @@ function NewQueryModal({ jc, onClose, onCreated }) {
     subject: '', description: '', category: 'general',
     priority: 'medium', assigned_department: 'production',
   });
+  const [photos, setPhotos] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
@@ -861,6 +862,13 @@ function NewQueryModal({ jc, onClose, onCreated }) {
         job_card_id: jc.id,
         ...f,
       });
+      if (photos.length) {
+        try {
+          const fd = new FormData();
+          photos.forEach(p => fd.append('photos', p));
+          await api.post(`/customer-queries/${r.data.id}/photos`, fd);
+        } catch (_) { /* photos are optional — the query is already created */ }
+      }
       onCreated(r.data.id);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create query');
@@ -885,6 +893,28 @@ function NewQueryModal({ jc, onClose, onCreated }) {
           <label className="label">Description</label>
           <textarea className="input" rows={3} value={f.description} onChange={set('description')}
             placeholder="Detailed description of the customer's complaint..." />
+        </div>
+        <div>
+          <label className="label">Photos <span className="text-gray-400 font-normal">(optional)</span></label>
+          <label className="flex items-center gap-2 cursor-pointer border border-gray-200 rounded-lg px-3 py-2 hover:border-brand-400 transition-colors bg-gray-50">
+            <Upload size={15} className="text-gray-400 flex-shrink-0" />
+            <span className="text-sm text-gray-600 flex-1 truncate">
+              {photos.length ? `${photos.length} photo${photos.length > 1 ? 's' : ''} selected` : 'Attach photos of the issue…'}
+            </span>
+            <input type="file" accept="image/*" multiple className="hidden"
+              onChange={e => setPhotos(prev => [...prev, ...Array.from(e.target.files || [])])} />
+          </label>
+          {photos.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {photos.map((p, i) => (
+                <span key={i} className="text-xs bg-gray-100 rounded px-1.5 py-0.5 flex items-center gap-1">
+                  {p.name}
+                  <button type="button" className="text-gray-400 hover:text-red-600"
+                    onClick={() => setPhotos(prev => prev.filter((_, j) => j !== i))}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="grid grid-cols-3 gap-4">
           <div>
