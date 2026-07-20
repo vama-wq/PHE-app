@@ -402,4 +402,45 @@ router.get('/monthly-production', authenticate, authorize('owner'), async (req, 
   }
 });
 
+// ── Petty Cash ledger ─────────────────────────────────────────────────────────
+router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+  const rows = await getDB().all(`
+    SELECT e.*, u.name AS created_by_name
+    FROM petty_cash_entries e LEFT JOIN users u ON u.id = e.created_by
+    ORDER BY e.entry_date ASC, e.id ASC`);
+
+  let running = 0;
+  const data = rows.map(r => {
+    const amt = Number(r.amount);
+    running += r.entry_type === 'top_up' ? amt : -amt;
+    return {
+      'Date':        r.entry_date || '',
+      'Type':        r.entry_type === 'top_up' ? 'Top-up' : 'Expense',
+      'Category':    r.category || '',
+      'Description': r.description || '',
+      'Paid To':     r.paid_to || '',
+      'Cash In':     r.entry_type === 'top_up' ? amt : '',
+      'Cash Out':    r.entry_type === 'expense' ? amt : '',
+      'Balance':     running,
+      'Receipt':     r.receipt_original_name || '',
+      'Recorded By': r.created_by_name || '',
+    };
+  });
+
+  const catRows = await getDB().all(`
+    SELECT to_char(entry_date, 'YYYY-MM') AS month, TRIM(category) AS category, SUM(amount) AS total
+    FROM petty_cash_entries WHERE entry_type='expense'
+    GROUP BY 1, 2 ORDER BY 1 DESC, total DESC`);
+  const catData = catRows.map(r => ({ 'Month': r.month, 'Category': r.category || '', 'Total (₹)': Number(r.total) }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ Message: 'No entries yet' }]);
+  autoWidth(ws);
+  XLSX.utils.book_append_sheet(wb, ws, 'Ledger');
+  const ws2 = XLSX.utils.json_to_sheet(catData.length ? catData : [{ Message: 'No expenses yet' }]);
+  autoWidth(ws2);
+  XLSX.utils.book_append_sheet(wb, ws2, 'Monthly by Category');
+  sendXlsx(res, wb, `petty_cash_${Date.now()}.xlsx`);
+});
+
 module.exports = router;

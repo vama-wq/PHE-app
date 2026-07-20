@@ -182,6 +182,25 @@ async function initDB(retries = 20, delayMs = 10000) {
       // Replacement cards: query resolved as "replaced" spawns a fresh production
       // run tagged with the query; dispatching it needs no new invoice.
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS replacement_query_id INTEGER`);
+
+      // Office Expense — Petty Cash ledger: accounts records expenses, owner
+      // records top-ups. Record-only (no approval); balance = top_ups − expenses.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS petty_cash_entries (
+          id          SERIAL PRIMARY KEY,
+          entry_date  DATE NOT NULL,
+          entry_type  TEXT NOT NULL CHECK (entry_type IN ('expense','top_up')),
+          category    TEXT,
+          description TEXT,
+          paid_to     TEXT,
+          amount      NUMERIC NOT NULL CHECK (amount > 0),
+          receipt_file TEXT,
+          receipt_original_name TEXT,
+          created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_petty_cash_date ON petty_cash_entries(entry_date)`);
+      await pool.query(`ALTER TABLE petty_cash_entries ENABLE ROW LEVEL SECURITY`).catch(() => {});
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);

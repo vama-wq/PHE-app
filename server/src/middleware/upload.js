@@ -125,6 +125,7 @@ const uploaders = {
   purchaseInvoice: makeUploader('purchase-invoices',  fileFilter),
   purchaseItemQC:  makeUploader('purchase-qc',        imageOnlyFilter),
   chatAttachment:  makeUploader('chat-attachments',   fileFilter, 10),
+  pettyCashReceipt: makeUploader('petty-cash',        fileFilter),
 };
 
 // Export multer + push middleware pairs, matching the old named-export API
@@ -142,6 +143,7 @@ module.exports = {
   uploadProductPhoto:    [uploaders.productPhoto.upload.single('photo'),    uploaders.productPhoto.pushToStorage],
   uploadItemDrawing:     [uploaders.itemDrawing.upload.single('drawing'),   uploaders.itemDrawing.pushToStorage],
   uploadPurchaseQC:      [uploaders.purchaseQC.upload.single('report'),     uploaders.purchaseQC.pushToStorage],
+  uploadPettyCashReceipt: [uploaders.pettyCashReceipt.upload.single('receipt'), uploaders.pettyCashReceipt.pushToStorage],
   uploadPurchaseInvoice: [uploaders.purchaseInvoice.upload.single('invoice'), uploaders.purchaseInvoice.pushToStorage],
   uploadPurchaseItemQC:  [uploaders.purchaseItemQC.upload.single('image'),   uploaders.purchaseItemQC.pushToStorage],
   uploadChatAttachments: [uploaders.chatAttachment.upload.array('attachments', 5), uploaders.chatAttachment.pushToStorage],

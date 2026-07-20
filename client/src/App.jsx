@@ -21,6 +21,7 @@ import SupplierList from './pages/purchases/SupplierList';
 import PurchaseOrderList from './pages/purchases/PurchaseOrderList';
 import PurchaseOrderDetail from './pages/purchases/PurchaseOrderDetail';
 import PurchaseOrderForm from './pages/purchases/PurchaseOrderForm';
+import PettyCashLedger from './pages/pettyCash/PettyCashLedger';
 import ReportsDashboard from './pages/reports/ReportsDashboard';
 import FinishedGoodsList from './pages/finishedGoods/FinishedGoodsList';
 import FinishedGoodsDetail from './pages/finishedGoods/FinishedGoodsDetail';
@@ -159,6 +160,12 @@ export default function App() {
           <Route path="purchases/:id/edit" element={
             <ProtectedRoute roles={['owner','admin','accounts']} module="purchases">
               <PurchaseOrderForm />
+            </ProtectedRoute>
+          } />
+
+          <Route path="petty-cash" element={
+            <ProtectedRoute roles={['owner','accounts']} module="petty-cash">
+              <PettyCashLedger />
             </ProtectedRoute>
           } />
 
