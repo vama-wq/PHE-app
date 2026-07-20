@@ -443,7 +443,7 @@ export default function JobCardDetail() {
       </div>
 
       {/* Tab Content */}
-      {activeTab === 'overview' && <OverviewTab jc={jc} userRole={user.role} />}
+      {activeTab === 'overview' && <OverviewTab jc={jc} userRole={user.role} onReload={load} />}
       {activeTab === 'assemblies' && (
         <AssembliesTab jc={jc} canAdd={canAddAssembly} canEdit={canAddAssembly || canUpdateRawMaterial}
           userRole={user.role} onAdd={() => setShowAssemblyModal(true)}
@@ -499,7 +499,7 @@ export default function JobCardDetail() {
   );
 }
 
-function OverviewTab({ jc, userRole }) {
+function OverviewTab({ jc, userRole, onReload }) {
   const [checklist, setChecklist] = useState(null);
   const [qcReports, setQcReports] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -861,14 +861,35 @@ function OverviewTab({ jc, userRole }) {
         <h2 className="section-title mb-4">Attachments</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {jc.file_name && (
-            <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
-              className="p-4 border-2 border-blue-200 rounded-lg hover:bg-blue-50 transition-colors flex items-center gap-3">
-              <FileText size={24} className="text-blue-600" />
-              <div>
+            <div className="p-4 border-2 border-blue-200 rounded-lg flex items-center gap-3">
+              <FileText size={24} className="text-blue-600 flex-shrink-0" />
+              <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+                className="flex-1 min-w-0 hover:underline">
                 <p className="text-sm font-semibold text-gray-900">Job Card File</p>
                 <p className="text-xs text-gray-500 truncate">{jc.original_name || jc.file_name}</p>
-              </div>
-            </a>
+              </a>
+              {['admin', 'owner'].includes(userRole) && (
+                <label className="btn-secondary btn-sm py-1 px-2 text-xs cursor-pointer flex-shrink-0" title="Upload a new file to replace this job card">
+                  Replace Card
+                  <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx" className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      if (!window.confirm(`Replace the job card file with "${file.name}"?`)) { e.target.value = ''; return; }
+                      try {
+                        const fd = new FormData();
+                        fd.append('file', file);
+                        await api.put(`/job-cards/${jc.id}/file`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                        onReload?.();
+                      } catch (err) {
+                        alert(err.response?.data?.error || 'Failed to replace job card file');
+                      } finally {
+                        e.target.value = '';
+                      }
+                    }} />
+                </label>
+              )}
+            </div>
           )}
           {jc.drawing_no && (
             <a href={`/uploads/drawings/${jc.drawing_no}.pdf`} target="_blank" rel="noopener noreferrer"

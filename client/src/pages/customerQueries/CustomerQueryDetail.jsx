@@ -597,16 +597,29 @@ function highlightMentions(text, users) {
 function ResolveModal({ query, onClose, onDone }) {
   const [type, setType] = useState('resolved');
   const [summary, setSummary] = useState('');
+  const [cardChoice, setCardChoice] = useState('keep'); // 'keep' | 'new' — job card for the replacement run
+  const [newCardFile, setNewCardFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   const handleSubmit = async () => {
     if (!summary.trim()) { setError('Resolution summary is required'); return; }
+    if (type === 'replaced' && cardChoice === 'new' && !newCardFile) {
+      setError('Upload the new job card file, or choose to keep the existing card.'); return;
+    }
     setSaving(true);
     try {
-      await api.put(`/customer-queries/${query.id}/resolve`, {
-        resolution_type: type, resolution_summary: summary
-      });
+      if (type === 'replaced') {
+        const fd = new FormData();
+        fd.append('resolution_type', type);
+        fd.append('resolution_summary', summary);
+        if (cardChoice === 'new' && newCardFile) fd.append('file', newCardFile);
+        await api.put(`/customer-queries/${query.id}/resolve`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      } else {
+        await api.put(`/customer-queries/${query.id}/resolve`, {
+          resolution_type: type, resolution_summary: summary
+        });
+      }
       onDone();
     } catch (err) { setError(err.response?.data?.error || 'Failed'); setSaving(false); }
   };
@@ -640,6 +653,37 @@ function ResolveModal({ query, onClose, onDone }) {
             </button>
           </div>
         </div>
+        {type === 'replaced' && (
+          <div className="bg-blue-50/50 border border-blue-200 rounded-xl p-3 space-y-2">
+            <label className="label mb-0">Job card for the replacement run</label>
+            <div className="flex gap-2">
+              <button type="button"
+                className={`flex-1 py-2 px-3 rounded-lg border-2 text-sm font-medium transition-colors ${
+                  cardChoice === 'keep' ? 'bg-white border-blue-500 text-blue-700' : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                }`}
+                onClick={() => { setCardChoice('keep'); setNewCardFile(null); }}>
+                Keep same job card
+              </button>
+              <button type="button"
+                className={`flex-1 py-2 px-3 rounded-lg border-2 text-sm font-medium transition-colors ${
+                  cardChoice === 'new' ? 'bg-white border-blue-500 text-blue-700' : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                }`}
+                onClick={() => setCardChoice('new')}>
+                Upload new job card
+              </button>
+            </div>
+            {cardChoice === 'new' && (
+              <label className="flex items-center gap-2 cursor-pointer border border-gray-200 rounded-lg px-3 py-2 hover:border-brand-400 transition-colors bg-white">
+                <Upload size={15} className="text-gray-400 flex-shrink-0" />
+                <span className="text-sm text-gray-600 flex-1 truncate">{newCardFile ? newCardFile.name : 'Attach the new job card…'}</span>
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx" className="hidden"
+                  onChange={e => { setNewCardFile(e.target.files[0] || null); setError(''); }} />
+              </label>
+            )}
+            <p className="text-[11px] text-gray-500">The replacement card goes straight into production with this document.</p>
+          </div>
+        )}
+
         <div>
           <label className="label">Resolution Summary *</label>
           <textarea className="input" rows={3} value={summary} onChange={e => setSummary(e.target.value)}

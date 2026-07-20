@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
-const { uploadToStorage, deleteFromStorage, uploadChatAttachments } = require('../middleware/upload');
+const { uploadToStorage, deleteFromStorage, uploadChatAttachments, uploadJobCard } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const multer = require('multer');
 
@@ -298,7 +298,7 @@ router.put('/:id', authenticate, authorize('accounts', 'owner', 'admin'), async 
 });
 
 // ── Resolve query (OWNER ONLY) ─────────────────────────────────────────────
-router.put('/:id/resolve', authenticate, authorize('owner'), async (req, res) => {
+router.put('/:id/resolve', authenticate, authorize('owner'), ...uploadJobCard, async (req, res) => {
   const { resolution_summary, resolution_type } = req.body;
   // resolution_type: 'resolved', 'product_return' or 'replaced' (no return —
   // a replacement production run starts immediately)
@@ -329,11 +329,15 @@ router.put('/:id/resolve', authenticate, authorize('owner'), async (req, res) =>
       ? orig.dispatch_date
       : new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
 
+    // Owner chose either to keep the original job card document or upload a new one
+    const filePath = req.file?.storagePath || orig.file_path;
+    const fileName = req.file?.filename || orig.file_name;
+    const originalName = req.file?.originalname || orig.original_name;
     const r = await db.insert(
       `INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date,
          notes, punching, drawing_no, product_name, uploaded_by, order_item_id, replacement_query_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-      [jobCardNo, orig.order_id, orig.file_path, orig.file_name, orig.original_name, orig.qty, dispatchDate,
+      [jobCardNo, orig.order_id, filePath, fileName, originalName, orig.qty, dispatchDate,
        `Replacement for query ${q.query_no} — ${resolution_summary.trim()}`,
        orig.punching, orig.drawing_no, orig.product_name, req.user.id, orig.order_item_id, q.id]
     );

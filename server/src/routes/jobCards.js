@@ -1080,6 +1080,30 @@ router.put('/split-requests/:reqId/reject', authenticate, authorize('owner'), as
   res.json({ message: 'Rejected' });
 });
 
+// ── Replace the job card document ─────────────────────────────────────────────
+// Used e.g. on replacement (-RPL) cards, which are created with the original
+// card's file cloned — admin/owner can swap in the corrected job card here.
+router.put('/:id/file', authenticate, authorize('admin', 'owner'), ...uploadJobCard, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Job card file is required' });
+    const db = getDB();
+    const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.id]);
+    if (!jc) return res.status(404).json({ error: 'Job card not found' });
+    const oldPath = jc.file_path;
+    await db.run(
+      'UPDATE job_cards SET file_path=$1, file_name=$2, original_name=$3 WHERE id=$4',
+      [req.file.storagePath, req.file.filename, req.file.originalname, req.params.id]
+    );
+    if (oldPath && oldPath !== req.file.storagePath) await deleteFromStorage(oldPath);
+    await logActivity(jc.order_id, jc.id, 'job_card_file_replaced',
+      `Job card file replaced: ${req.file.originalname}`, req.user.id);
+    res.json({ message: 'Job card file replaced', file_name: req.file.filename, original_name: req.file.originalname });
+  } catch (e) {
+    console.error('job card file replace error:', e);
+    res.status(500).json({ error: 'Failed to replace job card file' });
+  }
+});
+
 // ── Finished-Goods inventory job card ─────────────────────────────────────────
 // For finished_goods orders: each item gets an "inventory job card". The admin
 // picks which Finished Goods stock the material comes from — that stock deducts
