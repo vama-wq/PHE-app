@@ -8,7 +8,7 @@ import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS
 import {
   Wrench, Calendar, Plus, CheckSquare, Square, CheckCircle,
   X, ExternalLink, ClipboardList, Check, Image as ImageIcon,
-  AlertTriangle, ChevronRight, ArrowLeft, Lock, Download, HelpCircle, Truck
+  AlertTriangle, ChevronRight, ArrowLeft, Lock, Download, HelpCircle, Truck, Upload
 } from 'lucide-react';
 
 export default function ProductionDashboard() {
@@ -105,6 +105,7 @@ export default function ProductionDashboard() {
         <div className="text-center text-gray-400 py-16">Loading...</div>
       ) : tab === 'today' ? (
         <TodayTab
+          onReload={load}
           picks={todayPicks}
           canManage={canManage}
           onUnpick={async (id) => { await unpickCard(id); load(); }}
@@ -144,7 +145,9 @@ export default function ProductionDashboard() {
 }
 
 // ── Today's Work tab ──────────────────────────────────────────────────────────
-function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore }) {
+function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore, onReload }) {
+  const { user } = useAuthStore();
+  const canReplaceCard = ['admin', 'owner'].includes(user?.role);
   if (picks.length === 0) {
     return (
       <div className="text-center py-16">
@@ -310,6 +313,27 @@ function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore }) {
                     className="btn-secondary btn-sm flex items-center gap-1">
                     <ExternalLink size={13} /> View Card
                   </a>
+                )}
+                {canReplaceCard && (
+                  <label className="btn-secondary btn-sm flex items-center gap-1 cursor-pointer" title="Upload a new file to replace this job card">
+                    <Upload size={13} /> Replace Card
+                    <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx" className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        if (!window.confirm(`Replace the job card file of ${jc.job_card_no} with "${file.name}"?`)) { e.target.value = ''; return; }
+                        try {
+                          const fd = new FormData();
+                          fd.append('file', file);
+                          await api.put(`/job-cards/${jc.id}/file`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                          onReload?.();
+                        } catch (err) {
+                          alert(err.response?.data?.error || 'Failed to replace job card file');
+                        } finally {
+                          e.target.value = '';
+                        }
+                      }} />
+                  </label>
                 )}
                 <button className="btn-primary btn-sm flex items-center gap-1" onClick={() => onChecklist(jc)}>
                   <ClipboardList size={13} /> Checklist
