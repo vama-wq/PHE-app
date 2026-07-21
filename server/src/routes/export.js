@@ -251,7 +251,10 @@ router.get('/dispatch-checklist', authenticate, authorize('owner', 'admin', 'acc
       GREATEST(
         jc.qty
           - COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
-          + COALESCE((SELECT SUM(CASE WHEN stage_no != 29 THEN remade_qty ELSE 0 END) FROM production_checklist WHERE job_card_id = jc.id), 0),
+          + LEAST(
+              COALESCE((SELECT SUM(CASE WHEN stage_no != 29 THEN remade_qty ELSE 0 END) FROM production_checklist WHERE job_card_id = jc.id), 0),
+              COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
+            ),
         0
       ) as net_qty,
       (SELECT dispatched_qty FROM production_checklist WHERE job_card_id = jc.id AND stage_no = 29 LIMIT 1) as dispatched_qty

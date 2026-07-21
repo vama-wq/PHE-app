@@ -56,7 +56,10 @@ router.get('/', authenticate, authorize('design', 'owner', 'admin'), async (req,
        GREATEST(
          jc.qty
            - COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
-           + COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0),
+           + LEAST(
+               COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id), 0),
+               COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
+             ),
          0
        ) as net_qty,
        COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0) as total_rejected,
@@ -179,8 +182,9 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
     FROM production_checklist
     WHERE job_card_id = $1
   `, [req.params.id]);
+  // Remade replaces rejected pieces — capped so it never adds beyond the rejections
   const netQty = Math.max(
-    (jc.qty || 0) - (prodRow.total_rejected - prodRow.total_remade),
+    (jc.qty || 0) - prodRow.total_rejected + Math.min(Number(prodRow.total_remade), Number(prodRow.total_rejected)),
     0
   );
 

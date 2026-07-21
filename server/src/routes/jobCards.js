@@ -25,7 +25,11 @@ router.get('/', authenticate, async (req, res) => {
       GREATEST(
         jc.qty
           - COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
-          + COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id AND stage_no != 29), 0),
+          -- remade replaces rejected pieces — it can never ADD pieces beyond the rejections
+          + LEAST(
+              COALESCE((SELECT SUM(remade_qty)    FROM production_checklist WHERE job_card_id = jc.id AND stage_no != 29), 0),
+              COALESCE((SELECT SUM(rejection_qty) FROM production_checklist WHERE job_card_id = jc.id), 0)
+            ),
         0
       ) as net_qty,
       (SELECT dispatched_qty FROM production_checklist WHERE job_card_id = jc.id AND stage_no = 29 LIMIT 1) as dispatched_qty,
@@ -210,7 +214,8 @@ router.get('/:id', authenticate, async (req, res) => {
   `, [req.params.id]);
   jc.total_rejected = parseInt(qtySummary?.total_rejected || 0, 10);
   jc.total_remade   = parseInt(qtySummary?.total_remade   || 0, 10);
-  jc.net_qty        = Math.max((parseInt(jc.qty, 10) || 0) - jc.total_rejected + jc.total_remade, 0);
+  // Remade replaces rejected pieces — capped so it never adds beyond the rejections
+  jc.net_qty        = Math.max((parseInt(jc.qty, 10) || 0) - jc.total_rejected + Math.min(jc.total_remade, jc.total_rejected), 0);
 
   jc.assemblies = await db.all(`
     SELECT a.*, u.name as dispatched_by_name
