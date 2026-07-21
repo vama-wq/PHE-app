@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
+import { renderEmail, copyFor } from './applicationEmails';
 import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload } from 'lucide-react';
 
 // Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
@@ -49,51 +50,6 @@ function parseTable(text) {
   return { prospects };
 }
 
-// Default 2-email sequence (editable per session; mirrors the standalone tool).
-const DEFAULT_EMAILS = {
-  e1: {
-    subject: 'Heating elements for your {{segment}} — Peena Heat Elements, Ahmedabad',
-    body: `Dear [Procurement Team],
-
-I'm Vama from Peena Heat Elements (PHE) — a manufacturer of custom tubular heating elements based in Ahmedabad.
-
-We've been following the work {{company}} does in {{segment}}, and there's a genuine fit with what we make. Our elements — SS304/316 and Incoloy, CNC-bent, furnace-annealed — are built for exactly the kind of equipment you manufacture.
-
-Every element leaves our floor tested and backed by a 6-month guarantee. We've been supplying OEMs across India and internationally for years, and our clients keep coming back because we get the spec right and we're easy to work with.
-
-I'd love to send you a sample batch — no obligation — so your team can test our quality directly.
-
-Would a quick call this week work?
-
-Warm regards,
-Vama
-Peena Heat Elements LLP, Ahmedabad
-vama@peenaheatelements.com | phe.co.in`,
-  },
-  e2: {
-    subject: 'Following up — PHE heating elements for {{company}}',
-    body: `Dear [Procurement Team],
-
-A gentle follow-up on my earlier note about our heating elements.
-
-If you'd like to share your current element spec — material, watt density, dimensions — we'll turn around a quote and a sample within the week.
-
-A few things our OEM partners tell us make the difference:
-
-→ Custom CNC bending to your exact dimensions
-→ SS304, SS316, Incoloy material options
-→ Consistent batch quality at volume
-→ 5–7 day dispatch from Ahmedabad
-
-No pressure — I've attached our catalogue for reference.
-
-Warm regards,
-Vama
-Peena Heat Elements LLP
-vama@peenaheatelements.com | phe.co.in`,
-  },
-};
-
 const PRIORITY_BADGE = {
   H: 'bg-amber-100 text-amber-800',
   M: 'bg-indigo-100 text-indigo-800',
@@ -119,7 +75,7 @@ export default function ProspectingList() {
   const [prospects, setProspects] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [loading, setLoading] = useState(true);
-  const [emails, setEmails] = useState(DEFAULT_EMAILS);
+  const [emailEdits, setEmailEdits] = useState({});           // per-email manual tweaks, reset when application changes
   const [activeEmail, setActiveEmail] = useState('e1');
   const [busy, setBusy] = useState(false);
   // Manual import
@@ -175,6 +131,17 @@ export default function ProspectingList() {
     const uniq = [...new Set(visible.map(p => p.application).filter(Boolean))];
     return uniq.length === 1 ? uniq[0] : '';
   }, [appFilter, visible]);
+
+  // Re-tailored copy whenever the application in view changes; manual tweaks are dropped
+  // so you never send last application's edits to a different audience.
+  const tailored = useMemo(() => ({
+    e1: renderEmail('intro', activeApplication),
+    e2: renderEmail('follow', activeApplication),
+  }), [activeApplication]);
+  useEffect(() => { setEmailEdits({}); }, [activeApplication]);
+  const shownEmail = { ...tailored[activeEmail], ...(emailEdits[activeEmail] || {}) };
+  const editEmail = (field, value) =>
+    setEmailEdits(e => ({ ...e, [activeEmail]: { ...(e[activeEmail] || {}), [field]: value } }));
 
   const selectedVisible = useMemo(() => visible.filter(p => selected.has(p.id)), [visible, selected]);
   const emailableSel = useMemo(() => selectedVisible.filter(hasEmail).map(p => p.id), [selectedVisible]);
@@ -244,8 +211,8 @@ export default function ProspectingList() {
     } finally { setImpBusy(false); }
   };
 
-  const segLabel = segments.find(s => s.segment === segment)?.segment || segment;
-  const renderSubject = e => emails[e].subject.replace(/{{segment}}/g, segLabel || 'your segment');
+  // Clear region/application filters when switching segment — options differ per list.
+  useEffect(() => { setRegionFilter(''); setAppFilter(''); }, [segment]);
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -279,6 +246,14 @@ export default function ProspectingList() {
             ))}
           </select>
         </div>
+        <select className="input" value={appFilter} onChange={e => setAppFilter(e.target.value)}>
+          <option value="">All applications</option>
+          {applications.map(a => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select className="input" value={regionFilter} onChange={e => setRegionFilter(e.target.value)}>
+          <option value="">All regions</option>
+          {regions.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
         <select className="input" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
           <option value="">All contacts</option>
           <option value="verified">✓ Verified email only</option>
@@ -324,6 +299,8 @@ export default function ProspectingList() {
                     <th className="px-3 py-2 w-8"></th>
                     <th className="px-3 py-2">Company</th>
                     <th className="px-3 py-2">City</th>
+                    <th className="px-3 py-2">Region</th>
+                    <th className="px-3 py-2">Application</th>
                     <th className="px-3 py-2">Email</th>
                     <th className="px-3 py-2">Phone</th>
                     <th className="px-3 py-2">Contact</th>
@@ -341,6 +318,12 @@ export default function ProspectingList() {
                         </td>
                         <td className="px-3 py-2 font-medium text-gray-900">{p.company}</td>
                         <td className="px-3 py-2 text-gray-600">{p.city}</td>
+                        <td className="px-3 py-2 text-gray-600">{p.state || <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2">
+                          {p.application
+                            ? <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">{p.application}</span>
+                            : <span className="text-gray-300">—</span>}
+                        </td>
                         <td className="px-3 py-2 text-gray-500 font-mono text-xs">{p.email || <span className="text-gray-300">—</span>}</td>
                         <td className="px-3 py-2 text-gray-500 font-mono text-xs">{p.phone || <span className="text-gray-300">—</span>}</td>
                         <td className="px-3 py-2">
@@ -356,7 +339,7 @@ export default function ProspectingList() {
                     );
                   })}
                   {!loading && visible.length === 0 && (
-                    <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-400">No prospects for this filter</td></tr>
+                    <tr><td colSpan={10} className="px-3 py-10 text-center text-gray-400">No prospects for this filter</td></tr>
                   )}
                 </tbody>
               </table>
