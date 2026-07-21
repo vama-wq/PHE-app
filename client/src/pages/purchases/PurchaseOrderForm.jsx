@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../../lib/api';
+import Modal from '../../components/ui/Modal';
+import SupplierModal from '../../components/SupplierModal';
+import InventoryItemModal from '../../components/InventoryItemModal';
 import { Plus, Trash2, ArrowLeft, Search } from 'lucide-react';
 
 const EMPTY_ITEM = { inventory_item_id: null, description: '', unit: '', qty: '', rate: '', amount: 0 };
@@ -23,12 +26,17 @@ export default function PurchaseOrderForm() {
   const [error, setError] = useState('');
   const [pickerSearch, setPickerSearch] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [showNewSupplier, setShowNewSupplier] = useState(false);
+  const [showNewItem, setShowNewItem] = useState(false);
+  const [linkItem, setLinkItem] = useState(null); // freshly created item awaiting supplier link
+
+  // Pending items are visible here (tagged) — a PO is how a new item gets bought;
+  // they stay hidden from BOM and other pickers until the owner approves them.
+  const loadSuppliers = () => api.get('/suppliers').then(r => { setSuppliers(r.data); return r.data; });
+  const loadInventory = () => api.get('/inventory?include_pending=1').then(r => { setInvItems(r.data); return r.data; });
 
   useEffect(() => {
-    Promise.all([api.get('/suppliers'), api.get('/inventory')]).then(([s, inv]) => {
-      setSuppliers(s.data);
-      setInvItems(inv.data);
-    });
+    Promise.all([loadSuppliers(), loadInventory()]);
     if (isEdit) {
       api.get(`/purchase-orders/${id}`).then(r => {
         const po = r.data;
@@ -52,9 +60,9 @@ export default function PurchaseOrderForm() {
 
   // Load the selected supplier's linked items — these are the only items a PO
   // for this supplier can contain, and they carry the agreed rate.
-  useEffect(() => {
-    if (!supplierId) { setLinkedItems([]); return; }
-    api.get(`/suppliers/${supplierId}/items`).then(r => {
+  const loadLinkedItems = (sid = supplierId) => {
+    if (!sid) { setLinkedItems([]); return Promise.resolve([]); }
+    return api.get(`/suppliers/${sid}/items`).then(r => {
       setLinkedItems((r.data || []).map(li => ({
         id: li.inventory_item_id,
         item_code: li.item_code,
@@ -66,7 +74,8 @@ export default function PurchaseOrderForm() {
         lead_time_days: li.lead_time_days,
       })));
     }).catch(() => setLinkedItems([]));
-  }, [supplierId]);
+  };
+  useEffect(() => { loadLinkedItems(); }, [supplierId]);
 
   const updateItem = (idx, field, value) => {
     setItems(prev => {
@@ -172,13 +181,20 @@ export default function PurchaseOrderForm() {
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2 md:col-span-1">
               <label className="label">Supplier *</label>
-              <select className="input" value={supplierId}
-                onChange={e => { setSupplierId(e.target.value); setItems([]); setPickerSearch(''); }} required>
-                <option value="">Select supplier...</option>
-                {suppliers.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+              <div className="flex gap-2">
+                <select className="input flex-1" value={supplierId}
+                  onChange={e => { setSupplierId(e.target.value); setItems([]); setPickerSearch(''); }} required>
+                  <option value="">Select supplier...</option>
+                  {suppliers.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+                <button type="button" className="btn-secondary flex items-center gap-1 whitespace-nowrap"
+                  title="Create a new supplier (same form as the Suppliers page)"
+                  onClick={() => setShowNewSupplier(true)}>
+                  <Plus size={14} /> New
+                </button>
+              </div>
               <p className="text-xs text-gray-400 mt-1">Only this supplier's linked items can be added below.</p>
             </div>
             <div>
@@ -201,8 +217,8 @@ export default function PurchaseOrderForm() {
           <h2 className="font-semibold text-gray-900 mb-3">Items</h2>
 
           {/* Prominent item search — adds a row when clicked */}
-          <div className="relative mb-4">
-            <div className={`flex items-center gap-2 border-2 rounded-xl px-3 py-2.5 transition-colors ${supplierId ? 'border-gray-200 focus-within:border-brand-400 bg-white' : 'border-gray-100 bg-gray-50'}`}>
+          <div className="relative mb-4 flex gap-2">
+            <div className={`flex-1 flex items-center gap-2 border-2 rounded-xl px-3 py-2.5 transition-colors ${supplierId ? 'border-gray-200 focus-within:border-brand-400 bg-white' : 'border-gray-100 bg-gray-50'}`}>
               <Search size={17} className="text-gray-400 flex-shrink-0" />
               <input
                 className="flex-1 outline-none text-sm bg-transparent disabled:cursor-not-allowed"
@@ -214,6 +230,12 @@ export default function PurchaseOrderForm() {
                 onBlur={() => setTimeout(() => setPickerOpen(false), 200)}
               />
             </div>
+            <button type="button" className="btn-secondary flex items-center gap-1 whitespace-nowrap self-stretch"
+              disabled={!supplierId}
+              title="Create a new inventory item (same form as the Inventory page) and link it to this supplier"
+              onClick={() => setShowNewItem(true)}>
+              <Plus size={14} /> New Item
+            </button>
             {pickerOpen && supplierId && (
               <div
                 className="absolute z-30 left-0 right-0 bg-white border border-gray-200 rounded-xl shadow-2xl mt-1 overflow-y-auto"
@@ -240,7 +262,12 @@ export default function PurchaseOrderForm() {
                       onMouseDown={() => !added && addPickedItem(inv)}
                     >
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-semibold text-gray-800 truncate">{inv.name}</div>
+                        <div className="text-sm font-semibold text-gray-800 truncate">
+                          {inv.name}
+                          {inv.approval_status === 'pending_approval' && (
+                            <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 align-middle">PENDING APPROVAL</span>
+                          )}
+                        </div>
                         <div className="text-xs text-gray-400 mt-0.5">{inv.item_code} · {inv.unit} · Stock: {inv.current_stock}</div>
                       </div>
                       {inv.supplier_price != null && (
@@ -341,6 +368,109 @@ export default function PurchaseOrderForm() {
           </button>
         </div>
       </form>
+
+      {showNewSupplier && (
+        <SupplierModal
+          includePendingInventory
+          onClose={() => setShowNewSupplier(false)}
+          onSaved={async (newId) => {
+            setShowNewSupplier(false);
+            await loadSuppliers();
+            setSupplierId(String(newId));
+            setItems([]);
+          }}
+        />
+      )}
+      {showNewItem && (
+        <InventoryItemModal
+          onClose={() => setShowNewItem(false)}
+          onSave={async (created) => {
+            setShowNewItem(false);
+            await loadInventory();
+            if (created?.id && supplierId) setLinkItem(created);
+          }}
+        />
+      )}
+      {linkItem && (
+        <LinkItemModal
+          supplier={suppliers.find(su => String(su.id) === String(supplierId))}
+          itemId={linkItem.id}
+          onClose={() => setLinkItem(null)}
+          onLinked={async (link) => {
+            setLinkItem(null);
+            await loadLinkedItems();
+            const inv = invItems.find(i => String(i.id) === String(link.inventory_item_id));
+            setItems(prev => prev.some(i => i.inventory_item_id === link.inventory_item_id) ? prev : [...prev, {
+              inventory_item_id: link.inventory_item_id,
+              description: inv?.name || '',
+              unit: inv?.unit || '',
+              qty: '',
+              rate: String(link.supplier_price),
+              amount: 0,
+            }]);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+
+// After creating a new item mid-PO, link it to the selected supplier with the
+// agreed rate — same required fields as the supplier form's item links.
+function LinkItemModal({ supplier, itemId, onClose, onLinked }) {
+  const [f, setF] = useState({ supplier_price: '', lead_time_days: '', supplier_part_no: '', min_order_qty: '' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!(parseFloat(f.supplier_price) > 0)) return setError('Price is required.');
+    if (!(parseInt(f.lead_time_days, 10) > 0)) return setError('Lead time is required.');
+    setSaving(true);
+    setError('');
+    try {
+      await api.post(`/suppliers/${supplier.id}/items`, { inventory_item_id: itemId, ...f });
+      onLinked({ inventory_item_id: itemId, supplier_price: f.supplier_price });
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to link item');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title={`Link item to ${supplier?.name || 'supplier'}`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <p className="text-sm text-gray-500">
+          The new item was created. Set the agreed rate with this supplier so it can go on the PO — same details as the Suppliers page.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">Price (per unit) <span className="text-red-500">*</span></label>
+            <input className="input" type="number" step="any" min="0.01" value={f.supplier_price} onChange={set('supplier_price')} required />
+          </div>
+          <div>
+            <label className="label">Lead Time (days) <span className="text-red-500">*</span></label>
+            <input className="input" type="number" min="1" value={f.lead_time_days} onChange={set('lead_time_days')} required />
+          </div>
+          <div>
+            <label className="label">Supplier Part No</label>
+            <input className="input" value={f.supplier_part_no} onChange={set('supplier_part_no')} />
+          </div>
+          <div>
+            <label className="label">Min Order Qty</label>
+            <input className="input" type="number" step="any" min="0" value={f.min_order_qty} onChange={set('min_order_qty')} />
+          </div>
+        </div>
+        {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+        <div className="flex gap-3 pt-1">
+          <button type="button" className="btn-secondary flex-1" onClick={onClose}>Skip</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving}>
+            {saving ? 'Linking…' : 'Link & Add to PO'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
