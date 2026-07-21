@@ -13,20 +13,28 @@ import {
 const ROLES = ['owner', 'admin', 'accounts', 'design', 'production'];
 
 // ── Module definitions (must stay in sync with Sidebar NAV) ──────────────────
+// Mirrors the sidebar's module list (ids, labels, role gates) — keep in sync
+// with client/src/components/layout/Sidebar.jsx when adding a module.
 const ALL_MODULES = [
-  { id: 'dashboard',  label: 'Dashboard',      icon: LayoutDashboard,  roles: null },
-  { id: 'orders',     label: 'Orders',          icon: ClipboardList,    roles: null },
-  { id: 'job-cards',  label: 'Job Cards',       icon: FileText,         roles: null },
-  { id: 'production', label: 'Production',      icon: Wrench,           roles: null },
-  { id: 'qc',         label: 'Quality Check',   icon: FlaskConical,     roles: ['design','owner','admin'] },
-  { id: 'dispatch',   label: 'Dispatch',        icon: Truck,            roles: null },
-  { id: 'inventory',  label: 'Inventory',       icon: Package,          roles: ['owner','admin','accounts','design'] },
-  { id: 'purchases',  label: 'Purchases',       icon: ShoppingCart,     roles: ['owner','admin','accounts'] },
-  { id: 'suppliers',  label: 'Suppliers',       icon: Building2,        roles: ['owner','admin','accounts'] },
-  { id: 'prospecting',label: 'Prospecting',     icon: Target,           roles: ['owner','admin','accounts'] },
-  { id: 'customers',  label: 'Customers',       icon: Users,            roles: ['admin','owner'] },
-  { id: 'products',   label: 'Products',        icon: Box,              roles: null },
-  { id: 'reports',    label: 'Reports',         icon: BarChart2,        roles: null },
+  { id: 'dashboard',         label: 'Dashboard',        icon: LayoutDashboard,  roles: null },
+  { id: 'orders',            label: 'Orders',            icon: ClipboardList,    roles: null },
+  { id: 'drawings',          label: 'Drawings',          icon: FileText,         roles: ['owner','admin','design'] },
+  { id: 'job-cards',         label: 'Job Cards',         icon: FileText,         roles: null },
+  { id: 'production',        label: 'Production',        icon: Wrench,           roles: null },
+  { id: 'manufacturing-plan',label: 'Mfg Plan',          icon: ClipboardList,    roles: ['owner','production'] },
+  { id: 'qc',                label: 'Quality Check',     icon: FlaskConical,     roles: ['design','owner','admin'] },
+  { id: 'dispatch',          label: 'Dispatch',          icon: Truck,            roles: null },
+  { id: 'customer-queries',  label: 'Customer Queries',  icon: Users,            roles: null },
+  { id: 'finished-goods',    label: 'Finished Goods',    icon: Package,          roles: ['owner','admin','production'] },
+  { id: 'inventory',         label: 'Inventory',         icon: Package,          roles: ['owner','admin','design'] },
+  { id: 'purchases',         label: 'Purchases',         icon: ShoppingCart,     roles: ['owner','admin','accounts'] },
+  { id: 'petty-cash',        label: 'Petty Cash',        icon: ShoppingCart,     roles: ['owner','accounts'] },
+  { id: 'suppliers',         label: 'Suppliers',         icon: Building2,        roles: ['owner','admin','accounts'] },
+  { id: 'prospecting',       label: 'Prospecting',       icon: Target,           roles: ['owner','admin','accounts'] },
+  { id: 'customers',         label: 'Customers',         icon: Users,            roles: ['admin','owner'] },
+  { id: 'products',          label: 'Products',          icon: Box,              roles: null },
+  { id: 'reports',           label: 'Reports',           icon: BarChart2,        roles: null },
+  { id: 'policy',            label: 'Policy of PHE',     icon: FileText,         roles: null },
 ];
 
 // Return modules the given role can access
