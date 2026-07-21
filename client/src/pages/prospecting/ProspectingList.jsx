@@ -114,6 +114,8 @@ export default function ProspectingList() {
   const [segment, setSegment] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');       // '', verified, phone-only, unverified
+  const [regionFilter, setRegionFilter] = useState('');       // state / province within the country
+  const [appFilter, setAppFilter] = useState('');             // application category
   const [prospects, setProspects] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [loading, setLoading] = useState(true);
@@ -151,10 +153,28 @@ export default function ProspectingList() {
   const hasPhone = p => !!(p.phone && p.phone.trim());
   const rowSource = p => (p.source === 'verified' || p.source === 'phone-only') ? p.source : 'unverified';
 
-  // Source filter is applied client-side so it's instant.
-  const visible = useMemo(() =>
-    prospects.filter(p => !sourceFilter || rowSource(p) === sourceFilter),
-    [prospects, sourceFilter]);
+  // Filter options are derived from the loaded segment, so they always match the data.
+  const regions = useMemo(
+    () => [...new Set(prospects.map(p => p.state).filter(Boolean))].sort(),
+    [prospects]);
+  const applications = useMemo(
+    () => [...new Set(prospects.map(p => p.application).filter(Boolean))].sort(),
+    [prospects]);
+
+  // Source / region / application filters are applied client-side so they're instant.
+  const visible = useMemo(() => prospects.filter(p =>
+    (!sourceFilter || rowSource(p) === sourceFilter) &&
+    (!regionFilter || p.state === regionFilter) &&
+    (!appFilter || p.application === appFilter)
+  ), [prospects, sourceFilter, regionFilter, appFilter]);
+
+  // The email copy follows the application in view: an explicit filter wins, otherwise
+  // if everything visible shares one application we tailor to it, else stay generic.
+  const activeApplication = useMemo(() => {
+    if (appFilter) return appFilter;
+    const uniq = [...new Set(visible.map(p => p.application).filter(Boolean))];
+    return uniq.length === 1 ? uniq[0] : '';
+  }, [appFilter, visible]);
 
   const selectedVisible = useMemo(() => visible.filter(p => selected.has(p.id)), [visible, selected]);
   const emailableSel = useMemo(() => selectedVisible.filter(hasEmail).map(p => p.id), [selectedVisible]);

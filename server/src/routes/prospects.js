@@ -7,13 +7,15 @@ const SALES = ['owner', 'admin', 'accounts'];
 
 /** List prospects, optionally filtered by segment / priority / status. */
 router.get('/', authenticate, authorize(...SALES), async (req, res) => {
-  const { segment, priority, status, source } = req.query;
+  const { segment, priority, status, source, state, application } = req.query;
   const where = [];
   const params = [];
-  if (segment)  { params.push(segment);  where.push(`segment = $${params.length}`); }
-  if (priority) { params.push(priority); where.push(`priority = $${params.length}`); }
-  if (status)   { params.push(status);   where.push(`status = $${params.length}`); }
-  if (source)   { params.push(source);   where.push(`source = $${params.length}`); }
+  if (segment)     { params.push(segment);     where.push(`segment = $${params.length}`); }
+  if (priority)    { params.push(priority);    where.push(`priority = $${params.length}`); }
+  if (status)      { params.push(status);      where.push(`status = $${params.length}`); }
+  if (source)      { params.push(source);      where.push(`source = $${params.length}`); }
+  if (state)       { params.push(state);       where.push(`state = $${params.length}`); }
+  if (application) { params.push(application); where.push(`application = $${params.length}`); }
   const sql = `
     SELECT * FROM prospects
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -92,11 +94,15 @@ router.delete('/:id', authenticate, authorize(...SALES), async (req, res) => {
  * ?segment=, ?source=, and ?ids=1,2,3 to scope the export.
  */
 router.get('/export.csv', authenticate, authorize(...SALES), async (req, res) => {
-  const { segment, ids, source } = req.query;
+  const { segment, ids, source, state, application, status, priority } = req.query;
   const type = req.query.type === 'sms' ? 'sms' : 'email';
   const where = [], params = [];
-  if (segment) { params.push(segment); where.push(`segment = $${params.length}`); }
-  if (source)  { params.push(source);  where.push(`source = $${params.length}`); }
+  if (segment)     { params.push(segment);     where.push(`segment = $${params.length}`); }
+  if (source)      { params.push(source);      where.push(`source = $${params.length}`); }
+  if (state)       { params.push(state);       where.push(`state = $${params.length}`); }
+  if (application) { params.push(application); where.push(`application = $${params.length}`); }
+  if (status)      { params.push(status);      where.push(`status = $${params.length}`); }
+  if (priority)    { params.push(priority);    where.push(`priority = $${params.length}`); }
   if (ids) {
     const idList = String(ids).split(',').map(s => parseInt(s, 10)).filter(Boolean);
     if (idList.length) {
@@ -117,15 +123,20 @@ router.get('/export.csv', authenticate, authorize(...SALES), async (req, res) =>
   // SMS campaigns send to the "Mobile" field, so the number goes there.
   let header, lines;
   if (type === 'sms') {
-    header = ['Mobile', 'Contact Email', 'First Name', 'Last Name', 'Company', 'City', 'Priority'];
+    header = ['Mobile', 'Contact Email', 'First Name', 'Last Name', 'Company', 'City', 'Region', 'Application', 'Priority'];
     lines = [header.join(',')];
-    for (const p of rows) lines.push([p.phone, p.email, '', '', p.company, p.city, p.priority].map(esc).join(','));
+    for (const p of rows) lines.push([p.phone, p.email, '', '', p.company, p.city, p.state, p.application, p.priority].map(esc).join(','));
   } else {
-    header = ['Contact Email', 'First Name', 'Last Name', 'Company', 'Phone', 'City', 'State', 'Priority'];
+    header = ['Contact Email', 'First Name', 'Last Name', 'Company', 'Phone', 'City', 'Region', 'Application', 'Priority'];
     lines = [header.join(',')];
-    for (const p of rows) lines.push([p.email, '', '', p.company, p.phone, p.city, p.state, p.priority].map(esc).join(','));
+    for (const p of rows) lines.push([p.email, '', '', p.company, p.phone, p.city, p.state, p.application, p.priority].map(esc).join(','));
   }
-  const fname = `PHE-${(segment || 'prospects').replace(/[^a-z0-9]+/gi, '-')}-${type}.csv`;
+  // Filename reflects the active filters so downloaded files are self-describing
+  const slug = s => String(s).replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+  const parts = ['PHE', slug(segment || 'prospects')];
+  if (application) parts.push(slug(application));
+  if (state) parts.push(slug(state));
+  const fname = `${parts.join('-')}-${type}.csv`;
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
   res.send(lines.join('\n'));

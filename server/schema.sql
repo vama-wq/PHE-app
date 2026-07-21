@@ -507,9 +507,10 @@ CREATE TABLE IF NOT EXISTS prospects (
   id            SERIAL PRIMARY KEY,
   company       TEXT NOT NULL,
   city          TEXT,
-  state         TEXT,
+  state         TEXT,                        -- region / province within the country
   country       TEXT DEFAULT 'India',
   segment       TEXT NOT NULL,
+  application   TEXT,                        -- e.g. 'Boilers & steam' — drives filtering + tailored email copy
   email         TEXT,
   phone         TEXT,
   contact_role  TEXT,
