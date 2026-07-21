@@ -69,7 +69,9 @@ router.get('/:id', authenticate, async (req, res) => {
   res.json(stripCost(req, item));
 });
 
-router.post('/', authenticate, authorize('owner', 'admin'), ...uploadItemDrawing, async (req, res) => {
+// accounts included for the PO-page inline flow — their items still land as
+// pending_approval and they have no Inventory section access
+router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), ...uploadItemDrawing, async (req, res) => {
   const { item_code, name, name_gu, category, unit, current_stock, reorder_level, unit_cost, min_order_qty, notes } = req.body;
   if (!item_code || !name || !unit) return res.status(400).json({ error: 'Code, name and unit required' });
 
@@ -114,7 +116,7 @@ router.post('/', authenticate, authorize('owner', 'admin'), ...uploadItemDrawing
       } catch (_) { /* notifications are best-effort */ }
     }
 
-    res.status(201).json({ id: r.lastInsertRowid, approval_status: approvalStatus });
+    res.status(201).json({ id: r.lastInsertRowid, approval_status: approvalStatus, item_code: item_code.toUpperCase(), name, unit });
   } catch (e) {
     if (e.message.includes('unique') || e.message.includes('UNIQUE')) return res.status(409).json({ error: 'Item code already exists' });
     throw e;
