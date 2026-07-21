@@ -128,30 +128,40 @@ router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async 
 // Link (or update) a single inventory item to a supplier — used by the PO page
 // when a brand-new item is created mid-PO. Same validation as the supplier form.
 router.post('/:id/items', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
-  const { inventory_item_id, supplier_price, lead_time_days, supplier_part_no, min_order_qty } = req.body;
-  if (!inventory_item_id) return res.status(400).json({ error: 'Inventory item is required' });
-  if (!supplier_price || Number(supplier_price) <= 0) return res.status(400).json({ error: 'Price is required' });
-  if (!lead_time_days || Number(lead_time_days) <= 0) return res.status(400).json({ error: 'Lead time is required' });
-  const db = getDB();
-  const sup = await db.get('SELECT id FROM suppliers WHERE id=$1', [req.params.id]);
-  if (!sup) return res.status(404).json({ error: 'Supplier not found' });
-  const existing = await db.get(
-    'SELECT id FROM supplier_items WHERE supplier_id=$1 AND inventory_item_id=$2',
-    [req.params.id, inventory_item_id]
-  );
-  if (existing) {
+  try {
+    const { inventory_item_id, supplier_price, lead_time_days, supplier_part_no, min_order_qty } = req.body;
+    const supId = parseInt(req.params.id, 10);
+    const invId = parseInt(inventory_item_id, 10);
+    const price = Number(supplier_price);
+    const lead = parseInt(lead_time_days, 10);
+    if (!Number.isInteger(supId)) return res.status(400).json({ error: 'Invalid supplier' });
+    if (!Number.isInteger(invId)) return res.status(400).json({ error: 'Inventory item is required' });
+    if (!(price > 0)) return res.status(400).json({ error: 'Price is required' });
+    if (!(lead > 0)) return res.status(400).json({ error: 'Lead time is required' });
+    const moq = min_order_qty === '' || min_order_qty == null ? null : Number(min_order_qty);
+    if (moq != null && !(moq >= 0)) return res.status(400).json({ error: 'Min order qty must be zero or more' });
+
+    const db = getDB();
+    const sup = await db.get('SELECT id FROM suppliers WHERE id=$1', [supId]);
+    if (!sup) return res.status(404).json({ error: 'Supplier not found' });
+    const inv = await db.get('SELECT id FROM inventory_items WHERE id=$1', [invId]);
+    if (!inv) return res.status(404).json({ error: 'Inventory item not found' });
+
     await db.run(
-      `UPDATE supplier_items SET supplier_price=$1, lead_time_days=$2, supplier_part_no=$3, min_order_qty=$4 WHERE id=$5`,
-      [Number(supplier_price), Number(lead_time_days), supplier_part_no || null, Number(min_order_qty) || null, existing.id]
-    );
-  } else {
-    await db.insert(
       `INSERT INTO supplier_items (supplier_id, inventory_item_id, supplier_part_no, supplier_price, lead_time_days, min_order_qty)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [req.params.id, inventory_item_id, supplier_part_no || null, Number(supplier_price), Number(lead_time_days), Number(min_order_qty) || null]
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT(supplier_id, inventory_item_id) DO UPDATE SET
+         supplier_part_no = EXCLUDED.supplier_part_no,
+         supplier_price   = EXCLUDED.supplier_price,
+         lead_time_days   = EXCLUDED.lead_time_days,
+         min_order_qty    = EXCLUDED.min_order_qty`,
+      [supId, invId, supplier_part_no || null, price, lead, moq]
     );
+    res.status(201).json({ message: 'Item linked to supplier' });
+  } catch (e) {
+    console.error('supplier item link error:', e);
+    res.status(500).json({ error: 'Failed to link item to supplier' });
   }
-  res.status(201).json({ message: 'Item linked to supplier' });
 });
 
 router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res) => {
