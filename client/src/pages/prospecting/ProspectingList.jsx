@@ -166,11 +166,20 @@ export default function ProspectingList() {
     if (!ids.length) return;
     setBusy(true);
     try {
-      const res = await api.get('/prospects/export.csv', { params: { segment, type, ids: ids.join(',') }, responseType: 'blob' });
+      // Pass the active filters so the CSV honours exactly what's on screen and the
+      // filename identifies the slice (e.g. PHE-pharma-autoclaves-sterilizers-gujarat-email.csv).
+      const params = { segment, type, ids: ids.join(',') };
+      if (appFilter) params.application = appFilter;
+      if (regionFilter) params.state = regionFilter;
+      const res = await api.get('/prospects/export.csv', { params, responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
+      const slug = s => String(s).replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+      const parts = ['PHE', slug(segment || 'prospects')];
+      if (appFilter) parts.push(slug(appFilter));
+      if (regionFilter) parts.push(slug(regionFilter));
       a.href = url;
-      a.download = `PHE-${(segment || 'prospects').replace(/[^a-z0-9]+/gi, '-')}-${type}.csv`;
+      a.download = `${parts.join('-')}-${type}.csv`;
       a.click();
       URL.revokeObjectURL(url);
       await api.post('/prospects/bulk-status', { ids, status: 'exported' });
@@ -351,6 +360,15 @@ export default function ProspectingList() {
             <div className="flex items-center gap-2 mb-3">
               <Mail size={16} className="text-brand-700" />
               <h3 className="text-sm font-semibold">Email sequence — intro + follow-up (5 days)</h3>
+              {activeApplication ? (
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                  Tailored: {activeApplication} — {copyFor(activeApplication).product}
+                </span>
+              ) : (
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                  Generic copy — pick an application filter to tailor
+                </span>
+              )}
             </div>
             <div className="flex gap-2 mb-3">
               {['e1', 'e2'].map(e => (
@@ -362,13 +380,13 @@ export default function ProspectingList() {
               ))}
             </div>
             <input className="input w-full mb-2 font-medium"
-              value={emails[activeEmail].subject}
-              onChange={e => setEmails({ ...emails, [activeEmail]: { ...emails[activeEmail], subject: e.target.value } })} />
-            <textarea className="input w-full font-sans leading-relaxed" rows={12}
-              value={emails[activeEmail].body}
-              onChange={e => setEmails({ ...emails, [activeEmail]: { ...emails[activeEmail], body: e.target.value } })} />
+              value={shownEmail.subject}
+              onChange={e => editEmail('subject', e.target.value)} />
+            <textarea className="input w-full font-sans leading-relaxed" rows={14}
+              value={shownEmail.body}
+              onChange={e => editEmail('body', e.target.value)} />
             <p className="text-xs text-gray-400 mt-2">
-              Subject preview: <span className="italic">{renderSubject(activeEmail)}</span>
+              The copy re-tailors automatically to the application in view ({activeApplication || 'none selected'}); switching application resets manual edits. {'{{company}}'} merges in Zoho.
             </p>
           </div>
 
@@ -390,7 +408,7 @@ export default function ProspectingList() {
             </button>
           </div>
           <p className="text-xs text-gray-400 mt-2">
-            Email list = selected rows with a verified email (for Zoho email campaign). SMS list = selected rows with a phone number (for Zoho SMS campaign). Both mark those rows “exported”.
+            Exports include only the selected rows that match the active application/region filters — the CSV filename records the slice. Email list = rows with an email (Zoho email campaign); SMS list = rows with a phone (Zoho SMS campaign). Both mark the rows “exported”.
           </p>
         </>
       )}
