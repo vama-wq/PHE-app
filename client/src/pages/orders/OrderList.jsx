@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
+import { compressImages } from '../../lib/compressImage';
 import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
@@ -307,8 +308,8 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
     setShowDropdown(false);
   };
 
-  const addImages = (e) => {
-    const files = Array.from(e.target.files);
+  const addImages = async (e) => {
+    const files = await compressImages(e.target.files);
     setImages(prev => [...prev, ...files]);
     e.target.value = '';
   };

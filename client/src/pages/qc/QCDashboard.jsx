@@ -6,6 +6,7 @@ import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import InventoryEditModal from '../../components/InventoryEditModal';
 import { fmtDate, fmtDateTime, daysUntil } from '../../lib/utils';
+import { compressImage } from '../../lib/compressImage';
 import { downloadExcel } from '../../lib/utils';
 import {
   FlaskConical, CheckCircle, XCircle, Upload, FileText,
@@ -731,7 +732,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
     setSaving(true);
     try {
       const fd = new FormData();
-      fd.append('file', qcPhoto);  // field name 'file' matches uploadChecklistPhoto middleware
+      fd.append('file', await compressImage(qcPhoto));  // field name 'file' matches uploadChecklistPhoto middleware
       fd.append('heater_destination', destination);
       if (destination === 'finished_goods' || destination === 'both') fd.append('io_qty', parseInt(fgQty));
       if (destination === 'both') fd.append('dispatch_qty', parseInt(dispatchQty));

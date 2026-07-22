@@ -6,6 +6,7 @@ import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { fmtDate, fmtDateTime, downloadExcel, PRODUCTION_STAGES } from '../../lib/utils';
+import { compressImages } from '../../lib/compressImage';
 import { Upload, Search, BarChart2, Download, X, CheckCircle, Circle, AlertTriangle, ArrowRight, HelpCircle, DollarSign } from 'lucide-react';
 
 // Route label helper
@@ -902,7 +903,7 @@ function NewQueryModal({ jc, onClose, onCreated }) {
               {photos.length ? `${photos.length} photo${photos.length > 1 ? 's' : ''} selected` : 'Attach photos of the issue…'}
             </span>
             <input type="file" accept="image/*" multiple className="hidden"
-              onChange={e => setPhotos(prev => [...prev, ...Array.from(e.target.files || [])])} />
+              onChange={async e => { const c = await compressImages(e.target.files); setPhotos(prev => [...prev, ...c]); }} />
           </label>
           {photos.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mt-1.5">

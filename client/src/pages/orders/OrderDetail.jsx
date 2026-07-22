@@ -8,6 +8,7 @@ import FileUpload from '../../components/ui/FileUpload';
 import DrawingUploadModal from '../../components/DrawingUploadModal';
 import InventoryEditModal from '../../components/InventoryEditModal';
 import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati } from '../../lib/utils';
+import { compressImages } from '../../lib/compressImage';
 import {
   ArrowLeft, CheckCircle, CheckCircle2, XCircle, FileText, Plus, Upload,
   ExternalLink, Trash2, Edit2, Package, PenLine, MessageSquare,
@@ -1404,8 +1405,8 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
   // Tube Material options come from the "Tube" inventory category (stores the item code).
   const tubeItems = inventoryItems.filter(i => (i.category || '').toLowerCase().trim() === 'tube');
 
-  const addFiles = (e) => {
-    const files = Array.from(e.target.files);
+  const addFiles = async (e) => {
+    const files = await compressImages(e.target.files);
     setNewFiles(prev => [...prev, ...files]);
     e.target.value = '';
   };

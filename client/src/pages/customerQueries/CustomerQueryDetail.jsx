@@ -5,6 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import { fmtDate, fmtDateTime, ROLE_LABELS } from '../../lib/utils';
+import { compressImages } from '../../lib/compressImage';
 import {
   ArrowLeft, Send, Camera, Upload, CheckCircle, XCircle, AlertTriangle,
   MessageSquare, Clock, User, AtSign, ChevronRight, Truck, FileText,
@@ -881,7 +882,7 @@ function PhotoUploadModal({ queryId, onClose, onDone }) {
     if (!files.length) { setError('Select at least one photo'); return; }
     setSaving(true);
     const fd = new FormData();
-    files.forEach(f => fd.append('photos', f));
+    (await compressImages(files)).forEach(f => fd.append('photos', f));
     fd.append('caption', caption);
     try {
       await api.post(`/customer-queries/${queryId}/photos`, fd);

@@ -5,6 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS, getStageLabel, stagesFor, downloadExcel, WORKER_NAME_STAGES, SCRAP_VALUE_STAGES } from '../../lib/utils';
+import { compressImage } from '../../lib/compressImage';
 import {
   Wrench, Calendar, Plus, CheckSquare, Square, CheckCircle,
   X, ExternalLink, ClipboardList, Check, Image as ImageIcon,
@@ -1293,7 +1294,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     return { v1: value1 || null, v2: value2 || null };
   };
 
-  const uploadRejectionPhoto = async (file) => {
+  const uploadRejectionPhoto = async (rawFile) => {
+    const file = await compressImage(rawFile);
     setUploadingRejPhoto(true);
     setError('');
     const fd = new FormData();
@@ -1308,7 +1310,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     }
   };
 
-  const uploadStagePhoto = async (file) => {
+  const uploadStagePhoto = async (rawFile) => {
+    const file = await compressImage(rawFile);
     if (needsWorker && !workerName.trim()) {
       return setError('Worker name is required');
     }
