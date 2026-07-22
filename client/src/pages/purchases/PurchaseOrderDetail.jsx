@@ -958,43 +958,92 @@ function POChatPanel({ poId, currentUser }) {
   const [newMsg, setNewMsg] = useState('');
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState([]);
+  const [mentionQuery, setMentionQuery] = useState(null);
+  const [mentionPos, setMentionPos] = useState(0);
+  const [mentionedIds, setMentionedIds] = useState([]);
+  const [attachments, setAttachments] = useState([]);
   const bottomRef = useRef(null);
+  const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const loadMessages = async () => {
     try {
       const r = await api.get(`/purchase-orders/${poId}/messages`);
       setMessages(Array.isArray(r.data) ? r.data : []);
-    } catch {
-      setMessages([]);
-    } finally {
-      setLoading(false);
-    }
+    } catch { setMessages([]); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => { loadMessages(); }, [poId]);
+  useEffect(() => { api.get('/auth/users').then(r => setUsers(r.data)).catch(() => {}); }, []);
+  useEffect(() => { if (!loading) bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
 
-  useEffect(() => {
-    if (!loading) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
+  const handleChange = (e) => {
+    const val = e.target.value;
+    setNewMsg(val);
+    const caret = e.target.selectionStart;
+    const textToCaret = val.slice(0, caret);
+    const atIdx = textToCaret.lastIndexOf('@');
+    if (atIdx !== -1 && (atIdx === 0 || /\s/.test(textToCaret[atIdx - 1]))) {
+      const query = textToCaret.slice(atIdx + 1).toLowerCase();
+      const hasMatches = query.length === 0 || users.some(u =>
+        u.name.toLowerCase().includes(query) || (u.role || '').toLowerCase().includes(query));
+      if (hasMatches) { setMentionQuery(query); setMentionPos(atIdx); return; }
+    }
+    setMentionQuery(null);
+  };
+
+  const filteredUsers = mentionQuery !== null
+    ? users.filter(u => u.name.toLowerCase().includes(mentionQuery) || (u.role || '').toLowerCase().includes(mentionQuery)).slice(0, 6)
+    : [];
+
+  const insertMention = (u) => {
+    const before = newMsg.slice(0, mentionPos);
+    const after = newMsg.slice(mentionPos + 1 + (mentionQuery?.length || 0));
+    const inserted = `@${u.name} `;
+    setNewMsg(before + inserted + after);
+    setMentionQuery(null);
+    setMentionedIds(prev => prev.includes(u.id) ? prev : [...prev, u.id]);
+    setTimeout(() => {
+      textareaRef.current?.focus();
+      const pos = before.length + inserted.length;
+      textareaRef.current?.setSelectionRange(pos, pos);
+    }, 0);
+  };
 
   const sendMessage = async () => {
-    if (!newMsg.trim() || sending) return;
+    if ((!newMsg.trim() && !attachments.length) || sending) return;
     setSending(true);
     try {
-      await api.post(`/purchase-orders/${poId}/messages`, { message: newMsg });
-      setNewMsg('');
+      const fd = new FormData();
+      fd.append('message', newMsg);
+      fd.append('mentionIds', JSON.stringify(mentionedIds));
+      attachments.forEach(f => fd.append('attachments', f));
+      const client = attachments.length > 0 ? uploadApi : api;
+      await client.post(`/purchase-orders/${poId}/messages`, fd);
+      setNewMsg(''); setMentionQuery(null); setMentionedIds([]); setAttachments([]);
       await loadMessages();
-    } finally {
-      setSending(false);
-    }
+    } catch (e) {
+      alert(e.response?.data?.error || 'Failed to send message');
+    } finally { setSending(false); }
   };
 
   const handleKey = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    if (mentionQuery !== null && filteredUsers.length > 0 && e.key === 'Escape') { setMentionQuery(null); return; }
+    if (e.key === 'Enter' && !e.shiftKey && mentionQuery === null) { e.preventDefault(); sendMessage(); }
+  };
+
+  const addFiles = async (e) => {
+    if (e.target.files?.length) {
+      const compressed = await compressImages(e.target.files);
+      setAttachments(prev => [...prev, ...compressed]);
+    }
+    e.target.value = '';
   };
 
   return (
-    <div className="flex flex-col" style={{ height: '400px' }}>
+    <div className="flex flex-col" style={{ height: '440px' }}>
       <div className="px-4 py-2.5 border-b border-gray-50 flex items-center justify-between">
         <span className="text-xs text-gray-400 font-medium uppercase tracking-wide">
           {messages.length} message{messages.length !== 1 ? 's' : ''}
@@ -1030,7 +1079,26 @@ function POChatPanel({ poId, currentUser }) {
                   <div className={`rounded-2xl px-3 py-2 text-sm leading-relaxed ${
                     isMe ? 'bg-brand-600 text-white rounded-tr-sm' : 'bg-gray-100 text-gray-800 rounded-tl-sm'
                   }`}>
-                    {msg.message}
+                    {msg.message && <MessageText text={msg.message} isMe={isMe} />}
+                    {msg.attachments?.length > 0 && (
+                      <div className={`flex flex-wrap gap-2 ${msg.message ? 'mt-2' : ''}`}>
+                        {msg.attachments.map(att => {
+                          const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(att.file_name || '');
+                          return isImage ? (
+                            <a key={att.id} href={`/uploads/${att.file_path}`} target="_blank" rel="noreferrer" className="block">
+                              <img src={`/uploads/${att.file_path}`} alt={att.file_name} className="max-w-[200px] max-h-[150px] rounded-lg border border-white/20 object-cover" />
+                            </a>
+                          ) : (
+                            <a key={att.id} href={`/uploads/${att.file_path}`} target="_blank" rel="noreferrer"
+                              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs ${isMe ? 'bg-white/15 text-white hover:bg-white/25' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
+                              <File size={12} />
+                              <span className="truncate max-w-[120px]">{att.file_name}</span>
+                              <Download size={10} />
+                            </a>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                   <span className="text-xs text-gray-300">{fmtDateTime(msg.created_at)}</span>
                 </div>
@@ -1041,24 +1109,56 @@ function POChatPanel({ poId, currentUser }) {
         <div ref={bottomRef} />
       </div>
 
-      <div className="border-t border-gray-100 p-3 flex gap-2 items-end">
-        <textarea
-          className="input flex-1 resize-none text-sm py-2 leading-snug"
-          placeholder="Type a message… (Enter to send)"
-          value={newMsg}
-          onChange={e => setNewMsg(e.target.value)}
-          onKeyDown={handleKey}
-          rows={2}
-          style={{ minHeight: '40px', maxHeight: '80px' }}
-        />
-        <button
-          className="btn-primary px-3 py-2 flex-shrink-0"
-          disabled={sending || !newMsg.trim()}
-          onClick={sendMessage}
-          title="Send"
-        >
-          <Send size={15} />
-        </button>
+      <div className="border-t border-gray-100 p-3 relative">
+        {mentionQuery !== null && filteredUsers.length > 0 && (
+          <div className="absolute bottom-full left-3 mb-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
+            <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100">
+              <span className="text-xs text-gray-400 font-medium">Mention someone</span>
+            </div>
+            {filteredUsers.map(u => (
+              <button key={u.id} type="button"
+                className="w-full text-left px-3 py-2 hover:bg-brand-50 flex items-center gap-2 transition-colors"
+                onMouseDown={e => { e.preventDefault(); insertMention(u); }}>
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${ROLE_COLORS[u.role] || 'bg-gray-100 text-gray-600'}`}>
+                  {ROLE_LABELS[u.role] || u.role}
+                </span>
+                <span className="text-sm text-gray-800 font-medium">{u.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {attachments.map((f, i) => (
+              <div key={i} className="flex items-center gap-1.5 bg-gray-100 rounded-lg px-2 py-1 text-xs text-gray-600">
+                <Paperclip size={10} />
+                <span className="truncate max-w-[120px]">{f.name}</span>
+                <button type="button" onClick={() => setAttachments(prev => prev.filter((_, j) => j !== i))} className="text-gray-400 hover:text-red-500">
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2 items-end">
+          <input type="file" ref={fileInputRef} className="hidden" multiple
+            accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.pdf,.doc,.docx,.xls,.xlsx"
+            onChange={addFiles} />
+          <button type="button" onClick={() => fileInputRef.current?.click()}
+            className="p-2 text-gray-400 hover:text-brand-600 transition-colors flex-shrink-0" title="Attach files">
+            <Paperclip size={16} />
+          </button>
+          <textarea ref={textareaRef}
+            className="input flex-1 resize-none text-sm py-2 leading-snug"
+            placeholder="Type a message… use @ to mention someone"
+            value={newMsg} onChange={handleChange} onKeyDown={handleKey} rows={2}
+            style={{ minHeight: '40px', maxHeight: '80px' }} />
+          <button className="btn-primary px-3 py-2 flex-shrink-0"
+            disabled={sending || (!newMsg.trim() && !attachments.length)}
+            onClick={sendMessage} title="Send">
+            <Send size={15} />
+          </button>
+        </div>
       </div>
     </div>
   );
