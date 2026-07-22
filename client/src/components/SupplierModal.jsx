@@ -13,13 +13,15 @@ export default function SupplierModal({ supplier, onClose, onSaved, includePendi
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [loadingItems, setLoadingItems] = useState(!!supplier);
+  const [initialItemIds, setInitialItemIds] = useState([]);
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
   useEffect(() => {
-    api.get(includePendingInventory ? '/inventory?include_pending=1' : '/inventory')
-      .then(r => setInventoryList(r.data)).catch(() => {});
+    // Pending items are linkable here (tagged) — supplier links are purchase-side
+    api.get('/inventory?include_pending=1').then(r => setInventoryList(r.data)).catch(() => {});
     if (supplier) {
       api.get(`/suppliers/${supplier.id}/items`)
+        .then(r => { setInitialItemIds(r.data.map(si => String(si.inventory_item_id))); return r; })
         .then(r => setItems(r.data.map(si => ({
           inventory_item_id: si.inventory_item_id,
           supplier_part_no: si.supplier_part_no || '',
@@ -66,7 +68,20 @@ export default function SupplierModal({ supplier, onClose, onSaved, includePendi
     setSaving(true);
     setError('');
     try {
-      const payload = { ...f, items: validItems };
+      let finalItems = validItems;
+      if (supplier) {
+        // Preserve links added elsewhere (e.g. from the PO page) while this form
+        // was open — only links the user SAW and removed should be deleted.
+        try {
+          const fresh = await api.get(`/suppliers/${supplier.id}/items`);
+          const knownIds = new Set([...initialItemIds, ...validItems.map(i => String(i.inventory_item_id))]);
+          const preserved = (fresh.data || []).filter(si => !knownIds.has(String(si.inventory_item_id)))
+            .map(si => ({ inventory_item_id: si.inventory_item_id, supplier_part_no: si.supplier_part_no || '',
+              supplier_price: si.supplier_price, lead_time_days: si.lead_time_days, min_order_qty: si.min_order_qty || '' }));
+          finalItems = [...validItems, ...preserved];
+        } catch (_) { /* keep the user's list if the check fails */ }
+      }
+      const payload = { ...f, items: finalItems };
       if (supplier) { await api.put(`/suppliers/${supplier.id}`, payload); onSaved(supplier.id); }
       else { const r = await api.post('/suppliers', payload); onSaved(r.data.id); }
     } catch (err) {

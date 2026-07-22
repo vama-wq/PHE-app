@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import api from '../../lib/api';
-import Modal from '../../components/ui/Modal';
 import ImportModal from '../../components/ui/ImportModal';
 import SupplierModal from '../../components/SupplierModal';
-import { Plus, Search, Phone, Mail, MapPin, Building2, Pencil, Trash2, Upload, AlertTriangle, Package, X } from 'lucide-react';
+import { Plus, Search, Phone, Mail, MapPin, Building2, Pencil, Trash2, Upload, AlertTriangle, Package } from 'lucide-react';
 
 export default function SupplierList() {
   const [suppliers, setSuppliers] = useState([]);

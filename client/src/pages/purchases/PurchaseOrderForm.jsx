@@ -72,6 +72,7 @@ export default function PurchaseOrderForm() {
         drawing_file: li.drawing_file,
         supplier_price: li.supplier_price,
         lead_time_days: li.lead_time_days,
+        approval_status: li.approval_status,
       })));
     }).catch(() => setLinkedItems([]));
   };
@@ -378,16 +379,17 @@ export default function PurchaseOrderForm() {
             await loadSuppliers();
             setSupplierId(String(newId));
             setItems([]);
+            setPickerSearch('');
           }}
         />
       )}
       {showNewItem && (
         <InventoryItemModal
           onClose={() => setShowNewItem(false)}
-          onSave={async (created) => {
+          onSave={(created) => {
             setShowNewItem(false);
-            await loadInventory();
             if (created?.id && supplierId) setLinkItem(created);
+            loadInventory().catch(() => {});
           }}
         />
       )}
@@ -399,7 +401,7 @@ export default function PurchaseOrderForm() {
           onLinked={async (link) => {
             setLinkItem(null);
             await loadLinkedItems();
-            const inv = invItems.find(i => String(i.id) === String(link.inventory_item_id));
+            const inv = invItems.find(i => String(i.id) === String(link.inventory_item_id)) || linkItem;
             setItems(prev => prev.some(i => i.inventory_item_id === link.inventory_item_id) ? prev : [...prev, {
               inventory_item_id: link.inventory_item_id,
               description: inv?.name || '',
@@ -444,6 +446,7 @@ function LinkItemModal({ supplier, itemId, onClose, onLinked }) {
       <form onSubmit={submit} className="space-y-4">
         <p className="text-sm text-gray-500">
           The new item was created. Set the agreed rate with this supplier so it can go on the PO — same details as the Suppliers page.
+          If you skip, you can link it later by editing the supplier on the Suppliers page.
         </p>
         <div className="grid grid-cols-2 gap-4">
           <div>
