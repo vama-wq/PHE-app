@@ -42,16 +42,19 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
     ${where}
     ORDER BY e.entry_date ASC, e.id ASC`, params);
 
-  // Cash-in-hand always reflects ALL cash-affecting entries (not filtered).
+  // Two live balances (all entries, not filtered) driven by payment_method:
+  //  cash → Cash balance, paid_bank → Bank balance, unpaid_bank → neither.
+  const acctSum = (method) => `COALESCE(SUM(CASE WHEN payment_method='${method}'
+      THEN (CASE WHEN entry_type='top_up' THEN amount ELSE -amount END) ELSE 0 END), 0)`;
   const bal = await db.get(`
-    SELECT COALESCE(SUM(CASE WHEN entry_type='top_up' THEN amount
-                             WHEN affects_cash THEN -amount ELSE 0 END), 0) AS balance
+    SELECT ${acctSum('cash')} AS cash, ${acctSum('paid_bank')} AS bank,
+           COALESCE(SUM(CASE WHEN entry_type='expense' AND payment_method='unpaid_bank' THEN amount ELSE 0 END), 0) AS unpaid_pending
     FROM petty_cash_entries`);
 
-  // Opening figure for the running column, only meaningful when a month is set.
-  //  • unfiltered → prior CASH balance (cash-impact aware)
+  // Opening figures for the running columns, only meaningful when a month is set.
+  //  • unfiltered → prior Cash + Bank balances (per account)
   //  • category/company ledger → prior CUMULATIVE spend in that account
-  let opening = 0;
+  let opening = 0, opening_cash = 0, opening_bank = 0;
   if (month) {
     if (category || company) {
       const bp = [month];
@@ -62,10 +65,10 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
       opening = Number(o.t);
     } else {
       const o = await db.get(`
-        SELECT COALESCE(SUM(CASE WHEN entry_type='top_up' THEN amount
-                                 WHEN affects_cash THEN -amount ELSE 0 END), 0) AS balance
+        SELECT ${acctSum('cash')} AS cash, ${acctSum('paid_bank')} AS bank
         FROM petty_cash_entries WHERE to_char(entry_date, 'YYYY-MM') < $1`, [month]);
-      opening = Number(o.balance);
+      opening_cash = Number(o.cash);
+      opening_bank = Number(o.bank);
     }
   }
 
@@ -78,8 +81,11 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
 
   res.json({
     entries,
-    balance: Number(bal.balance),
-    opening_balance: opening,
+    cash_balance: Number(bal.cash),
+    bank_balance: Number(bal.bank),
+    unpaid_pending: Number(bal.unpaid_pending),
+    opening_cash, opening_bank,
+    opening_balance: opening, // cumulative spend, for filtered ledger views
     category_totals,
     filter: { category, company },
     receipt_required_above: RECEIPT_REQUIRED_ABOVE,
@@ -154,7 +160,13 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
     const amt = parseFloat(amount);
     if (!(amt > 0)) return res.status(400).json({ error: 'Enter a valid amount' });
 
-    let cash = true;
+    const method = String(req.body.payment_method || '').trim();
+    // Top-ups can only land in cash or paid_bank; expenses may also be unpaid_bank
+    const validMethods = entry_type === 'top_up' ? ['cash', 'paid_bank'] : ['cash', 'paid_bank', 'unpaid_bank'];
+    if (!validMethods.includes(method)) {
+      return res.status(400).json({ error: entry_type === 'top_up' ? 'Select Cash or Bank' : 'Select a payment method (Cash / Paid Bank / Unpaid Bank)' });
+    }
+
     if (entry_type === 'expense') {
       const cat = (category || '').trim();
       const to = (paid_to || '').trim();
@@ -170,26 +182,40 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
       if (amt > RECEIPT_REQUIRED_ABOVE && !req.file) {
         return res.status(400).json({ error: `A receipt/bill photo is required for expenses above ₹${RECEIPT_REQUIRED_ABOVE}` });
       }
-      cash = affectsCash(cat, to);
     }
 
     const r = await db.insert(
-      `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, affects_cash, receipt_file, receipt_original_name, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, receipt_file, receipt_original_name, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [entry_date, entry_type, entry_type === 'expense' ? category.trim() : null,
        (description || '').trim() || null, (paid_to || '').trim() || null, amt,
-       entry_type === 'top_up' ? true : cash,
+       method, method !== 'unpaid_bank',
        req.file?.storagePath || null, req.file?.originalname || null, req.user.id]
     );
+    const methodLabel = { cash: 'Cash', paid_bank: 'Paid Bank', unpaid_bank: 'Unpaid Bank' }[method];
     await logActivity(null, null, 'petty_cash_entry',
       entry_type === 'top_up'
-        ? `Petty cash top-up: ₹${amt}`
-        : `Petty cash expense: ₹${amt} — ${category}${paid_to ? ` (${paid_to})` : ''}${cash ? '' : ' [no cash impact]'}`, req.user.id);
+        ? `Petty cash top-up: ₹${amt} (${methodLabel})`
+        : `Petty cash expense: ₹${amt} — ${category}${paid_to ? ` (${paid_to})` : ''} [${methodLabel}]`, req.user.id);
     res.status(201).json({ id: r.lastInsertRowid });
   } catch (e) {
     console.error('petty cash entry error:', e);
     res.status(500).json({ error: 'Failed to record entry' });
   }
+});
+
+// Owner marks an Unpaid Bank expense as Paid — it then hits the Bank balance
+router.put('/:id/mark-paid', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const e = await db.get('SELECT * FROM petty_cash_entries WHERE id=$1', [req.params.id]);
+  if (!e) return res.status(404).json({ error: 'Entry not found' });
+  if (e.entry_type !== 'expense' || e.payment_method !== 'unpaid_bank') {
+    return res.status(400).json({ error: 'Only an Unpaid Bank expense can be marked paid' });
+  }
+  await db.run("UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE WHERE id=$1", [req.params.id]);
+  await logActivity(null, null, 'petty_cash_marked_paid',
+    `Unpaid bank expense marked paid: ₹${e.amount} — ${e.category || ''}${e.paid_to ? ` (${e.paid_to})` : ''}`, req.user.id);
+  res.json({ message: 'Marked as paid' });
 });
 
 // Owner can remove a wrong entry (receipt file is cleaned up too)

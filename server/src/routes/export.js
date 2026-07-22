@@ -412,24 +412,28 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
     FROM petty_cash_entries e LEFT JOIN users u ON u.id = e.created_by
     ORDER BY e.entry_date ASC, e.id ASC`);
 
-  let running = 0;
+  // Two running balances driven by payment_method:
+  // cash → Cash balance, paid_bank → Bank balance, unpaid_bank → neither (pending)
+  const METHOD_LABELS = { cash: 'Cash', paid_bank: 'Paid Bank', unpaid_bank: 'Unpaid Bank' };
+  let cashBal = 0, bankBal = 0;
   const data = rows.map(r => {
     const amt = Number(r.amount);
-    // Jay Bhramani (Machinery) expenses don't affect cash-in-hand
-    const cashDelta = r.entry_type === 'top_up' ? amt : (r.affects_cash === false ? 0 : -amt);
-    running += cashDelta;
+    const delta = r.entry_type === 'top_up' ? amt : -amt;
+    if (r.payment_method === 'cash') cashBal += delta;
+    else if (r.payment_method === 'paid_bank') bankBal += delta;
     return {
-      'Date':        r.entry_date || '',
-      'Type':        r.entry_type === 'top_up' ? 'Top-up' : 'Expense',
-      'Category':    r.category || '',
-      'Description': r.description || '',
-      'Paid To':     r.paid_to || '',
-      'Cash In':     r.entry_type === 'top_up' ? amt : '',
-      'Cash Out':    r.entry_type === 'expense' ? amt : '',
-      'Cash Impact': r.entry_type === 'expense' && r.affects_cash === false ? 'No (recorded only)' : 'Yes',
-      'Balance':     running,
-      'Receipt':     r.receipt_original_name || '',
-      'Recorded By': r.created_by_name || '',
+      'Date':         r.entry_date || '',
+      'Type':         r.entry_type === 'top_up' ? 'Top-up' : 'Expense',
+      'Category':     r.category || '',
+      'Description':  r.description || '',
+      'Paid To':      r.paid_to || '',
+      'Method':       METHOD_LABELS[r.payment_method] || r.payment_method || '',
+      'In':           r.entry_type === 'top_up' ? amt : '',
+      'Out':          r.entry_type === 'expense' ? amt : '',
+      'Cash Balance': cashBal,
+      'Bank Balance': bankBal,
+      'Receipt':      r.receipt_original_name || '',
+      'Recorded By':  r.created_by_name || '',
     };
   });
 

@@ -3,10 +3,15 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import { fmtDate, downloadExcel } from '../../lib/utils';
-import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2 } from 'lucide-react';
+import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const MACHINERY = 'Machinery';
+const METHOD_BADGES = {
+  cash:        { label: 'Cash',        cls: 'bg-emerald-100 text-emerald-700' },
+  paid_bank:   { label: 'Paid Bank',   cls: 'bg-blue-100 text-blue-700' },
+  unpaid_bank: { label: 'Unpaid Bank', cls: 'bg-amber-100 text-amber-700' },
+};
 
 export default function PettyCashLedger() {
   const { user } = useAuthStore();
@@ -25,30 +30,43 @@ export default function PettyCashLedger() {
     if (filter?.company) params.set('company', filter.company);
     api.get(`/petty-cash?${params}`).then(r => setData(r.data)).finally(() => setLoading(false));
   };
+  const loadLedgers = () => { if (isOwner) api.get('/petty-cash/ledgers').then(r => setLedgers(r.data)).catch(() => {}); };
   useEffect(() => { load(); }, [month, filter]);
-  useEffect(() => { if (isOwner) api.get('/petty-cash/ledgers').then(r => setLedgers(r.data)).catch(() => {}); }, [showEntry]);
+  useEffect(() => { loadLedgers(); }, [showEntry]);
 
   const handleDelete = async (e) => {
     if (!window.confirm(`Delete this ${e.entry_type === 'top_up' ? 'top-up' : 'expense'} of ${inr(e.amount)}?`)) return;
-    try { await api.delete(`/petty-cash/${e.id}`); load(); if (isOwner) api.get('/petty-cash/ledgers').then(r => setLedgers(r.data)); }
+    try { await api.delete(`/petty-cash/${e.id}`); load(); loadLedgers(); }
+    catch (err) { alert(err.response?.data?.error || 'Failed'); }
+  };
+
+  const handleMarkPaid = async (e) => {
+    if (!window.confirm(`Mark this ${inr(e.amount)} expense (${e.paid_to || e.category}) as PAID from bank? It will then reduce the Bank balance.`)) return;
+    try { await api.put(`/petty-cash/${e.id}/mark-paid`); load(); loadLedgers(); }
     catch (err) { alert(err.response?.data?.error || 'Failed'); }
   };
 
   const isLedgerView = !!(filter?.category || filter?.company);
-  // Running column: main view = cash balance (Jay Bhramani expenses don't reduce cash);
+  // Running columns: main view = Cash + Bank balances per payment method;
   // ledger view = cumulative spend in that account.
-  let running = data?.opening_balance ?? 0;
+  let cashRun = data?.opening_cash ?? 0;
+  let bankRun = data?.opening_bank ?? 0;
+  let cumRun = data?.opening_balance ?? 0;
   const rows = (data?.entries || []).map(e => {
-    if (isLedgerView) running += e.entry_type === 'expense' ? Number(e.amount) : 0;
-    else running += e.entry_type === 'top_up' ? Number(e.amount) : (e.affects_cash === false ? 0 : -Number(e.amount));
-    return { ...e, running };
+    const amt = Number(e.amount);
+    const delta = e.entry_type === 'top_up' ? amt : -amt;
+    if (e.payment_method === 'cash') cashRun += delta;
+    else if (e.payment_method === 'paid_bank') bankRun += delta;
+    if (e.entry_type === 'expense') cumRun += amt;
+    return { ...e, cashRun, bankRun, cumRun };
   });
   const monthIn = (data?.entries || []).filter(e => e.entry_type === 'top_up').reduce((a, e) => a + Number(e.amount), 0);
   const monthOut = (data?.entries || []).filter(e => e.entry_type === 'expense').reduce((a, e) => a + Number(e.amount), 0);
   const ledgerTitle = filter?.company ? `Machinery — ${filter.company}` : filter?.category;
+  const cols = isOwner ? 11 : 10;
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
@@ -74,12 +92,22 @@ export default function PettyCashLedger() {
       </div>
 
       {/* Balance cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <div className="card p-4">
-          <div className="text-sm text-gray-500">Cash in Hand</div>
-          <div className={`text-2xl font-bold mt-1 ${Number(data?.balance) < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-            {data ? inr(data.balance) : '—'}
+          <div className="text-sm text-gray-500 flex items-center gap-1"><Wallet size={14} className="text-emerald-500" /> Cash in Hand</div>
+          <div className={`text-2xl font-bold mt-1 ${Number(data?.cash_balance) < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+            {data ? inr(data.cash_balance) : '—'}
           </div>
+        </div>
+        <div className="card p-4">
+          <div className="text-sm text-gray-500 flex items-center gap-1"><Landmark size={14} className="text-blue-500" /> Bank Balance</div>
+          <div className={`text-2xl font-bold mt-1 ${Number(data?.bank_balance) < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+            {data ? inr(data.bank_balance) : '—'}
+          </div>
+        </div>
+        <div className="card p-4">
+          <div className="text-sm text-gray-500 flex items-center gap-1"><Clock size={14} className="text-amber-500" /> Unpaid (pending)</div>
+          <div className="text-2xl font-bold mt-1 text-amber-700">{data ? inr(data.unpaid_pending) : '—'}</div>
         </div>
         <div className="card p-4">
           <div className="text-sm text-gray-500 flex items-center gap-1"><TrendingUp size={14} className="text-green-500" /> Top-ups this month</div>
@@ -114,10 +142,7 @@ export default function PettyCashLedger() {
                 {ledgers.companies.map(co => (
                   <button key={co.name} onClick={() => setFilter({ company: co.name })}
                     className="card p-3 text-left hover:border-emerald-300 transition-colors">
-                    <div className="text-sm font-medium text-gray-800 truncate flex items-center gap-1">
-                      {co.name}
-                      {co.no_cash && <span className="text-[9px] font-bold bg-amber-100 text-amber-700 rounded px-1 py-0.5">NO CASH</span>}
-                    </div>
+                    <div className="text-sm font-medium text-gray-800 truncate">{co.name}</div>
                     <div className="text-lg font-bold text-gray-900">{inr(co.total_out)}</div>
                     <div className="text-xs text-gray-400">{co.entry_count} entr{co.entry_count == 1 ? 'y' : 'ies'}</div>
                   </button>
@@ -158,9 +183,17 @@ export default function PettyCashLedger() {
               <th className="table-header text-left">Category / Type</th>
               <th className="table-header text-left">Description</th>
               <th className="table-header text-left">Paid To</th>
-              <th className="table-header text-right">Cash In</th>
-              <th className="table-header text-right">Cash Out</th>
-              <th className="table-header text-right">{isLedgerView ? 'Cumulative' : 'Balance'}</th>
+              <th className="table-header text-left">Method</th>
+              <th className="table-header text-right">In</th>
+              <th className="table-header text-right">Out</th>
+              {isLedgerView ? (
+                <th className="table-header text-right">Cumulative</th>
+              ) : (
+                <>
+                  <th className="table-header text-right">Cash Bal.</th>
+                  <th className="table-header text-right">Bank Bal.</th>
+                </>
+              )}
               <th className="table-header text-center">Receipt</th>
               <th className="table-header text-left">By</th>
               {isOwner && <th className="table-header text-center"></th>}
@@ -168,51 +201,76 @@ export default function PettyCashLedger() {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={10} className="table-cell text-center text-gray-400 py-10">Loading…</td></tr>
+              <tr><td colSpan={cols + 1} className="table-cell text-center text-gray-400 py-10">Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={10} className="table-cell text-center text-gray-400 py-10">No entries this month</td></tr>
+              <tr><td colSpan={cols + 1} className="table-cell text-center text-gray-400 py-10">No entries this month</td></tr>
             ) : (
               <>
                 <tr className="bg-gray-50/60">
-                  <td colSpan={6} className="table-cell text-xs text-gray-500">{isLedgerView ? 'Brought forward' : 'Opening balance'}</td>
-                  <td className="table-cell text-right text-xs font-semibold text-gray-600">{inr(data.opening_balance)}</td>
+                  <td colSpan={7} className="table-cell text-xs text-gray-500">{isLedgerView ? 'Brought forward' : 'Opening balances'}</td>
+                  {isLedgerView ? (
+                    <td className="table-cell text-right text-xs font-semibold text-gray-600">{inr(data.opening_balance)}</td>
+                  ) : (
+                    <>
+                      <td className="table-cell text-right text-xs font-semibold text-gray-600">{inr(data.opening_cash)}</td>
+                      <td className="table-cell text-right text-xs font-semibold text-gray-600">{inr(data.opening_bank)}</td>
+                    </>
+                  )}
                   <td colSpan={isOwner ? 3 : 2}></td>
                 </tr>
-                {rows.map(e => (
-                  <tr key={e.id} className="hover:bg-gray-50">
-                    <td className="table-cell text-sm whitespace-nowrap">{fmtDate(e.entry_date)}</td>
-                    <td className="table-cell text-sm">
-                      {e.entry_type === 'top_up'
-                        ? <span className="text-xs font-medium bg-green-100 text-green-700 rounded-full px-2 py-0.5">Top-up</span>
-                        : <span>{e.category || '—'}{e.affects_cash === false && <span className="ml-1 text-[9px] font-bold bg-amber-100 text-amber-700 rounded px-1 py-0.5">NO CASH</span>}</span>}
-                    </td>
-                    <td className="table-cell text-sm text-gray-600">{e.description || '—'}</td>
-                    <td className="table-cell text-sm text-gray-600">{e.paid_to || '—'}</td>
-                    <td className="table-cell text-right text-sm font-semibold text-green-700">
-                      {e.entry_type === 'top_up' ? inr(e.amount) : ''}
-                    </td>
-                    <td className="table-cell text-right text-sm font-semibold text-red-700">
-                      {e.entry_type === 'expense' ? inr(e.amount) : ''}
-                    </td>
-                    <td className={`table-cell text-right text-sm font-medium ${!isLedgerView && e.running < 0 ? 'text-red-600' : 'text-gray-700'}`}>{inr(e.running)}</td>
-                    <td className="table-cell text-center">
-                      {e.receipt_file ? (
-                        <a href={`/uploads/${e.receipt_file}`} target="_blank" rel="noopener noreferrer"
-                          className="text-brand-600 hover:text-brand-700 inline-flex" title={e.receipt_original_name || 'View receipt'}>
-                          <ExternalLink size={14} />
-                        </a>
-                      ) : <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="table-cell text-xs text-gray-400">{e.created_by_name || ''}</td>
-                    {isOwner && (
-                      <td className="table-cell text-center">
-                        <button className="p-1 text-gray-300 hover:text-red-600" onClick={() => handleDelete(e)} title="Delete entry">
-                          <Trash2 size={14} />
-                        </button>
+                {rows.map(e => {
+                  const badge = METHOD_BADGES[e.payment_method] || METHOD_BADGES.cash;
+                  return (
+                    <tr key={e.id} className="hover:bg-gray-50">
+                      <td className="table-cell text-sm whitespace-nowrap">{fmtDate(e.entry_date)}</td>
+                      <td className="table-cell text-sm">
+                        {e.entry_type === 'top_up'
+                          ? <span className="text-xs font-medium bg-green-100 text-green-700 rounded-full px-2 py-0.5">Top-up</span>
+                          : <span>{e.category || '—'}</span>}
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td className="table-cell text-sm text-gray-600">{e.description || '—'}</td>
+                      <td className="table-cell text-sm text-gray-600">{e.paid_to || '—'}</td>
+                      <td className="table-cell">
+                        <span className={`text-[10px] font-semibold rounded-full px-2 py-0.5 whitespace-nowrap ${badge.cls}`}>{badge.label}</span>
+                      </td>
+                      <td className="table-cell text-right text-sm font-semibold text-green-700">
+                        {e.entry_type === 'top_up' ? inr(e.amount) : ''}
+                      </td>
+                      <td className="table-cell text-right text-sm font-semibold text-red-700">
+                        {e.entry_type === 'expense' ? inr(e.amount) : ''}
+                      </td>
+                      {isLedgerView ? (
+                        <td className="table-cell text-right text-sm font-medium text-gray-700">{inr(e.cumRun)}</td>
+                      ) : (
+                        <>
+                          <td className={`table-cell text-right text-sm font-medium ${e.cashRun < 0 ? 'text-red-600' : 'text-gray-700'}`}>{inr(e.cashRun)}</td>
+                          <td className={`table-cell text-right text-sm font-medium ${e.bankRun < 0 ? 'text-red-600' : 'text-gray-700'}`}>{inr(e.bankRun)}</td>
+                        </>
+                      )}
+                      <td className="table-cell text-center">
+                        {e.receipt_file ? (
+                          <a href={`/uploads/${e.receipt_file}`} target="_blank" rel="noopener noreferrer"
+                            className="text-brand-600 hover:text-brand-700 inline-flex" title={e.receipt_original_name || 'View receipt'}>
+                            <ExternalLink size={14} />
+                          </a>
+                        ) : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="table-cell text-xs text-gray-400">{e.created_by_name || ''}</td>
+                      {isOwner && (
+                        <td className="table-cell text-center whitespace-nowrap">
+                          {e.entry_type === 'expense' && e.payment_method === 'unpaid_bank' && (
+                            <button className="p-1 text-amber-500 hover:text-green-600" onClick={() => handleMarkPaid(e)} title="Mark as paid (bank)">
+                              <CheckCircle size={14} />
+                            </button>
+                          )}
+                          <button className="p-1 text-gray-300 hover:text-red-600" onClick={() => handleDelete(e)} title="Delete entry">
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </>
             )}
           </tbody>
@@ -232,6 +290,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   const [f, setF] = useState({
     entry_date: new Date().toISOString().slice(0, 10),
     category: '', description: '', paid_to: '', amount: '',
+    payment_method: isTopUp ? 'cash' : '',
   });
   const [categories, setCategories] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -247,7 +306,6 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   }, []);
 
   const isMachinery = f.category === MACHINERY;
-  const isJayBhramani = isMachinery && f.paid_to.trim().toLowerCase() === 'jay bhramani';
   const needsReceipt = !isTopUp && parseFloat(f.amount) > receiptLimit;
 
   const addCategory = async () => {
@@ -267,6 +325,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
     e.preventDefault();
     setError('');
     if (!(parseFloat(f.amount) > 0)) return setError('Enter a valid amount.');
+    if (!f.payment_method) return setError(isTopUp ? 'Select Cash or Bank.' : 'Select a payment method.');
     if (!isTopUp) {
       if (!f.category) return setError('Category is required.');
       if (!f.paid_to.trim()) return setError('Paid To is required.');
@@ -279,6 +338,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
       fd.append('entry_type', type);
       fd.append('entry_date', f.entry_date);
       fd.append('amount', f.amount);
+      fd.append('payment_method', f.payment_method);
       if (!isTopUp) { fd.append('category', f.category); fd.append('paid_to', f.paid_to.trim()); }
       if (f.description) fd.append('description', f.description);
       if (receipt) fd.append('receipt', receipt);
@@ -302,6 +362,19 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
             <label className="label">Amount (₹) <span className="text-red-500">*</span></label>
             <input className="input" type="number" min="0.01" step="any" value={f.amount} onChange={set('amount')} required />
           </div>
+        </div>
+
+        <div>
+          <label className="label">{isTopUp ? 'Top-up Into' : 'Payment Method'} <span className="text-red-500">*</span></label>
+          <select className="input" value={f.payment_method} onChange={set('payment_method')}>
+            {!isTopUp && <option value="">— select —</option>}
+            <option value="cash">Cash{isTopUp ? ' in Hand' : ''}</option>
+            <option value="paid_bank">{isTopUp ? 'Bank' : 'Paid Bank'}</option>
+            {!isTopUp && <option value="unpaid_bank">Unpaid Bank (pending — no deduction yet)</option>}
+          </select>
+          {f.payment_method === 'unpaid_bank' && (
+            <p className="text-[11px] text-amber-700 mt-1">Recorded but not deducted — the owner can mark it Paid later, which then reduces the Bank balance.</p>
+          )}
         </div>
 
         {!isTopUp && (
@@ -329,9 +402,6 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                 </select>
               ) : (
                 <input className="input" value={f.paid_to} onChange={set('paid_to')} placeholder="Shop / person / company" />
-              )}
-              {isJayBhramani && (
-                <p className="text-[11px] text-amber-700 mt-1">Jay Bhramani — recorded in the ledger but not deducted from cash-in-hand.</p>
               )}
             </div>
 

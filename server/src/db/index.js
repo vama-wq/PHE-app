@@ -246,6 +246,13 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`INSERT INTO petty_cash_companies (name) VALUES ($1) ON CONFLICT DO NOTHING`, ['Jay Bhramani']);
       await pool.query(`ALTER TABLE petty_cash_categories ENABLE ROW LEVEL SECURITY`).catch(() => {});
       await pool.query(`ALTER TABLE petty_cash_companies ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      // Payment method drives which account an entry hits: cash → Cash balance,
+      // paid_bank → Bank balance, unpaid_bank → neither (pending; owner marks paid).
+      // Replaces the old affects_cash / Jay-Bhramani rule.
+      await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'cash'`);
+      // Migrate legacy rows: non-cash-affecting (Jay Bhramani) → unpaid_bank, rest → cash
+      await pool.query(`UPDATE petty_cash_entries SET payment_method = CASE WHEN affects_cash THEN 'cash' ELSE 'unpaid_bank' END
+                        WHERE payment_method IS NULL OR payment_method = 'cash' AND affects_cash = FALSE`);
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);
