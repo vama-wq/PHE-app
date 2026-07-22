@@ -8,8 +8,26 @@ import FileUpload from '../../components/ui/FileUpload';
 import {
   ArrowLeft, Printer, Send, CheckCircle, XCircle,
   PackageCheck, Pencil, Loader2, Truck, Upload, FileText,
-  ExternalLink, RefreshCw, MessageSquare, Trash2, AlertTriangle
+  ExternalLink, RefreshCw, MessageSquare, Trash2, AlertTriangle,
+  Paperclip, X, File, Download
 } from 'lucide-react';
+import { compressImages } from '../../lib/compressImage';
+
+// Highlights @mentions inside a chat message
+function MessageText({ text, isMe }) {
+  const parts = text.split(/(@[\w][\w\s/]*[\w])/g);
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.startsWith('@') ? (
+          <span key={i} className={`font-semibold rounded px-0.5 ${isMe ? 'bg-white/20 text-white' : 'bg-brand-100 text-brand-700'}`}>{part}</span>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const STATUS_STYLES = {
