@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseItemQC } = require('../middleware/upload');
+const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseItemQC, uploadChatAttachments } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 
 // Add a single received PO item's stock to inventory (FIFO lot + moving-average
@@ -530,7 +530,8 @@ router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res
 });
 
 router.get('/:id/messages', authenticate, async (req, res) => {
-  const messages = await getDB().all(
+  const db = getDB();
+  const messages = await db.all(
     `SELECT pom.*, u.name as user_name, u.role as user_role
      FROM purchase_order_messages pom
      JOIN users u ON pom.user_id = u.id
@@ -538,17 +539,66 @@ router.get('/:id/messages', authenticate, async (req, res) => {
      ORDER BY pom.created_at ASC`,
     [req.params.id]
   );
+  for (const msg of messages) {
+    msg.attachments = await db.all(
+      'SELECT id, file_path, file_name, file_size, mime_type FROM purchase_order_message_attachments WHERE message_id = $1',
+      [msg.id]
+    );
+  }
   res.json(messages);
 });
 
-router.post('/:id/messages', authenticate, async (req, res) => {
+router.post('/:id/messages', authenticate, ...uploadChatAttachments, async (req, res) => {
   const { message } = req.body;
-  if (!message?.trim()) return res.status(400).json({ error: 'Message cannot be empty' });
-  await getDB().run(
+  let mentionIds = req.body.mentionIds;
+  if (typeof mentionIds === 'string') try { mentionIds = JSON.parse(mentionIds); } catch { mentionIds = []; }
+  const hasFiles = req.files?.length > 0;
+  if (!message?.trim() && !hasFiles) return res.status(400).json({ error: 'Message or attachment required' });
+
+  const db = getDB();
+  const r = await db.insert(
     'INSERT INTO purchase_order_messages (po_id, user_id, message) VALUES ($1,$2,$3)',
-    [req.params.id, req.user.id, message.trim()]
+    [req.params.id, req.user.id, (message || '').trim()]
   );
-  res.status(201).json({ message: 'Sent' });
+  const messageId = r.lastInsertRowid;
+
+  if (hasFiles) {
+    for (const f of req.files) {
+      await db.insert(
+        'INSERT INTO purchase_order_message_attachments (message_id, file_path, file_name, file_size, mime_type) VALUES ($1,$2,$3,$4,$5)',
+        [messageId, f.storagePath, f.originalname, f.size, f.mimetype]
+      );
+    }
+  }
+
+  if (Array.isArray(mentionIds) && mentionIds.length) {
+    for (const userId of mentionIds) {
+      if (userId !== req.user.id) {
+        await db.run(
+          'INSERT INTO purchase_order_message_mentions (message_id, po_id, mentioned_user_id) VALUES ($1,$2,$3)',
+          [messageId, req.params.id, userId]
+        );
+      }
+    }
+    const po = await db.get('SELECT po_number FROM purchase_orders WHERE id=$1', [req.params.id]);
+    const poNo = po?.po_number || `PO #${req.params.id}`;
+    const preview = (message || '').trim().slice(0, 100);
+    const fileNote = hasFiles ? ` [+${req.files.length} file${req.files.length > 1 ? 's' : ''}]` : '';
+    for (const userId of mentionIds) {
+      if (userId !== req.user.id) {
+        await createNotification(db, {
+          userId,
+          type: 'po_message',
+          title: `${req.user.name} in ${poNo}`,
+          body: preview ? preview + fileNote : `Sent${fileNote}`,
+          link: `/purchases/${req.params.id}`,
+          sourceUserId: req.user.id,
+        });
+      }
+    }
+  }
+
+  res.status(201).json({ id: messageId });
 });
 
 module.exports = router;

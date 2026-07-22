@@ -201,6 +201,29 @@ async function initDB(retries = 20, delayMs = 10000) {
         )`);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_petty_cash_date ON petty_cash_entries(entry_date)`);
       await pool.query(`ALTER TABLE petty_cash_entries ENABLE ROW LEVEL SECURITY`).catch(() => {});
+
+      // PO chat parity with order chat: attachments + @mentions (→ dashboard notifications)
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS purchase_order_message_attachments (
+          id         SERIAL PRIMARY KEY,
+          message_id INTEGER NOT NULL REFERENCES purchase_order_messages(id) ON DELETE CASCADE,
+          file_path  TEXT NOT NULL,
+          file_name  TEXT,
+          file_size  BIGINT,
+          mime_type  TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS purchase_order_message_mentions (
+          id                SERIAL PRIMARY KEY,
+          message_id        INTEGER NOT NULL REFERENCES purchase_order_messages(id) ON DELETE CASCADE,
+          po_id             INTEGER NOT NULL,
+          mentioned_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          is_read           INTEGER NOT NULL DEFAULT 0,
+          created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`ALTER TABLE purchase_order_message_attachments ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`ALTER TABLE purchase_order_message_mentions ENABLE ROW LEVEL SECURITY`).catch(() => {});
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);

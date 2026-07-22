@@ -169,12 +169,58 @@ export function copyFor(application) {
   return (application && APP_COPY[application]) || GENERIC_COPY;
 }
 
-const SIGNOFF = [
-  'Warm regards,',
-  'Vama',
-  'Peena Heat Elements LLP, Ahmedabad',
-  'vama@peenaheatelements.com',
-].join('\n');
+// ── Website + catalogues ──────────────────────────────────────────────────────
+// Public catalogue PDFs hosted on the company site, plus the marketing website.
+// Every email links the most relevant catalogue for the application in view.
+export const WEBSITE = 'https://phe.co.in';
+
+const CAT_BASE = 'https://catalog.weblink.in/dynamic-files/ei/other-files/14746390';
+const CATALOGUES = {
+  main:       { label: 'Full product catalogue',        url: `${CAT_BASE}/phe-catalogue_compressed.pdf` },
+  industrial: { label: 'Industrial element catalogue',  url: `${CAT_BASE}/industrial-equipment-element-catalogue.pdf` },
+  lab:        { label: 'Laboratory equipment catalogue', url: `${CAT_BASE}/laboratory-equipment-catalogue-_compressed.pdf` },
+  kitchen:    { label: 'Kitchen & appliance catalogue',  url: `${CAT_BASE}/household-appliances-kitchen-equipment-ctalogue_compressed.pdf` },
+};
+
+// application → which catalogue is most relevant (falls back to the full catalogue)
+const APP_CATALOGUE = {
+  'Autoclaves & sterilizers': 'industrial',
+  'Fluid bed dryers & granulation': 'industrial',
+  'Tablet coating & drying': 'industrial',
+  'Stability chambers & incubators': 'lab',
+  'Ovens & furnaces': 'lab',
+  'Dissolution & water baths': 'lab',
+  'Aircraft manufacturing': 'industrial',
+  'Aircraft & engine MRO': 'industrial',
+  'UAV & composites': 'industrial',
+  'Heating elements & distribution': 'main',
+  'Boilers & steam': 'industrial',
+  'Furnaces & kilns': 'industrial',
+  'Geysers & water heaters': 'industrial',
+  'Catering & bakery ovens': 'kitchen',
+  'Electroplating & finishing': 'industrial',
+  'Industrial & curing ovens': 'industrial',
+  'Plastics machinery': 'industrial',
+  'Incubators & lab ovens': 'lab',
+};
+
+export function catalogueFor(application) {
+  return CATALOGUES[APP_CATALOGUE[application] || 'main'];
+}
+
+// Footer appended to every email: website + the relevant catalogue link.
+function footer(application) {
+  const cat = catalogueFor(application);
+  return [
+    'Warm regards,',
+    'Vama',
+    'Peena Heat Elements LLP, Ahmedabad',
+    'vama@peenaheatelements.com',
+    WEBSITE,
+    '',
+    `${cat.label} (PDF): ${cat.url}`,
+  ].join('\n');
+}
 
 /**
  * Build the tailored email for an application.
@@ -182,6 +228,7 @@ const SIGNOFF = [
  */
 export function renderEmail(which, application) {
   const c = copyFor(application);
+  const cat = catalogueFor(application);
   if (which === 'follow') {
     return {
       subject: c.subjectFollow,
@@ -194,9 +241,9 @@ export function renderEmail(which, application) {
         '',
         'If you can share a drawing or the current spec — sheath material, watt density and dimensions — we will quote it and build one sample for your team to test.',
         '',
-        'No pressure either way. Happy to just answer questions.',
+        `In the meantime our ${cat.label.toLowerCase()} and full range are on our website — links below. No pressure either way; happy to just answer questions.`,
         '',
-        SIGNOFF,
+        footer(application),
       ].join('\n'),
     };
   }
@@ -213,11 +260,11 @@ export function renderEmail(which, application) {
       '',
       'Every element is tested before it leaves our floor and carries a 6-month guarantee. We dispatch in 5-7 days and already supply OEMs across India and on export.',
       '',
-      `I would be glad to build one ${c.product.split('(')[0].trim()} to your drawing so your team can bench it against the incumbent — no obligation.`,
+      `You can see the full range on our website and in the catalogue linked below. I would be glad to build one ${c.product.split('(')[0].trim()} to your drawing so your team can bench it against the incumbent — no obligation.`,
       '',
       'Would a short call this week suit you?',
       '',
-      SIGNOFF,
+      footer(application),
     ].join('\n'),
   };
 }
