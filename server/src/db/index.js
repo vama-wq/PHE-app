@@ -224,6 +224,28 @@ async function initDB(retries = 20, delayMs = 10000) {
         )`);
       await pool.query(`ALTER TABLE purchase_order_message_attachments ENABLE ROW LEVEL SECURITY`).catch(() => {});
       await pool.query(`ALTER TABLE purchase_order_message_mentions ENABLE ROW LEVEL SECURITY`).catch(() => {});
+
+      // Petty cash: fixed categories (owner-managed) + Machinery "paid to" companies.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS petty_cash_categories (
+          id SERIAL PRIMARY KEY, name TEXT NOT NULL, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_pc_category ON petty_cash_categories(lower(name))`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS petty_cash_companies (
+          id SERIAL PRIMARY KEY, name TEXT NOT NULL, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_pc_company ON petty_cash_companies(lower(name))`);
+      // Jay Bhramani (Machinery) entries are recorded but don't reduce cash-in-hand.
+      await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS affects_cash BOOLEAN NOT NULL DEFAULT TRUE`);
+      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling']) {
+        await pool.query(`INSERT INTO petty_cash_categories (name) VALUES ($1) ON CONFLICT DO NOTHING`, [c]);
+      }
+      await pool.query(`INSERT INTO petty_cash_companies (name) VALUES ($1) ON CONFLICT DO NOTHING`, ['Jay Bhramani']);
+      await pool.query(`ALTER TABLE petty_cash_categories ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`ALTER TABLE petty_cash_companies ENABLE ROW LEVEL SECURITY`).catch(() => {});
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);

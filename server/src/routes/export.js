@@ -415,7 +415,9 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
   let running = 0;
   const data = rows.map(r => {
     const amt = Number(r.amount);
-    running += r.entry_type === 'top_up' ? amt : -amt;
+    // Jay Bhramani (Machinery) expenses don't affect cash-in-hand
+    const cashDelta = r.entry_type === 'top_up' ? amt : (r.affects_cash === false ? 0 : -amt);
+    running += cashDelta;
     return {
       'Date':        r.entry_date || '',
       'Type':        r.entry_type === 'top_up' ? 'Top-up' : 'Expense',
@@ -424,6 +426,7 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
       'Paid To':     r.paid_to || '',
       'Cash In':     r.entry_type === 'top_up' ? amt : '',
       'Cash Out':    r.entry_type === 'expense' ? amt : '',
+      'Cash Impact': r.entry_type === 'expense' && r.affects_cash === false ? 'No (recorded only)' : 'Yes',
       'Balance':     running,
       'Receipt':     r.receipt_original_name || '',
       'Recorded By': r.created_by_name || '',
