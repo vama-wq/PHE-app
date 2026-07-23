@@ -50,8 +50,9 @@ export default function PettyCashLedger() {
   };
 
   const handleDelete = async (e) => {
-    if (!window.confirm(`Delete this ${e.entry_type === 'top_up' ? 'top-up' : 'expense'} of ${inr(e.amount)}?`)) return;
-    try { await api.delete(`/petty-cash/${e.id}`); load(); loadLedgers(); }
+    const extra = e.category === SAMPLING ? '\n\nThis also deletes its sample record, including any review history.' : '';
+    if (!window.confirm(`Delete this ${e.entry_type === 'top_up' ? 'top-up' : 'expense'} of ${inr(e.amount)}?${extra}`)) return;
+    try { await api.delete(`/petty-cash/${e.id}`); load(); loadLedgers(); loadSamples(); }
     catch (err) { alert(err.response?.data?.error || 'Failed'); }
   };
 
@@ -380,40 +381,66 @@ export default function PettyCashLedger() {
 }
 
 // Approval walks the NORMAL creation forms, prefilled from the sampling draft:
-// 1. Inventory Item form (item must exist before the supplier can link it) —
-//    the created id is checkpointed on the sample so a cancelled flow resumes
-//    without duplicating the item.
-// 2. Supplier: create new (prefilled, sample item pre-linked at unit cost) or
-//    link the item to an existing supplier (price + lead time).
+// 1. Inventory item — create new (prefilled form) or pick an already-stocked
+//    item. Either way the id is checkpointed on the sample so a cancelled or
+//    failed flow resumes here without duplicating records.
+// 2. Supplier — create new (prefilled, sample item pre-linked at unit cost) or
+//    link the item to an existing supplier (price + lead time). Also
+//    checkpointed before approval.
 // 3. Both ids are posted to /samples/:id/approve → status APPROVED.
+// Checkpoint failures ABORT the flow (the sample may have been deleted) — they
+// are never silently skipped, so no orphan records get created past a dead
+// sample.
 function SampleApproveFlow({ sample, onClose, onDone }) {
   const qty = Number(sample.sample_qty);
   const unitCost = qty > 0 ? Math.round((Number(sample.sample_cost) / qty) * 100) / 100 : '';
   const [itemId, setItemId] = useState(sample.inventory_item_id || null);
-  const [step, setStep] = useState(sample.inventory_item_id ? 'choice' : 'item');
+  const [step, setStep] = useState(
+    sample.inventory_item_id && sample.supplier_id ? 'finalize'
+      : sample.inventory_item_id ? 'choice' : 'item-choice');
   const [suppliers, setSuppliers] = useState([]);
+  const [inventory, setInventory] = useState([]);
   const [existingId, setExistingId] = useState('');
+  const [existingItemId, setExistingItemId] = useState('');
   const [link, setLink] = useState({ supplier_price: unitCost, lead_time_days: '', supplier_part_no: '', min_order_qty: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => { api.get('/suppliers').then(r => setSuppliers(r.data || [])).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get('/suppliers').then(r => setSuppliers(r.data || [])).catch(() => {});
+    api.get('/inventory?include_pending=1').then(r => setInventory(r.data || [])).catch(() => {});
+  }, []);
 
-  const finalize = async (supplierId, invId) => {
-    await api.put(`/petty-cash/samples/${sample.id}/approve`, { supplier_id: supplierId, inventory_item_id: invId });
-    onDone();
+  // Persist progress on the sample; abort the whole flow if that fails.
+  const checkpoint = async (payload) => {
+    try {
+      await api.put(`/petty-cash/samples/${sample.id}/link-item`, payload);
+      return true;
+    } catch (err) {
+      alert(`${err.response?.data?.error || 'Could not update the sample'} — the approval cannot continue. Anything already created (item / supplier) still exists and can be reused.`);
+      onClose();
+      return false;
+    }
   };
 
-  if (step === 'item') {
+  const finalize = async (supplierId, invId) => {
+    try {
+      await api.put(`/petty-cash/samples/${sample.id}/approve`, { supplier_id: supplierId, inventory_item_id: invId });
+      onDone();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Approving the sample failed — open Approve again to finish (nothing needs re-creating).');
+      onClose();
+    }
+  };
+
+  if (step === 'item-new') {
     return (
       <InventoryItemModal
         initial={{ name: sample.item_name, category: sample.category || '', unit: sample.unit || '', unit_cost: unitCost, notes: `From sample — ${sample.supplier_name}` }}
         onClose={onClose}
         onSave={async (r) => {
           setItemId(r.id);
-          // Checkpoint so a cancelled flow doesn't re-create the item next time
-          await api.put(`/petty-cash/samples/${sample.id}/link-item`, { inventory_item_id: r.id }).catch(() => {});
-          setStep('choice');
+          if (await checkpoint({ inventory_item_id: r.id })) setStep('choice');
         }} />
     );
   }
@@ -426,13 +453,12 @@ function SampleApproveFlow({ sample, onClose, onDone }) {
         includePendingInventory
         onClose={onClose}
         onSaved={async (id) => {
-          try { await finalize(id, itemId); }
-          catch (err) { alert(err.response?.data?.error || 'Supplier saved, but approving the sample failed — try Approve again.'); onClose(); }
+          if (await checkpoint({ supplier_id: id })) await finalize(id, itemId);
         }} />
     );
   }
 
-  // step 'choice' (pick supplier path) and 'link' (existing-supplier price/lead)
+  // Remaining steps share one modal: 'item-choice', 'choice', 'link', 'finalize'
   const submitLink = async (e) => {
     e.preventDefault();
     if (!(Number(link.supplier_price) > 0)) return setError('Price is required.');
@@ -441,7 +467,7 @@ function SampleApproveFlow({ sample, onClose, onDone }) {
     setError('');
     try {
       await api.post(`/suppliers/${existingId}/items`, { inventory_item_id: itemId, ...link });
-      await finalize(existingId, itemId);
+      if (await checkpoint({ supplier_id: existingId })) await finalize(existingId, itemId);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed');
       setSaving(false);
@@ -450,9 +476,37 @@ function SampleApproveFlow({ sample, onClose, onDone }) {
 
   return (
     <Modal open title={`Approve Sample — ${sample.item_name}`} onClose={onClose}>
-      {step === 'choice' ? (
+      {step === 'finalize' ? (
         <div className="space-y-3">
-          <p className="text-sm text-gray-500">Item created ✓ — now the supplier. The sample came from <span className="font-medium text-gray-700">{sample.supplier_name}</span>:</p>
+          <p className="text-sm text-gray-500">Supplier and item are already created for this sample — just complete the approval.</p>
+          <button className="btn-primary w-full" onClick={() => finalize(sample.supplier_id, sample.inventory_item_id)}>
+            Complete Approval
+          </button>
+        </div>
+      ) : step === 'item-choice' ? (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500">First the inventory item for <span className="font-medium text-gray-700">{sample.item_name}</span>:</p>
+          <button className="card p-4 w-full text-left hover:border-brand-400 transition-colors" onClick={() => setStep('item-new')}>
+            <div className="font-medium text-gray-800">Create new inventory item</div>
+            <div className="text-xs text-gray-400 mt-0.5">Opens the normal Inventory form prefilled with the sample's name, category, unit and unit cost</div>
+          </button>
+          <div className="card p-4">
+            <div className="font-medium text-gray-800 mb-1">Link to an existing item</div>
+            <div className="text-xs text-gray-400 mb-2">If this material is already in inventory (e.g. sampled from a new source)</div>
+            <div className="flex gap-2">
+              <select className="input flex-1" value={existingItemId} onChange={e => setExistingItemId(e.target.value)}>
+                <option value="">— select item —</option>
+                {inventory.map(inv => <option key={inv.id} value={inv.id}>{inv.item_code} — {inv.name} ({inv.unit})</option>)}
+              </select>
+              <button className="btn-primary btn-sm" disabled={!existingItemId} onClick={async () => {
+                if (await checkpoint({ inventory_item_id: existingItemId })) { setItemId(existingItemId); setStep('choice'); }
+              }}>Continue</button>
+            </div>
+          </div>
+        </div>
+      ) : step === 'choice' ? (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500">Item linked ✓ — now the supplier. The sample came from <span className="font-medium text-gray-700">{sample.supplier_name}</span>:</p>
           <button className="card p-4 w-full text-left hover:border-brand-400 transition-colors" onClick={() => setStep('supplier')}>
             <div className="font-medium text-gray-800">Create new supplier</div>
             <div className="text-xs text-gray-400 mt-0.5">Opens the normal Supplier form prefilled with "{sample.supplier_name}", sample item pre-linked at {unitCost !== '' ? inr(unitCost) : 'its'} / {sample.unit || 'unit'}</div>
