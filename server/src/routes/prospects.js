@@ -125,7 +125,7 @@ router.get('/export.csv', authenticate, authorize(...SALES), async (req, res) =>
   if (type === 'sms') {
     header = ['Mobile', 'Contact Email', 'First Name', 'Last Name', 'Company', 'City', 'Region', 'Application', 'Priority'];
     lines = [header.join(',')];
-    for (const p of rows) lines.push([p.phone, p.email, '', '', p.company, p.city, p.state, p.application, p.priority].map(esc).join(','));
+    for (const p of rows) lines.push([p.phone, p.email, p.company, '', p.company, p.city, p.state, p.application, p.priority].map(esc).join(','));
   } else {
     header = ['Contact Email', 'First Name', 'Last Name', 'Company', 'Phone', 'City', 'Region', 'Application', 'Priority'];
     lines = [header.join(',')];
