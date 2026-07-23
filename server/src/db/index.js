@@ -253,6 +253,30 @@ async function initDB(retries = 20, delayMs = 10000) {
       // Migrate legacy rows: non-cash-affecting (Jay Bhramani) → unpaid_bank, rest → cash
       await pool.query(`UPDATE petty_cash_entries SET payment_method = CASE WHEN affects_cash THEN 'cash' ELSE 'unpaid_bank' END
                         WHERE payment_method IS NULL OR payment_method = 'cash' AND affects_cash = FALSE`);
+      // Sampling drafts: a Sampling petty-cash expense captures draft supplier +
+      // item details. Owner approves (→ real supplier + inventory records via the
+      // normal prefilled forms, ids stored here) or rejects with a reason.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS petty_cash_samples (
+          id SERIAL PRIMARY KEY,
+          entry_id INTEGER REFERENCES petty_cash_entries(id) ON DELETE CASCADE,
+          supplier_name TEXT NOT NULL,
+          item_name TEXT NOT NULL,
+          category TEXT,
+          unit TEXT,
+          sample_qty NUMERIC,
+          sample_cost NUMERIC NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+          rejection_reason TEXT,
+          supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+          inventory_item_id INTEGER REFERENCES inventory_items(id) ON DELETE SET NULL,
+          reviewed_by INTEGER REFERENCES users(id),
+          reviewed_at TIMESTAMP,
+          created_by INTEGER REFERENCES users(id),
+          created_at TIMESTAMP DEFAULT NOW()
+        )`);
+      await pool.query(`ALTER TABLE petty_cash_samples ENABLE ROW LEVEL SECURITY`).catch(() => {});
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);

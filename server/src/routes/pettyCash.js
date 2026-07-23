@@ -11,6 +11,7 @@ const { uploadPettyCashReceipt, deleteFromStorage } = require('../middleware/upl
 // other machinery company deducts and gets its own ledger.
 const RECEIPT_REQUIRED_ABOVE = 500;
 const MACHINERY = 'Machinery';
+const SAMPLING = 'Sampling';
 const NO_CASH_COMPANY = 'jay bhramani'; // lower-cased for comparison
 
 // Whether an expense reduces cash-in-hand
@@ -167,6 +168,8 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
       return res.status(400).json({ error: entry_type === 'top_up' ? 'Select Cash or Bank' : 'Select a payment method (Cash / Paid Bank / Unpaid Bank)' });
     }
 
+    // Sampling expenses carry full draft details for the future supplier + item
+    let sample = null;
     if (entry_type === 'expense') {
       const cat = (category || '').trim();
       const to = (paid_to || '').trim();
@@ -178,6 +181,15 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
         if (!(description || '').trim()) return res.status(400).json({ error: 'Description is required for Machinery expenses' });
         const co = await db.get('SELECT id FROM petty_cash_companies WHERE lower(name)=lower($1)', [to]);
         if (!co) return res.status(400).json({ error: 'Pick a company from the list (or add it)' });
+      }
+      if (cat === SAMPLING) {
+        const itemName = (req.body.item_name || '').trim();
+        const unit = (req.body.unit || '').trim();
+        const qty = parseFloat(req.body.sample_qty);
+        if (!itemName) return res.status(400).json({ error: 'Item name is required for Sampling expenses' });
+        if (!unit) return res.status(400).json({ error: 'Unit is required for Sampling expenses' });
+        if (!(qty > 0)) return res.status(400).json({ error: 'Enter a valid sample quantity' });
+        sample = { item_name: itemName, category: (req.body.item_category || '').trim() || null, unit, qty };
       }
       if (amt > RECEIPT_REQUIRED_ABOVE && !req.file) {
         return res.status(400).json({ error: `A receipt/bill photo is required for expenses above ₹${RECEIPT_REQUIRED_ABOVE}` });
@@ -192,6 +204,20 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
        method, method !== 'unpaid_bank',
        req.file?.storagePath || null, req.file?.originalname || null, req.user.id]
     );
+    // Sampling → create the pending draft (owner approves/rejects later). If the
+    // draft insert fails, roll back the entry so the two never drift apart.
+    if (sample) {
+      try {
+        await db.insert(
+          `INSERT INTO petty_cash_samples (entry_id, supplier_name, item_name, category, unit, sample_qty, sample_cost, description, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [r.lastInsertRowid, paid_to.trim(), sample.item_name, sample.category, sample.unit,
+           sample.qty, amt, (description || '').trim() || null, req.user.id]);
+      } catch (e2) {
+        await db.run('DELETE FROM petty_cash_entries WHERE id=$1', [r.lastInsertRowid]).catch(() => {});
+        throw e2;
+      }
+    }
     const methodLabel = { cash: 'Cash', paid_bank: 'Paid Bank', unpaid_bank: 'Unpaid Bank' }[method];
     await logActivity(null, null, 'petty_cash_entry',
       entry_type === 'top_up'
@@ -202,6 +228,77 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
     console.error('petty cash entry error:', e);
     res.status(500).json({ error: 'Failed to record entry' });
   }
+});
+
+// ── Sampling drafts ──────────────────────────────────────────────────────────
+// A Sampling expense creates a pending draft supplier + item. The owner tests
+// the sample, then either approves (the client walks the normal prefilled
+// Supplier / Inventory forms and posts the resulting ids here) or rejects with
+// a reason. Accounts can view status; only the owner reviews.
+router.get('/samples', authenticate, authorize('accounts', 'owner'), async (req, res) => {
+  const rows = await getDB().all(`
+    SELECT s.*, u.name AS created_by_name, rv.name AS reviewed_by_name,
+           e.entry_date, e.receipt_file,
+           sup.name AS linked_supplier_name, inv.item_code AS linked_item_code
+    FROM petty_cash_samples s
+    LEFT JOIN users u  ON u.id = s.created_by
+    LEFT JOIN users rv ON rv.id = s.reviewed_by
+    LEFT JOIN petty_cash_entries e ON e.id = s.entry_id
+    LEFT JOIN suppliers sup ON sup.id = s.supplier_id
+    LEFT JOIN inventory_items inv ON inv.id = s.inventory_item_id
+    ORDER BY (s.status = 'pending') DESC, s.id DESC`);
+  res.json(rows);
+});
+
+// Mid-approval checkpoint: the item is created first (the Supplier form needs an
+// item to link). Storing its id lets a cancelled flow resume without creating a
+// duplicate item next time.
+router.put('/samples/:id/link-item', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const s = await db.get('SELECT * FROM petty_cash_samples WHERE id=$1', [req.params.id]);
+  if (!s) return res.status(404).json({ error: 'Sample not found' });
+  if (s.status !== 'pending') return res.status(400).json({ error: 'Sample is not pending' });
+  const invId = parseInt(req.body.inventory_item_id, 10);
+  const inv = await db.get('SELECT id FROM inventory_items WHERE id=$1', [invId]);
+  if (!inv) return res.status(404).json({ error: 'Inventory item not found' });
+  await db.run('UPDATE petty_cash_samples SET inventory_item_id=$1 WHERE id=$2', [invId, req.params.id]);
+  res.json({ message: 'Item linked to sample' });
+});
+
+router.put('/samples/:id/approve', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const s = await db.get('SELECT * FROM petty_cash_samples WHERE id=$1', [req.params.id]);
+  if (!s) return res.status(404).json({ error: 'Sample not found' });
+  if (s.status !== 'pending') return res.status(400).json({ error: 'Sample is not pending' });
+  const supId = parseInt(req.body.supplier_id, 10);
+  const invId = parseInt(req.body.inventory_item_id, 10);
+  const sup = await db.get('SELECT id, name FROM suppliers WHERE id=$1', [supId]);
+  if (!sup) return res.status(404).json({ error: 'Supplier not found' });
+  const inv = await db.get('SELECT id, item_code FROM inventory_items WHERE id=$1', [invId]);
+  if (!inv) return res.status(404).json({ error: 'Inventory item not found' });
+  await db.run(
+    `UPDATE petty_cash_samples SET status='approved', supplier_id=$1, inventory_item_id=$2,
+       rejection_reason=NULL, reviewed_by=$3, reviewed_at=NOW() WHERE id=$4`,
+    [supId, invId, req.user.id, req.params.id]);
+  await logActivity(null, null, 'sample_approved',
+    `Sample approved: ${s.item_name} (${s.supplier_name}) → supplier "${sup.name}", item ${inv.item_code}`, req.user.id);
+  res.json({ message: 'Sample approved' });
+});
+
+router.put('/samples/:id/reject', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const s = await db.get('SELECT * FROM petty_cash_samples WHERE id=$1', [req.params.id]);
+  if (!s) return res.status(404).json({ error: 'Sample not found' });
+  if (s.status !== 'pending') return res.status(400).json({ error: 'Sample is not pending' });
+  const reason = (req.body.reason || '').trim();
+  if (!reason) return res.status(400).json({ error: 'A rejection reason is required' });
+  await db.run(
+    `UPDATE petty_cash_samples SET status='rejected', rejection_reason=$1,
+       reviewed_by=$2, reviewed_at=NOW() WHERE id=$3`,
+    [reason, req.user.id, req.params.id]);
+  await logActivity(null, null, 'sample_rejected',
+    `Sample rejected: ${s.item_name} (${s.supplier_name}) — ${reason}`, req.user.id);
+  res.json({ message: 'Sample rejected' });
 });
 
 // Owner marks an Unpaid Bank expense as Paid — it then hits the Bank balance

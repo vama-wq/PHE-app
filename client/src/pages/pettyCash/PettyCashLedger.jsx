@@ -2,11 +2,15 @@ import { useEffect, useState } from 'react';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
+import SupplierModal from '../../components/SupplierModal';
+import InventoryItemModal from '../../components/InventoryItemModal';
+import CategorySelect from '../../components/CategorySelect';
 import { fmtDate, downloadExcel } from '../../lib/utils';
-import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle } from 'lucide-react';
+import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const MACHINERY = 'Machinery';
+const SAMPLING = 'Sampling';
 const METHOD_BADGES = {
   cash:        { label: 'Cash',        cls: 'bg-emerald-100 text-emerald-700' },
   paid_bank:   { label: 'Paid Bank',   cls: 'bg-blue-100 text-blue-700' },
@@ -21,6 +25,8 @@ export default function PettyCashLedger() {
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [filter, setFilter] = useState(null); // { category } | { company } | null
   const [showEntry, setShowEntry] = useState(null); // 'expense' | 'top_up'
+  const [samples, setSamples] = useState([]);
+  const [approving, setApproving] = useState(null); // sample being approved
   const [loading, setLoading] = useState(true);
 
   const load = () => {
@@ -31,8 +37,17 @@ export default function PettyCashLedger() {
     api.get(`/petty-cash?${params}`).then(r => setData(r.data)).finally(() => setLoading(false));
   };
   const loadLedgers = () => { if (isOwner) api.get('/petty-cash/ledgers').then(r => setLedgers(r.data)).catch(() => {}); };
+  const loadSamples = () => api.get('/petty-cash/samples').then(r => setSamples(r.data || [])).catch(() => {});
   useEffect(() => { load(); }, [month, filter]);
-  useEffect(() => { loadLedgers(); }, [showEntry]);
+  useEffect(() => { loadLedgers(); loadSamples(); }, [showEntry]);
+
+  const handleRejectSample = async (s) => {
+    const reason = window.prompt(`Reject sample "${s.item_name}" from ${s.supplier_name}?\n\nRejection reason (required):`);
+    if (reason === null) return;
+    if (!reason.trim()) return alert('A rejection reason is required.');
+    try { await api.put(`/petty-cash/samples/${s.id}/reject`, { reason: reason.trim() }); loadSamples(); }
+    catch (err) { alert(err.response?.data?.error || 'Failed'); }
+  };
 
   const handleDelete = async (e) => {
     if (!window.confirm(`Delete this ${e.entry_type === 'top_up' ? 'top-up' : 'expense'} of ${inr(e.amount)}?`)) return;
@@ -150,6 +165,79 @@ export default function PettyCashLedger() {
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {/* Samples tracker: Sampling expenses create draft supplier + item records
+          that the owner approves (→ real accounts via prefilled forms) or rejects */}
+      {!isLedgerView && samples.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5 mb-2">
+            <FlaskConical size={15} className="text-purple-600" /> Samples
+            {samples.some(s => s.status === 'pending') && (
+              <span className="text-[10px] font-bold bg-amber-100 text-amber-700 rounded-full px-2 py-0.5">
+                {samples.filter(s => s.status === 'pending').length} pending
+              </span>
+            )}
+          </h2>
+          <div className="card overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="table-header text-left">Date</th>
+                  <th className="table-header text-left">Item</th>
+                  <th className="table-header text-left">Prospective Supplier</th>
+                  <th className="table-header text-right">Qty</th>
+                  <th className="table-header text-right">Cost</th>
+                  <th className="table-header text-left">Status</th>
+                  {isOwner && <th className="table-header text-center">Review</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {samples.map(s => (
+                  <tr key={s.id} className="hover:bg-gray-50">
+                    <td className="table-cell text-sm whitespace-nowrap">{fmtDate(s.entry_date || s.created_at)}</td>
+                    <td className="table-cell text-sm">
+                      <div className="font-medium text-gray-800">{s.item_name}</div>
+                      <div className="text-xs text-gray-400">{[s.category, s.unit].filter(Boolean).join(' · ')}</div>
+                    </td>
+                    <td className="table-cell text-sm text-gray-600">{s.supplier_name}</td>
+                    <td className="table-cell text-sm text-right">{s.sample_qty ? Number(s.sample_qty) : '—'}</td>
+                    <td className="table-cell text-sm text-right font-semibold">{inr(s.sample_cost)}</td>
+                    <td className="table-cell">
+                      {s.status === 'pending' && <span className="text-[10px] font-bold bg-amber-100 text-amber-700 rounded-full px-2 py-0.5">PENDING</span>}
+                      {s.status === 'approved' && (
+                        <div>
+                          <span className="text-[10px] font-bold bg-green-100 text-green-700 rounded-full px-2 py-0.5">APPROVED</span>
+                          <div className="text-[11px] text-gray-400 mt-0.5">{s.linked_supplier_name}{s.linked_item_code ? ` · ${s.linked_item_code}` : ''}</div>
+                        </div>
+                      )}
+                      {s.status === 'rejected' && (
+                        <div>
+                          <span className="text-[10px] font-bold bg-red-100 text-red-700 rounded-full px-2 py-0.5">REJECTED</span>
+                          {s.rejection_reason && <div className="text-[11px] text-gray-400 mt-0.5 max-w-[220px]">{s.rejection_reason}</div>}
+                        </div>
+                      )}
+                    </td>
+                    {isOwner && (
+                      <td className="table-cell text-center whitespace-nowrap">
+                        {s.status === 'pending' && (
+                          <>
+                            <button className="btn-primary btn-sm text-xs mr-1.5" onClick={() => setApproving(s)}>
+                              <CheckCircle size={12} className="inline mr-0.5" /> Approve
+                            </button>
+                            <button className="p-1 text-gray-400 hover:text-red-600" onClick={() => handleRejectSample(s)} title="Reject with reason">
+                              <XCircle size={15} />
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -281,7 +369,138 @@ export default function PettyCashLedger() {
         <EntryModal type={showEntry} isOwner={isOwner} receiptLimit={data?.receipt_required_above ?? 500}
           onClose={() => setShowEntry(null)} onSaved={() => { setShowEntry(null); load(); }} />
       )}
+
+      {approving && (
+        <SampleApproveFlow sample={approving}
+          onClose={() => { setApproving(null); loadSamples(); }}
+          onDone={() => { setApproving(null); loadSamples(); }} />
+      )}
     </div>
+  );
+}
+
+// Approval walks the NORMAL creation forms, prefilled from the sampling draft:
+// 1. Inventory Item form (item must exist before the supplier can link it) —
+//    the created id is checkpointed on the sample so a cancelled flow resumes
+//    without duplicating the item.
+// 2. Supplier: create new (prefilled, sample item pre-linked at unit cost) or
+//    link the item to an existing supplier (price + lead time).
+// 3. Both ids are posted to /samples/:id/approve → status APPROVED.
+function SampleApproveFlow({ sample, onClose, onDone }) {
+  const qty = Number(sample.sample_qty);
+  const unitCost = qty > 0 ? Math.round((Number(sample.sample_cost) / qty) * 100) / 100 : '';
+  const [itemId, setItemId] = useState(sample.inventory_item_id || null);
+  const [step, setStep] = useState(sample.inventory_item_id ? 'choice' : 'item');
+  const [suppliers, setSuppliers] = useState([]);
+  const [existingId, setExistingId] = useState('');
+  const [link, setLink] = useState({ supplier_price: unitCost, lead_time_days: '', supplier_part_no: '', min_order_qty: '' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => { api.get('/suppliers').then(r => setSuppliers(r.data || [])).catch(() => {}); }, []);
+
+  const finalize = async (supplierId, invId) => {
+    await api.put(`/petty-cash/samples/${sample.id}/approve`, { supplier_id: supplierId, inventory_item_id: invId });
+    onDone();
+  };
+
+  if (step === 'item') {
+    return (
+      <InventoryItemModal
+        initial={{ name: sample.item_name, category: sample.category || '', unit: sample.unit || '', unit_cost: unitCost, notes: `From sample — ${sample.supplier_name}` }}
+        onClose={onClose}
+        onSave={async (r) => {
+          setItemId(r.id);
+          // Checkpoint so a cancelled flow doesn't re-create the item next time
+          await api.put(`/petty-cash/samples/${sample.id}/link-item`, { inventory_item_id: r.id }).catch(() => {});
+          setStep('choice');
+        }} />
+    );
+  }
+
+  if (step === 'supplier') {
+    return (
+      <SupplierModal
+        initial={{ name: sample.supplier_name, notes: `From sample — ${sample.item_name}` }}
+        initialItems={[{ inventory_item_id: String(itemId), supplier_part_no: '', supplier_price: unitCost, lead_time_days: '', min_order_qty: '' }]}
+        includePendingInventory
+        onClose={onClose}
+        onSaved={async (id) => {
+          try { await finalize(id, itemId); }
+          catch (err) { alert(err.response?.data?.error || 'Supplier saved, but approving the sample failed — try Approve again.'); onClose(); }
+        }} />
+    );
+  }
+
+  // step 'choice' (pick supplier path) and 'link' (existing-supplier price/lead)
+  const submitLink = async (e) => {
+    e.preventDefault();
+    if (!(Number(link.supplier_price) > 0)) return setError('Price is required.');
+    if (!(parseInt(link.lead_time_days, 10) > 0)) return setError('Lead time is required.');
+    setSaving(true);
+    setError('');
+    try {
+      await api.post(`/suppliers/${existingId}/items`, { inventory_item_id: itemId, ...link });
+      await finalize(existingId, itemId);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title={`Approve Sample — ${sample.item_name}`} onClose={onClose}>
+      {step === 'choice' ? (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500">Item created ✓ — now the supplier. The sample came from <span className="font-medium text-gray-700">{sample.supplier_name}</span>:</p>
+          <button className="card p-4 w-full text-left hover:border-brand-400 transition-colors" onClick={() => setStep('supplier')}>
+            <div className="font-medium text-gray-800">Create new supplier</div>
+            <div className="text-xs text-gray-400 mt-0.5">Opens the normal Supplier form prefilled with "{sample.supplier_name}", sample item pre-linked at {unitCost !== '' ? inr(unitCost) : 'its'} / {sample.unit || 'unit'}</div>
+          </button>
+          <div className="card p-4">
+            <div className="font-medium text-gray-800 mb-2">Link to an existing supplier</div>
+            <div className="flex gap-2">
+              <select className="input flex-1" value={existingId} onChange={e => setExistingId(e.target.value)}>
+                <option value="">— select supplier —</option>
+                {suppliers.map(s => <option key={s.id} value={s.id}>{s.supplier_code ? `${s.supplier_code} — ` : ''}{s.name}</option>)}
+              </select>
+              <button className="btn-primary btn-sm" disabled={!existingId} onClick={() => setStep('link')}>Continue</button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={submitLink} className="space-y-4">
+          <p className="text-sm text-gray-500">Link the sample item to <span className="font-medium text-gray-700">{suppliers.find(s => String(s.id) === String(existingId))?.name}</span>:</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Price (per {sample.unit || 'unit'}) <span className="text-red-500">*</span></label>
+              <input className="input" type="number" step="any" min="0" value={link.supplier_price}
+                onChange={e => setLink(p => ({ ...p, supplier_price: e.target.value }))} required />
+            </div>
+            <div>
+              <label className="label">Lead Time (days) <span className="text-red-500">*</span></label>
+              <input className="input" type="number" min="1" value={link.lead_time_days}
+                onChange={e => setLink(p => ({ ...p, lead_time_days: e.target.value }))} required />
+            </div>
+            <div>
+              <label className="label">Supplier Part No</label>
+              <input className="input" value={link.supplier_part_no}
+                onChange={e => setLink(p => ({ ...p, supplier_part_no: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">Min Order Qty</label>
+              <input className="input" type="number" step="any" min="0" value={link.min_order_qty}
+                onChange={e => setLink(p => ({ ...p, min_order_qty: e.target.value }))} />
+            </div>
+          </div>
+          {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+          <div className="flex gap-3 pt-1">
+            <button type="button" className="btn-secondary flex-1" onClick={() => { setError(''); setStep('choice'); }}>Back</button>
+            <button type="submit" className="btn-primary flex-1" disabled={saving}>{saving ? 'Saving…' : 'Link & Approve'}</button>
+          </div>
+        </form>
+      )}
+    </Modal>
   );
 }
 
@@ -291,6 +510,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
     entry_date: new Date().toISOString().slice(0, 10),
     category: '', description: '', paid_to: '', amount: '',
     payment_method: isTopUp ? 'cash' : '',
+    item_name: '', item_category: '', unit: '', sample_qty: '',
   });
   const [categories, setCategories] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -306,6 +526,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   }, []);
 
   const isMachinery = f.category === MACHINERY;
+  const isSampling = f.category === SAMPLING;
   const needsReceipt = !isTopUp && parseFloat(f.amount) > receiptLimit;
 
   const addCategory = async () => {
@@ -330,6 +551,11 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
       if (!f.category) return setError('Category is required.');
       if (!f.paid_to.trim()) return setError('Paid To is required.');
       if (isMachinery && !f.description.trim()) return setError('Description is required for Machinery.');
+      if (isSampling) {
+        if (!f.item_name.trim()) return setError('Item name is required for Sampling.');
+        if (!f.unit.trim()) return setError('Unit is required for Sampling.');
+        if (!(parseFloat(f.sample_qty) > 0)) return setError('Enter a valid sample quantity.');
+      }
       if (needsReceipt && !receipt) return setError(`A receipt/bill photo is required for expenses above ₹${receiptLimit}.`);
     }
     setSaving(true);
@@ -340,6 +566,12 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
       fd.append('amount', f.amount);
       fd.append('payment_method', f.payment_method);
       if (!isTopUp) { fd.append('category', f.category); fd.append('paid_to', f.paid_to.trim()); }
+      if (!isTopUp && isSampling) {
+        fd.append('item_name', f.item_name.trim());
+        fd.append('item_category', f.item_category);
+        fd.append('unit', f.unit.trim());
+        fd.append('sample_qty', f.sample_qty);
+      }
       if (f.description) fd.append('description', f.description);
       if (receipt) fd.append('receipt', receipt);
       await api.post('/petty-cash', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
@@ -401,9 +633,36 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                   {companies.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               ) : (
-                <input className="input" value={f.paid_to} onChange={set('paid_to')} placeholder="Shop / person / company" />
+                <input className="input" value={f.paid_to} onChange={set('paid_to')}
+                  placeholder={isSampling ? 'Prospective supplier name' : 'Shop / person / company'} />
               )}
             </div>
+
+            {isSampling && (
+              <div className="border border-purple-200 bg-purple-50/50 rounded-xl p-3 space-y-3">
+                <p className="text-xs text-purple-700 font-medium flex items-center gap-1">
+                  <FlaskConical size={13} /> Sample details — creates a draft supplier + item for owner approval
+                </p>
+                <div>
+                  <label className="label">Item Name <span className="text-red-500">*</span></label>
+                  <input className="input" value={f.item_name} onChange={set('item_name')} placeholder="e.g. Brass Nipple 1/2 inch" />
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="label">Item Category</label>
+                    <CategorySelect value={f.item_category} onChange={v => setF(p => ({ ...p, item_category: v }))} />
+                  </div>
+                  <div>
+                    <label className="label">Unit <span className="text-red-500">*</span></label>
+                    <input className="input" value={f.unit} onChange={set('unit')} placeholder="kg / mtr / nos" />
+                  </div>
+                  <div>
+                    <label className="label">Sample Qty <span className="text-red-500">*</span></label>
+                    <input className="input" type="number" step="any" min="0" value={f.sample_qty} onChange={set('sample_qty')} />
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="label">Description {isMachinery ? <span className="text-red-500">*</span> : <span className="text-gray-400 font-normal">(optional)</span>}</label>

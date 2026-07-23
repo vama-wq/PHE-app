@@ -4,11 +4,13 @@ import Modal from './ui/Modal';
 import { Plus, Package, X } from 'lucide-react';
 
 // Add/Edit Supplier — the single source of truth for supplier creation.
-// Used by the Suppliers page and inline from the PO form (includePendingInventory
-// lets the PO flow link items that are still awaiting owner approval).
-export default function SupplierModal({ supplier, onClose, onSaved, includePendingInventory = false }) {
-  const [f, setF] = useState(supplier || { supplier_code: '', name: '', contact_person: '', phone: '', email: '', address: '', notes: '' });
-  const [items, setItems] = useState([]);
+// Used by the Suppliers page, inline from the PO form (includePendingInventory
+// lets the PO flow link items that are still awaiting owner approval), and the
+// sample-approval flow (`initial` prefills fields, `initialItems` preseeds the
+// linked-items rows — create mode only).
+export default function SupplierModal({ supplier, onClose, onSaved, includePendingInventory = false, initial, initialItems }) {
+  const [f, setF] = useState(supplier || { supplier_code: '', name: '', contact_person: '', phone: '', email: '', address: '', notes: '', ...(initial || {}) });
+  const [items, setItems] = useState(supplier ? [] : (initialItems || []));
   const [inventoryList, setInventoryList] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');

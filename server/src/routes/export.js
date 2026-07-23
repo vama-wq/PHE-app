@@ -443,6 +443,33 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
     GROUP BY 1, 2 ORDER BY 1 DESC, total DESC`);
   const catData = catRows.map(r => ({ 'Month': r.month, 'Category': r.category || '', 'Total (₹)': Number(r.total) }));
 
+  // Sampling drafts and their outcomes
+  const sampleRows = await getDB().all(`
+    SELECT s.*, e.entry_date, u.name AS created_by_name, rv.name AS reviewed_by_name,
+           sup.name AS linked_supplier_name, inv.item_code AS linked_item_code
+    FROM petty_cash_samples s
+    LEFT JOIN petty_cash_entries e ON e.id = s.entry_id
+    LEFT JOIN users u  ON u.id = s.created_by
+    LEFT JOIN users rv ON rv.id = s.reviewed_by
+    LEFT JOIN suppliers sup ON sup.id = s.supplier_id
+    LEFT JOIN inventory_items inv ON inv.id = s.inventory_item_id
+    ORDER BY s.id ASC`);
+  const sampleData = sampleRows.map(s => ({
+    'Date':            s.entry_date || '',
+    'Item':            s.item_name || '',
+    'Category':        s.category || '',
+    'Unit':            s.unit || '',
+    'Qty':             s.sample_qty != null ? Number(s.sample_qty) : '',
+    'Cost (₹)':        Number(s.sample_cost),
+    'Prospective Supplier': s.supplier_name || '',
+    'Status':          s.status === 'approved' ? 'Approved' : s.status === 'rejected' ? 'Rejected' : 'Pending',
+    'Linked Supplier': s.linked_supplier_name || '',
+    'Linked Item':     s.linked_item_code || '',
+    'Rejection Reason': s.rejection_reason || '',
+    'Recorded By':     s.created_by_name || '',
+    'Reviewed By':     s.reviewed_by_name || '',
+  }));
+
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ Message: 'No entries yet' }]);
   autoWidth(ws);
@@ -450,6 +477,9 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
   const ws2 = XLSX.utils.json_to_sheet(catData.length ? catData : [{ Message: 'No expenses yet' }]);
   autoWidth(ws2);
   XLSX.utils.book_append_sheet(wb, ws2, 'Monthly by Category');
+  const ws3 = XLSX.utils.json_to_sheet(sampleData.length ? sampleData : [{ Message: 'No samples yet' }]);
+  autoWidth(ws3);
+  XLSX.utils.book_append_sheet(wb, ws3, 'Samples');
   sendXlsx(res, wb, `petty_cash_${Date.now()}.xlsx`);
 });
 

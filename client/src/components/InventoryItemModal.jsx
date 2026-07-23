@@ -6,11 +6,13 @@ import CategorySelect from './CategorySelect';
 import { Upload } from 'lucide-react';
 
 // Add Inventory Item — the single source of truth for item creation. Used by the
-// Inventory page and inline from the PO form. onSave receives the API response
-// ({ id, approval_status }) so callers can keep working with the new item.
-export default function NewItemModal({ onClose, onSave }) {
+// Inventory page, inline from the PO form, and the sample-approval flow (which
+// passes `initial` to prefill fields from the sampling draft). onSave receives
+// the API response ({ id, approval_status }) so callers can keep working with
+// the new item.
+export default function NewItemModal({ onClose, onSave, initial }) {
   const { user } = useAuthStore();
-  const [f, setF] = useState({ item_code: '', name: '', name_gu: '', category: '', unit: '', current_stock: 0, reorder_level: 0, min_order_qty: 0, unit_cost: '', notes: '' });
+  const [f, setF] = useState({ item_code: '', name: '', name_gu: '', category: '', unit: '', current_stock: 0, reorder_level: 0, min_order_qty: 0, unit_cost: '', notes: '', ...(initial || {}) });
   const [drawing, setDrawing] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
