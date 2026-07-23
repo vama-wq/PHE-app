@@ -439,7 +439,8 @@ export default function ProspectingList() {
               Copy the subject line above into Zoho’s subject field.
             </div>
             <p className="text-xs text-gray-400 mt-2">
-              The copy re-tailors automatically to the application in view ({activeApplication || 'none selected'}); switching application resets manual edits. {'{{company}}'} merges in Zoho.
+              The copy re-tailors automatically to the application in view ({activeApplication || 'none selected'}); switching application resets manual edits.
+              Company names merge via Zoho’s $[FNAME|…]$ tag — the CSV export puts the company in First Name, and the fallback text keeps the email natural if it’s empty (test emails don’t merge; real sends do).
             </p>
           </div>
 
