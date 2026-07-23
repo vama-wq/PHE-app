@@ -67,6 +67,7 @@ export default function FinishedGoodsDetail() {
               {fg.base_drawing_no || fg.drawing_no || '—'}
             </h1>
             <div className="flex flex-wrap gap-2 mt-1.5">
+              {fg.product_code       && <Chip color="blue">{fg.product_code}</Chip>}
               {fg.tube_material      && <Chip color="gray">{fg.tube_material}</Chip>}
               {fg.tube_diameter      && <Chip color="gray">⌀ {fg.tube_diameter} mm</Chip>}
               {fg.wattage            && <Chip color="amber">{fg.wattage} W</Chip>}

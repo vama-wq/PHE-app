@@ -255,6 +255,8 @@ function LocationsModal({ onClose }) {
 }
 
 function AddFGModal({ onClose, onDone }) {
+  const [products, setProducts] = useState([]);
+  const [productCode, setProductCode] = useState('');
   const [code, setCode]         = useState('');
   const [material, setMaterial] = useState('');
   const [diameter, setDiameter] = useState('');
@@ -266,13 +268,28 @@ function AddFGModal({ onClose, onDone }) {
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState('');
 
+  useEffect(() => { api.get('/products').then(r => setProducts(r.data || [])).catch(() => {}); }, []);
+
+  // Product first — the item code is entered under the chosen product family
+  const pickProduct = (pc) => {
+    setProductCode(pc);
+    setCode(prev => {
+      // Seed / reseed the code with the product prefix unless the user already typed their own
+      const prevPrefixes = products.map(p => `${p.product_code}-`);
+      if (!prev || prevPrefixes.includes(prev)) return pc ? `${pc}-` : '';
+      return prev;
+    });
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!code.trim()) return setError('Item code is required');
+    if (!productCode) return setError('Select a product first');
+    if (!code.trim() || code.trim() === `${productCode}-`) return setError('Enter the item code / drawing no');
     if (!qty || parseInt(qty) <= 0) return setError('Enter a valid quantity');
     setSaving(true);
     try {
       await api.post('/finished-goods', {
+        product_code: productCode,
         base_drawing_no: code.trim(),
         tube_material: material || undefined,
         tube_diameter: diameter || undefined,
@@ -296,9 +313,17 @@ function AddFGModal({ onClose, onDone }) {
           If an item with the same code already exists, the quantity will be added to the existing stock.
         </p>
         <div>
+          <label className="label">Product *</label>
+          <select className="input" value={productCode} onChange={e => pickProduct(e.target.value)} autoFocus>
+            <option value="">— select product —</option>
+            {products.map(p => <option key={p.id} value={p.product_code}>{p.product_code} — {p.name}</option>)}
+          </select>
+        </div>
+        <div>
           <label className="label">Item Code / Drawing No *</label>
           <input className="input" placeholder="e.g. PT-STRAIGHT-20S-750W" value={code}
-            onChange={e => setCode(e.target.value)} autoFocus />
+            onChange={e => setCode(e.target.value)} disabled={!productCode} />
+          {!productCode && <p className="text-[11px] text-gray-400 mt-1">Select a product first</p>}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>

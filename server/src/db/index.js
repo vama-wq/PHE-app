@@ -297,6 +297,14 @@ async function initDB(retries = 20, delayMs = 10000) {
           ALTER TABLE petty_cash_samples ALTER COLUMN reviewed_at TYPE TIMESTAMPTZ USING reviewed_at AT TIME ZONE 'UTC';
         END IF;
       END $$`);
+      // Finished goods carry the product family (picked first on manual entry;
+      // copied from the order item on production/return inwards). Backfill from
+      // each row's job card → order item.
+      await pool.query(`ALTER TABLE finished_goods ADD COLUMN IF NOT EXISTS product_code TEXT`);
+      await pool.query(`
+        UPDATE finished_goods fg SET product_code = oi.product_code
+        FROM job_cards jc JOIN order_items oi ON oi.id = jc.order_item_id
+        WHERE jc.id = fg.job_card_id AND fg.product_code IS NULL AND oi.product_code IS NOT NULL`);
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);

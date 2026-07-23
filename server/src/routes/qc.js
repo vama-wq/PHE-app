@@ -198,6 +198,7 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
     ? await db.get('SELECT * FROM order_items WHERE id=$1', [jc.order_item_id])
     : null;
   const specs = {
+    product_code: oi?.product_code || null,
     tube_material: asm?.tube_material || oi?.tube_material || null,
     tube_diameter: asm?.tube_diameter_mm || oi?.tube_diameter || null,
     wattage: asm?.wattage_actual || oi?.wattage || null,
@@ -231,13 +232,14 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
       // label to the latest) and backfill any specs it's still missing.
       await db.run(
         `UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1, location = COALESCE($3, location),
-           tube_material        = COALESCE(tube_material, $4),
-           tube_diameter        = COALESCE(tube_diameter, $5),
-           wattage              = COALESCE(wattage, $6),
-           voltage              = COALESCE(voltage, $7),
-           plating_instructions = COALESCE(plating_instructions, $8)
+           product_code         = COALESCE(product_code, $4),
+           tube_material        = COALESCE(tube_material, $5),
+           tube_diameter        = COALESCE(tube_diameter, $6),
+           wattage              = COALESCE(wattage, $7),
+           voltage              = COALESCE(voltage, $8),
+           plating_instructions = COALESCE(plating_instructions, $9)
          WHERE id = $2`,
-        [qty, existing.id, fgLocation, specs.tube_material, specs.tube_diameter, specs.wattage, specs.voltage, specs.plating]
+        [qty, existing.id, fgLocation, specs.product_code, specs.tube_material, specs.tube_diameter, specs.wattage, specs.voltage, specs.plating]
       );
       fgId = existing.id;
     } else {
@@ -245,13 +247,14 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
       const fg = await db.insert(`
         INSERT INTO finished_goods
           (job_card_id, order_id, order_code, order_type, customer_code, customer_name,
-           drawing_no, base_drawing_no, tube_material, tube_diameter, wattage, voltage, plating_instructions,
+           drawing_no, base_drawing_no, product_code, tube_material, tube_diameter, wattage, voltage, plating_instructions,
            qty_in, qty_available, notes, location, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,$16,$17)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15,$16,$17,$18)
       `, [
         jc.id, jc.order_id, jc.order_code, jc.order_type,
         jc.customer_code, jc.customer_name,
         jc.drawing_no || null, baseNo,
+        specs.product_code,
         specs.tube_material, specs.tube_diameter,
         specs.wattage, specs.voltage,
         specs.plating,

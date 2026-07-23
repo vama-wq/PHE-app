@@ -527,6 +527,7 @@ router.put('/:id/qc-result', authenticate, authorize('design', 'owner', 'admin')
         const asm = await db.get('SELECT * FROM job_card_assemblies WHERE job_card_id=$1 LIMIT 1', [q.job_card_id]);
         const oi = jc.order_item_id ? await db.get('SELECT * FROM order_items WHERE id=$1', [jc.order_item_id]) : null;
         const specs = {
+          product_code: oi?.product_code || null,
           tube_material: asm?.tube_material || oi?.tube_material || null,
           tube_diameter: asm?.tube_diameter_mm || oi?.tube_diameter || null,
           wattage: asm?.wattage_actual || oi?.wattage || null,
@@ -537,13 +538,14 @@ router.put('/:id/qc-result', authenticate, authorize('design', 'owner', 'admin')
         if (existing) {
           await db.run(
             `UPDATE finished_goods SET qty_in=qty_in+$1, qty_available=qty_available+$1,
-               tube_material        = COALESCE(tube_material, $3),
-               tube_diameter        = COALESCE(tube_diameter, $4),
-               wattage              = COALESCE(wattage, $5),
-               voltage              = COALESCE(voltage, $6),
-               plating_instructions = COALESCE(plating_instructions, $7)
+               product_code         = COALESCE(product_code, $3),
+               tube_material        = COALESCE(tube_material, $4),
+               tube_diameter        = COALESCE(tube_diameter, $5),
+               wattage              = COALESCE(wattage, $6),
+               voltage              = COALESCE(voltage, $7),
+               plating_instructions = COALESCE(plating_instructions, $8)
              WHERE id=$2`,
-            [jc.qty || 1, existing.id, specs.tube_material, specs.tube_diameter, specs.wattage, specs.voltage, specs.plating]);
+            [jc.qty || 1, existing.id, specs.product_code, specs.tube_material, specs.tube_diameter, specs.wattage, specs.voltage, specs.plating]);
           await db.insert(
             `INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, job_card_no, order_code, customer_code, reference, notes, created_by)
              VALUES ($1,'inward',$2,$3,$4,$5,$6,$7,$8)`,
@@ -553,11 +555,11 @@ router.put('/:id/qc-result', authenticate, authorize('design', 'owner', 'admin')
         } else {
           const fg = await db.insert(`
             INSERT INTO finished_goods (job_card_id, order_id, order_code, order_type, customer_code, customer_name,
-              drawing_no, base_drawing_no, tube_material, tube_diameter, wattage, voltage, plating_instructions,
+              drawing_no, base_drawing_no, product_code, tube_material, tube_diameter, wattage, voltage, plating_instructions,
               qty_in, qty_available, notes, created_by)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,$16)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15,$16,$17)
           `, [jc.id, jc.order_id, jc.order_code, jc.order_type, jc.customer_code, jc.customer_name,
-              jc.drawing_no, baseNo, specs.tube_material, specs.tube_diameter,
+              jc.drawing_no, baseNo, specs.product_code, specs.tube_material, specs.tube_diameter,
               specs.wattage, specs.voltage, specs.plating,
               jc.qty || 1, `Return from customer — QC passed — Coupon: ${q.return_coupon_no || 'N/A'}`, req.user.id]);
           await db.insert(

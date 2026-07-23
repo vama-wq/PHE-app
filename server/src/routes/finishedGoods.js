@@ -119,8 +119,10 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // ── Manual create / add finished goods ───────────────────────────────────────
+// The product family is selected FIRST from the existing products list, then
+// the specific item code / drawing no is entered under it.
 router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
-  const { base_drawing_no, tube_material, tube_diameter, wattage, voltage,
+  const { product_code, base_drawing_no, tube_material, tube_diameter, wattage, voltage,
           plating_instructions, qty, notes } = req.body;
   if (!base_drawing_no?.trim()) return res.status(400).json({ error: 'Item code (drawing no) is required' });
   const parsedQty = parseInt(qty);
@@ -134,19 +136,28 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (r
     [code]
   );
 
+  // New products must belong to an existing product family
+  const prodCode = (product_code || '').trim();
+  if (!existing) {
+    if (!prodCode) return res.status(400).json({ error: 'Select a product first' });
+    const known = await db.get('SELECT id FROM products WHERE product_code=$1', [prodCode]);
+    if (!known) return res.status(400).json({ error: 'Pick a product from the list' });
+  }
+
   let fgId;
   if (existing) {
     await db.run(
-      'UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1 WHERE id = $2',
-      [parsedQty, existing.id]
+      `UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1,
+         product_code = COALESCE(product_code, $3) WHERE id = $2`,
+      [parsedQty, existing.id, prodCode || null]
     );
     fgId = existing.id;
   } else {
     const result = await db.insert(
       `INSERT INTO finished_goods
-         (base_drawing_no, drawing_no, tube_material, tube_diameter, wattage, voltage, plating_instructions, qty_in, qty_available, notes, created_by)
-       VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$7,$8,$9)`,
-      [code, tube_material || null, tube_diameter || null,
+         (product_code, base_drawing_no, drawing_no, tube_material, tube_diameter, wattage, voltage, plating_instructions, qty_in, qty_available, notes, created_by)
+       VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$8,$9,$10)`,
+      [prodCode, code, tube_material || null, tube_diameter || null,
        wattage || null, voltage || null, plating_instructions || null,
        parsedQty, notes || null, req.user.id]
     );
