@@ -29,6 +29,7 @@ const ALL_MODULES = [
   { id: 'inventory',         label: 'Inventory',         icon: Package,          roles: ['owner','admin','design'] },
   { id: 'purchases',         label: 'Purchases',         icon: ShoppingCart,     roles: ['owner','admin','accounts'] },
   { id: 'petty-cash',        label: 'Petty Cash',        icon: ShoppingCart,     roles: ['owner','accounts'] },
+  { id: 'payroll',           label: 'Payroll',           icon: ShoppingCart,     roles: ['owner','accounts'] },
   { id: 'suppliers',         label: 'Suppliers',         icon: Building2,        roles: ['owner','admin','accounts'] },
   { id: 'prospecting',       label: 'Prospecting',       icon: Target,           roles: ['owner','admin','accounts'] },
   { id: 'customers',         label: 'Customers',         icon: Users,            roles: ['admin','owner'] },

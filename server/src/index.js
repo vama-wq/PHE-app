@@ -70,6 +70,7 @@ app.use('/api/manufacturing',    require('./routes/manufacturing'));
 app.use('/api/backup',           require('./routes/backup'));
 app.use('/api/prospects',        require('./routes/prospects'));
 app.use('/api/petty-cash',       require('./routes/pettyCash'));
+app.use('/api/payroll',          require('./routes/payroll'));
 
 // Serve React client in production
 if (process.env.NODE_ENV === 'production') {

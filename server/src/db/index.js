@@ -297,6 +297,110 @@ async function initDB(retries = 20, delayMs = 10000) {
           ALTER TABLE petty_cash_samples ALTER COLUMN reviewed_at TYPE TIMESTAMPTZ USING reviewed_at AT TIME ZONE 'UTC';
         END IF;
       END $$`);
+      // ── Payroll: employees, monthly runs, advances, leave ledger ────────────
+      // Worker groups: labour (per-day, no paid leave), fixed_admin (8h std day),
+      // fixed_production (10h std day). Fixed groups: salary ÷ 30 per day, +1
+      // paid leave/month (carryforward, max 5 into a new year, >7 together
+      // flagged); admin earns +1 sick credit for weeks with 4+ days out ≥18:30.
+      // OT for everyone = hours beyond std day at (day pay ÷ 8)/hour.
+      // Accounts prepares attendance; ONLY the owner sees amounts/bank details,
+      // approves the run and marks salaries paid (7th of each month).
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS employees (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          worker_group TEXT NOT NULL CHECK (worker_group IN ('labour','fixed_admin','fixed_production')),
+          daily_rate NUMERIC,
+          monthly_salary NUMERIC,
+          petrol_monthly NUMERIC NOT NULL DEFAULT 0,
+          advance_balance NUMERIC NOT NULL DEFAULT 0,
+          bank_ac_no TEXT, ifsc_code TEXT, ac_holder_name TEXT,
+          active BOOLEAN NOT NULL DEFAULT TRUE,
+          joined_on DATE, notes TEXT,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS employee_advances (
+          id SERIAL PRIMARY KEY,
+          employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+          amount NUMERIC NOT NULL,
+          advance_date DATE NOT NULL,
+          notes TEXT,
+          settled BOOLEAN NOT NULL DEFAULT FALSE,
+          payroll_run_id INTEGER,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS payroll_runs (
+          id SERIAL PRIMARY KEY,
+          month TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','submitted','approved','paid')),
+          working_days INTEGER NOT NULL DEFAULT 30,
+          essl_file TEXT, essl_original_name TEXT,
+          prepared_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          submitted_at TIMESTAMPTZ,
+          approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          approved_at TIMESTAMPTZ, paid_at TIMESTAMPTZ,
+          notes TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS payroll_lines (
+          id SERIAL PRIMARY KEY,
+          run_id INTEGER NOT NULL REFERENCES payroll_runs(id) ON DELETE CASCADE,
+          employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+          worker_group TEXT NOT NULL,
+          present_days NUMERIC NOT NULL DEFAULT 0,
+          absent_days NUMERIC NOT NULL DEFAULT 0,
+          ot_hours NUMERIC NOT NULL DEFAULT 0,
+          late_stay_days INTEGER NOT NULL DEFAULT 0,
+          leave_credit_used NUMERIC NOT NULL DEFAULT 0,
+          sick_credit_earned NUMERIC NOT NULL DEFAULT 0,
+          long_leave_flag BOOLEAN NOT NULL DEFAULT FALSE,
+          daily_rate NUMERIC, monthly_salary NUMERIC,
+          petrol NUMERIC NOT NULL DEFAULT 0,
+          advance_deduction NUMERIC NOT NULL DEFAULT 0,
+          base_pay NUMERIC NOT NULL DEFAULT 0,
+          ot_amount NUMERIC NOT NULL DEFAULT 0,
+          absent_deduction NUMERIC NOT NULL DEFAULT 0,
+          total_payable NUMERIC NOT NULL DEFAULT 0,
+          paid BOOLEAN NOT NULL DEFAULT FALSE,
+          remarks TEXT,
+          UNIQUE (run_id, employee_id)
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS employee_leave_ledger (
+          id SERIAL PRIMARY KEY,
+          employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+          entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
+          delta NUMERIC NOT NULL,
+          reason TEXT NOT NULL CHECK (reason IN ('monthly_accrual','sick_630','used','year_trim','manual')),
+          payroll_run_id INTEGER REFERENCES payroll_runs(id) ON DELETE SET NULL,
+          notes TEXT,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )`);
+      for (const t of ['employees', 'employee_advances', 'payroll_runs', 'payroll_lines', 'employee_leave_ledger']) {
+        await pool.query(`ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      }
+      // Grant the payroll module to existing accounts users (sidebar filter).
+      // permitted_modules is a JSON array in a text column; append if missing.
+      {
+        const { rows: accUsers } = await pool.query(
+          `SELECT id, permitted_modules FROM users WHERE role='accounts' AND permitted_modules IS NOT NULL`);
+        for (const u of accUsers) {
+          try {
+            const mods = typeof u.permitted_modules === 'string' ? JSON.parse(u.permitted_modules) : u.permitted_modules;
+            if (Array.isArray(mods) && !mods.includes('payroll')) {
+              mods.push('payroll');
+              await pool.query('UPDATE users SET permitted_modules=$1 WHERE id=$2', [JSON.stringify(mods), u.id]);
+            }
+          } catch { /* leave malformed lists untouched */ }
+        }
+      }
+
       // Owner can bypass drawing approval per order (button on the order page,
       // reversible). Replaces the old hardcoded client-side list — those orders
       // are migrated here once.

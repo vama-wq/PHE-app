@@ -491,4 +491,72 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
   sendXlsx(res, wb, `petty_cash_${Date.now()}.xlsx`);
 });
 
+// ── Payroll (owner only — salaries + bank details) ───────────────────────────
+// Two sheets matching the owner's Google Sheet: per-day labour and fixed salary
+router.get('/payroll/:month', authenticate, authorize('owner'), async (req, res) => {
+  const month = String(req.params.month || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'Month (YYYY-MM) required' });
+  const db = getDB();
+  const run = await db.get('SELECT * FROM payroll_runs WHERE month=$1', [month]);
+  if (!run) return res.status(404).json({ error: `No payroll run for ${month}` });
+  const lines = await db.all(`
+    SELECT pl.*, e.name, e.bank_ac_no, e.ifsc_code, e.ac_holder_name
+    FROM payroll_lines pl JOIN employees e ON e.id = pl.employee_id
+    WHERE pl.run_id=$1
+    ORDER BY CASE pl.worker_group WHEN 'labour' THEN 0 WHEN 'fixed_admin' THEN 1 ELSE 2 END, e.name`, [run.id]);
+
+  const labour = lines.filter(l => l.worker_group === 'labour').map(l => ({
+    'Name':                 l.name,
+    'Pay as per 8 hrs':     Number(l.daily_rate || 0),
+    'Pay per 1 hr OT':      Math.round((Number(l.daily_rate || 0) / 8) * 100) / 100,
+    'Present Days':         Number(l.present_days),
+    'Absent Days':          Number(l.absent_days),
+    'OT Time (hrs)':        Number(l.ot_hours),
+    'Salary as per Present Days': Number(l.base_pay),
+    'OT Amount':            Number(l.ot_amount),
+    'Advance':              Number(l.advance_deduction),
+    'Total Salary':         Number(l.total_payable),
+    'Done / Not':           l.paid ? 'Done' : '',
+    'Bank AC No':           l.bank_ac_no || '',
+    'IFSC Code':            l.ifsc_code || '',
+    'AC Holder Name':       l.ac_holder_name || '',
+    'Remarks':              l.remarks || '',
+  }));
+  const fixed = lines.filter(l => l.worker_group !== 'labour').map(l => ({
+    'Name':             l.name,
+    'Type':             l.worker_group === 'fixed_admin' ? 'Admin (8h)' : 'Production (10h)',
+    'Working Days':     Number(run.working_days),
+    'Monthly Salary':   Number(l.monthly_salary || 0),
+    'Pay as per Day':   Number(l.daily_rate || 0),
+    'Pay per 1 Hr':     Math.round((Number(l.daily_rate || 0) / 8) * 100) / 100,
+    'Absent Days':      Number(l.absent_days),
+    'Leave Credit Used': Number(l.leave_credit_used),
+    'OT Time (hrs)':    Number(l.ot_hours),
+    'Salary Pay':       Number(l.base_pay),
+    'OT Amount':        Number(l.ot_amount),
+    'Absent Deduction': Number(l.absent_deduction),
+    'Petrol':           Number(l.petrol),
+    'Advance':          Number(l.advance_deduction),
+    'Total Salary':     Number(l.total_payable),
+    'Done / Not':       l.paid ? 'Done' : '',
+    'Sick Credit Earned': Number(l.sick_credit_earned),
+    '>7 Leaves Flag':   l.long_leave_flag ? 'FLAG' : '',
+    'Bank AC No':       l.bank_ac_no || '',
+    'IFSC Code':        l.ifsc_code || '',
+    'AC Holder Name':   l.ac_holder_name || '',
+    'Remarks':          l.remarks || '',
+  }));
+  if (labour.length) labour.push({ 'Name': 'TOTAL', 'Total Salary': labour.reduce((a, r) => a + r['Total Salary'], 0) });
+  if (fixed.length) fixed.push({ 'Name': 'TOTAL', 'Total Salary': fixed.reduce((a, r) => a + r['Total Salary'], 0) });
+
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.json_to_sheet(labour.length ? labour : [{ Message: 'No per-day labour' }]);
+  autoWidth(ws1);
+  XLSX.utils.book_append_sheet(wb, ws1, 'Per-Day Labour');
+  const ws2 = XLSX.utils.json_to_sheet(fixed.length ? fixed : [{ Message: 'No fixed salary workers' }]);
+  autoWidth(ws2);
+  XLSX.utils.book_append_sheet(wb, ws2, 'Fixed Salary');
+  sendXlsx(res, wb, `payroll_${month}.xlsx`);
+});
+
 module.exports = router;
