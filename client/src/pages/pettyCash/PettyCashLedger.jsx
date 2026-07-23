@@ -79,7 +79,7 @@ export default function PettyCashLedger() {
   const monthIn = (data?.entries || []).filter(e => e.entry_type === 'top_up').reduce((a, e) => a + Number(e.amount), 0);
   const monthOut = (data?.entries || []).filter(e => e.entry_type === 'expense').reduce((a, e) => a + Number(e.amount), 0);
   const ledgerTitle = filter?.company ? `Machinery — ${filter.company}` : filter?.category;
-  const cols = isOwner ? 11 : 10;
+  const cols = isOwner ? 11 : 9; // accounts has no Bank Bal. column or actions column
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -107,32 +107,37 @@ export default function PettyCashLedger() {
         </div>
       </div>
 
-      {/* Balance cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+      {/* Balance cards — bank balance and totals are owner-only; accounts keeps
+          Cash in Hand (they manage the physical cash box) */}
+      <div className={`grid gap-4 mb-6 ${isOwner ? 'grid-cols-2 md:grid-cols-5' : 'grid-cols-1 max-w-xs'}`}>
         <div className="card p-4">
           <div className="text-sm text-gray-500 flex items-center gap-1"><Wallet size={14} className="text-emerald-500" /> Cash in Hand</div>
           <div className={`text-2xl font-bold mt-1 ${Number(data?.cash_balance) < 0 ? 'text-red-600' : 'text-gray-900'}`}>
             {data ? inr(data.cash_balance) : '—'}
           </div>
         </div>
-        <div className="card p-4">
-          <div className="text-sm text-gray-500 flex items-center gap-1"><Landmark size={14} className="text-blue-500" /> Bank Balance</div>
-          <div className={`text-2xl font-bold mt-1 ${Number(data?.bank_balance) < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-            {data ? inr(data.bank_balance) : '—'}
-          </div>
-        </div>
-        <div className="card p-4">
-          <div className="text-sm text-gray-500 flex items-center gap-1"><Clock size={14} className="text-amber-500" /> Unpaid (pending)</div>
-          <div className="text-2xl font-bold mt-1 text-amber-700">{data ? inr(data.unpaid_pending) : '—'}</div>
-        </div>
-        <div className="card p-4">
-          <div className="text-sm text-gray-500 flex items-center gap-1"><TrendingUp size={14} className="text-green-500" /> Top-ups this month</div>
-          <div className="text-2xl font-bold mt-1 text-green-700">{inr(monthIn)}</div>
-        </div>
-        <div className="card p-4">
-          <div className="text-sm text-gray-500 flex items-center gap-1"><TrendingDown size={14} className="text-red-500" /> Expenses this month</div>
-          <div className="text-2xl font-bold mt-1 text-red-700">{inr(monthOut)}</div>
-        </div>
+        {isOwner && (
+          <>
+            <div className="card p-4">
+              <div className="text-sm text-gray-500 flex items-center gap-1"><Landmark size={14} className="text-blue-500" /> Bank Balance</div>
+              <div className={`text-2xl font-bold mt-1 ${Number(data?.bank_balance) < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                {data ? inr(data.bank_balance) : '—'}
+              </div>
+            </div>
+            <div className="card p-4">
+              <div className="text-sm text-gray-500 flex items-center gap-1"><Clock size={14} className="text-amber-500" /> Unpaid (pending)</div>
+              <div className="text-2xl font-bold mt-1 text-amber-700">{data ? inr(data.unpaid_pending) : '—'}</div>
+            </div>
+            <div className="card p-4">
+              <div className="text-sm text-gray-500 flex items-center gap-1"><TrendingUp size={14} className="text-green-500" /> Top-ups this month</div>
+              <div className="text-2xl font-bold mt-1 text-green-700">{inr(monthIn)}</div>
+            </div>
+            <div className="card p-4">
+              <div className="text-sm text-gray-500 flex items-center gap-1"><TrendingDown size={14} className="text-red-500" /> Expenses this month</div>
+              <div className="text-2xl font-bold mt-1 text-red-700">{inr(monthOut)}</div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Owner-only: ledger accounts (each category + each Machinery company) */}
@@ -280,7 +285,7 @@ export default function PettyCashLedger() {
               ) : (
                 <>
                   <th className="table-header text-right">Cash Bal.</th>
-                  <th className="table-header text-right">Bank Bal.</th>
+                  {isOwner && <th className="table-header text-right">Bank Bal.</th>}
                 </>
               )}
               <th className="table-header text-center">Receipt</th>
@@ -302,7 +307,7 @@ export default function PettyCashLedger() {
                   ) : (
                     <>
                       <td className="table-cell text-right text-xs font-semibold text-gray-600">{inr(data.opening_cash)}</td>
-                      <td className="table-cell text-right text-xs font-semibold text-gray-600">{inr(data.opening_bank)}</td>
+                      {isOwner && <td className="table-cell text-right text-xs font-semibold text-gray-600">{inr(data.opening_bank)}</td>}
                     </>
                   )}
                   <td colSpan={isOwner ? 3 : 2}></td>
@@ -333,7 +338,7 @@ export default function PettyCashLedger() {
                       ) : (
                         <>
                           <td className={`table-cell text-right text-sm font-medium ${e.cashRun < 0 ? 'text-red-600' : 'text-gray-700'}`}>{inr(e.cashRun)}</td>
-                          <td className={`table-cell text-right text-sm font-medium ${e.bankRun < 0 ? 'text-red-600' : 'text-gray-700'}`}>{inr(e.bankRun)}</td>
+                          {isOwner && <td className={`table-cell text-right text-sm font-medium ${e.bankRun < 0 ? 'text-red-600' : 'text-gray-700'}`}>{inr(e.bankRun)}</td>}
                         </>
                       )}
                       <td className="table-cell text-center">

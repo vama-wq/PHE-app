@@ -76,12 +76,16 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
     WHERE entry_type='expense' ${month ? `AND to_char(entry_date, 'YYYY-MM') = $1` : ''}
     GROUP BY TRIM(category) ORDER BY total DESC`, catParams);
 
+  // Bank balance figures are owner-only — accounts keeps the entries list and
+  // the cash balance (they manage the physical cash box), nothing bank-side.
+  const isOwner = req.user.role === 'owner';
   res.json({
     entries,
     cash_balance: Number(bal.cash),
-    bank_balance: Number(bal.bank),
-    unpaid_pending: Number(bal.unpaid_pending),
-    opening_cash, opening_bank,
+    bank_balance: isOwner ? Number(bal.bank) : null,
+    unpaid_pending: isOwner ? Number(bal.unpaid_pending) : null,
+    opening_cash,
+    opening_bank: isOwner ? opening_bank : null,
     opening_balance: opening, // cumulative spend, for filtered ledger views
     category_totals,
     filter: { category, company },

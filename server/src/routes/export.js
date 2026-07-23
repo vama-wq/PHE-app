@@ -415,6 +415,7 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
   // Two running balances driven by payment_method:
   // cash → Cash balance, paid_bank → Bank balance, unpaid_bank → neither (pending)
   const METHOD_LABELS = { cash: 'Cash', paid_bank: 'Paid Bank', unpaid_bank: 'Unpaid Bank' };
+  const isOwner = req.user.role === 'owner';
   let cashBal = 0, bankBal = 0;
   const data = rows.map(r => {
     const amt = Number(r.amount);
@@ -431,7 +432,8 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
       'In':           r.entry_type === 'top_up' ? amt : '',
       'Out':          r.entry_type === 'expense' ? amt : '',
       'Cash Balance': cashBal,
-      'Bank Balance': bankBal,
+      // Bank balance is owner-only — accounts' export omits the column
+      ...(isOwner ? { 'Bank Balance': bankBal } : {}),
       'Receipt':      r.receipt_original_name || '',
       'Recorded By':  r.created_by_name || '',
     };
