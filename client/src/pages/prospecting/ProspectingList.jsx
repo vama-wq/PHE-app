@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
-import { renderEmail, copyFor, bodyToHtml } from './applicationEmails';
+import { renderEmail, copyFor, bodyToHtml, catalogueFor } from './applicationEmails';
 import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Code, Eye } from 'lucide-react';
 
 // Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
@@ -149,8 +149,17 @@ export default function ProspectingList() {
   const emailHtml = useMemo(
     () => bodyToHtml(shownEmail.body, activeApplication),
     [shownEmail.body, activeApplication]);
+  const activeCat = catalogueFor(activeApplication);
+  // Body without the plain catalogue-link line — for Zoho's drag-and-drop editor,
+  // where the native Button block replaces that line.
+  const bodyNoCatalogue = useMemo(
+    () => shownEmail.body.split('\n').filter(l => !/\(PDF\):\s*https?:\/\//i.test(l)).join('\n').replace(/\n{3,}/g, '\n\n').trimEnd(),
+    [shownEmail.body]);
   const doCopy = async kind => {
-    const text = kind === 'html' ? emailHtml : `${shownEmail.subject}\n\n${shownEmail.body}`;
+    const text = kind === 'html' ? emailHtml
+      : kind === 'viztext' ? bodyNoCatalogue
+      : kind === 'url' ? activeCat.url
+      : `${shownEmail.subject}\n\n${shownEmail.body}`;
     try {
       await navigator.clipboard.writeText(text);
       setCopied(kind);
@@ -415,6 +424,25 @@ export default function ProspectingList() {
               <div className="mt-3 border border-gray-200 rounded-lg p-5 bg-white overflow-x-auto"
                 dangerouslySetInnerHTML={{ __html: emailHtml }} />
             )}
+            {/* Zoho drag-and-drop editor helper — no code view needed */}
+            <div className="mt-3 border border-gray-200 rounded-lg p-3 bg-gray-50">
+              <div className="text-xs font-semibold text-gray-700 mb-2">Using Zoho’s drag-and-drop editor instead? (no code view)</div>
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => doCopy('viztext')}>
+                  <Copy size={13} /> {copied === 'viztext' ? 'Copied ✓' : '1. Copy text (without catalogue line)'}
+                </button>
+                <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => doCopy('url')}>
+                  <Copy size={13} /> {copied === 'url' ? 'Copied ✓' : '2. Copy button URL'}
+                </button>
+              </div>
+              <ol className="text-xs text-gray-500 list-decimal pl-4 space-y-0.5">
+                <li>Paste the text into a <strong>Text</strong> block (the catalogue line is already removed).</li>
+                <li>Drag in Zoho’s <strong>Button</strong> block below the sign-off → label it
+                  {' '}<span className="font-medium text-gray-700">“View our {activeCat.label.toLowerCase()} (PDF)”</span>,
+                  paste the URL as its link, background <span className="font-mono">#b91c1c</span>, white text.</li>
+                <li>Select “phe.co.in” in the text and link it to <span className="font-mono">https://phe.co.in</span>.</li>
+              </ol>
+            </div>
             <p className="text-xs text-gray-400 mt-2">
               The copy re-tailors automatically to the application in view ({activeApplication || 'none selected'}); switching application resets manual edits. {'{{company}}'} merges in Zoho.
               “Copy HTML for Zoho” gives the email with the catalogue as a clickable button — in Zoho’s editor choose the code/HTML view and paste it in.
