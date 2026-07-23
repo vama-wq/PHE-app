@@ -271,12 +271,32 @@ async function initDB(retries = 20, delayMs = 10000) {
           rejection_reason TEXT,
           supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
           inventory_item_id INTEGER REFERENCES inventory_items(id) ON DELETE SET NULL,
-          reviewed_by INTEGER REFERENCES users(id),
-          reviewed_at TIMESTAMP,
-          created_by INTEGER REFERENCES users(id),
-          created_at TIMESTAMP DEFAULT NOW()
+          reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          reviewed_at TIMESTAMPTZ,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
         )`);
       await pool.query(`ALTER TABLE petty_cash_samples ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      // Repair databases where the table was created by the first cut of this
+      // migration: user FKs must not block user deletion, and timestamps follow
+      // the schema-wide TIMESTAMPTZ convention. Conditional → no-op thereafter.
+      await pool.query(`DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='petty_cash_samples_created_by_fkey' AND confdeltype <> 'n') THEN
+          ALTER TABLE petty_cash_samples DROP CONSTRAINT petty_cash_samples_created_by_fkey;
+          ALTER TABLE petty_cash_samples ADD CONSTRAINT petty_cash_samples_created_by_fkey
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL;
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='petty_cash_samples_reviewed_by_fkey' AND confdeltype <> 'n') THEN
+          ALTER TABLE petty_cash_samples DROP CONSTRAINT petty_cash_samples_reviewed_by_fkey;
+          ALTER TABLE petty_cash_samples ADD CONSTRAINT petty_cash_samples_reviewed_by_fkey
+            FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL;
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='petty_cash_samples'
+                   AND column_name='created_at' AND data_type='timestamp without time zone') THEN
+          ALTER TABLE petty_cash_samples ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+          ALTER TABLE petty_cash_samples ALTER COLUMN reviewed_at TYPE TIMESTAMPTZ USING reviewed_at AT TIME ZONE 'UTC';
+        END IF;
+      END $$`);
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);

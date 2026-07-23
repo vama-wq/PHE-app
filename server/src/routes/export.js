@@ -443,17 +443,23 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
     GROUP BY 1, 2 ORDER BY 1 DESC, total DESC`);
   const catData = catRows.map(r => ({ 'Month': r.month, 'Category': r.category || '', 'Total (₹)': Number(r.total) }));
 
-  // Sampling drafts and their outcomes
-  const sampleRows = await getDB().all(`
-    SELECT s.*, e.entry_date, u.name AS created_by_name, rv.name AS reviewed_by_name,
-           sup.name AS linked_supplier_name, inv.item_code AS linked_item_code
-    FROM petty_cash_samples s
-    LEFT JOIN petty_cash_entries e ON e.id = s.entry_id
-    LEFT JOIN users u  ON u.id = s.created_by
-    LEFT JOIN users rv ON rv.id = s.reviewed_by
-    LEFT JOIN suppliers sup ON sup.id = s.supplier_id
-    LEFT JOIN inventory_items inv ON inv.id = s.inventory_item_id
-    ORDER BY s.id ASC`);
+  // Sampling drafts and their outcomes. Degrade to an empty sheet if the table
+  // isn't queryable (e.g. boot-migration window) — never sink the whole export.
+  let sampleRows = [];
+  try {
+    sampleRows = await getDB().all(`
+      SELECT s.*, e.entry_date, u.name AS created_by_name, rv.name AS reviewed_by_name,
+             sup.name AS linked_supplier_name, inv.item_code AS linked_item_code
+      FROM petty_cash_samples s
+      LEFT JOIN petty_cash_entries e ON e.id = s.entry_id
+      LEFT JOIN users u  ON u.id = s.created_by
+      LEFT JOIN users rv ON rv.id = s.reviewed_by
+      LEFT JOIN suppliers sup ON sup.id = s.supplier_id
+      LEFT JOIN inventory_items inv ON inv.id = s.inventory_item_id
+      ORDER BY s.id ASC`);
+  } catch (e) {
+    console.error('petty-cash export: samples unavailable:', e.message);
+  }
   const sampleData = sampleRows.map(s => ({
     'Date':            s.entry_date || '',
     'Item':            s.item_name || '',
