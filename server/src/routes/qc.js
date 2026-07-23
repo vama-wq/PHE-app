@@ -188,11 +188,22 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
     0
   );
 
-  // Fetch first assembly for technical specs
+  // Fetch technical specs: first assembly, falling back to the order item —
+  // many cards never fill assemblies, but the order item always has the specs.
   const asm = await db.get(
     'SELECT * FROM job_card_assemblies WHERE job_card_id=$1 ORDER BY assembly_no ASC LIMIT 1',
     [req.params.id]
   );
+  const oi = jc.order_item_id
+    ? await db.get('SELECT * FROM order_items WHERE id=$1', [jc.order_item_id])
+    : null;
+  const specs = {
+    tube_material: asm?.tube_material || oi?.tube_material || null,
+    tube_diameter: asm?.tube_diameter_mm || oi?.tube_diameter || null,
+    wattage: asm?.wattage_actual || oi?.wattage || null,
+    voltage: asm?.voltage_actual || oi?.voltage || null,
+    plating: asm?.plating_description || oi?.plating_instructions || null,
+  };
 
   // Helper: strip trailing -N suffix to get the base drawing number for grouping
   // e.g. "PT-UTYPE-12U-500W-1" → "PT-UTYPE-12U-500W"
@@ -216,10 +227,17 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
 
     let fgId;
     if (existing) {
-      // Add stock to the existing product entry (update the stored location label to the latest)
+      // Add stock to the existing product entry (update the stored location
+      // label to the latest) and backfill any specs it's still missing.
       await db.run(
-        `UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1, location = COALESCE($3, location) WHERE id = $2`,
-        [qty, existing.id, fgLocation]
+        `UPDATE finished_goods SET qty_in = qty_in + $1, qty_available = qty_available + $1, location = COALESCE($3, location),
+           tube_material        = COALESCE(tube_material, $4),
+           tube_diameter        = COALESCE(tube_diameter, $5),
+           wattage              = COALESCE(wattage, $6),
+           voltage              = COALESCE(voltage, $7),
+           plating_instructions = COALESCE(plating_instructions, $8)
+         WHERE id = $2`,
+        [qty, existing.id, fgLocation, specs.tube_material, specs.tube_diameter, specs.wattage, specs.voltage, specs.plating]
       );
       fgId = existing.id;
     } else {
@@ -234,9 +252,9 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
         jc.id, jc.order_id, jc.order_code, jc.order_type,
         jc.customer_code, jc.customer_name,
         jc.drawing_no || null, baseNo,
-        asm?.tube_material || null, asm?.tube_diameter_mm || null,
-        asm?.wattage_actual || null, asm?.voltage_actual || null,
-        asm?.plating_description || null,
+        specs.tube_material, specs.tube_diameter,
+        specs.wattage, specs.voltage,
+        specs.plating,
         qty, null, fgLocation, req.user.id,
       ]);
       fgId = fg.lastInsertRowid;
