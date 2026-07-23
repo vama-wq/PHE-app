@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
-import { renderEmail, copyFor } from './applicationEmails';
-import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload } from 'lucide-react';
+import { renderEmail, copyFor, bodyToHtml } from './applicationEmails';
+import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Code, Eye } from 'lucide-react';
 
 // Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
 // header row; a "Company" column is mandatory, the rest are optional.
@@ -142,6 +142,21 @@ export default function ProspectingList() {
   const shownEmail = { ...tailored[activeEmail], ...(emailEdits[activeEmail] || {}) };
   const editEmail = (field, value) =>
     setEmailEdits(e => ({ ...e, [activeEmail]: { ...(e[activeEmail] || {}), [field]: value } }));
+
+  // Copy for Zoho: HTML turns the catalogue link into a clickable button.
+  const [copied, setCopied] = useState('');
+  const [showHtmlPreview, setShowHtmlPreview] = useState(false);
+  const emailHtml = useMemo(
+    () => bodyToHtml(shownEmail.body, activeApplication),
+    [shownEmail.body, activeApplication]);
+  const doCopy = async kind => {
+    const text = kind === 'html' ? emailHtml : `${shownEmail.subject}\n\n${shownEmail.body}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(kind);
+      setTimeout(() => setCopied(''), 2000);
+    } catch { /* clipboard unavailable — user can select the text manually */ }
+  };
 
   const selectedVisible = useMemo(() => visible.filter(p => selected.has(p.id)), [visible, selected]);
   const emailableSel = useMemo(() => selectedVisible.filter(hasEmail).map(p => p.id), [selectedVisible]);
@@ -385,8 +400,24 @@ export default function ProspectingList() {
             <textarea className="input w-full font-sans leading-relaxed" rows={14}
               value={shownEmail.body}
               onChange={e => editEmail('body', e.target.value)} />
+            <div className="flex flex-wrap items-center gap-2 mt-3">
+              <button className="btn-primary text-xs flex items-center gap-1.5" onClick={() => doCopy('html')}>
+                <Code size={13} /> {copied === 'html' ? 'Copied ✓' : 'Copy HTML for Zoho'}
+              </button>
+              <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => doCopy('text')}>
+                <Copy size={13} /> {copied === 'text' ? 'Copied ✓' : 'Copy plain text'}
+              </button>
+              <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => setShowHtmlPreview(v => !v)}>
+                <Eye size={13} /> {showHtmlPreview ? 'Hide preview' : 'Preview as recipient sees it'}
+              </button>
+            </div>
+            {showHtmlPreview && (
+              <div className="mt-3 border border-gray-200 rounded-lg p-5 bg-white overflow-x-auto"
+                dangerouslySetInnerHTML={{ __html: emailHtml }} />
+            )}
             <p className="text-xs text-gray-400 mt-2">
               The copy re-tailors automatically to the application in view ({activeApplication || 'none selected'}); switching application resets manual edits. {'{{company}}'} merges in Zoho.
+              “Copy HTML for Zoho” gives the email with the catalogue as a clickable button — in Zoho’s editor choose the code/HTML view and paste it in.
             </p>
           </div>
 

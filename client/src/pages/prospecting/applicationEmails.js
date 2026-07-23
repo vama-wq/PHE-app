@@ -222,6 +222,68 @@ function footer(application) {
   ].join('\n');
 }
 
+// ── HTML export for Zoho ──────────────────────────────────────────────────────
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Email-client-safe CTA button (table + styled anchor — works in Outlook/Gmail).
+export function catalogueButtonHtml(application) {
+  const cat = catalogueFor(application);
+  return (
+    '<table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin:18px 0;">' +
+    '<tr><td align="center" bgcolor="#b91c1c" style="border-radius:6px;">' +
+    `<a href="${cat.url}" target="_blank" ` +
+    'style="display:inline-block;padding:12px 26px;font-family:Arial,Helvetica,sans-serif;' +
+    'font-size:15px;font-weight:bold;line-height:1;color:#ffffff;text-decoration:none;border-radius:6px;">' +
+    `View our ${esc(cat.label.toLowerCase())} (PDF) &nbsp;&rarr;</a>` +
+    '</td></tr></table>'
+  );
+}
+
+/**
+ * Convert the (possibly hand-edited) plain-text body into Zoho-ready HTML:
+ * paragraphs become <p>, "→" lines become a bullet list, the plain catalogue-URL
+ * line becomes the clickable button, and the website/email addresses become links.
+ * Paste the result into Zoho Campaigns' HTML/code editor.
+ */
+export function bodyToHtml(bodyText, application) {
+  const cat = catalogueFor(application);
+  const out = [];
+  let para = [], bullets = [];
+  const flushPara = () => {
+    if (para.length) { out.push(`<p style="margin:0 0 14px;">${para.join('<br>')}</p>`); para = []; }
+  };
+  const flushBullets = () => {
+    if (bullets.length) {
+      out.push(`<ul style="margin:0 0 14px;padding-left:20px;">${bullets.map(b => `<li style="margin:4px 0;">${b}</li>`).join('')}</ul>`);
+      bullets = [];
+    }
+  };
+  const linkify = t => esc(t)
+    .replace(/vama@peenaheatelements\.com/g, '<a href="mailto:vama@peenaheatelements.com" style="color:#b91c1c;">vama@peenaheatelements.com</a>')
+    .replace(/https:\/\/phe\.co\.in/g, '<a href="https://phe.co.in" target="_blank" style="color:#b91c1c;">phe.co.in</a>');
+
+  for (const raw of String(bodyText).split('\n')) {
+    const line = raw.replace(/\s+$/, '');
+    // the plain-text catalogue line renders as the clickable button instead
+    if (line.includes(cat.url) || /\(PDF\):\s*https?:\/\/\S+\.pdf/i.test(line)) {
+      flushBullets(); flushPara();
+      out.push(catalogueButtonHtml(application));
+      continue;
+    }
+    if (line.startsWith('→')) { flushPara(); bullets.push(linkify(line.replace(/^→\s*/, ''))); continue; }
+    if (line.trim() === '') { flushBullets(); flushPara(); continue; }
+    flushBullets();
+    para.push(linkify(line));
+  }
+  flushBullets(); flushPara();
+
+  return (
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1f2937;max-width:620px;">' +
+    out.join('\n') +
+    '</div>'
+  );
+}
+
 /**
  * Build the tailored email for an application.
  * `which` is 'intro' | 'follow'. {{company}} is left in place for Zoho to merge.
