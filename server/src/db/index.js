@@ -297,6 +297,13 @@ async function initDB(retries = 20, delayMs = 10000) {
           ALTER TABLE petty_cash_samples ALTER COLUMN reviewed_at TYPE TIMESTAMPTZ USING reviewed_at AT TIME ZONE 'UTC';
         END IF;
       END $$`);
+      // Owner can bypass drawing approval per order (button on the order page,
+      // reversible). Replaces the old hardcoded client-side list — those orders
+      // are migrated here once.
+      await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS drawing_bypassed BOOLEAN NOT NULL DEFAULT FALSE`);
+      await pool.query(
+        `UPDATE orders SET drawing_bypassed=TRUE WHERE drawing_bypassed=FALSE AND order_code = ANY($1)`,
+        [['ORD-017-26', 'ORD-020-26', 'ORD-024-26', 'ORD-053-26', 'ORD-064-26', 'ORD-067-26', 'ORD-069-26', 'ORD-075-26']]);
       // Finished goods carry the product family (picked first on manual entry;
       // copied from the order item on production/return inwards). Backfill from
       // each row's job card → order item.

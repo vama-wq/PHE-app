@@ -584,6 +584,28 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
   }
 });
 
+// ── Drawing bypass: owner skips drawing approval for the whole order ──────────
+// Reversible — job cards can be created for all items while bypassed.
+router.put('/:id/drawing-bypass', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid order id' });
+    const db = getDB();
+    const o = await db.get('SELECT id, order_code, drawing_bypassed FROM orders WHERE id=$1', [id]);
+    if (!o) return res.status(404).json({ error: 'Order not found' });
+    const bypassed = req.body.bypassed === true || req.body.bypassed === 'true';
+    await db.run('UPDATE orders SET drawing_bypassed=$1 WHERE id=$2', [bypassed, id]);
+    await logActivity(id, null, 'drawing_bypass',
+      bypassed
+        ? `Drawing approval bypassed for ${o.order_code} — job cards allowed without drawings`
+        : `Drawing requirement restored for ${o.order_code}`, req.user.id);
+    res.json({ message: bypassed ? 'Drawing bypassed for this order' : 'Drawing requirement restored', drawing_bypassed: bypassed });
+  } catch (e) {
+    console.error('drawing bypass error:', e);
+    res.status(500).json({ error: 'Failed to update drawing bypass' });
+  }
+});
+
 // ── Drawing review: owner approves or rejects individual drawings ──────────────
 router.put('/:id/drawings/:drawingId/approve', authenticate, authorize('owner'), async (req, res) => {
   const db = getDB();

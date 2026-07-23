@@ -30,7 +30,8 @@ function validateItem(f) {
 
 // Orders allowed to upload job cards before their drawings are approved.
 // Drawings still show and follow the normal approval flow.
-const DRAWING_BYPASS_ORDERS = ['ORD-020-26', 'ORD-024-26', 'ORD-017-26', 'ORD-053-26', 'ORD-064-26', 'ORD-067-26', 'ORD-069-26', 'ORD-075-26'];
+// Drawing bypass is a per-order DB flag (orders.drawing_bypassed) toggled by
+// the owner from the Reference Drawings section — no hardcoded list.
 
 export default function OrderDetail() {
   const { id } = useParams();
@@ -484,15 +485,46 @@ export default function OrderDetail() {
 
           {/* ── Reference Drawings (per item) ── */}
           <div className="card p-5">
-            <div className="mb-4">
-              <h2 className="section-title">
-                <PenLine size={18} className="text-orange-500" />
-                Reference Drawings
-              </h2>
-              <p className="text-xs text-gray-400 mt-0.5">
-                One drawing per item · owner approves/rejects each individually · approved items can have job cards uploaded
-              </p>
+            <div className="mb-4 flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <h2 className="section-title">
+                  <PenLine size={18} className="text-orange-500" />
+                  Reference Drawings
+                  {order.drawing_bypassed && (
+                    <span className="text-[10px] font-bold bg-amber-100 text-amber-700 rounded-full px-2 py-0.5 ml-1">DRAWING BYPASSED</span>
+                  )}
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  One drawing per item · owner approves/rejects each individually · approved items can have job cards uploaded
+                </p>
+              </div>
+              {user.role === 'owner' && orderApproved && (
+                order.drawing_bypassed ? (
+                  <button className="btn-secondary btn-sm text-xs"
+                    onClick={async () => {
+                      if (!window.confirm('Require drawings again for this order? Job cards will need approved drawings from now on.')) return;
+                      try { await api.put(`/orders/${id}/drawing-bypass`, { bypassed: false }); load(); }
+                      catch (err) { alert(err.response?.data?.error || 'Failed'); }
+                    }}>
+                    Require Drawing Again
+                  </button>
+                ) : (
+                  <button className="btn-secondary btn-sm text-xs text-amber-700 border-amber-300 hover:bg-amber-50"
+                    onClick={async () => {
+                      if (!window.confirm(`Bypass drawing approval for ${order.order_code}? Job cards can then be created for all items without drawings. You can undo this anytime.`)) return;
+                      try { await api.put(`/orders/${id}/drawing-bypass`, { bypassed: true }); load(); }
+                      catch (err) { alert(err.response?.data?.error || 'Failed'); }
+                    }}>
+                    Bypass Drawing
+                  </button>
+                )
+              )}
             </div>
+            {order.drawing_bypassed && (
+              <div className="mb-4 text-sm rounded-xl px-4 py-3 bg-amber-50 border border-amber-200 text-amber-700">
+                ⚡ Drawing approval bypassed by owner — job cards can be created for all items without drawings.
+              </div>
+            )}
 
             {/* Gate: drawings only relevant after order is approved */}
             {!orderApproved && (
@@ -681,7 +713,7 @@ export default function OrderDetail() {
                         <span className="text-xs text-gray-500 font-medium flex items-center gap-1">
                           <CheckCircle2 size={11} className="text-green-500" /> Job Card Uploaded
                         </span>
-                      ) : drawingStatus === 'approved' || DRAWING_BYPASS_ORDERS.includes(order.order_code) ? (
+                      ) : drawingStatus === 'approved' || order.drawing_bypassed ? (
                         <button className="btn-primary btn-sm py-1 px-2 text-xs"
                           onClick={() => { setShowJobCardModal(true); }}>
                           <Upload size={12} /> Upload Job Card
@@ -942,7 +974,7 @@ export default function OrderDetail() {
       )}
       {showJobCardModal && (
         <UploadJobCardModal orderId={id}
-          orderCode={order.order_code}
+          drawingBypassed={!!order.drawing_bypassed}
           defaultDispatchDate={order.dispatch_date || ''}
           items={order.items || []}
           jobCards={order.job_cards || []}
@@ -1766,7 +1798,7 @@ function QuotationModal({ orderId, hasPriceRequest, onClose, onSave }) {
   );
 }
 
-function UploadJobCardModal({ orderId, orderCode, defaultDispatchDate, items, jobCards, itemDrawingStatus = {}, onClose, onSave }) {
+function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchDate, items, jobCards, itemDrawingStatus = {}, onClose, onSave }) {
   const [selectedItemId, setSelectedItemId] = useState('');
   const [form, setForm] = useState({
     qty: '', dispatch_date: defaultDispatchDate || '',
@@ -1777,10 +1809,9 @@ function UploadJobCardModal({ orderId, orderCode, defaultDispatchDate, items, jo
   const [saving, setSaving] = useState(false);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  const bypassDrawing = DRAWING_BYPASS_ORDERS.includes(orderCode);
   const takenDrawings = new Set(jobCards.map(jc => jc.drawing_no).filter(Boolean));
   const availableItems = items.filter(item =>
-    (bypassDrawing || itemDrawingStatus[item.id] === 'approved') && !takenDrawings.has(item.drawing_number)
+    (drawingBypassed || itemDrawingStatus[item.id] === 'approved') && !takenDrawings.has(item.drawing_number)
   );
 
   // The selected item object
