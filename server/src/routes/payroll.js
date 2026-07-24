@@ -150,9 +150,12 @@ router.get('/employees', authenticate, authorize('owner', 'accounts'), async (re
       const balMap = Object.fromEntries(balances.map(b => [b.employee_id, Number(b.bal)]));
       return res.json(rows.map(e => ({ ...e, leave_balance: balMap[e.id] || 0 })));
     }
-    // accounts: names + groups only — no rates, salaries, petrol, advances or bank details
+    // accounts enter worker master data (incl. salary + bank), but never see the
+    // running financial state — advance balance and leave balance stay owner-only.
     res.json(rows.map(e => ({
       id: e.id, name: e.name, worker_group: e.worker_group, active: e.active, joined_on: e.joined_on,
+      daily_rate: e.daily_rate, monthly_salary: e.monthly_salary, petrol_monthly: e.petrol_monthly,
+      bank_ac_no: e.bank_ac_no, ifsc_code: e.ifsc_code, ac_holder_name: e.ac_holder_name, notes: e.notes,
     })));
   } catch (e) {
     console.error('employees list error:', e);
@@ -160,7 +163,7 @@ router.get('/employees', authenticate, authorize('owner', 'accounts'), async (re
   }
 });
 
-router.post('/employees', authenticate, authorize('owner'), async (req, res) => {
+router.post('/employees', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const { name, worker_group, daily_rate, monthly_salary, petrol_monthly,
             bank_ac_no, ifsc_code, ac_holder_name, joined_on, notes } = req.body;
@@ -191,7 +194,7 @@ router.post('/employees', authenticate, authorize('owner'), async (req, res) => 
   }
 });
 
-router.put('/employees/:id', authenticate, authorize('owner'), async (req, res) => {
+router.put('/employees/:id', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid employee id' });
@@ -221,6 +224,32 @@ router.put('/employees/:id', authenticate, authorize('owner'), async (req, res) 
   } catch (e) {
     console.error('employee update error:', e);
     res.status(500).json({ error: 'Failed to update employee' });
+  }
+});
+
+// Hard-delete a worker (owner) — only when they carry NO payroll history
+// (never appeared in a run, no advances, no leave ledger). Leavers should be
+// deactivated instead so their salary records survive.
+router.delete('/employees/:id', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid employee id' });
+    const db = getDB();
+    const emp = await db.get('SELECT id, name FROM employees WHERE id=$1', [id]);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+    const hist = await db.get(`
+      SELECT (SELECT COUNT(*) FROM payroll_lines WHERE employee_id=$1)
+           + (SELECT COUNT(*) FROM employee_advances WHERE employee_id=$1)
+           + (SELECT COUNT(*) FROM employee_leave_ledger WHERE employee_id=$1) AS n`, [id]);
+    if (Number(hist.n) > 0) {
+      return res.status(400).json({ error: 'This worker has payroll history — deactivate them instead of deleting' });
+    }
+    await db.run('DELETE FROM employees WHERE id=$1', [id]);
+    await logActivity(null, null, 'employee_deleted', `Worker deleted: ${emp.name}`, req.user.id);
+    res.json({ message: 'Worker deleted' });
+  } catch (e) {
+    console.error('employee delete error:', e);
+    res.status(500).json({ error: 'Failed to delete worker' });
   }
 });
 

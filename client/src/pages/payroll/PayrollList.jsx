@@ -4,7 +4,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import { fmtDate } from '../../lib/utils';
-import { Banknote, Plus, Users, CalendarDays, Upload, Pencil, Wallet, CalendarClock } from 'lucide-react';
+import { Banknote, Plus, Users, CalendarDays, Upload, Pencil, Wallet, CalendarClock, Trash2 } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const GROUP_LABELS = {
@@ -40,6 +40,12 @@ export default function PayrollList() {
   };
   useEffect(load, []);
 
+  const handleDeleteEmp = async (e) => {
+    if (!window.confirm(`Delete ${e.name}? This is only allowed if they have no payroll history — otherwise deactivate them via Edit.`)) return;
+    try { await api.delete(`/payroll/employees/${e.id}`); load(); }
+    catch (err) { alert(err.response?.data?.error || 'Failed'); }
+  };
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
@@ -52,7 +58,7 @@ export default function PayrollList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {isOwner && tab === 'employees' && (
+          {tab === 'employees' && (
             <button className="btn-primary flex items-center gap-1.5" onClick={() => setEditEmp('new')}>
               <Plus size={16} /> Add Worker
             </button>
@@ -121,58 +127,59 @@ export default function PayrollList() {
               <tr>
                 <th className="table-header text-left">Name</th>
                 <th className="table-header text-left">Type</th>
-                {isOwner && (
-                  <>
-                    <th className="table-header text-right">Rate / Salary</th>
-                    <th className="table-header text-right">Petrol</th>
-                    <th className="table-header text-right">Advance Bal.</th>
-                    <th className="table-header text-right">Leave Bal.</th>
-                    <th className="table-header text-left">Bank AC</th>
-                  </>
-                )}
+                <th className="table-header text-right">Rate / Salary</th>
+                <th className="table-header text-right">Petrol</th>
+                {isOwner && <th className="table-header text-right">Advance Bal.</th>}
+                {isOwner && <th className="table-header text-right">Leave Bal.</th>}
+                <th className="table-header text-left">Bank AC</th>
                 <th className="table-header text-center">Status</th>
-                {isOwner && <th className="table-header text-center"></th>}
+                <th className="table-header text-center"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {employees.length === 0 ? (
-                <tr><td colSpan={9} className="table-cell text-center text-gray-400 py-10">
-                  {isOwner ? 'Add your workers to get started' : 'No workers added yet'}
+                <tr><td colSpan={isOwner ? 9 : 7} className="table-cell text-center text-gray-400 py-10">
+                  No workers added yet — add your workers to get started
                 </td></tr>
               ) : employees.map(e => (
                 <tr key={e.id} className={`hover:bg-gray-50 ${!e.active ? 'opacity-50' : ''}`}>
                   <td className="table-cell text-sm font-medium text-gray-800">{e.name}</td>
                   <td className="table-cell text-xs text-gray-500">{GROUP_LABELS[e.worker_group]}</td>
+                  <td className="table-cell text-right text-sm">
+                    {e.worker_group === 'labour' ? `${inr(e.daily_rate || 0)}/day` : `${inr(e.monthly_salary || 0)}/mo`}
+                  </td>
+                  <td className="table-cell text-right text-sm">{Number(e.petrol_monthly) > 0 ? inr(e.petrol_monthly) : '—'}</td>
                   {isOwner && (
-                    <>
-                      <td className="table-cell text-right text-sm">
-                        {e.worker_group === 'labour' ? `${inr(e.daily_rate || 0)}/day` : `${inr(e.monthly_salary || 0)}/mo`}
-                      </td>
-                      <td className="table-cell text-right text-sm">{Number(e.petrol_monthly) > 0 ? inr(e.petrol_monthly) : '—'}</td>
-                      <td className="table-cell text-right text-sm">
-                        {Number(e.advance_balance) > 0 ? <span className="text-amber-700 font-semibold">{inr(e.advance_balance)}</span> : '—'}
-                      </td>
-                      <td className="table-cell text-right text-sm">
-                        {e.worker_group === 'labour' ? '—' : <span className="font-semibold">{Number(e.leave_balance || 0)}</span>}
-                      </td>
-                      <td className="table-cell text-xs text-gray-500">{e.bank_ac_no || '—'}</td>
-                    </>
+                    <td className="table-cell text-right text-sm">
+                      {Number(e.advance_balance) > 0 ? <span className="text-amber-700 font-semibold">{inr(e.advance_balance)}</span> : '—'}
+                    </td>
                   )}
+                  {isOwner && (
+                    <td className="table-cell text-right text-sm">
+                      {e.worker_group === 'labour' ? '—' : <span className="font-semibold">{Number(e.leave_balance || 0)}</span>}
+                    </td>
+                  )}
+                  <td className="table-cell text-xs text-gray-500">{e.bank_ac_no || '—'}</td>
                   <td className="table-cell text-center">
                     <span className={`text-[10px] font-bold rounded-full px-2 py-0.5 ${e.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                       {e.active ? 'ACTIVE' : 'INACTIVE'}
                     </span>
                   </td>
-                  {isOwner && (
-                    <td className="table-cell text-center whitespace-nowrap">
+                  <td className="table-cell text-center whitespace-nowrap">
+                    {isOwner && (
                       <button className="p-1 text-gray-400 hover:text-brand-600" title="Record advance" onClick={() => setAdvanceEmp(e)}>
                         <Wallet size={14} />
                       </button>
-                      <button className="p-1 text-gray-400 hover:text-brand-600" title="Edit worker" onClick={() => setEditEmp(e)}>
-                        <Pencil size={14} />
+                    )}
+                    <button className="p-1 text-gray-400 hover:text-brand-600" title="Edit worker" onClick={() => setEditEmp(e)}>
+                      <Pencil size={14} />
+                    </button>
+                    {isOwner && (
+                      <button className="p-1 text-gray-300 hover:text-red-600" title="Delete worker (only if no payroll history)" onClick={() => handleDeleteEmp(e)}>
+                        <Trash2 size={14} />
                       </button>
-                    </td>
-                  )}
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -336,11 +343,12 @@ function EmployeeModal({ employee, onClose, onDone }) {
             <input className="input" value={f.notes || ''} onChange={set('notes')} />
           </div>
           {employee && (
-            <div className="col-span-2">
+            <div className="col-span-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
               <label className="flex items-center gap-2 text-sm text-gray-700">
                 <input type="checkbox" checked={!!f.active} onChange={e => setF(p => ({ ...p, active: e.target.checked }))} />
-                Active (included in new salary runs)
+                Active — included in new salary runs
               </label>
+              <p className="text-[11px] text-gray-400 mt-0.5 ml-6">Uncheck when the worker leaves — they drop out of future runs but their past salary records are kept.</p>
             </div>
           )}
         </div>
