@@ -321,10 +321,12 @@ export default function PayrollRun() {
                       <td className="table-cell text-right text-sm text-red-600">{inr(l.absent_deduction)}</td>
                       <td className="table-cell text-right text-sm">{inr(l.ot_amount)}</td>
                       <td className="table-cell text-right">
-                        {editable ? (
-                          <input className="input text-sm py-1 px-1.5 text-right w-20" type="number" step="any" min="0"
-                            value={val(l, 'petrol')} onChange={setVal(l, 'petrol')} />
-                        ) : <span className="text-sm">{inr(l.petrol)}</span>}
+                        {l.worker_group === 'fixed_production_nl'
+                          ? <span className="text-sm text-gray-300">—</span>
+                          : editable ? (
+                            <input className="input text-sm py-1 px-1.5 text-right w-20" type="number" step="any" min="0"
+                              value={val(l, 'petrol')} onChange={setVal(l, 'petrol')} />
+                          ) : <span className="text-sm">{inr(l.petrol)}</span>}
                       </td>
                       <td className="table-cell text-right">
                         {editable ? (

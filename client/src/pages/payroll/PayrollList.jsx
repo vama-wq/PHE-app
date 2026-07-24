@@ -318,10 +318,12 @@ function EmployeeModal({ employee, onClose, onDone }) {
               <input className="input" type="number" step="any" min="0" value={f.monthly_salary || ''} onChange={set('monthly_salary')} />
             </div>
           )}
-          <div>
-            <label className="label">Petrol / month (₹)</label>
-            <input className="input" type="number" step="any" min="0" value={f.petrol_monthly || ''} onChange={set('petrol_monthly')} />
-          </div>
+          {(f.worker_group === 'fixed_admin' || f.worker_group === 'fixed_production') && (
+            <div>
+              <label className="label">Petrol / month (₹)</label>
+              <input className="input" type="number" step="any" min="0" value={f.petrol_monthly || ''} onChange={set('petrol_monthly')} />
+            </div>
+          )}
           <div>
             <label className="label">Bank AC No</label>
             <input className="input" value={f.bank_ac_no || ''} onChange={set('bank_ac_no')} />

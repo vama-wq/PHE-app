@@ -27,6 +27,9 @@ const ALL_GROUPS = ['labour', 'fixed_admin', 'fixed_production', 'fixed_producti
 // Paid leaves accrued per month by group (same pool, same carryforward). Admin
 // also earns variable 6:30 sick credits on top; production gets a flat 2.
 const MONTHLY_ACCRUAL = { fixed_admin: 1, fixed_production: 2 };
+// Only Admin and Production (with leave) get petrol — labour and no-leave
+// production never receive petrol reimbursement.
+const PETROL_GROUPS = ['fixed_admin', 'fixed_production'];
 const MONTH_BASIS_DAYS = 30; // fixed salary ÷ 30, always
 const OT_DIVISOR = 8;        // OT hour = day pay ÷ 8 for every group
 const MAX_CARRYFORWARD = 5;  // leaves carried into a new year
@@ -41,7 +44,8 @@ function computeLine(emp, line) {
   const absent = Number(line.absent_days || 0);
   const ot = Number(line.ot_hours || 0);
   const creditUsed = Number(line.leave_credit_used || 0);
-  const petrol = Number(line.petrol ?? emp.petrol_monthly ?? 0);
+  // Only Admin and Production (with leave) get petrol
+  const petrol = PETROL_GROUPS.includes(emp.worker_group) ? Number(line.petrol ?? emp.petrol_monthly ?? 0) : 0;
   const advance = Number(line.advance_deduction || 0);
 
   if (emp.worker_group === 'labour') {
@@ -184,7 +188,7 @@ router.post('/employees', authenticate, authorize('owner', 'accounts'), async (r
       [name.trim(), worker_group,
        worker_group === 'labour' ? Number(daily_rate) : null,
        FIXED_GROUPS.includes(worker_group) ? Number(monthly_salary) : null,
-       Number(petrol_monthly) || 0,
+       PETROL_GROUPS.includes(worker_group) ? (Number(petrol_monthly) || 0) : 0,
        (bank_ac_no || '').trim() || null, (ifsc_code || '').trim() || null, (ac_holder_name || '').trim() || null,
        joined_on || null, (notes || '').trim() || null, req.user.id]);
     res.status(201).json({ id: r.lastInsertRowid });
@@ -213,7 +217,7 @@ router.put('/employees/:id', authenticate, authorize('owner', 'accounts'), async
       [(name ?? emp.name).trim(), group,
        group === 'labour' ? (daily_rate != null ? Number(daily_rate) : emp.daily_rate) : null,
        FIXED_GROUPS.includes(group) ? (monthly_salary != null ? Number(monthly_salary) : emp.monthly_salary) : null,
-       petrol_monthly != null ? Number(petrol_monthly) : emp.petrol_monthly,
+       PETROL_GROUPS.includes(group) ? (petrol_monthly != null ? Number(petrol_monthly) : emp.petrol_monthly) : 0,
        bank_ac_no !== undefined ? ((bank_ac_no || '').trim() || null) : emp.bank_ac_no,
        ifsc_code !== undefined ? ((ifsc_code || '').trim() || null) : emp.ifsc_code,
        ac_holder_name !== undefined ? ((ac_holder_name || '').trim() || null) : emp.ac_holder_name,
@@ -376,7 +380,7 @@ router.post('/runs', authenticate, authorize('owner', 'accounts'), ...uploadEssl
         [month, workingDays, req.file?.storagePath || null, req.file?.originalname || null, req.user.id]);
       for (const emp of employees) {
         // Labour never receives petrol — only fixed staff do
-        const petrol = emp.worker_group === 'labour' ? 0 : (emp.petrol_monthly || 0);
+        const petrol = PETROL_GROUPS.includes(emp.worker_group) ? (emp.petrol_monthly || 0) : 0;
         await client.query(
           `INSERT INTO payroll_lines (run_id, employee_id, worker_group, daily_rate, monthly_salary, petrol, advance_deduction)
            VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -615,7 +619,7 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
           `UPDATE payroll_lines SET leave_credit_used=$1, sick_credit_earned=$2, petrol=$3, advance_deduction=$4,
              remarks=$5, base_pay=$6, ot_amount=$7, absent_deduction=$8, total_payable=$9
            WHERE id=$10`,
-          [creditUsed, sickEarned, merged.petrol, advance,
+          [creditUsed, sickEarned, pay.petrol, advance,
            u.remarks !== undefined ? ((u.remarks || '').trim() || null) : line.remarks,
            pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.total_payable, lineId]);
       }
@@ -769,7 +773,7 @@ router.post('/runs/:id/add-employee', authenticate, authorize('owner'), async (r
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
     const dupe = await db.get('SELECT id FROM payroll_lines WHERE run_id=$1 AND employee_id=$2', [id, empId]);
     if (dupe) return res.status(409).json({ error: 'Worker already in this run' });
-    const petrol = emp.worker_group === 'labour' ? 0 : (emp.petrol_monthly || 0);
+    const petrol = PETROL_GROUPS.includes(emp.worker_group) ? (emp.petrol_monthly || 0) : 0;
     await db.run(
       `INSERT INTO payroll_lines (run_id, employee_id, worker_group, daily_rate, monthly_salary, petrol, advance_deduction)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
