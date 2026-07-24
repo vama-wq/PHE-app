@@ -399,6 +399,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL`);
       await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS payroll_line_id INTEGER REFERENCES payroll_lines(id) ON DELETE SET NULL`);
       await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS advance_id INTEGER REFERENCES employee_advances(id) ON DELETE SET NULL`);
+      // Consolidate a pre-existing owner-added 'Employee Expenses' (plural) into
+      // the canonical 'Employee Expense' the Employee-Expense form keys on.
+      await pool.query(`UPDATE petty_cash_entries SET category='Employee Expense' WHERE category='Employee Expenses'`);
+      await pool.query(`DELETE FROM petty_cash_categories WHERE name='Employee Expenses'`);
       // employee_advances predates payroll_runs, so its settlement backlink FK
       // couldn't be inline — add it idempotently (ON DELETE SET NULL).
       await pool.query(`DO $$ BEGIN
