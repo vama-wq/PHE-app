@@ -7,7 +7,7 @@ import { Link } from 'react-router-dom';
 import {
   AlertTriangle, ClipboardList, CheckCircle, Clock, TrendingUp,
   Package, XCircle, ShoppingCart, FlaskConical, Wrench,
-  Truck, IndianRupee, Bell, DatabaseBackup,
+  Truck, IndianRupee, Bell, DatabaseBackup, Banknote, Wallet, Boxes, Landmark,
 } from 'lucide-react';
 
 // ── Backup status badge (owner dashboard, top-right) ────────────────────────
@@ -321,6 +321,9 @@ function OwnerAdminDashboard() {
   const [rejections, setRejections]       = useState([]);
   const [activeHolds, setActiveHolds]     = useState([]);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
+  const [finishedGoods, setFinishedGoods] = useState([]);
+  const [payrollRuns, setPayrollRuns]     = useState([]);
+  const [statement, setStatement]         = useState(null);
   const [loading, setLoading]             = useState(true);
   const [approvingHold, setApprovingHold] = useState(null);
   const [backup, setBackup]               = useState(undefined);
@@ -329,8 +332,11 @@ function OwnerAdminDashboard() {
   const hasJobCards  = canSee(user, 'job-cards');
   const hasInventory = canSee(user, 'inventory') && ['owner', 'admin', 'design'].includes(user.role);
   const hasPurchases = canSee(user, 'purchases') && ['owner', 'admin', 'accounts'].includes(user.role);
+  const hasFinishedGoods = canSee(user, 'finished-goods');
+  const hasPayroll   = canSee(user, 'payroll');       // owner only in practice
+  const hasStatement = canSee(user, 'petty-cash');    // Account Statement — owner only in practice
 
-  const loadAll = () => {
+  const loadReqs = () => {
     const reqs = [];
     if (hasOrders)    reqs.push(api.get('/orders').then(r => setOrders(r.data)));
     if (hasJobCards)  reqs.push(api.get('/job-cards').then(r => setJobCards(r.data)));
@@ -338,9 +344,13 @@ function OwnerAdminDashboard() {
     if (hasPurchases) reqs.push(api.get('/purchase-orders').then(r => setPurchaseOrders(r.data)));
     if (hasJobCards)  reqs.push(api.get('/job-cards/rejections/all').then(r => setRejections(r.data)));
     if (hasJobCards)  reqs.push(api.get('/job-cards/holds/active').then(r => setActiveHolds(r.data)));
+    if (hasFinishedGoods) reqs.push(api.get('/finished-goods').then(r => setFinishedGoods(r.data)).catch(() => {}));
+    if (hasPayroll)   reqs.push(api.get('/payroll/runs').then(r => setPayrollRuns(r.data)).catch(() => {}));
+    if (hasStatement) reqs.push(api.get('/petty-cash').then(r => setStatement(r.data)).catch(() => {}));
     reqs.push(api.get('/activity/recent?limit=10').then(r => setRecent(r.data)));
-    return Promise.all(reqs);
+    return reqs;
   };
+  const loadAll = () => Promise.all(loadReqs());
 
   const handleApproveHold = async (jc, e) => {
     e.preventDefault();
@@ -358,14 +368,7 @@ function OwnerAdminDashboard() {
   };
 
   useEffect(() => {
-    const reqs = [];
-    if (hasOrders)    reqs.push(api.get('/orders').then(r => setOrders(r.data)));
-    if (hasJobCards)  reqs.push(api.get('/job-cards').then(r => setJobCards(r.data)));
-    if (hasInventory) reqs.push(api.get('/inventory/low-stock').then(r => setLowStock(r.data)));
-    if (hasPurchases) reqs.push(api.get('/purchase-orders').then(r => setPurchaseOrders(r.data)));
-    if (hasJobCards)  reqs.push(api.get('/job-cards/rejections/all').then(r => setRejections(r.data)));
-    if (hasJobCards)  reqs.push(api.get('/job-cards/holds/active').then(r => setActiveHolds(r.data)));
-    reqs.push(api.get('/activity/recent?limit=10').then(r => setRecent(r.data)));
+    const reqs = loadReqs();
     reqs.push(api.get('/backup/status').then(r => setBackup(r.data)).catch(() => setBackup(null)));
     Promise.all(reqs).finally(() => setLoading(false));
   }, []);
@@ -381,6 +384,11 @@ function OwnerAdminDashboard() {
   });
 
   const pendingPOs  = purchaseOrders.filter(po => ['pending','approved'].includes(po.status));
+
+  const fgOutOfStock = finishedGoods.filter(f => Number(f.qty_available) === 0);
+  // Salary runs still needing work (attendance/review) or approved-but-unpaid
+  const pendingRuns  = payrollRuns.filter(r => ['draft','submitted'].includes(r.status));
+  const unpaidRuns   = payrollRuns.filter(r => r.status === 'approved');
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -399,6 +407,9 @@ function OwnerAdminDashboard() {
         {hasJobCards  && <StatCard label="On Hold"          value={onHold.length}     icon={AlertTriangle}  color={onHold.length > 0 ? 'red' : 'green'} sub={onHold.length > 0 ? 'Requires approval' : 'All clear'} to="/job-cards" />}
         {hasInventory && <StatCard label="Low Stock Items"  value={lowStock.length}   icon={Package}        color={lowStock.length > 0 ? 'red' : 'green'} to="/inventory" />}
         {hasPurchases && <StatCard label="Pending POs"      value={pendingPOs.length} icon={ShoppingCart}   color="teal"   to="/purchases" />}
+        {hasFinishedGoods && <StatCard label="Finished Goods" value={finishedGoods.length} sub={fgOutOfStock.length > 0 ? `${fgOutOfStock.length} out of stock` : 'all in stock'} icon={Boxes} color={fgOutOfStock.length > 0 ? 'orange' : 'green'} to="/finished-goods" />}
+        {hasStatement && statement && <StatCard label="Cash in Hand" value={fmtRs(statement.cash_balance)} icon={Wallet} color={Number(statement.cash_balance) < 0 ? 'red' : 'green'} to="/petty-cash" />}
+        {hasPayroll   && <StatCard label="Salary Runs" value={pendingRuns.length} sub={pendingRuns.length > 0 ? 'need action' : `${unpaidRuns.length} to pay`} icon={Banknote} color={pendingRuns.length > 0 ? 'orange' : (unpaidRuns.length > 0 ? 'teal' : 'green')} to="/payroll" />}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -573,10 +584,76 @@ function OwnerAdminDashboard() {
               </div>
             </SectionCard>
           )}
+
+          {/* Finished Goods out of stock */}
+          {hasFinishedGoods && fgOutOfStock.length > 0 && (
+            <SectionCard title="Finished Goods — Out of Stock" icon={Boxes} iconColor="text-orange-500"
+              action={<span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-semibold">{fgOutOfStock.length}</span>}>
+              <div className="divide-y divide-gray-50">
+                {fgOutOfStock.slice(0, 6).map((f, i) => (
+                  <Link key={i} to="/finished-goods"
+                    className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors">
+                    <span className="text-sm font-medium text-gray-800 truncate">{f.base_drawing_no || '—'}</span>
+                    <span className="text-xs font-semibold text-red-600">0 in stock</span>
+                  </Link>
+                ))}
+                {fgOutOfStock.length > 6 && (
+                  <Link to="/finished-goods" className="block text-center text-xs text-brand-600 py-2">+{fgOutOfStock.length - 6} more</Link>
+                )}
+              </div>
+            </SectionCard>
+          )}
+
+          {/* Payroll — runs needing action / to pay (owner) */}
+          {hasPayroll && (pendingRuns.length > 0 || unpaidRuns.length > 0) && (
+            <SectionCard title="Payroll" icon={Banknote} iconColor="text-emerald-600">
+              <div className="divide-y divide-gray-50">
+                {[...pendingRuns, ...unpaidRuns].slice(0, 6).map(r => (
+                  <Link key={r.id} to={`/payroll/runs/${r.id}`}
+                    className="flex items-center justify-between px-5 py-3.5 hover:bg-gray-50 transition-colors">
+                    <div>
+                      <span className="font-semibold text-sm text-gray-900">{r.month}</span>
+                      <span className="text-xs text-gray-400 ml-2">{r.line_count} workers</span>
+                    </div>
+                    <div className="text-right">
+                      {r.total_payable != null && <div className="text-sm font-semibold text-gray-800">{fmtRs(r.total_payable)}</div>}
+                      <span className={`text-[10px] font-bold rounded-full px-2 py-0.5 uppercase ${r.status === 'approved' ? 'bg-teal-100 text-teal-700' : r.status === 'submitted' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                        {r.status === 'approved' ? 'to pay' : r.status}
+                      </span>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </SectionCard>
+          )}
         </div>
 
         {/* Side column */}
         <div className="space-y-4">
+
+          {/* Account Statement balances (owner) */}
+          {hasStatement && statement && (
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
+                <Wallet size={15} className="text-emerald-600" /> Account Statement
+              </h3>
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500 flex items-center gap-1"><Wallet size={12} className="text-emerald-500" /> Cash in Hand</span>
+                  <span className={`text-sm font-bold ${Number(statement.cash_balance) < 0 ? 'text-red-600' : 'text-gray-800'}`}>{fmtRs(statement.cash_balance)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500 flex items-center gap-1"><Landmark size={12} className="text-blue-500" /> Bank Balance</span>
+                  <span className={`text-sm font-bold ${Number(statement.bank_balance) < 0 ? 'text-red-600' : 'text-gray-800'}`}>{fmtRs(statement.bank_balance)}</span>
+                </div>
+                <div className="flex items-center justify-between border-t border-gray-100 pt-2">
+                  <span className="text-xs text-gray-500 flex items-center gap-1"><Clock size={12} className="text-amber-500" /> Unpaid (pending)</span>
+                  <span className="text-sm font-bold text-amber-700">{fmtRs(statement.unpaid_pending)}</span>
+                </div>
+                <Link to="/petty-cash" className="block text-center text-xs text-brand-600 pt-1 hover:text-brand-800">Open statement →</Link>
+              </div>
+            </div>
+          )}
 
           {/* Pending POs */}
           {hasPurchases && pendingPOs.length > 0 && (
@@ -644,20 +721,31 @@ function AccountsDashboard() {
   const { user } = useAuthStore();
   const [orders, setOrders]                   = useState([]);
   const [purchaseOrders, setPurchaseOrders]   = useState([]);
+  const [payrollRuns, setPayrollRuns]         = useState([]);
+  const [statement, setStatement]             = useState(null);
   const [recent, setRecent]                   = useState([]);
   const [loading, setLoading]                 = useState(true);
 
   const hasOrders    = canSee(user, 'orders');
   const hasPurchases = canSee(user, 'purchases');
+  const hasPayroll   = canSee(user, 'payroll');
+  const hasStatement = canSee(user, 'petty-cash');
 
   useEffect(() => {
     const reqs = [api.get('/activity/recent?limit=10').then(r => setRecent(r.data))];
     if (hasOrders)    reqs.push(api.get('/orders').then(r => setOrders(r.data)));
     if (hasPurchases) reqs.push(api.get('/purchase-orders').then(r => setPurchaseOrders(r.data)));
+    if (hasPayroll)   reqs.push(api.get('/payroll/runs').then(r => setPayrollRuns(r.data)).catch(() => {}));
+    if (hasStatement) reqs.push(api.get(`/petty-cash?month=${new Date().toISOString().slice(0, 7)}`).then(r => setStatement(r.data)).catch(() => {}));
     Promise.all(reqs).finally(() => setLoading(false));
   }, []);
 
   if (loading) return <LoadingSpinner />;
+
+  // Payroll: draft/submitted runs the accounts team prepares & submits
+  const runsToPrepare = payrollRuns.filter(r => ['draft', 'submitted'].includes(r.status));
+  // This month's recorded expenses (Account Statement) — cash box view
+  const thisMonthExpense = (statement?.category_totals || []).reduce((s, c) => s + Number(c.total || 0), 0);
 
   const active        = orders.filter(o => o.status !== 'dispatched');
   const totalValue    = active.reduce((s, o) => s + (o.total_amount || 0), 0);
@@ -676,14 +764,12 @@ function AccountsDashboard() {
       </div>
 
       {/* Financial stat row */}
-      {hasOrders && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <StatCard label="Active Orders"   value={active.length}         icon={ClipboardList} color="blue"   to="/orders" />
-          <StatCard label="Total Value"     value={fmtRs(totalValue)}     icon={IndianRupee}   color="teal" />
-          <StatCard label="Collected"       value={fmtRs(totalAdv)}       icon={CheckCircle}   color="green"  sub={`${active.length - withBalance.length} fully paid`} />
-          <StatCard label="Balance Due"     value={fmtRs(totalBalance)}   icon={AlertTriangle} color={totalBalance > 0 ? 'orange' : 'green'} sub={`${withBalance.length} orders pending`} />
-        </div>
-      )}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {hasOrders && <StatCard label="Active Orders"   value={active.length}         icon={ClipboardList} color="blue"   to="/orders" />}
+        {hasOrders && <StatCard label="Balance Due"     value={fmtRs(totalBalance)}   icon={AlertTriangle} color={totalBalance > 0 ? 'orange' : 'green'} sub={`${withBalance.length} orders pending`} />}
+        {hasStatement && statement && <StatCard label="Cash in Hand" value={fmtRs(statement.cash_balance)} icon={Wallet} color={Number(statement.cash_balance) < 0 ? 'red' : 'green'} to="/petty-cash" />}
+        {hasPayroll && <StatCard label="Salary Runs" value={runsToPrepare.length} sub={runsToPrepare.length > 0 ? 'to prepare' : 'up to date'} icon={Banknote} color={runsToPrepare.length > 0 ? 'orange' : 'green'} to="/payroll" />}
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
@@ -764,6 +850,47 @@ function AccountsDashboard() {
 
         {/* Side */}
         <div className="space-y-4">
+
+          {/* Salary Runs to prepare/submit */}
+          {hasPayroll && (
+            <SectionCard title="Salary Runs" icon={Banknote} iconColor="text-emerald-600"
+              action={runsToPrepare.length > 0 && <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-semibold">{runsToPrepare.length} to prepare</span>}>
+              <div className="divide-y divide-gray-50">
+                {payrollRuns.length === 0 ? (
+                  <EmptyRow message="No salary runs yet" />
+                ) : payrollRuns.slice(0, 5).map(r => (
+                  <Link key={r.id} to={`/payroll/runs/${r.id}`}
+                    className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors">
+                    <div>
+                      <span className="font-semibold text-sm text-gray-900">{r.month}</span>
+                      <span className="text-xs text-gray-400 ml-2">{r.line_count} workers</span>
+                    </div>
+                    <span className={`text-[10px] font-bold rounded-full px-2 py-0.5 uppercase ${r.status === 'paid' ? 'bg-emerald-100 text-emerald-800' : r.status === 'approved' ? 'bg-green-100 text-green-700' : r.status === 'submitted' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>{r.status}</span>
+                  </Link>
+                ))}
+              </div>
+            </SectionCard>
+          )}
+
+          {/* Account Statement — cash box view (accounts sees cash only) */}
+          {hasStatement && statement && (
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
+                <Wallet size={15} className="text-emerald-600" /> Account Statement
+              </h3>
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500">Cash in Hand</span>
+                  <span className={`text-sm font-bold ${Number(statement.cash_balance) < 0 ? 'text-red-600' : 'text-gray-800'}`}>{fmtRs(statement.cash_balance)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500">Expenses this month</span>
+                  <span className="text-sm font-bold text-red-600">{fmtRs(thisMonthExpense)}</span>
+                </div>
+                <Link to="/petty-cash" className="block text-center text-xs text-brand-600 pt-1 hover:text-brand-800">Open statement →</Link>
+              </div>
+            </div>
+          )}
 
           {hasPurchases && (
             <div className="card p-5">
