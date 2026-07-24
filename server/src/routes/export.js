@@ -524,7 +524,9 @@ router.get('/payroll/:month', authenticate, authorize('owner'), async (req, res)
   }));
   const fixed = lines.filter(l => l.worker_group !== 'labour').map(l => ({
     'Name':             l.name,
-    'Type':             l.worker_group === 'fixed_admin' ? 'Admin (8h)' : 'Production (10h)',
+    'Type':             l.worker_group === 'fixed_admin' ? 'Admin (8h)'
+                          : l.worker_group === 'fixed_production_nl' ? 'Production (10h, no leave)'
+                          : 'Production (10h)',
     'Working Days':     Number(run.working_days),
     'Monthly Salary':   Number(l.monthly_salary || 0),
     'Pay as per Day':   Number(l.daily_rate || 0),

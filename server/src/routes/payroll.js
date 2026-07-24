@@ -18,7 +18,15 @@ const { parseEssl, matchEmployees } = require('../lib/esslParser');
 // Roles: accounts PREPARES (attendance only — never sees rates, amounts or
 // bank details); OWNER reviews, approves and marks paid (salary day = 7th).
 
-const FIXED_GROUPS = ['fixed_admin', 'fixed_production'];
+// Groups paid a fixed monthly salary (÷30/day maths). fixed_production_nl is a
+// 10h production worker on fixed salary but with NO paid leave.
+const FIXED_GROUPS = ['fixed_admin', 'fixed_production', 'fixed_production_nl'];
+// Groups that accrue and can spend paid leave (fixed_production_nl does NOT)
+const LEAVE_GROUPS = ['fixed_admin', 'fixed_production'];
+const ALL_GROUPS = ['labour', 'fixed_admin', 'fixed_production', 'fixed_production_nl'];
+// Paid leaves accrued per month by group (same pool, same carryforward). Admin
+// also earns variable 6:30 sick credits on top; production gets a flat 2.
+const MONTHLY_ACCRUAL = { fixed_admin: 1, fixed_production: 2 };
 const MONTH_BASIS_DAYS = 30; // fixed salary ÷ 30, always
 const OT_DIVISOR = 8;        // OT hour = day pay ÷ 8 for every group
 const MAX_CARRYFORWARD = 5;  // leaves carried into a new year
@@ -119,7 +127,7 @@ async function applyAttendanceUpdates(client, runId, updates) {
          base_pay=$7, ot_amount=$8, absent_deduction=$9, total_payable=$10
        WHERE id=$11`,
       [u.present_days, u.absent_days, u.ot_hours, u.late_stay_days, u.sick_credit_earned || 0,
-       Number(u.absent_days) > MAX_TOGETHER,
+       LEAVE_GROUPS.includes(line.worker_group) && Number(u.absent_days) > MAX_TOGETHER,
        pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.total_payable, line.id]);
   }
 }
@@ -157,7 +165,7 @@ router.post('/employees', authenticate, authorize('owner'), async (req, res) => 
     const { name, worker_group, daily_rate, monthly_salary, petrol_monthly,
             bank_ac_no, ifsc_code, ac_holder_name, joined_on, notes } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Name is required' });
-    if (!['labour', 'fixed_admin', 'fixed_production'].includes(worker_group)) {
+    if (!ALL_GROUPS.includes(worker_group)) {
       return res.status(400).json({ error: 'Pick a valid worker type' });
     }
     if (worker_group === 'labour' && !(Number(daily_rate) > 0)) {
@@ -193,7 +201,7 @@ router.put('/employees/:id', authenticate, authorize('owner'), async (req, res) 
     const { name, worker_group, daily_rate, monthly_salary, petrol_monthly,
             bank_ac_no, ifsc_code, ac_holder_name, joined_on, notes, active } = req.body;
     const group = worker_group || emp.worker_group;
-    if (!['labour', 'fixed_admin', 'fixed_production'].includes(group)) {
+    if (!ALL_GROUPS.includes(group)) {
       return res.status(400).json({ error: 'Pick a valid worker type' });
     }
     await db.run(
@@ -487,7 +495,7 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
            WHERE id=$12`,
           [merged.present_days, merged.absent_days, merged.ot_hours, merged.late_stay_days, clampedCredit,
            u.remarks !== undefined ? ((u.remarks || '').trim() || null) : line.remarks,
-           Number(merged.absent_days) > MAX_TOGETHER,
+           LEAVE_GROUPS.includes(line.worker_group) && Number(merged.absent_days) > MAX_TOGETHER,
            pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.total_payable, lineId]);
       }
     });
@@ -545,7 +553,7 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
         if (!line) continue;
 
         let creditUsed = u.leave_credit_used != null ? Number(u.leave_credit_used) : Number(line.leave_credit_used);
-        if (FIXED_GROUPS.includes(line.worker_group)) {
+        if (LEAVE_GROUPS.includes(line.worker_group)) {
           const { rows: balRows } = await client.query(
             'SELECT COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger WHERE employee_id=$1', [line.employee_id]);
           const bal = Number(balRows[0].bal);
@@ -555,7 +563,7 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
           if (creditUsed > MAX_TOGETHER) { errors.push(`${line.name}: paid leave capped at ${MAX_TOGETHER} (max together)`); creditUsed = MAX_TOGETHER; }
           if (creditUsed < 0) creditUsed = 0;
         } else {
-          creditUsed = 0; // labour has no paid leave
+          creditUsed = 0; // labour and no-leave production get no paid leave
         }
 
         let advance = u.advance_deduction != null ? Number(u.advance_deduction) : Number(line.advance_deduction);
@@ -622,7 +630,7 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
                       monthly_salary: line.e_salary, petrol_monthly: line.petrol };
         let creditUsed = Number(line.leave_credit_used || 0);
 
-        if (FIXED_GROUPS.includes(line.worker_group)) {
+        if (LEAVE_GROUPS.includes(line.worker_group)) {
           // Year start: trim carryforward above the cap BEFORE this month's postings
           if (isJanuary) {
             const { rows: b } = await client.query(
@@ -661,17 +669,20 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
         total += Number(pay.total_payable);
         lineCount += 1;
 
-        if (FIXED_GROUPS.includes(line.worker_group)) {
+        if (LEAVE_GROUPS.includes(line.worker_group)) {
           if (creditUsed > 0) {
             await client.query(
               `INSERT INTO employee_leave_ledger (employee_id, delta, reason, payroll_run_id, notes, created_by)
                VALUES ($1,$2,'used',$3,$4,$5)`,
               [line.employee_id, -creditUsed, id, `Used in ${run.month}`, req.user.id]);
           }
-          await client.query(
-            `INSERT INTO employee_leave_ledger (employee_id, delta, reason, payroll_run_id, notes, created_by)
-             VALUES ($1,1,'monthly_accrual',$2,$3,$4)`,
-            [line.employee_id, id, `Monthly paid leave for ${run.month}`, req.user.id]);
+          const accrual = MONTHLY_ACCRUAL[line.worker_group] || 0;
+          if (accrual > 0) {
+            await client.query(
+              `INSERT INTO employee_leave_ledger (employee_id, delta, reason, payroll_run_id, notes, created_by)
+               VALUES ($1,$2,'monthly_accrual',$3,$4,$5)`,
+              [line.employee_id, accrual, id, `Monthly paid leave (${accrual}) for ${run.month}`, req.user.id]);
+          }
           if (line.worker_group === 'fixed_admin' && Number(line.sick_credit_earned) > 0) {
             await client.query(
               `INSERT INTO employee_leave_ledger (employee_id, delta, reason, payroll_run_id, notes, created_by)

@@ -385,6 +385,11 @@ async function initDB(retries = 20, delayMs = 10000) {
       for (const t of ['employees', 'employee_advances', 'payroll_runs', 'payroll_lines', 'employee_leave_ledger']) {
         await pool.query(`ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY`).catch(() => {});
       }
+      // 4th worker group: fixed_production_nl — 10h production on fixed salary but
+      // NO paid leave (every absence deducts). Widen the CHECK on existing DBs.
+      await pool.query(`ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_worker_group_check`);
+      await pool.query(`ALTER TABLE employees ADD CONSTRAINT employees_worker_group_check
+        CHECK (worker_group IN ('labour','fixed_admin','fixed_production','fixed_production_nl'))`);
       // employee_advances predates payroll_runs, so its settlement backlink FK
       // couldn't be inline — add it idempotently (ON DELETE SET NULL).
       await pool.query(`DO $$ BEGIN

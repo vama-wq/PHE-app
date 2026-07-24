@@ -245,7 +245,7 @@ export default function PayrollRun() {
       {/* ── Fixed Salary (Admin + Production) ── */}
       {fixed.length > 0 && (
         <Section title="Fixed Salary — Admin & Production"
-          subtitle="Salary ÷ 30 per day · OT = day pay ÷ 8 per hour · 1 paid leave/month (max 5 carried to next year, >7 together flagged) · Admin: 4+ days past 6:30pm in a week = +1 sick credit">
+          subtitle="Salary ÷ 30 per day · OT = day pay ÷ 8 per hour · paid leave same pool (max 5 carried to next year, >7 together capped) · Admin: 1/month + 4+ days past 6:30pm in a week = +1 sick · Production: 2/month · Production (no leave): every absence deducts">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -277,26 +277,47 @@ export default function PayrollRun() {
                     {l.name}
                     {l.long_leave_flag && <span className="ml-1.5 text-[9px] font-bold bg-red-100 text-red-700 rounded px-1 py-0.5" title="More than 7 leaves together">&gt;7 LEAVES</span>}
                   </td>
-                  <td className="table-cell text-xs text-gray-500">{l.worker_group === 'fixed_admin' ? 'Admin (8h)' : 'Production (10h)'}</td>
+                  <td className="table-cell text-xs text-gray-500">
+                    {l.worker_group === 'fixed_admin' ? 'Admin (8h)'
+                      : l.worker_group === 'fixed_production_nl' ? 'Production (10h, no leave)'
+                      : 'Production (10h)'}
+                  </td>
                   {isOwner && <td className="table-cell text-right text-sm">{inr(l.monthly_salary || 0)}</td>}
                   <td className="table-cell text-right">{numInput(l, 'absent_days')}</td>
                   <td className="table-cell text-right">{numInput(l, 'ot_hours')}</td>
-                  <td className="table-cell text-right">{numInput(l, 'late_stay_days', { step: '1', disabled: l.worker_group !== 'fixed_admin' })}</td>
+                  <td className="table-cell text-right">
+                    {l.worker_group === 'fixed_admin'
+                      ? numInput(l, 'late_stay_days', { step: '1' })
+                      : <span className="text-sm text-gray-300">—</span>}
+                  </td>
                   {isOwner && (
                     <>
-                      <td className="table-cell text-right text-sm font-semibold">{leaveBal?.[l.employee_id] ?? 0}</td>
-                      <td className="table-cell text-right">
-                        {editable ? (
-                          <input className="input text-sm py-1 px-1.5 text-right w-14" type="number" step="0.5" min="0"
-                            value={val(l, 'leave_credit_used')} onChange={setVal(l, 'leave_credit_used')} />
-                        ) : <span className="text-sm">{Number(l.leave_credit_used)}</span>}
-                      </td>
-                      <td className="table-cell text-right">
-                        {editable && l.worker_group === 'fixed_admin' ? (
-                          <input className="input text-sm py-1 px-1.5 text-right w-14" type="number" step="1" min="0"
-                            value={val(l, 'sick_credit_earned')} onChange={setVal(l, 'sick_credit_earned')} />
-                        ) : <span className="text-sm">{Number(l.sick_credit_earned)}</span>}
-                      </td>
+                      {/* Leave columns only for groups that have paid leave */}
+                      {l.worker_group === 'fixed_production_nl' ? (
+                        <>
+                          <td className="table-cell text-right text-sm text-gray-300">—</td>
+                          <td className="table-cell text-right text-sm text-gray-300">—</td>
+                          <td className="table-cell text-right text-sm text-gray-300">—</td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="table-cell text-right text-sm font-semibold">{leaveBal?.[l.employee_id] ?? 0}</td>
+                          <td className="table-cell text-right">
+                            {editable ? (
+                              <input className="input text-sm py-1 px-1.5 text-right w-14" type="number" step="0.5" min="0"
+                                value={val(l, 'leave_credit_used')} onChange={setVal(l, 'leave_credit_used')} />
+                            ) : <span className="text-sm">{Number(l.leave_credit_used)}</span>}
+                          </td>
+                          <td className="table-cell text-right">
+                            {l.worker_group === 'fixed_admin'
+                              ? (editable ? (
+                                  <input className="input text-sm py-1 px-1.5 text-right w-14" type="number" step="1" min="0"
+                                    value={val(l, 'sick_credit_earned')} onChange={setVal(l, 'sick_credit_earned')} />
+                                ) : <span className="text-sm">{Number(l.sick_credit_earned)}</span>)
+                              : <span className="text-sm text-gray-300">—</span>}
+                          </td>
+                        </>
+                      )}
                       <td className="table-cell text-right text-sm text-red-600">{inr(l.absent_deduction)}</td>
                       <td className="table-cell text-right text-sm">{inr(l.ot_amount)}</td>
                       <td className="table-cell text-right">

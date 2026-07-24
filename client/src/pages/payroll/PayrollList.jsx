@@ -11,6 +11,7 @@ export const GROUP_LABELS = {
   labour: 'Per-Day Labour',
   fixed_admin: 'Fixed — Admin (8h)',
   fixed_production: 'Fixed — Production (10h)',
+  fixed_production_nl: 'Fixed — Production (10h, no leave)',
 };
 const STATUS_BADGES = {
   draft:     'bg-gray-100 text-gray-600',
@@ -295,7 +296,8 @@ function EmployeeModal({ employee, onClose, onDone }) {
             <select className="input" value={f.worker_group} onChange={set('worker_group')}>
               <option value="labour">Per-Day Labour — paid by present days, no paid leave</option>
               <option value="fixed_admin">Fixed — Admin (8h day, 1 paid leave/mo + 6:30 sick rule)</option>
-              <option value="fixed_production">Fixed — Production (10h day, 1 paid leave/mo)</option>
+              <option value="fixed_production">Fixed — Production (10h day, 2 paid leaves/mo)</option>
+              <option value="fixed_production_nl">Fixed — Production (10h day, no paid leave)</option>
             </select>
           </div>
           {isLabour ? (
