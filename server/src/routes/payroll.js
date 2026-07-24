@@ -741,6 +741,17 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
             // partial coverage of an advance leaves it unsettled (balance still tracks the remainder)
           }
         }
+
+        // Post the net salary into the Account Statement as an Unpaid Bank entry,
+        // linked to this line so marking it paid there flips the line to paid.
+        if (Number(pay.total_payable) > 0) {
+          await client.query(
+            `INSERT INTO petty_cash_entries
+               (entry_date, entry_type, category, description, paid_to, amount,
+                payment_method, affects_cash, payroll_line_id, created_by)
+             VALUES (CURRENT_DATE, 'expense', 'Salary', $1, $2, $3, 'unpaid_bank', FALSE, $4, $5)`,
+            [`Salary ${run.month}`, line.name, r2(pay.total_payable), line.id, req.user.id]);
+        }
       }
       await client.query(
         `UPDATE payroll_runs SET status='approved', approved_by=$1, approved_at=NOW() WHERE id=$2`,
@@ -820,11 +831,16 @@ router.put('/runs/:id/mark-paid', authenticate, authorize('owner'), async (req, 
     if (run.status === 'draft' || run.status === 'submitted') {
       return res.status(400).json({ error: 'Approve the run first' });
     }
+    // Keep the linked Account-Statement salary entries in sync: paid → Paid Bank
     if (Array.isArray(req.body.line_ids) && req.body.line_ids.length) {
       const ids = req.body.line_ids.map(n => parseInt(n, 10)).filter(Number.isInteger);
       await db.run(`UPDATE payroll_lines SET paid=TRUE WHERE run_id=$1 AND id = ANY($2)`, [id, ids]);
+      await db.run(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE
+                    WHERE payment_method='unpaid_bank' AND payroll_line_id = ANY($1)`, [ids]);
     } else {
       await db.run('UPDATE payroll_lines SET paid=TRUE WHERE run_id=$1', [id]);
+      await db.run(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE
+                    WHERE payment_method='unpaid_bank' AND payroll_line_id IN (SELECT id FROM payroll_lines WHERE run_id=$1)`, [id]);
     }
     const remaining = await db.get(
       'SELECT COUNT(*)::int AS n FROM payroll_lines WHERE run_id=$1 AND paid=FALSE', [id]);

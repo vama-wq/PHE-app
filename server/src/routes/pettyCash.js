@@ -12,7 +12,12 @@ const { uploadPettyCashReceipt, deleteFromStorage } = require('../middleware/upl
 const RECEIPT_REQUIRED_ABOVE = 500;
 const MACHINERY = 'Machinery';
 const SAMPLING = 'Sampling';
+const EMPLOYEE_EXPENSE = 'Employee Expense';
 const NO_CASH_COMPANY = 'jay bhramani'; // lower-cased for comparison
+// Employee Expense sub-types (stored in `description`). Advance Paid & Employee
+// Care pick a worker from the payroll list; the others need a free-text Paid To.
+const EMP_TYPES = ['Advance Paid', 'Employee Welfare', 'Employee Care', 'Miscellaneous'];
+const EMP_TYPES_WORKER = ['Advance Paid', 'Employee Care'];
 
 // ── Ledger + balance ──────────────────────────────────────────────────────────
 // Filters: ?month=YYYY-MM, ?category=<name>, ?company=<paid_to> (company scoped
@@ -176,6 +181,9 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
     // Sampling expenses carry full draft details for the future supplier + item
     let sample = null;
     let cat = null;
+    let empExpense = null;       // { type, employee_id, isAdvance } for Employee Expense
+    let finalPaidTo = (paid_to || '').trim();
+    let finalDescription = (description || '').trim() || null;
     if (entry_type === 'expense') {
       const to = (paid_to || '').trim();
       if (!(req.body.category || '').trim()) return fail(400, 'Category is required for expenses');
@@ -184,7 +192,27 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
       const known = await db.get('SELECT id, name FROM petty_cash_categories WHERE lower(name)=lower($1)', [req.body.category.trim()]);
       if (!known) return fail(400, 'Pick a valid category');
       cat = known.name;
-      if (!to) return fail(400, 'Paid To is required');
+      if (cat === 'Salary') return fail(400, 'Salary entries are posted automatically from Payroll');
+
+      if (cat === EMPLOYEE_EXPENSE) {
+        const type = (req.body.emp_expense_type || '').trim();
+        if (!EMP_TYPES.includes(type)) return fail(400, 'Pick an expense type (Advance Paid / Employee Welfare / Employee Care / Miscellaneous)');
+        finalDescription = type; // the sub-type is stored as the description
+        if (EMP_TYPES_WORKER.includes(type)) {
+          const empId = parseInt(req.body.employee_id, 10);
+          if (!Number.isInteger(empId)) return fail(400, 'Select the employee from the list');
+          const emp = await db.get('SELECT id, name FROM employees WHERE id=$1', [empId]);
+          if (!emp) return fail(400, 'Employee not found');
+          finalPaidTo = emp.name; // the chosen worker is the payee
+          empExpense = { type, employee_id: empId, isAdvance: type === 'Advance Paid' };
+        } else {
+          if (!to) return fail(400, 'Paid To is required');
+          empExpense = { type, employee_id: null, isAdvance: false };
+        }
+      } else {
+        if (!to) return fail(400, 'Paid To is required');
+      }
+
       if (cat === MACHINERY) {
         if (!(description || '').trim()) return fail(400, 'Description is required for Machinery expenses');
         const co = await db.get('SELECT id FROM petty_cash_companies WHERE lower(name)=lower($1)', [to]);
@@ -204,15 +232,27 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
       }
     }
 
-    // Entry + sampling draft commit atomically — they must never drift apart.
+    // Entry + sampling draft (+ auto payroll advance) commit atomically.
     const entryId = await db.withTransaction(async (client) => {
+      // Advance Paid → create the payroll advance so it deducts from the
+      // worker's next salary run; link it back onto this entry.
+      let advanceId = null;
+      if (empExpense?.isAdvance) {
+        const adv = await client.query(
+          `INSERT INTO employee_advances (employee_id, amount, advance_date, notes, created_by)
+           VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+          [empExpense.employee_id, amt, entry_date, 'Advance paid via Account Statement', req.user.id]);
+        advanceId = adv.rows[0].id;
+        await client.query('UPDATE employees SET advance_balance = advance_balance + $1 WHERE id=$2',
+          [amt, empExpense.employee_id]);
+      }
       const { rows } = await client.query(
-        `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, receipt_file, receipt_original_name, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-        [entry_date, entry_type, cat,
-         (description || '').trim() || null, (paid_to || '').trim() || null, amt,
+        `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, receipt_file, receipt_original_name, employee_id, advance_id, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+        [entry_date, entry_type, cat, finalDescription, finalPaidTo || null, amt,
          method, method !== 'unpaid_bank',
-         req.file?.storagePath || null, req.file?.originalname || null, req.user.id]);
+         req.file?.storagePath || null, req.file?.originalname || null,
+         empExpense?.employee_id || null, advanceId, req.user.id]);
       if (sample) {
         await client.query(
           `INSERT INTO petty_cash_samples (entry_id, supplier_name, item_name, category, unit, sample_qty, sample_cost, description, created_by)
@@ -349,7 +389,9 @@ router.put('/samples/:id/reject', authenticate, authorize('owner'), async (req, 
   }
 });
 
-// Owner marks an Unpaid Bank expense as Paid — it then hits the Bank balance
+// Owner marks an Unpaid Bank expense as Paid — it then hits the Bank balance.
+// For an auto-posted Salary entry, this ALSO marks the worker paid in Payroll
+// (and flips the whole run to 'paid' once every worker is settled).
 router.put('/:id/mark-paid', authenticate, authorize('owner'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -360,9 +402,23 @@ router.put('/:id/mark-paid', authenticate, authorize('owner'), async (req, res) 
     if (e.entry_type !== 'expense' || e.payment_method !== 'unpaid_bank') {
       return res.status(400).json({ error: 'Only an Unpaid Bank expense can be marked paid' });
     }
-    await db.run("UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE WHERE id=$1", [id]);
+    await db.withTransaction(async (client) => {
+      await client.query("UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE WHERE id=$1", [id]);
+      if (e.payroll_line_id) {
+        await client.query('UPDATE payroll_lines SET paid=TRUE WHERE id=$1', [e.payroll_line_id]);
+        const { rows: r } = await client.query('SELECT run_id FROM payroll_lines WHERE id=$1', [e.payroll_line_id]);
+        const runId = r[0]?.run_id;
+        if (runId) {
+          const { rows: rem } = await client.query(
+            'SELECT COUNT(*)::int AS n FROM payroll_lines WHERE run_id=$1 AND paid=FALSE', [runId]);
+          if (rem[0].n === 0) {
+            await client.query("UPDATE payroll_runs SET status='paid', paid_at=NOW() WHERE id=$1 AND status<>'paid'", [runId]);
+          }
+        }
+      }
+    });
     await logActivity(null, null, 'petty_cash_marked_paid',
-      `Unpaid bank expense marked paid: ₹${e.amount} — ${e.category || ''}${e.paid_to ? ` (${e.paid_to})` : ''}`, req.user.id);
+      `${e.category === 'Salary' ? 'Salary' : 'Unpaid bank expense'} marked paid: ₹${e.amount}${e.paid_to ? ` (${e.paid_to})` : ''}`, req.user.id);
     res.json({ message: 'Marked as paid' });
   } catch (e) {
     console.error('petty cash mark-paid error:', e);
@@ -380,10 +436,32 @@ router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {
     const db = getDB();
     const e = await db.get('SELECT * FROM petty_cash_entries WHERE id=$1', [id]);
     if (!e) return res.status(404).json({ error: 'Entry not found' });
-    await db.run('DELETE FROM petty_cash_entries WHERE id=$1', [id]);
+    // Salary entries are posted from an approved payroll run — don't orphan them
+    if (e.payroll_line_id) {
+      return res.status(400).json({ error: 'This is an auto-posted salary entry — it can\'t be deleted here' });
+    }
+    // An Advance Paid entry created a payroll advance. Reverse it if it hasn't
+    // been recovered in a run yet; if already settled, block (it's been deducted).
+    if (e.advance_id) {
+      const adv = await db.get('SELECT * FROM employee_advances WHERE id=$1', [e.advance_id]);
+      if (adv && adv.settled) {
+        return res.status(400).json({ error: 'This advance was already recovered in a salary run — it can\'t be deleted' });
+      }
+    }
+    await db.withTransaction(async (client) => {
+      if (e.advance_id) {
+        const { rows: a } = await client.query('SELECT * FROM employee_advances WHERE id=$1 AND settled=FALSE', [e.advance_id]);
+        if (a[0]) {
+          await client.query('UPDATE employees SET advance_balance = GREATEST(advance_balance - $1, 0) WHERE id=$2',
+            [Number(a[0].amount), a[0].employee_id]);
+          await client.query('DELETE FROM employee_advances WHERE id=$1', [e.advance_id]);
+        }
+      }
+      await client.query('DELETE FROM petty_cash_entries WHERE id=$1', [id]);
+    });
     await deleteFromStorage(e.receipt_file).catch(() => {});
     await logActivity(null, null, 'petty_cash_deleted',
-      `Petty cash entry deleted: ${e.entry_type} ₹${e.amount}${e.category ? ` (${e.category})` : ''}`, req.user.id);
+      `Account statement entry deleted: ${e.entry_type} ₹${e.amount}${e.category ? ` (${e.category})` : ''}`, req.user.id);
     res.json({ message: 'Entry deleted' });
   } catch (e) {
     console.error('petty cash delete error:', e);

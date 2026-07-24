@@ -407,6 +407,39 @@ router.get('/monthly-production', authenticate, authorize('owner'), async (req, 
 
 // ── Petty Cash ledger ─────────────────────────────────────────────────────────
 router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+  // ?account=cash → a Cash-in-Hand-only statement (accounts can export this
+  // for the supervisor). Otherwise the full ledger.
+  const cashOnly = String(req.query.account || '').toLowerCase() === 'cash';
+  if (cashOnly) {
+    const rows = await getDB().all(`
+      SELECT e.*, u.name AS created_by_name
+      FROM petty_cash_entries e LEFT JOIN users u ON u.id = e.created_by
+      WHERE e.payment_method='cash'
+      ORDER BY e.entry_date ASC, e.id ASC`);
+    let bal = 0;
+    const data = rows.map(r => {
+      const amt = Number(r.amount);
+      bal += r.entry_type === 'top_up' ? amt : -amt;
+      return {
+        'Date':        r.entry_date || '',
+        'Type':        r.entry_type === 'top_up' ? 'Top-up' : 'Expense',
+        'Category':    r.category || '',
+        'Description': r.description || '',
+        'Paid To':     r.paid_to || '',
+        'Cash In':     r.entry_type === 'top_up' ? amt : '',
+        'Cash Out':    r.entry_type === 'expense' ? amt : '',
+        'Cash Balance': Math.round(bal * 100) / 100,
+        'Receipt':     r.receipt_original_name || '',
+        'Recorded By': r.created_by_name || '',
+      };
+    });
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ Message: 'No cash entries yet' }]);
+    autoWidth(ws);
+    XLSX.utils.book_append_sheet(wb, ws, 'Cash in Hand');
+    return sendXlsx(res, wb, `cash_in_hand_${Date.now()}.xlsx`);
+  }
+
   const rows = await getDB().all(`
     SELECT e.*, u.name AS created_by_name
     FROM petty_cash_entries e LEFT JOIN users u ON u.id = e.created_by

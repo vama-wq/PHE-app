@@ -240,7 +240,7 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_pc_company ON petty_cash_companies(lower(name))`);
       // Jay Bhramani (Machinery) entries are recorded but don't reduce cash-in-hand.
       await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS affects_cash BOOLEAN NOT NULL DEFAULT TRUE`);
-      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling']) {
+      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling', 'Employee Expense', 'Salary']) {
         await pool.query(`INSERT INTO petty_cash_categories (name) VALUES ($1) ON CONFLICT DO NOTHING`, [c]);
       }
       await pool.query(`INSERT INTO petty_cash_companies (name) VALUES ($1) ON CONFLICT DO NOTHING`, ['Jay Bhramani']);
@@ -390,6 +390,15 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_worker_group_check`);
       await pool.query(`ALTER TABLE employees ADD CONSTRAINT employees_worker_group_check
         CHECK (worker_group IN ('labour','fixed_admin','fixed_production','fixed_production_nl'))`);
+
+      // Account Statement ↔ Payroll links on petty_cash_entries (added after the
+      // payroll tables exist): a 'Salary' entry links to the payroll line it was
+      // posted from (mark-paid syncs both ways); an 'Employee Expense / Advance
+      // Paid' entry links to the employee + the advance it created (deducted in
+      // the worker's next run; reversed if the entry is deleted while unsettled).
+      await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL`);
+      await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS payroll_line_id INTEGER REFERENCES payroll_lines(id) ON DELETE SET NULL`);
+      await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS advance_id INTEGER REFERENCES employee_advances(id) ON DELETE SET NULL`);
       // employee_advances predates payroll_runs, so its settlement backlink FK
       // couldn't be inline — add it idempotently (ON DELETE SET NULL).
       await pool.query(`DO $$ BEGIN

@@ -11,6 +11,9 @@ import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown,
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const MACHINERY = 'Machinery';
 const SAMPLING = 'Sampling';
+const EMPLOYEE_EXPENSE = 'Employee Expense';
+const EMP_TYPES = ['Advance Paid', 'Employee Welfare', 'Employee Care', 'Miscellaneous'];
+const EMP_TYPES_WORKER = ['Advance Paid', 'Employee Care']; // pick a worker from payroll
 const METHOD_BADGES = {
   cash:        { label: 'Cash',        cls: 'bg-emerald-100 text-emerald-700' },
   paid_bank:   { label: 'Paid Bank',   cls: 'bg-blue-100 text-blue-700' },
@@ -86,14 +89,19 @@ export default function PettyCashLedger() {
       <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Wallet size={24} className="text-emerald-600" /> Petty Cash
+            <Wallet size={24} className="text-emerald-600" /> Account Statement
           </h1>
-          <p className="text-gray-500 text-sm mt-0.5">Office expense ledger — record-only, receipts required above ₹{data?.receipt_required_above ?? 500}</p>
+          <p className="text-gray-500 text-sm mt-0.5">Cash &amp; bank expense ledger — receipts required above ₹{data?.receipt_required_above ?? 500}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <input type="month" className="input w-[160px]" value={month} onChange={e => setMonth(e.target.value)} />
           <button className="btn-secondary flex items-center gap-1.5 text-sm"
-            onClick={() => downloadExcel('petty-cash', 'petty_cash.xlsx')}>
+            onClick={() => downloadExcel('petty-cash?account=cash', 'cash_in_hand.xlsx')}
+            title="Export the Cash-in-Hand statement">
+            <Download size={15} /> Cash-in-Hand
+          </button>
+          <button className="btn-secondary flex items-center gap-1.5 text-sm"
+            onClick={() => downloadExcel('petty-cash', 'account_statement.xlsx')}>
             <Download size={15} /> Export
           </button>
           {isOwner && (
@@ -570,9 +578,11 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
     category: '', description: '', paid_to: '', amount: '',
     payment_method: isTopUp ? 'cash' : '',
     item_name: '', item_category: '', unit: '', sample_qty: '',
+    emp_expense_type: '', employee_id: '',
   });
   const [categories, setCategories] = useState([]);
   const [companies, setCompanies] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [receipt, setReceipt] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -580,12 +590,16 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
 
   useEffect(() => {
     if (isTopUp) return;
-    api.get('/petty-cash/categories').then(r => setCategories(r.data || [])).catch(() => {});
+    // Hide the system-managed 'Salary' category from manual entry
+    api.get('/petty-cash/categories').then(r => setCategories((r.data || []).filter(c => c !== 'Salary'))).catch(() => {});
     api.get('/petty-cash/companies').then(r => setCompanies(r.data || [])).catch(() => {});
+    api.get('/payroll/employees').then(r => setEmployees((r.data || []).filter(e => e.active))).catch(() => {});
   }, []);
 
   const isMachinery = f.category === MACHINERY;
   const isSampling = f.category === SAMPLING;
+  const isEmpExpense = f.category === EMPLOYEE_EXPENSE;
+  const empNeedsWorker = isEmpExpense && EMP_TYPES_WORKER.includes(f.emp_expense_type);
   const needsReceipt = !isTopUp && parseFloat(f.amount) > receiptLimit;
 
   const addCategory = async () => {
@@ -608,7 +622,13 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
     if (!f.payment_method) return setError(isTopUp ? 'Select Cash or Bank.' : 'Select a payment method.');
     if (!isTopUp) {
       if (!f.category) return setError('Category is required.');
-      if (!f.paid_to.trim()) return setError('Paid To is required.');
+      if (isEmpExpense) {
+        if (!f.emp_expense_type) return setError('Pick the expense type.');
+        if (empNeedsWorker && !f.employee_id) return setError('Select the employee.');
+        if (!empNeedsWorker && !f.paid_to.trim()) return setError('Paid To is required.');
+      } else if (!f.paid_to.trim()) {
+        return setError('Paid To is required.');
+      }
       if (isMachinery && !f.description.trim()) return setError('Description is required for Machinery.');
       if (isSampling) {
         if (!f.item_name.trim()) return setError('Item name is required for Sampling.');
@@ -624,14 +644,22 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
       fd.append('entry_date', f.entry_date);
       fd.append('amount', f.amount);
       fd.append('payment_method', f.payment_method);
-      if (!isTopUp) { fd.append('category', f.category); fd.append('paid_to', f.paid_to.trim()); }
+      if (!isTopUp) {
+        fd.append('category', f.category);
+        // For worker-linked employee expenses the payee is the selected worker
+        if (!empNeedsWorker) fd.append('paid_to', f.paid_to.trim());
+      }
+      if (!isTopUp && isEmpExpense) {
+        fd.append('emp_expense_type', f.emp_expense_type);
+        if (empNeedsWorker) fd.append('employee_id', f.employee_id);
+      }
       if (!isTopUp && isSampling) {
         fd.append('item_name', f.item_name.trim());
         fd.append('item_category', f.item_category);
         fd.append('unit', f.unit.trim());
         fd.append('sample_qty', f.sample_qty);
       }
-      if (f.description) fd.append('description', f.description);
+      if (f.description && !isEmpExpense) fd.append('description', f.description);
       if (receipt) fd.append('receipt', receipt);
       await api.post('/petty-cash', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSaved();
@@ -681,21 +709,51 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
               </select>
             </div>
 
-            <div>
-              <label className="label flex items-center justify-between">
-                <span>Paid To <span className="text-red-500">*</span></span>
-                {isMachinery && <button type="button" className="text-xs text-brand-600 hover:underline" onClick={addCompany}>＋ New company</button>}
-              </label>
-              {isMachinery ? (
-                <select className="input" value={f.paid_to} onChange={set('paid_to')}>
-                  <option value="">— select company —</option>
-                  {companies.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              ) : (
-                <input className="input" value={f.paid_to} onChange={set('paid_to')}
-                  placeholder={isSampling ? 'Prospective supplier name' : 'Shop / person / company'} />
-              )}
-            </div>
+            {isEmpExpense ? (
+              <div className="border border-sky-200 bg-sky-50/50 rounded-xl p-3 space-y-3">
+                <div>
+                  <label className="label">Description <span className="text-red-500">*</span></label>
+                  <select className="input" value={f.emp_expense_type}
+                    onChange={e => setF(p => ({ ...p, emp_expense_type: e.target.value, employee_id: '', paid_to: '' }))}>
+                    <option value="">— select type —</option>
+                    {EMP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                {empNeedsWorker ? (
+                  <div>
+                    <label className="label">Employee <span className="text-red-500">*</span></label>
+                    <select className="input" value={f.employee_id} onChange={set('employee_id')}>
+                      <option value="">— select worker —</option>
+                      {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                    </select>
+                    {f.emp_expense_type === 'Advance Paid' && (
+                      <p className="text-[11px] text-sky-700 mt-1">This advance is added to the worker's payroll and auto-deducted from their next salary.</p>
+                    )}
+                  </div>
+                ) : f.emp_expense_type ? (
+                  <div>
+                    <label className="label">Paid To <span className="text-red-500">*</span></label>
+                    <input className="input" value={f.paid_to} onChange={set('paid_to')} placeholder="Person / shop / description" />
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div>
+                <label className="label flex items-center justify-between">
+                  <span>Paid To <span className="text-red-500">*</span></span>
+                  {isMachinery && <button type="button" className="text-xs text-brand-600 hover:underline" onClick={addCompany}>＋ New company</button>}
+                </label>
+                {isMachinery ? (
+                  <select className="input" value={f.paid_to} onChange={set('paid_to')}>
+                    <option value="">— select company —</option>
+                    {companies.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                ) : (
+                  <input className="input" value={f.paid_to} onChange={set('paid_to')}
+                    placeholder={isSampling ? 'Prospective supplier name' : 'Shop / person / company'} />
+                )}
+              </div>
+            )}
 
             {isSampling && (
               <div className="border border-purple-200 bg-purple-50/50 rounded-xl p-3 space-y-3">
@@ -723,10 +781,12 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
               </div>
             )}
 
-            <div>
-              <label className="label">Description {isMachinery ? <span className="text-red-500">*</span> : <span className="text-gray-400 font-normal">(optional)</span>}</label>
-              <input className="input" value={f.description} onChange={set('description')} />
-            </div>
+            {!isEmpExpense && (
+              <div>
+                <label className="label">Description {isMachinery ? <span className="text-red-500">*</span> : <span className="text-gray-400 font-normal">(optional)</span>}</label>
+                <input className="input" value={f.description} onChange={set('description')} />
+              </div>
+            )}
 
             <div>
               <label className="label">
