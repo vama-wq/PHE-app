@@ -51,7 +51,7 @@ export default function PayrollRun() {
   if (error) return <div className="p-6 text-red-600">{error}</div>;
   if (!data) return <div className="p-6 text-gray-400">Loading…</div>;
 
-  const { run, lines, leave_balances: leaveBal } = data;
+  const { run, lines, leave_balances: leaveBal, paid_holidays: holidays = 0 } = data;
   const editable = ['draft', 'submitted'].includes(run.status);
   const approved = ['approved', 'paid'].includes(run.status);
 
@@ -122,6 +122,7 @@ export default function PayrollRun() {
           </h1>
           <p className="text-gray-500 text-sm mt-0.5">
             {run.working_days} working days
+            {holidays > 0 && <> · <span className="text-emerald-700 font-medium">{holidays} paid holiday{holidays > 1 ? 's' : ''}</span></>}
             {isOwner && totalPayable != null && <> · Total payable: <span className="font-semibold text-gray-800">{inr(totalPayable)}</span></>}
           </p>
         </div>
@@ -182,7 +183,7 @@ export default function PayrollRun() {
 
       {/* ── Per-Day Labour ── */}
       {labour.length > 0 && (
-        <Section title="Per-Day Labour" subtitle="Paid by present days × daily rate · OT = rate ÷ 8 per hour · no paid leave">
+        <Section title="Per-Day Labour" subtitle={`Paid by present days × daily rate · OT = rate ÷ 8 per hour · no paid leave${holidays > 0 ? ` · +${holidays} paid festival holiday${holidays > 1 ? 's' : ''}` : ''}`}>
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -194,6 +195,7 @@ export default function PayrollRun() {
                 {isOwner && (
                   <>
                     <th className="table-header text-right">Salary (Present)</th>
+                    {holidays > 0 && <th className="table-header text-right">Holiday Pay</th>}
                     <th className="table-header text-right">OT Amt</th>
                     <th className="table-header text-right">Advance</th>
                     <th className="table-header text-right">Total</th>
@@ -214,6 +216,7 @@ export default function PayrollRun() {
                   {isOwner && (
                     <>
                       <td className="table-cell text-right text-sm">{inr(l.base_pay)}</td>
+                      {holidays > 0 && <td className="table-cell text-right text-sm text-emerald-700">{inr(l.holiday_pay || 0)}</td>}
                       <td className="table-cell text-right text-sm">{inr(l.ot_amount)}</td>
                       <td className="table-cell text-right">
                         {editable ? (

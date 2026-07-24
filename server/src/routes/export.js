@@ -546,6 +546,7 @@ router.get('/payroll/:month', authenticate, authorize('owner'), async (req, res)
     'Absent Days':          Number(l.absent_days),
     'OT Time (hrs)':        Number(l.ot_hours),
     'Salary as per Present Days': Number(l.base_pay),
+    'Holiday Pay':          Number(l.holiday_pay || 0),
     'OT Amount':            Number(l.ot_amount),
     'Advance':              Number(l.advance_deduction),
     'Total Salary':         Number(l.total_payable),

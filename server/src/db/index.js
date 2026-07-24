@@ -403,6 +403,22 @@ async function initDB(retries = 20, delayMs = 10000) {
       // the canonical 'Employee Expense' the Employee-Expense form keys on.
       await pool.query(`UPDATE petty_cash_entries SET category='Employee Expense' WHERE category='Employee Expenses'`);
       await pool.query(`DELETE FROM petty_cash_categories WHERE name='Employee Expenses'`);
+
+      // Paid festival holidays (owner-managed, one list per year). A holiday in a
+      // run's month is paid for every worker: labour gets +1 day's rate; fixed
+      // workers aren't deducted for it. payroll_lines.holiday_pay stores the
+      // labour holiday amount.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS holidays (
+          id SERIAL PRIMARY KEY,
+          holiday_date DATE NOT NULL UNIQUE,
+          name TEXT NOT NULL,
+          paid BOOLEAN NOT NULL DEFAULT TRUE,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`ALTER TABLE holidays ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS holiday_pay NUMERIC NOT NULL DEFAULT 0`);
       // employee_advances predates payroll_runs, so its settlement backlink FK
       // couldn't be inline — add it idempotently (ON DELETE SET NULL).
       await pool.query(`DO $$ BEGIN

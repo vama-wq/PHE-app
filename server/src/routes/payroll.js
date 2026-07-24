@@ -38,12 +38,15 @@ const MAX_TOGETHER = 7;      // more than this together → flag, excess unpaid
 const isOwner = (req) => req.user.role === 'owner';
 const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
 
-// Salary maths — single source of truth
-function computeLine(emp, line) {
+// Salary maths — single source of truth. `holidays` = paid festival holidays in
+// the run's month: labour gets +1 day's rate each; fixed workers aren't deducted
+// for them (holiday days come off the deductible-absent count).
+function computeLine(emp, line, holidays = 0) {
   const present = Number(line.present_days || 0);
   const absent = Number(line.absent_days || 0);
   const ot = Number(line.ot_hours || 0);
   const creditUsed = Number(line.leave_credit_used || 0);
+  const hol = Math.max(Number(holidays) || 0, 0);
   // Only Admin and Production (with leave) get petrol
   const petrol = PETROL_GROUPS.includes(emp.worker_group) ? Number(line.petrol ?? emp.petrol_monthly ?? 0) : 0;
   const advance = Number(line.advance_deduction || 0);
@@ -51,27 +54,39 @@ function computeLine(emp, line) {
   if (emp.worker_group === 'labour') {
     const rate = Number(line.daily_rate ?? emp.daily_rate ?? 0);
     const base = r2(rate * present);
+    const holidayPay = r2(rate * hol);
     const otAmount = r2((rate / OT_DIVISOR) * ot);
     return {
       daily_rate: rate, monthly_salary: null,
       base_pay: base, ot_amount: otAmount, absent_deduction: 0,
+      holiday_pay: holidayPay,
       petrol: 0, // labour never receives petrol
       advance_deduction: r2(advance),
-      total_payable: r2(base + otAmount - advance),
+      total_payable: r2(base + otAmount + holidayPay - advance),
     };
   }
-  // fixed_admin / fixed_production
+  // fixed_admin / fixed_production / fixed_production_nl
   const salary = Number(line.monthly_salary ?? emp.monthly_salary ?? 0);
   const perDay = salary / MONTH_BASIS_DAYS;
-  const chargedAbsent = Math.max(absent - creditUsed, 0);
+  // Paid festival holidays are never deducted (come off absents before credits)
+  const deductibleAbsent = Math.max(absent - hol, 0);
+  const chargedAbsent = Math.max(deductibleAbsent - creditUsed, 0);
   const absentDeduction = r2(perDay * chargedAbsent);
   const otAmount = r2((perDay / OT_DIVISOR) * ot);
   return {
     daily_rate: r2(perDay), monthly_salary: salary,
     base_pay: r2(salary - absentDeduction), ot_amount: otAmount, absent_deduction: absentDeduction,
+    holiday_pay: 0, // fixed salary already covers the paid holiday
     petrol: r2(petrol), advance_deduction: r2(advance),
     total_payable: r2(salary - absentDeduction + otAmount + petrol - advance),
   };
+}
+
+// Count of paid festival holidays in a YYYY-MM month
+async function paidHolidaysInMonth(db, month) {
+  const row = await db.get(
+    `SELECT COUNT(*)::int AS n FROM holidays WHERE paid=TRUE AND to_char(holiday_date,'YYYY-MM')=$1`, [month]);
+  return Number(row.n);
 }
 
 // Leave balance = sum of ledger deltas
@@ -108,7 +123,7 @@ async function esslToAttendance(buffer, employees, workingDays) {
 }
 
 // Write parsed attendance onto the run's lines (used by create + re-parse).
-async function applyAttendanceUpdates(client, runId, updates) {
+async function applyAttendanceUpdates(client, runId, updates, holidays = 0) {
   for (const u of updates) {
     const { rows } = await client.query(
       `SELECT pl.*, e.worker_group AS eg, e.daily_rate AS e_rate, e.monthly_salary AS e_salary,
@@ -124,15 +139,15 @@ async function applyAttendanceUpdates(client, runId, updates) {
     };
     const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
                   monthly_salary: line.e_salary, petrol_monthly: line.e_petrol };
-    const pay = computeLine(emp, merged);
+    const pay = computeLine(emp, merged, holidays);
     await client.query(
       `UPDATE payroll_lines SET present_days=$1, absent_days=$2, ot_hours=$3, late_stay_days=$4,
          sick_credit_earned=$5, long_leave_flag=$6,
-         base_pay=$7, ot_amount=$8, absent_deduction=$9, total_payable=$10
-       WHERE id=$11`,
+         base_pay=$7, ot_amount=$8, absent_deduction=$9, holiday_pay=$10, total_payable=$11
+       WHERE id=$12`,
       [u.present_days, u.absent_days, u.ot_hours, u.late_stay_days, u.sick_credit_earned || 0,
        LEAVE_GROUPS.includes(line.worker_group) && Number(u.absent_days) > MAX_TOGETHER,
-       pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.total_payable, line.id]);
+       pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.total_payable, line.id]);
   }
 }
 
@@ -332,6 +347,52 @@ router.post('/employees/:id/advances', authenticate, authorize('owner'), async (
   }
 });
 
+// ── Holidays (paid festival holidays) ─────────────────────────────────────────
+// Owner adds the year's paid festival holidays; accounts can view. A holiday in
+// a run's month is paid for every worker (labour +1 day; fixed not deducted).
+router.get('/holidays', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+  try {
+    const year = /^\d{4}$/.test(req.query.year || '') ? req.query.year : null;
+    const rows = await getDB().all(
+      `SELECT h.*, u.name AS created_by_name FROM holidays h LEFT JOIN users u ON u.id = h.created_by
+       ${year ? `WHERE to_char(holiday_date,'YYYY')=$1` : ''}
+       ORDER BY holiday_date`, year ? [year] : []);
+    res.json(rows);
+  } catch (e) {
+    console.error('holidays list error:', e);
+    res.status(500).json({ error: 'Failed to load holidays' });
+  }
+});
+
+router.post('/holidays', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const date = String(req.body.holiday_date || '').trim();
+    const name = String(req.body.name || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'A valid date is required' });
+    if (!name) return res.status(400).json({ error: 'Holiday name is required' });
+    const r = await getDB().insert(
+      `INSERT INTO holidays (holiday_date, name, created_by) VALUES ($1,$2,$3)
+       ON CONFLICT (holiday_date) DO UPDATE SET name=EXCLUDED.name RETURNING id`,
+      [date, name, req.user.id]);
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (e) {
+    console.error('holiday create error:', e);
+    res.status(500).json({ error: 'Failed to add holiday' });
+  }
+});
+
+router.delete('/holidays/:id', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid holiday id' });
+    await getDB().run('DELETE FROM holidays WHERE id=$1', [id]);
+    res.json({ message: 'Holiday removed' });
+  } catch (e) {
+    console.error('holiday delete error:', e);
+    res.status(500).json({ error: 'Failed to remove holiday' });
+  }
+});
+
 // ── Payroll runs ──────────────────────────────────────────────────────────────
 router.get('/runs', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
@@ -365,6 +426,7 @@ router.post('/runs', authenticate, authorize('owner', 'accounts'), ...uploadEssl
 
     const employees = await db.all('SELECT * FROM employees WHERE active = TRUE ORDER BY id');
     if (!employees.length) { discardFile(); return res.status(400).json({ error: 'Add employees first' }); }
+    const holidays = await paidHolidaysInMonth(db, month);
 
     // Parse the ESSL PDF up front (best-effort) so the grid arrives pre-filled
     let parseResult = null;
@@ -389,7 +451,7 @@ router.post('/runs', authenticate, authorize('owner', 'accounts'), ...uploadEssl
            FIXED_GROUPS.includes(emp.worker_group) ? emp.monthly_salary : null,
            petrol, emp.advance_balance || 0]);
       }
-      if (parseResult?.updates?.length) await applyAttendanceUpdates(client, rows[0].id, parseResult.updates);
+      if (parseResult?.updates?.length) await applyAttendanceUpdates(client, rows[0].id, parseResult.updates, holidays);
       return rows[0].id;
     });
     await logActivity(null, null, 'payroll_run_created', `Payroll run created for ${month}`, req.user.id);
@@ -427,6 +489,7 @@ router.put('/runs/:id/parse-essl', authenticate, authorize('owner', 'accounts'),
     const employees = await db.all(
       'SELECT * FROM employees WHERE id IN (SELECT employee_id FROM payroll_lines WHERE run_id=$1)', [id]);
     const result = await esslToAttendance(buffer, employees, run.working_days);
+    const holidays = await paidHolidaysInMonth(db, run.month);
     await db.withTransaction(async (client) => {
       if (req.file?.storagePath) {
         const old = run.essl_file;
@@ -434,7 +497,7 @@ router.put('/runs/:id/parse-essl', authenticate, authorize('owner', 'accounts'),
           [req.file.storagePath, req.file.originalname, id]);
         if (old && old !== req.file.storagePath) deleteFromStorage(old).catch(() => {});
       }
-      await applyAttendanceUpdates(client, id, result.updates);
+      await applyAttendanceUpdates(client, id, result.updates, holidays);
     });
     res.json({ message: 'ESSL applied', applied: result.applied, unmatched: result.unmatched, period: result.period });
   } catch (e) {
@@ -471,6 +534,7 @@ router.get('/runs/:id', authenticate, authorize('owner', 'accounts'), async (req
       run,
       lines: lines.map(l => visibleLine(l, owner)),
       leave_balances: leaveBalances,
+      paid_holidays: await paidHolidaysInMonth(db, run.month),
       policy: { month_basis_days: MONTH_BASIS_DAYS, ot_divisor: OT_DIVISOR, max_carryforward: MAX_CARRYFORWARD, max_together: MAX_TOGETHER },
     });
   } catch (e) {
@@ -493,6 +557,7 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
     }
     const updates = Array.isArray(req.body.lines) ? req.body.lines : [];
     if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+    const holidays = await paidHolidaysInMonth(db, run.month);
 
     await db.withTransaction(async (client) => {
       for (const u of updates) {
@@ -520,16 +585,16 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
         };
         const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
                       monthly_salary: line.e_salary, petrol_monthly: line.e_petrol };
-        const pay = computeLine(emp, merged);
+        const pay = computeLine(emp, merged, holidays);
         await client.query(
           `UPDATE payroll_lines SET present_days=$1, absent_days=$2, ot_hours=$3, late_stay_days=$4,
              leave_credit_used=$5, remarks=$6, long_leave_flag=$7,
-             base_pay=$8, ot_amount=$9, absent_deduction=$10, total_payable=$11
-           WHERE id=$12`,
+             base_pay=$8, ot_amount=$9, absent_deduction=$10, holiday_pay=$11, total_payable=$12
+           WHERE id=$13`,
           [merged.present_days, merged.absent_days, merged.ot_hours, merged.late_stay_days, clampedCredit,
            u.remarks !== undefined ? ((u.remarks || '').trim() || null) : line.remarks,
            LEAVE_GROUPS.includes(line.worker_group) && Number(merged.absent_days) > MAX_TOGETHER,
-           pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.total_payable, lineId]);
+           pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.total_payable, lineId]);
       }
     });
     res.json({ message: 'Attendance saved' });
@@ -571,6 +636,7 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
     }
     const updates = Array.isArray(req.body.lines) ? req.body.lines : [];
     if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+    const holidays = await paidHolidaysInMonth(db, run.month);
 
     const errors = [];
     await db.withTransaction(async (client) => {
@@ -585,13 +651,15 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
         const line = rows[0];
         if (!line) continue;
 
+        // Credits can only cover deductible absences (paid holidays are already free)
+        const deductibleAbsent = Math.max(Number(line.absent_days) - holidays, 0);
         let creditUsed = u.leave_credit_used != null ? Number(u.leave_credit_used) : Number(line.leave_credit_used);
         if (LEAVE_GROUPS.includes(line.worker_group)) {
           const { rows: balRows } = await client.query(
             'SELECT COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger WHERE employee_id=$1', [line.employee_id]);
           const bal = Number(balRows[0].bal);
           if (creditUsed > bal) { errors.push(`${line.name}: only ${bal} leave credit available`); creditUsed = bal; }
-          if (creditUsed > Number(line.absent_days)) creditUsed = Number(line.absent_days);
+          if (creditUsed > deductibleAbsent) creditUsed = deductibleAbsent;
           // No more than 7 paid leaves may be taken together — excess is unpaid
           if (creditUsed > MAX_TOGETHER) { errors.push(`${line.name}: paid leave capped at ${MAX_TOGETHER} (max together)`); creditUsed = MAX_TOGETHER; }
           if (creditUsed < 0) creditUsed = 0;
@@ -614,14 +682,14 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
           petrol: u.petrol != null ? Number(u.petrol) : Number(line.petrol) };
         const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
                       monthly_salary: line.e_salary, petrol_monthly: merged.petrol };
-        const pay = computeLine(emp, merged);
+        const pay = computeLine(emp, merged, holidays);
         await client.query(
           `UPDATE payroll_lines SET leave_credit_used=$1, sick_credit_earned=$2, petrol=$3, advance_deduction=$4,
-             remarks=$5, base_pay=$6, ot_amount=$7, absent_deduction=$8, total_payable=$9
-           WHERE id=$10`,
+             remarks=$5, base_pay=$6, ot_amount=$7, absent_deduction=$8, holiday_pay=$9, total_payable=$10
+           WHERE id=$11`,
           [creditUsed, sickEarned, pay.petrol, advance,
            u.remarks !== undefined ? ((u.remarks || '').trim() || null) : line.remarks,
-           pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.total_payable, lineId]);
+           pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.total_payable, lineId]);
       }
     });
     res.json({ message: 'Review saved', warnings: errors });
@@ -653,6 +721,9 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
       const run = runRows[0];
       if (!run || !['draft', 'submitted'].includes(run.status)) return { already: true };
       const isJanuary = run.month.endsWith('-01');
+      const { rows: hrows } = await client.query(
+        `SELECT COUNT(*)::int AS n FROM holidays WHERE paid=TRUE AND to_char(holiday_date,'YYYY-MM')=$1`, [run.month]);
+      const holidays = Number(hrows[0].n);
       const lines = (await client.query(
         `SELECT pl.*, e.name, e.daily_rate AS e_rate, e.monthly_salary AS e_salary, e.petrol_monthly AS e_petrol,
                 e.advance_balance
@@ -683,7 +754,9 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
           const { rows: b2 } = await client.query(
             'SELECT COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger WHERE employee_id=$1', [line.employee_id]);
           const liveBal = Number(b2[0].bal);
-          creditUsed = Math.max(0, Math.min(creditUsed, liveBal, Number(line.absent_days), MAX_TOGETHER));
+          // Credits cover only deductible absences (paid holidays already free)
+          const deductibleAbsent = Math.max(Number(line.absent_days) - holidays, 0);
+          creditUsed = Math.max(0, Math.min(creditUsed, liveBal, deductibleAbsent, MAX_TOGETHER));
         } else {
           creditUsed = 0;
         }
@@ -694,11 +767,11 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
         const deduction = Math.max(0, Math.min(Number(line.advance_deduction || 0), liveAdvBal));
 
         // Recompute pay with the final clamped values and freeze it on the line
-        const pay = computeLine(emp, { ...line, leave_credit_used: creditUsed, advance_deduction: deduction, petrol: line.petrol });
+        const pay = computeLine(emp, { ...line, leave_credit_used: creditUsed, advance_deduction: deduction, petrol: line.petrol }, holidays);
         await client.query(
           `UPDATE payroll_lines SET leave_credit_used=$1, advance_deduction=$2,
-             base_pay=$3, ot_amount=$4, absent_deduction=$5, total_payable=$6 WHERE id=$7`,
-          [creditUsed, deduction, pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.total_payable, line.id]);
+             base_pay=$3, ot_amount=$4, absent_deduction=$5, holiday_pay=$6, total_payable=$7 WHERE id=$8`,
+          [creditUsed, deduction, pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.total_payable, line.id]);
         total += Number(pay.total_payable);
         lineCount += 1;
 

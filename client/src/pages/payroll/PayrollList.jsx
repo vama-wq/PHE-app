@@ -81,6 +81,10 @@ export default function PayrollList() {
           onClick={() => setTab('employees')}>
           <Users size={14} className="inline mr-1" /> Workers ({employees.length})
         </button>
+        <button className={`px-4 py-1.5 rounded-lg text-sm font-medium ${tab === 'holidays' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}
+          onClick={() => setTab('holidays')}>
+          <CalendarDays size={14} className="inline mr-1" /> Holidays
+        </button>
       </div>
 
       {tab === 'runs' ? (
@@ -120,6 +124,8 @@ export default function PayrollList() {
             </tbody>
           </table>
         </div>
+      ) : tab === 'holidays' ? (
+        <HolidaysTab isOwner={isOwner} />
       ) : (
         <div className="card overflow-x-auto">
           <table className="w-full">
@@ -190,6 +196,96 @@ export default function PayrollList() {
       {showNewRun && <NewRunModal onClose={() => setShowNewRun(false)} onDone={() => { setShowNewRun(false); load(); }} />}
       {editEmp && <EmployeeModal employee={editEmp === 'new' ? null : editEmp} onClose={() => setEditEmp(null)} onDone={() => { setEditEmp(null); load(); }} />}
       {advanceEmp && <AdvanceModal employee={advanceEmp} onClose={() => setAdvanceEmp(null)} onDone={() => { setAdvanceEmp(null); load(); }} />}
+    </div>
+  );
+}
+
+function HolidaysTab({ isOwner }) {
+  const now = new Date();
+  const [year, setYear] = useState(String(now.getFullYear()));
+  const [holidays, setHolidays] = useState([]);
+  const [date, setDate] = useState('');
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = () => api.get(`/payroll/holidays?year=${year}`).then(r => setHolidays(r.data || [])).catch(() => {});
+  useEffect(() => { load(); }, [year]);
+
+  const add = async (e) => {
+    e.preventDefault();
+    if (!date) return setError('Pick a date.');
+    if (!name.trim()) return setError('Enter the holiday name.');
+    setSaving(true); setError('');
+    try { await api.post('/payroll/holidays', { holiday_date: date, name: name.trim() }); setDate(''); setName(''); load(); }
+    catch (err) { setError(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
+  };
+  const remove = async (h) => {
+    if (!window.confirm(`Remove ${h.name} (${fmtDate(h.holiday_date)})?`)) return;
+    try { await api.delete(`/payroll/holidays/${h.id}`); load(); }
+    catch (err) { alert(err.response?.data?.error || 'Failed'); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <p className="text-sm text-gray-500">
+          Paid festival holidays for the year. Any that fall in a payroll month are paid to every worker —
+          per-day labour gets that day's rate, fixed-salary workers aren't deducted for it.
+        </p>
+        <select className="input w-28" value={year} onChange={e => setYear(e.target.value)}>
+          {[now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1].map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+      </div>
+
+      {isOwner && (
+        <form onSubmit={add} className="card p-4 flex items-end gap-3 flex-wrap">
+          <div>
+            <label className="label">Date <span className="text-red-500">*</span></label>
+            <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} />
+          </div>
+          <div className="flex-1 min-w-[200px]">
+            <label className="label">Holiday Name <span className="text-red-500">*</span></label>
+            <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Diwali, Uttarayan" />
+          </div>
+          <button type="submit" className="btn-primary flex items-center gap-1.5" disabled={saving}>
+            <Plus size={16} /> {saving ? 'Adding…' : 'Add Holiday'}
+          </button>
+          {error && <p className="text-red-600 text-sm w-full">{error}</p>}
+        </form>
+      )}
+
+      <div className="card overflow-x-auto">
+        <table className="w-full">
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th className="table-header text-left">Date</th>
+              <th className="table-header text-left">Day</th>
+              <th className="table-header text-left">Holiday</th>
+              {isOwner && <th className="table-header text-center"></th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {holidays.length === 0 ? (
+              <tr><td colSpan={isOwner ? 4 : 3} className="table-cell text-center text-gray-400 py-10">No holidays added for {year}</td></tr>
+            ) : holidays.map(h => (
+              <tr key={h.id} className="hover:bg-gray-50">
+                <td className="table-cell text-sm whitespace-nowrap">{fmtDate(h.holiday_date)}</td>
+                <td className="table-cell text-sm text-gray-500">{new Date(h.holiday_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' })}</td>
+                <td className="table-cell text-sm font-medium text-gray-800">{h.name}</td>
+                {isOwner && (
+                  <td className="table-cell text-center">
+                    <button className="p-1 text-gray-300 hover:text-red-600" onClick={() => remove(h)} title="Remove holiday">
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
