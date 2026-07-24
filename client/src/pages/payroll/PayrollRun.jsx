@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import { downloadExcel } from '../../lib/utils';
-import { ArrowLeft, Banknote, Download, FileText, Send, CheckCircle, AlertTriangle, Save } from 'lucide-react';
+import { ArrowLeft, Banknote, Download, FileText, Send, CheckCircle, AlertTriangle, Save, Upload, Trash2 } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const STATUS_BADGES = {
@@ -19,6 +19,7 @@ const STATUS_BADGES = {
 // advance deductions, approves, and marks lines paid.
 export default function PayrollRun() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { user } = useAuthStore();
   const isOwner = user.role === 'owner';
   const [data, setData] = useState(null);
@@ -29,6 +30,23 @@ export default function PayrollRun() {
 
   const load = () => api.get(`/payroll/runs/${id}`).then(r => { setData(r.data); setEdits({}); }).catch(e => setError(e.response?.data?.error || 'Failed to load'));
   useEffect(() => { load(); }, [id]);
+
+  const reparseEssl = async (file) => {
+    const fd = new FormData();
+    if (file) fd.append('essl', file);
+    try {
+      const r = await api.put(`/payroll/runs/${id}/parse-essl`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      alert(`ESSL applied — attendance updated for ${r.data.applied} worker(s).` +
+        (r.data.unmatched?.length ? `\n\nUnmatched: ${r.data.unmatched.join(', ')}` : ''));
+      load();
+    } catch (err) { alert(err.response?.data?.error || 'Failed to parse ESSL'); }
+  };
+
+  const deleteRun = async () => {
+    if (!window.confirm('Delete this draft run? Attendance entered so far will be lost.')) return;
+    try { await api.delete(`/payroll/runs/${id}`); navigate('/payroll'); }
+    catch (err) { alert(err.response?.data?.error || 'Failed'); }
+  };
 
   if (error) return <div className="p-6 text-red-600">{error}</div>;
   if (!data) return <div className="p-6 text-gray-400">Loading…</div>;
@@ -112,6 +130,18 @@ export default function PayrollRun() {
             <a className="btn-secondary btn-sm flex items-center gap-1.5 text-xs" href={`/uploads/${run.essl_file}`} target="_blank" rel="noopener noreferrer">
               <FileText size={13} /> ESSL Report
             </a>
+          )}
+          {editable && (
+            <label className="btn-secondary btn-sm flex items-center gap-1.5 text-xs cursor-pointer" title="Upload / re-parse the ESSL report to auto-fill attendance">
+              <Upload size={13} /> {run.essl_file ? 'Re-parse ESSL' : 'Upload ESSL'}
+              <input type="file" accept=".pdf,image/*" className="hidden"
+                onChange={e => { const f = e.target.files[0]; e.target.value = ''; if (f || run.essl_file) reparseEssl(f); }} />
+            </label>
+          )}
+          {isOwner && editable && (
+            <button className="btn-secondary btn-sm flex items-center gap-1.5 text-xs text-red-500" onClick={deleteRun} title="Delete this draft run">
+              <Trash2 size={13} /> Delete
+            </button>
           )}
           {isOwner && (
             <button className="btn-secondary btn-sm flex items-center gap-1.5 text-xs"
@@ -271,7 +301,7 @@ export default function PayrollRun() {
                       <td className="table-cell text-right text-sm">{inr(l.ot_amount)}</td>
                       <td className="table-cell text-right">
                         {editable ? (
-                          <input className="input text-sm py-1 px-1.5 text-right w-18" type="number" step="any" min="0"
+                          <input className="input text-sm py-1 px-1.5 text-right w-20" type="number" step="any" min="0"
                             value={val(l, 'petrol')} onChange={setVal(l, 'petrol')} />
                         ) : <span className="text-sm">{inr(l.petrol)}</span>}
                       </td>

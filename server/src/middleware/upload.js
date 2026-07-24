@@ -38,6 +38,15 @@ async function deleteFromStorage(storagePath) {
   }
 }
 
+// Download a stored file's bytes as a Buffer (e.g. to re-parse an ESSL PDF).
+async function downloadFromStorage(storagePath) {
+  if (!storagePath) return null;
+  const supabase = getSupabase();
+  const { data, error } = await supabase.storage.from(BUCKET).download(storagePath);
+  if (error || !data) throw new Error(`Storage download failed: ${error?.message || 'not found'}`);
+  return Buffer.from(await data.arrayBuffer());
+}
+
 // Generate a public URL for a stored file.
 function getPublicUrl(storagePath) {
   if (!storagePath) return null;
@@ -153,6 +162,7 @@ module.exports = {
   // Utilities for route handlers
   uploadToStorage,
   deleteFromStorage,
+  downloadFromStorage,
   getPublicUrl,
   copyInStorage,
   BUCKET,

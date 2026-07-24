@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
@@ -187,6 +187,7 @@ export default function PayrollList() {
 }
 
 function NewRunModal({ onClose, onDone }) {
+  const navigate = useNavigate();
   const now = new Date();
   // Default to the previous month — salaries are computed after the month ends
   const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -206,8 +207,13 @@ function NewRunModal({ onClose, onDone }) {
       fd.append('working_days', workingDays);
       if (essl) fd.append('essl', essl);
       const r = await api.post('/payroll/runs', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      window.location.href = `/payroll/runs/${r.data.id}`;
-      onDone();
+      const info = r.data.essl;
+      if (info) {
+        const msg = `ESSL parsed — attendance pre-filled for ${info.applied} worker(s).` +
+          (info.unmatched?.length ? `\n\nUnmatched in report (no employee by that name): ${info.unmatched.join(', ')}` : '');
+        alert(msg);
+      }
+      navigate(`/payroll/runs/${r.data.id}`);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create run');
       setSaving(false);
@@ -261,6 +267,9 @@ function EmployeeModal({ employee, onClose, onDone }) {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (!f.name?.trim()) return setError('Name is required');
+    if (isLabour && !(Number(f.daily_rate) > 0)) return setError('Rate per day is required');
+    if (!isLabour && !(Number(f.monthly_salary) > 0)) return setError('Monthly salary is required');
     setSaving(true);
     setError('');
     try {

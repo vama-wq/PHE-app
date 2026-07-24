@@ -1,7 +1,8 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { uploadEsslReport, deleteFromStorage } = require('../middleware/upload');
+const { uploadEsslReport, deleteFromStorage, downloadFromStorage } = require('../middleware/upload');
+const { parseEssl, matchEmployees } = require('../lib/esslParser');
 
 // ── Payroll ───────────────────────────────────────────────────────────────────
 // Worker groups and policies (confirmed by owner):
@@ -42,8 +43,9 @@ function computeLine(emp, line) {
     return {
       daily_rate: rate, monthly_salary: null,
       base_pay: base, ot_amount: otAmount, absent_deduction: 0,
-      petrol: r2(petrol), advance_deduction: r2(advance),
-      total_payable: r2(base + otAmount + petrol - advance),
+      petrol: 0, // labour never receives petrol
+      advance_deduction: r2(advance),
+      total_payable: r2(base + otAmount - advance),
     };
   }
   // fixed_admin / fixed_production
@@ -65,6 +67,61 @@ async function leaveBalance(db, employeeId) {
   const row = await db.get(
     'SELECT COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger WHERE employee_id=$1', [employeeId]);
   return Number(row.bal);
+}
+
+// Parse an ESSL PDF and turn it into per-line attendance for this run's
+// employees. present from the report; for fixed groups absent = workingDays −
+// present (unlisted days count as absent until the owner corrects); OT hours
+// and 6:30 late-stays as counted; admin sick-credit weeks pre-filled as a
+// suggestion. Returns { applied, unmatched, updates:[{employee_id,...}] }.
+async function esslToAttendance(buffer, employees, workingDays) {
+  const parsed = await parseEssl(buffer);
+  const { matched, unmatched } = matchEmployees(parsed.workers, employees);
+  const empById = Object.fromEntries(employees.map(e => [e.id, e]));
+  const updates = [];
+  for (const [empId, agg] of matched) {
+    const emp = empById[empId];
+    const present = agg.present;
+    const isFixed = FIXED_GROUPS.includes(emp.worker_group);
+    updates.push({
+      employee_id: empId,
+      present_days: present,
+      absent_days: isFixed ? Math.max(workingDays - present, 0) : agg.absent,
+      ot_hours: agg.otHours,
+      late_stay_days: emp.worker_group === 'fixed_admin' ? agg.lateStays : 0,
+      sick_credit_earned: emp.worker_group === 'fixed_admin' ? agg.sickCreditWeeks : 0,
+    });
+  }
+  return { applied: updates.length, unmatched, period: parsed.period, updates };
+}
+
+// Write parsed attendance onto the run's lines (used by create + re-parse).
+async function applyAttendanceUpdates(client, runId, updates) {
+  for (const u of updates) {
+    const { rows } = await client.query(
+      `SELECT pl.*, e.worker_group AS eg, e.daily_rate AS e_rate, e.monthly_salary AS e_salary,
+              e.petrol_monthly AS e_petrol
+       FROM payroll_lines pl JOIN employees e ON e.id = pl.employee_id
+       WHERE pl.run_id=$1 AND pl.employee_id=$2`, [runId, u.employee_id]);
+    const line = rows[0];
+    if (!line) continue;
+    const merged = {
+      ...line,
+      present_days: u.present_days, absent_days: u.absent_days,
+      ot_hours: u.ot_hours, late_stay_days: u.late_stay_days,
+    };
+    const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
+                  monthly_salary: line.e_salary, petrol_monthly: line.e_petrol };
+    const pay = computeLine(emp, merged);
+    await client.query(
+      `UPDATE payroll_lines SET present_days=$1, absent_days=$2, ot_hours=$3, late_stay_days=$4,
+         sick_credit_earned=$5, long_leave_flag=$6,
+         base_pay=$7, ot_amount=$8, absent_deduction=$9, total_payable=$10
+       WHERE id=$11`,
+      [u.present_days, u.absent_days, u.ot_hours, u.late_stay_days, u.sick_credit_earned || 0,
+       Number(u.absent_days) > MAX_TOGETHER,
+       pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.total_payable, line.id]);
+  }
 }
 
 // Strip pay/bank fields for non-owner responses
@@ -268,28 +325,81 @@ router.post('/runs', authenticate, authorize('owner', 'accounts'), ...uploadEssl
     const employees = await db.all('SELECT * FROM employees WHERE active = TRUE ORDER BY id');
     if (!employees.length) { discardFile(); return res.status(400).json({ error: 'Add employees first' }); }
 
+    // Parse the ESSL PDF up front (best-effort) so the grid arrives pre-filled
+    let parseResult = null;
+    if (req.file?.buffer) {
+      try { parseResult = await esslToAttendance(req.file.buffer, employees, workingDays); }
+      catch (pe) { console.error('ESSL parse (non-fatal):', pe.message); }
+    }
+
     const runId = await db.withTransaction(async (client) => {
       const { rows } = await client.query(
         `INSERT INTO payroll_runs (month, working_days, essl_file, essl_original_name, prepared_by)
          VALUES ($1,$2,$3,$4,$5) RETURNING id`,
         [month, workingDays, req.file?.storagePath || null, req.file?.originalname || null, req.user.id]);
       for (const emp of employees) {
+        // Labour never receives petrol — only fixed staff do
+        const petrol = emp.worker_group === 'labour' ? 0 : (emp.petrol_monthly || 0);
         await client.query(
           `INSERT INTO payroll_lines (run_id, employee_id, worker_group, daily_rate, monthly_salary, petrol, advance_deduction)
            VALUES ($1,$2,$3,$4,$5,$6,$7)`,
           [rows[0].id, emp.id, emp.worker_group,
            emp.worker_group === 'labour' ? emp.daily_rate : r2(Number(emp.monthly_salary || 0) / MONTH_BASIS_DAYS),
            FIXED_GROUPS.includes(emp.worker_group) ? emp.monthly_salary : null,
-           emp.petrol_monthly || 0, emp.advance_balance || 0]);
+           petrol, emp.advance_balance || 0]);
       }
+      if (parseResult?.updates?.length) await applyAttendanceUpdates(client, rows[0].id, parseResult.updates);
       return rows[0].id;
     });
     await logActivity(null, null, 'payroll_run_created', `Payroll run created for ${month}`, req.user.id);
-    res.status(201).json({ id: runId });
+    res.status(201).json({
+      id: runId,
+      essl: parseResult ? { applied: parseResult.applied, unmatched: parseResult.unmatched, period: parseResult.period } : null,
+    });
   } catch (e) {
     console.error('run create error:', e);
     discardFile();
+    // Concurrent duplicate-month create surfaces the UNIQUE(month) violation
+    if (e.code === '23505') return res.status(409).json({ error: `A payroll run for this month already exists` });
     res.status(500).json({ error: 'Failed to create payroll run' });
+  }
+});
+
+// Re-parse an ESSL report onto an existing draft/submitted run (owner/accounts).
+// Accepts a fresh upload, else re-reads the run's stored PDF. Overwrites the
+// parsed attendance fields; owner review fields (credits/petrol/advance) untouched.
+router.put('/runs/:id/parse-essl', authenticate, authorize('owner', 'accounts'), ...uploadEsslReport, async (req, res) => {
+  const discardFile = () => { if (req.file?.storagePath) deleteFromStorage(req.file.storagePath).catch(() => {}); };
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) { discardFile(); return res.status(400).json({ error: 'Invalid run id' }); }
+    const db = getDB();
+    const run = await db.get('SELECT * FROM payroll_runs WHERE id=$1', [id]);
+    if (!run) { discardFile(); return res.status(404).json({ error: 'Run not found' }); }
+    if (!['draft', 'submitted'].includes(run.status)) { discardFile(); return res.status(400).json({ error: 'Run is locked after approval' }); }
+
+    let buffer = req.file?.buffer;
+    if (!buffer) {
+      if (!run.essl_file) return res.status(400).json({ error: 'No ESSL report on this run — attach one' });
+      buffer = await downloadFromStorage(run.essl_file);
+    }
+    const employees = await db.all(
+      'SELECT * FROM employees WHERE id IN (SELECT employee_id FROM payroll_lines WHERE run_id=$1)', [id]);
+    const result = await esslToAttendance(buffer, employees, run.working_days);
+    await db.withTransaction(async (client) => {
+      if (req.file?.storagePath) {
+        const old = run.essl_file;
+        await client.query('UPDATE payroll_runs SET essl_file=$1, essl_original_name=$2 WHERE id=$3',
+          [req.file.storagePath, req.file.originalname, id]);
+        if (old && old !== req.file.storagePath) deleteFromStorage(old).catch(() => {});
+      }
+      await applyAttendanceUpdates(client, id, result.updates);
+    });
+    res.json({ message: 'ESSL applied', applied: result.applied, unmatched: result.unmatched, period: result.period });
+  } catch (e) {
+    console.error('essl parse error:', e);
+    discardFile();
+    res.status(500).json({ error: 'Failed to parse ESSL report' });
   }
 });
 
@@ -354,22 +464,28 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
            WHERE pl.id=$1 AND pl.run_id=$2`, [lineId, id]);
         const line = rows[0];
         if (!line) continue;
+        const newAbsent = Math.max(u.absent_days != null ? Number(u.absent_days) : Number(line.absent_days), 0);
+        // Re-clamp any credit already chosen so it never exceeds the new absent
+        // count — otherwise reducing absences leaves stale credit that would
+        // over-debit the leave ledger at approval.
+        const clampedCredit = Math.min(Number(line.leave_credit_used || 0), newAbsent);
         const merged = {
           ...line,
-          present_days: u.present_days != null ? Number(u.present_days) : line.present_days,
-          absent_days: u.absent_days != null ? Number(u.absent_days) : line.absent_days,
-          ot_hours: u.ot_hours != null ? Number(u.ot_hours) : line.ot_hours,
-          late_stay_days: u.late_stay_days != null ? parseInt(u.late_stay_days, 10) || 0 : line.late_stay_days,
+          present_days: u.present_days != null ? Math.max(Number(u.present_days), 0) : line.present_days,
+          absent_days: newAbsent,
+          ot_hours: u.ot_hours != null ? Math.max(Number(u.ot_hours), 0) : line.ot_hours,
+          late_stay_days: u.late_stay_days != null ? Math.max(parseInt(u.late_stay_days, 10) || 0, 0) : line.late_stay_days,
+          leave_credit_used: clampedCredit,
         };
         const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
                       monthly_salary: line.e_salary, petrol_monthly: line.e_petrol };
         const pay = computeLine(emp, merged);
         await client.query(
           `UPDATE payroll_lines SET present_days=$1, absent_days=$2, ot_hours=$3, late_stay_days=$4,
-             remarks=$5, long_leave_flag=$6,
-             base_pay=$7, ot_amount=$8, absent_deduction=$9, total_payable=$10
-           WHERE id=$11`,
-          [merged.present_days, merged.absent_days, merged.ot_hours, merged.late_stay_days,
+             leave_credit_used=$5, remarks=$6, long_leave_flag=$7,
+             base_pay=$8, ot_amount=$9, absent_deduction=$10, total_payable=$11
+           WHERE id=$12`,
+          [merged.present_days, merged.absent_days, merged.ot_hours, merged.late_stay_days, clampedCredit,
            u.remarks !== undefined ? ((u.remarks || '').trim() || null) : line.remarks,
            Number(merged.absent_days) > MAX_TOGETHER,
            pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.total_payable, lineId]);
@@ -435,6 +551,8 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
           const bal = Number(balRows[0].bal);
           if (creditUsed > bal) { errors.push(`${line.name}: only ${bal} leave credit available`); creditUsed = bal; }
           if (creditUsed > Number(line.absent_days)) creditUsed = Number(line.absent_days);
+          // No more than 7 paid leaves may be taken together — excess is unpaid
+          if (creditUsed > MAX_TOGETHER) { errors.push(`${line.name}: paid leave capped at ${MAX_TOGETHER} (max together)`); creditUsed = MAX_TOGETHER; }
           if (creditUsed < 0) creditUsed = 0;
         } else {
           creditUsed = 0; // labour has no paid leave
@@ -480,23 +598,36 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid run id' });
     const db = getDB();
-    const run = await db.get('SELECT * FROM payroll_runs WHERE id=$1', [id]);
-    if (!run) return res.status(404).json({ error: 'Run not found' });
-    if (!['draft', 'submitted'].includes(run.status)) {
+    const pre = await db.get('SELECT id, status, month FROM payroll_runs WHERE id=$1', [id]);
+    if (!pre) return res.status(404).json({ error: 'Run not found' });
+    if (!['draft', 'submitted'].includes(pre.status)) {
       return res.status(400).json({ error: 'Run is already approved' });
     }
-    const lines = await db.all(
-      `SELECT pl.*, e.name FROM payroll_lines pl JOIN employees e ON e.id = pl.employee_id WHERE pl.run_id=$1`, [id]);
 
-    const isJanuary = run.month.endsWith('-01');
-    await db.withTransaction(async (client) => {
+    let total = 0, lineCount = 0;
+    const outcome = await db.withTransaction(async (client) => {
+      // Lock the run row and re-check status inside the txn so two concurrent
+      // approvals can't both post the ledger / settle advances.
+      const { rows: runRows } = await client.query('SELECT * FROM payroll_runs WHERE id=$1 FOR UPDATE', [id]);
+      const run = runRows[0];
+      if (!run || !['draft', 'submitted'].includes(run.status)) return { already: true };
+      const isJanuary = run.month.endsWith('-01');
+      const lines = (await client.query(
+        `SELECT pl.*, e.name, e.daily_rate AS e_rate, e.monthly_salary AS e_salary, e.petrol_monthly AS e_petrol,
+                e.advance_balance
+         FROM payroll_lines pl JOIN employees e ON e.id = pl.employee_id WHERE pl.run_id=$1`, [id])).rows;
+
       for (const line of lines) {
+        const emp = { worker_group: line.worker_group, daily_rate: line.worker_group === 'labour' ? line.e_rate : null,
+                      monthly_salary: line.e_salary, petrol_monthly: line.petrol };
+        let creditUsed = Number(line.leave_credit_used || 0);
+
         if (FIXED_GROUPS.includes(line.worker_group)) {
           // Year start: trim carryforward above the cap BEFORE this month's postings
           if (isJanuary) {
-            const { rows: balRows } = await client.query(
+            const { rows: b } = await client.query(
               'SELECT COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger WHERE employee_id=$1', [line.employee_id]);
-            const bal = Number(balRows[0].bal);
+            const bal = Number(b[0].bal);
             if (bal > MAX_CARRYFORWARD) {
               await client.query(
                 `INSERT INTO employee_leave_ledger (employee_id, delta, reason, payroll_run_id, notes, created_by)
@@ -505,11 +636,37 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
                  `Carryforward trimmed to ${MAX_CARRYFORWARD} at year start`, req.user.id]);
             }
           }
-          if (Number(line.leave_credit_used) > 0) {
+          // Re-clamp credit against the LIVE (post-trim) balance, absences and the
+          // max-together cap, then re-price the line if it changed — the review
+          // clamp may be stale (attendance edited, or the January trim just ran).
+          const { rows: b2 } = await client.query(
+            'SELECT COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger WHERE employee_id=$1', [line.employee_id]);
+          const liveBal = Number(b2[0].bal);
+          creditUsed = Math.max(0, Math.min(creditUsed, liveBal, Number(line.absent_days), MAX_TOGETHER));
+        } else {
+          creditUsed = 0;
+        }
+
+        // Re-cap the advance deduction against the LIVE balance (a prior month's
+        // run may have settled part of it since this line was seeded/reviewed).
+        const liveAdvBal = Number(line.advance_balance || 0);
+        const deduction = Math.max(0, Math.min(Number(line.advance_deduction || 0), liveAdvBal));
+
+        // Recompute pay with the final clamped values and freeze it on the line
+        const pay = computeLine(emp, { ...line, leave_credit_used: creditUsed, advance_deduction: deduction, petrol: line.petrol });
+        await client.query(
+          `UPDATE payroll_lines SET leave_credit_used=$1, advance_deduction=$2,
+             base_pay=$3, ot_amount=$4, absent_deduction=$5, total_payable=$6 WHERE id=$7`,
+          [creditUsed, deduction, pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.total_payable, line.id]);
+        total += Number(pay.total_payable);
+        lineCount += 1;
+
+        if (FIXED_GROUPS.includes(line.worker_group)) {
+          if (creditUsed > 0) {
             await client.query(
               `INSERT INTO employee_leave_ledger (employee_id, delta, reason, payroll_run_id, notes, created_by)
                VALUES ($1,$2,'used',$3,$4,$5)`,
-              [line.employee_id, -Number(line.leave_credit_used), id, `Used in ${run.month}`, req.user.id]);
+              [line.employee_id, -creditUsed, id, `Used in ${run.month}`, req.user.id]);
           }
           await client.query(
             `INSERT INTO employee_leave_ledger (employee_id, delta, reason, payroll_run_id, notes, created_by)
@@ -523,28 +680,88 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
                `6:30 late-stay sick credit for ${run.month}`, req.user.id]);
           }
         }
-        // Settle advances up to the deduction amount
-        const deduction = Number(line.advance_deduction || 0);
+
+        // Settle advances oldest-first, up to the deducted amount only
         if (deduction > 0) {
-          await client.query(
-            `UPDATE employees SET advance_balance = GREATEST(advance_balance - $1, 0) WHERE id=$2`,
+          await client.query('UPDATE employees SET advance_balance = GREATEST(advance_balance - $1, 0) WHERE id=$2',
             [deduction, line.employee_id]);
-          await client.query(
-            `UPDATE employee_advances SET settled=TRUE, payroll_run_id=$1
-             WHERE employee_id=$2 AND settled=FALSE`, [id, line.employee_id]);
+          let remaining = deduction;
+          const { rows: adv } = await client.query(
+            'SELECT id, amount FROM employee_advances WHERE employee_id=$1 AND settled=FALSE ORDER BY advance_date, id', [line.employee_id]);
+          for (const a of adv) {
+            if (remaining <= 0.0001) break;
+            if (Number(a.amount) <= remaining + 0.0001) {
+              await client.query('UPDATE employee_advances SET settled=TRUE, payroll_run_id=$1 WHERE id=$2', [id, a.id]);
+              remaining = r2(remaining - Number(a.amount));
+            }
+            // partial coverage of an advance leaves it unsettled (balance still tracks the remainder)
+          }
         }
       }
       await client.query(
         `UPDATE payroll_runs SET status='approved', approved_by=$1, approved_at=NOW() WHERE id=$2`,
         [req.user.id, id]);
+      return { already: false };
     });
-    const total = lines.reduce((a, l) => a + Number(l.total_payable || 0), 0);
+    if (outcome.already) return res.status(400).json({ error: 'Run is already approved' });
     await logActivity(null, null, 'payroll_approved',
-      `Payroll ${run.month} approved — ${lines.length} workers, ₹${r2(total)}`, req.user.id);
+      `Payroll ${pre.month} approved — ${lineCount} workers, ₹${r2(total)}`, req.user.id);
     res.json({ message: 'Payroll approved' });
   } catch (e) {
     console.error('run approve error:', e);
     res.status(500).json({ error: 'Failed to approve run' });
+  }
+});
+
+// Add a worker to an existing draft/submitted run (owner) — for someone hired
+// or reactivated after the run was created. Seeds one line; UNIQUE(run_id,
+// employee_id) guards against duplicates.
+router.post('/runs/:id/add-employee', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const empId = parseInt(req.body.employee_id, 10);
+    if (!Number.isInteger(id) || !Number.isInteger(empId)) return res.status(400).json({ error: 'Invalid id' });
+    const db = getDB();
+    const run = await db.get('SELECT * FROM payroll_runs WHERE id=$1', [id]);
+    if (!run) return res.status(404).json({ error: 'Run not found' });
+    if (!['draft', 'submitted'].includes(run.status)) return res.status(400).json({ error: 'Run is locked after approval' });
+    const emp = await db.get('SELECT * FROM employees WHERE id=$1', [empId]);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+    const dupe = await db.get('SELECT id FROM payroll_lines WHERE run_id=$1 AND employee_id=$2', [id, empId]);
+    if (dupe) return res.status(409).json({ error: 'Worker already in this run' });
+    const petrol = emp.worker_group === 'labour' ? 0 : (emp.petrol_monthly || 0);
+    await db.run(
+      `INSERT INTO payroll_lines (run_id, employee_id, worker_group, daily_rate, monthly_salary, petrol, advance_deduction)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [id, empId, emp.worker_group,
+       emp.worker_group === 'labour' ? emp.daily_rate : r2(Number(emp.monthly_salary || 0) / MONTH_BASIS_DAYS),
+       FIXED_GROUPS.includes(emp.worker_group) ? emp.monthly_salary : null, petrol, emp.advance_balance || 0]);
+    res.status(201).json({ message: 'Worker added to run' });
+  } catch (e) {
+    console.error('add-employee error:', e);
+    res.status(500).json({ error: 'Failed to add worker to run' });
+  }
+});
+
+// Delete a draft/submitted run (owner) — before approval, e.g. to recreate it
+// with a corrected ESSL or roster. Lines cascade. Approved/paid runs are kept.
+router.delete('/runs/:id', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid run id' });
+    const db = getDB();
+    const run = await db.get('SELECT * FROM payroll_runs WHERE id=$1', [id]);
+    if (!run) return res.status(404).json({ error: 'Run not found' });
+    if (!['draft', 'submitted'].includes(run.status)) {
+      return res.status(400).json({ error: 'Approved payroll cannot be deleted' });
+    }
+    await db.run('DELETE FROM payroll_runs WHERE id=$1', [id]);
+    if (run.essl_file) deleteFromStorage(run.essl_file).catch(() => {});
+    await logActivity(null, null, 'payroll_run_deleted', `Draft payroll run ${run.month} deleted`, req.user.id);
+    res.json({ message: 'Run deleted' });
+  } catch (e) {
+    console.error('run delete error:', e);
+    res.status(500).json({ error: 'Failed to delete run' });
   }
 });
 

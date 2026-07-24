@@ -385,9 +385,21 @@ async function initDB(retries = 20, delayMs = 10000) {
       for (const t of ['employees', 'employee_advances', 'payroll_runs', 'payroll_lines', 'employee_leave_ledger']) {
         await pool.query(`ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY`).catch(() => {});
       }
-      // Grant the payroll module to existing accounts users (sidebar filter).
-      // permitted_modules is a JSON array in a text column; append if missing.
-      {
+      // employee_advances predates payroll_runs, so its settlement backlink FK
+      // couldn't be inline — add it idempotently (ON DELETE SET NULL).
+      await pool.query(`DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='employee_advances_payroll_run_id_fkey') THEN
+          ALTER TABLE employee_advances ADD CONSTRAINT employee_advances_payroll_run_id_fkey
+            FOREIGN KEY (payroll_run_id) REFERENCES payroll_runs(id) ON DELETE SET NULL;
+        END IF;
+      END $$`).catch(() => {});
+      // One-time-only grant of the payroll module to existing accounts users.
+      // Gated behind a marker row so it never re-grants after an owner removes
+      // it (permitted_modules is a JSON array in a text column).
+      await pool.query(`CREATE TABLE IF NOT EXISTS app_flags (key TEXT PRIMARY KEY, set_at TIMESTAMPTZ DEFAULT NOW())`);
+      const grant = await pool.query(
+        `INSERT INTO app_flags (key) VALUES ('payroll_module_granted') ON CONFLICT DO NOTHING RETURNING key`);
+      if (grant.rowCount === 1) {
         const { rows: accUsers } = await pool.query(
           `SELECT id, permitted_modules FROM users WHERE role='accounts' AND permitted_modules IS NOT NULL`);
         for (const u of accUsers) {

@@ -546,8 +546,9 @@ router.get('/payroll/:month', authenticate, authorize('owner'), async (req, res)
     'AC Holder Name':   l.ac_holder_name || '',
     'Remarks':          l.remarks || '',
   }));
-  if (labour.length) labour.push({ 'Name': 'TOTAL', 'Total Salary': labour.reduce((a, r) => a + r['Total Salary'], 0) });
-  if (fixed.length) fixed.push({ 'Name': 'TOTAL', 'Total Salary': fixed.reduce((a, r) => a + r['Total Salary'], 0) });
+  const sumTotal = (arr) => Math.round(arr.reduce((a, r) => a + r['Total Salary'], 0) * 100) / 100;
+  if (labour.length) labour.push({ 'Name': 'TOTAL', 'Total Salary': sumTotal(labour) });
+  if (fixed.length) fixed.push({ 'Name': 'TOTAL', 'Total Salary': sumTotal(fixed) });
 
   const wb = XLSX.utils.book_new();
   const ws1 = XLSX.utils.json_to_sheet(labour.length ? labour : [{ Message: 'No per-day labour' }]);
