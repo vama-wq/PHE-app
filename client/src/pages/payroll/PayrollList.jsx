@@ -272,7 +272,7 @@ function HolidaysTab({ isOwner }) {
             ) : holidays.map(h => (
               <tr key={h.id} className="hover:bg-gray-50">
                 <td className="table-cell text-sm whitespace-nowrap">{fmtDate(h.holiday_date)}</td>
-                <td className="table-cell text-sm text-gray-500">{new Date(h.holiday_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' })}</td>
+                <td className="table-cell text-sm text-gray-500">{new Date(h.holiday_date).toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}</td>
                 <td className="table-cell text-sm font-medium text-gray-800">{h.name}</td>
                 {isOwner && (
                   <td className="table-cell text-center">
