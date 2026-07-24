@@ -831,24 +831,30 @@ router.put('/runs/:id/mark-paid', authenticate, authorize('owner'), async (req, 
     if (run.status === 'draft' || run.status === 'submitted') {
       return res.status(400).json({ error: 'Approve the run first' });
     }
-    // Keep the linked Account-Statement salary entries in sync: paid → Paid Bank
-    if (Array.isArray(req.body.line_ids) && req.body.line_ids.length) {
-      const ids = req.body.line_ids.map(n => parseInt(n, 10)).filter(Number.isInteger);
-      await db.run(`UPDATE payroll_lines SET paid=TRUE WHERE run_id=$1 AND id = ANY($2)`, [id, ids]);
-      await db.run(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE
-                    WHERE payment_method='unpaid_bank' AND payroll_line_id = ANY($1)`, [ids]);
-    } else {
-      await db.run('UPDATE payroll_lines SET paid=TRUE WHERE run_id=$1', [id]);
-      await db.run(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE
-                    WHERE payment_method='unpaid_bank' AND payroll_line_id IN (SELECT id FROM payroll_lines WHERE run_id=$1)`, [id]);
-    }
-    const remaining = await db.get(
-      'SELECT COUNT(*)::int AS n FROM payroll_lines WHERE run_id=$1 AND paid=FALSE', [id]);
-    if (remaining.n === 0 && run.status !== 'paid') {
-      await db.run("UPDATE payroll_runs SET status='paid', paid_at=NOW() WHERE id=$1", [id]);
+    // Mark lines paid + flip the linked Account-Statement salary entries to Paid
+    // Bank, and settle the run — all in one transaction so they never desync.
+    const remainingN = await db.withTransaction(async (client) => {
+      if (Array.isArray(req.body.line_ids) && req.body.line_ids.length) {
+        const ids = req.body.line_ids.map(n => parseInt(n, 10)).filter(Number.isInteger);
+        await client.query(`UPDATE payroll_lines SET paid=TRUE WHERE run_id=$1 AND id = ANY($2)`, [id, ids]);
+        await client.query(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE
+                      WHERE payment_method='unpaid_bank' AND payroll_line_id = ANY($1)`, [ids]);
+      } else {
+        await client.query('UPDATE payroll_lines SET paid=TRUE WHERE run_id=$1', [id]);
+        await client.query(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE
+                      WHERE payment_method='unpaid_bank' AND payroll_line_id IN (SELECT id FROM payroll_lines WHERE run_id=$1)`, [id]);
+      }
+      const { rows } = await client.query(
+        'SELECT COUNT(*)::int AS n FROM payroll_lines WHERE run_id=$1 AND paid=FALSE', [id]);
+      if (rows[0].n === 0 && run.status !== 'paid') {
+        await client.query("UPDATE payroll_runs SET status='paid', paid_at=NOW() WHERE id=$1", [id]);
+      }
+      return rows[0].n;
+    });
+    if (remainingN === 0 && run.status !== 'paid') {
       await logActivity(null, null, 'payroll_paid', `Payroll ${run.month} fully paid`, req.user.id);
     }
-    res.json({ message: 'Marked paid', all_paid: remaining.n === 0 });
+    res.json({ message: 'Marked paid', all_paid: remainingN === 0 });
   } catch (e) {
     console.error('mark paid error:', e);
     res.status(500).json({ error: 'Failed to mark paid' });

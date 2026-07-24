@@ -440,12 +440,22 @@ router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {
     if (e.payroll_line_id) {
       return res.status(400).json({ error: 'This is an auto-posted salary entry — it can\'t be deleted here' });
     }
-    // An Advance Paid entry created a payroll advance. Reverse it if it hasn't
-    // been recovered in a run yet; if already settled, block (it's been deducted).
+    // An Advance Paid entry created a payroll advance. It's cleanly reversible
+    // only while fully outstanding: if it's been settled — or partially recovered
+    // in a run (balance no longer covers all unsettled advances) — block, since
+    // we can't attribute the recovered portion. Adjust in Payroll instead.
     if (e.advance_id) {
       const adv = await db.get('SELECT * FROM employee_advances WHERE id=$1', [e.advance_id]);
-      if (adv && adv.settled) {
-        return res.status(400).json({ error: 'This advance was already recovered in a salary run — it can\'t be deleted' });
+      if (adv) {
+        if (adv.settled) {
+          return res.status(400).json({ error: 'This advance was already recovered in a salary run — it can\'t be deleted' });
+        }
+        const outstanding = await db.get(
+          'SELECT COALESCE(SUM(amount),0) AS s FROM employee_advances WHERE employee_id=$1 AND settled=FALSE', [adv.employee_id]);
+        const emp = await db.get('SELECT advance_balance FROM employees WHERE id=$1', [adv.employee_id]);
+        if (Number(emp.advance_balance) < Number(outstanding.s)) {
+          return res.status(400).json({ error: 'This advance has been partly recovered in a salary run — adjust it in Payroll instead of deleting' });
+        }
       }
     }
     await db.withTransaction(async (client) => {
