@@ -370,9 +370,10 @@ router.post('/holidays', authenticate, authorize('owner'), async (req, res) => {
     const name = String(req.body.name || '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'A valid date is required' });
     if (!name) return res.status(400).json({ error: 'Holiday name is required' });
+    // NB: db.insert() appends "RETURNING id" itself — don't add another here.
     const r = await getDB().insert(
       `INSERT INTO holidays (holiday_date, name, created_by) VALUES ($1,$2,$3)
-       ON CONFLICT (holiday_date) DO UPDATE SET name=EXCLUDED.name RETURNING id`,
+       ON CONFLICT (holiday_date) DO UPDATE SET name=EXCLUDED.name`,
       [date, name, req.user.id]);
     res.status(201).json({ id: r.lastInsertRowid });
   } catch (e) {
