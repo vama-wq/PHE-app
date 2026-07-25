@@ -23,12 +23,11 @@ const pdfParse = require('pdf-parse');
 const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
 const LATE_STAY_MIN = 18 * 60 + 30;     // 18:30 — admin 6:30 sick-credit threshold
 
-// OT is clock-out based and earned only by per-day labour (shift 9:00–5:30, OT
-// from 5:30 PM) and Production-no-leave (shift 9:00–7:30, OT from 7:30 PM).
-// Admin and Production-with-leave earn no OT. OT minutes round to the nearest ½
-// hour with a 20-minute threshold: 0–19 min into a half-hour drop, 20+ rounds up
-// (out 7:15 → 1:30, out 7:20 → 2:00).
-const OT_START = { labour: 17 * 60 + 30, fixed_production_nl: 19 * 60 + 30 }; // 5:30 PM / 7:30 PM
+// OT is clock-out based and earned only by per-day labour (OT from 5:30 PM) and
+// Production-no-leave (OT from 7:00 PM). Admin and Production-with-leave earn no
+// OT. OT minutes round to the nearest ½ hour with a 20-minute threshold: 0–19
+// min into a half-hour drop, 20+ rounds up (out 7:15 → 1:30, out 7:20 → 2:00).
+const OT_START = { labour: 17 * 60 + 30, fixed_production_nl: 19 * 60 }; // 5:30 PM / 7:00 PM
 
 function roundOtBlock(min) {
   if (min <= 0) return 0;
