@@ -23,13 +23,22 @@ const pdfParse = require('pdf-parse');
 const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
 const LATE_STAY_MIN = 18 * 60 + 30;     // 18:30 — admin 6:30 sick-credit threshold
 
-// Standard working day (minutes) by payroll worker_group — OT accrues beyond it
-const STD_DAY_MIN = { fixed_production: 600, fixed_production_nl: 600, fixed_admin: 480, labour: 480 };
+// OT is per-day-labour only, based on the clock-out time. Base shift is 9:00–
+// 5:30 (8h); OT runs from 5:30 PM. OT minutes are rounded to the nearest ½ hour
+// with a 20-minute threshold: 0–19 min into a half-hour are dropped, 20+ rounds
+// up (out 7:15 → 1:30, out 7:20 → 2:00).
+const OT_START_MIN = 17 * 60 + 30; // 5:30 PM
 
-// OT hours from a list of per-present-day total-worked minutes vs the standard day
-function otHoursFor(totMinsList, stdMin) {
-  const ot = (totMinsList || []).reduce((s, m) => s + Math.max(Number(m) - stdMin, 0), 0);
-  return Math.round((ot / 60) * 100) / 100;
+function roundOtBlock(min) {
+  if (min <= 0) return 0;
+  const blocks = Math.floor(min / 30), rem = min % 30;
+  return (rem >= 20 ? blocks + 1 : blocks) * 30;
+}
+
+// Labour OT hours: sum over present days of the rounded (clock-out − 5:30)
+function labourOtHours(outMinsList) {
+  const mins = (outMinsList || []).reduce((s, o) => s + roundOtBlock(Math.max((Number(o) || 0) - OT_START_MIN, 0)), 0);
+  return Math.round((mins / 60) * 100) / 100;
 }
 
 const toMin = (t) => {
@@ -135,21 +144,20 @@ async function parseEssl(buffer) {
       if (!key) continue;
       if (seenDayKeys.has(`${key}|${dayIso}`)) continue;
       seenDayKeys.add(`${key}|${dayIso}`);
-      if (!workers.has(key)) {
-        workers.set(key, { display, present: 0, absent: 0, noOutPunch: 0, totMinsList: [], lateStayDates: [], days: 0 });
-      }
       // Sunday is the weekly off — a non-attendance there isn't an absence
       // (the device inconsistently marks Sundays "WeeklyOff" or "Absent").
       // Saturday IS a working day, so its absences DO count.
       if (day.date.getUTCDay() === 0 && row.status !== 'Present' && row.status !== 'Half Day') continue;
-
+      if (!workers.has(key)) {
+        workers.set(key, { display, present: 0, absent: 0, noOutPunch: 0, outMinsList: [], lateStayDates: [], days: 0 });
+      }
       const w = workers.get(key);
       w.days += 1;
-      const { outMin, totMin } = readTimes(row, format);
+      const { outMin } = readTimes(row, format);
 
       if (row.status === 'Present' || row.status === 'Half Day') {
         w.present += row.status === 'Half Day' ? 0.5 : 1;
-        w.totMinsList.push(totMin || 0);            // for OT vs standard day
+        w.outMinsList.push(outMin || 0);            // clock-out for labour OT
         if (outMin != null && outMin >= LATE_STAY_MIN) w.lateStayDates.push(dayIso);
       } else if (/^Absent/.test(row.status)) {
         w.absent += 1;
@@ -160,8 +168,8 @@ async function parseEssl(buffer) {
   }
 
   // Weekly 6:30 rule: a Mon–Sun week with 4+ late stays earns +1 sick credit.
-  // otHours here is a default (8h standard) — esslToAttendance recomputes it
-  // against each worker's payroll standard day (8h admin/labour, 10h production).
+  // otHours is the labour clock-out OT; esslToAttendance zeroes it for fixed
+  // groups (only per-day labour earns OT).
   for (const w of workers.values()) {
     const weeks = new Map();
     for (const d of w.lateStayDates) {
@@ -173,7 +181,7 @@ async function parseEssl(buffer) {
     }
     w.lateStays = w.lateStayDates.length;
     w.sickCreditWeeks = [...weeks.values()].filter(n => n >= 4).length;
-    w.otHours = otHoursFor(w.totMinsList, 8 * 60);
+    w.otHours = labourOtHours(w.outMinsList);
     w.nameShift = w.display; // back-compat with callers/logs
   }
 
@@ -208,4 +216,4 @@ function matchEmployees(workers, employees) {
   return { matched, unmatched };
 }
 
-module.exports = { parseEssl, matchEmployees, normName, matchKey, otHoursFor, STD_DAY_MIN };
+module.exports = { parseEssl, matchEmployees, normName, matchKey, labourOtHours };

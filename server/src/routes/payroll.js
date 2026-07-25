@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadEsslReport, deleteFromStorage, downloadFromStorage } = require('../middleware/upload');
-const { parseEssl, matchEmployees, otHoursFor, STD_DAY_MIN } = require('../lib/esslParser');
+const { parseEssl, matchEmployees, labourOtHours } = require('../lib/esslParser');
 
 // ── Payroll ───────────────────────────────────────────────────────────────────
 // Worker groups and policies (confirmed by owner):
@@ -110,8 +110,8 @@ async function esslToAttendance(buffer, employees, workingDays) {
     const emp = empById[empId];
     const present = agg.present;
     const isFixed = FIXED_GROUPS.includes(emp.worker_group);
-    // OT beyond THIS worker's standard day (8h admin/labour, 10h production)
-    const otHours = otHoursFor(agg.totMinsList, STD_DAY_MIN[emp.worker_group] ?? 480);
+    // Only per-day labour earns OT (clock-out based, from 5:30 PM); fixed = 0
+    const otHours = emp.worker_group === 'labour' ? labourOtHours(agg.outMinsList) : 0;
     updates.push({
       employee_id: empId,
       present_days: present,
