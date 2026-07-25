@@ -313,9 +313,14 @@ function NewRunModal({ onClose, onDone }) {
       const r = await api.post('/payroll/runs', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const info = r.data.essl;
       if (info) {
-        const msg = `ESSL parsed — attendance pre-filled for ${info.applied} worker(s).` +
-          (info.unmatched?.length ? `\n\nUnmatched in report (no employee by that name): ${info.unmatched.join(', ')}` : '');
-        alert(msg);
+        const p = info.period;
+        const monthOk = p?.from && p?.to && (p.from.slice(0, 7) === month || p.to.slice(0, 7) === month);
+        alert(
+          `ESSL parsed — attendance pre-filled for ${info.applied} worker(s).` +
+          (p?.from ? `\nReport period: ${p.from} to ${p.to}` : '') +
+          (!monthOk && p?.from ? `\n\n⚠ These dates are not in ${month} — check you uploaded the right month's report.` : '') +
+          (info.unmatched?.length ? `\n\nNot matched to any worker (fix the name & re-parse): ${info.unmatched.join(', ')}` : '')
+        );
       }
       navigate(`/payroll/runs/${r.data.id}`);
     } catch (err) {

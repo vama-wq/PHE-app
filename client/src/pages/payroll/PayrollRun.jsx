@@ -36,8 +36,14 @@ export default function PayrollRun() {
     if (file) fd.append('essl', file);
     try {
       const r = await api.put(`/payroll/runs/${id}/parse-essl`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      alert(`ESSL applied — attendance updated for ${r.data.applied} worker(s).` +
-        (r.data.unmatched?.length ? `\n\nUnmatched: ${r.data.unmatched.join(', ')}` : ''));
+      const p = r.data.period;
+      const monthOk = p?.from && p?.to && (p.from.slice(0, 7) === data.run.month || p.to.slice(0, 7) === data.run.month);
+      alert(
+        `ESSL applied — attendance updated for ${r.data.applied} worker(s).` +
+        (p?.from ? `\nReport period: ${p.from} to ${p.to}` : '') +
+        (!monthOk && p?.from ? `\n\n⚠ These dates are not in ${data.run.month} — check you uploaded the right month's report.` : '') +
+        (r.data.unmatched?.length ? `\n\nNot matched to any worker (fix the name & re-parse): ${r.data.unmatched.join(', ')}` : '')
+      );
       load();
     } catch (err) { alert(err.response?.data?.error || 'Failed to parse ESSL'); }
   };
