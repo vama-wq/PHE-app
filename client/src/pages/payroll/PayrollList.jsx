@@ -29,6 +29,7 @@ export default function PayrollList() {
   const [showNewRun, setShowNewRun] = useState(false);
   const [editEmp, setEditEmp] = useState(null); // null | 'new' | employee obj
   const [advanceEmp, setAdvanceEmp] = useState(null);
+  const [leaveEmp, setLeaveEmp] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const load = () => {
@@ -172,6 +173,11 @@ export default function PayrollList() {
                     </span>
                   </td>
                   <td className="table-cell text-center whitespace-nowrap">
+                    {isOwner && e.worker_group !== 'labour' && (
+                      <button className="p-1 text-gray-400 hover:text-emerald-600" title="Adjust leave balance" onClick={() => setLeaveEmp(e)}>
+                        <CalendarDays size={14} />
+                      </button>
+                    )}
                     {isOwner && (
                       <button className="p-1 text-gray-400 hover:text-brand-600" title="Record advance" onClick={() => setAdvanceEmp(e)}>
                         <Wallet size={14} />
@@ -196,6 +202,7 @@ export default function PayrollList() {
       {showNewRun && <NewRunModal onClose={() => setShowNewRun(false)} onDone={() => { setShowNewRun(false); load(); }} />}
       {editEmp && <EmployeeModal employee={editEmp === 'new' ? null : editEmp} onClose={() => setEditEmp(null)} onDone={() => { setEditEmp(null); load(); }} />}
       {advanceEmp && <AdvanceModal employee={advanceEmp} onClose={() => setAdvanceEmp(null)} onDone={() => { setAdvanceEmp(null); load(); }} />}
+      {leaveEmp && <LeaveModal employee={leaveEmp} onClose={() => setLeaveEmp(null)} onDone={() => { setLeaveEmp(null); load(); }} />}
     </div>
   );
 }
@@ -510,6 +517,74 @@ function AdvanceModal({ employee, onClose, onDone }) {
         <div className="flex gap-3 pt-1">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary flex-1" disabled={saving}>{saving ? 'Saving…' : 'Record Advance'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// Owner adjusts a worker's paid-leave balance — e.g. an opening balance carried
+// over from before the app, or a correction. Positive adds credit, negative
+// removes. Posts to the leave ledger and shows recent entries for context.
+function LeaveModal({ employee, onClose, onDone }) {
+  const [data, setData] = useState(null); // { balance, entries }
+  const [delta, setDelta] = useState('');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = () => api.get(`/payroll/employees/${employee.id}/leave`).then(r => setData(r.data)).catch(() => setData({ balance: 0, entries: [] }));
+  useEffect(() => { load(); }, []);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const d = Number(delta);
+    if (!d) return setError('Enter a non-zero amount (e.g. 3 to add, -1 to remove).');
+    setSaving(true); setError('');
+    try {
+      await api.post(`/payroll/employees/${employee.id}/leave`, { delta: d, notes: notes.trim() || undefined });
+      onDone();
+    } catch (err) { setError(err.response?.data?.error || 'Failed'); setSaving(false); }
+  };
+
+  const REASON_LABELS = { monthly_accrual: 'Monthly accrual', sick_630: '6:30 sick credit', used: 'Used', year_trim: 'Year-start trim', manual: 'Manual adjustment' };
+
+  return (
+    <Modal open title={`Leave Balance — ${employee.name}`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-3 flex items-center justify-between">
+          <span className="text-sm text-gray-600">Current balance</span>
+          <span className="text-xl font-bold text-emerald-700">{data ? Number(data.balance) : '…'} <span className="text-sm font-normal text-gray-500">leaves</span></span>
+        </div>
+        <div>
+          <label className="label">Adjustment <span className="text-red-500">*</span></label>
+          <input className="input" type="number" step="0.5" value={delta} onChange={e => { setDelta(e.target.value); setError(''); }}
+            placeholder="e.g. 3 to add carried-over leave, -1 to remove" autoFocus />
+          <p className="text-[11px] text-gray-400 mt-1">Positive adds leave credit; negative removes. New balance will be {data ? Number(data.balance) + (Number(delta) || 0) : '…'}.</p>
+        </div>
+        <div>
+          <label className="label">Note <span className="text-gray-400 font-normal">(optional)</span></label>
+          <input className="input" value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Leftover leave carried from before the app" />
+        </div>
+
+        {data?.entries?.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-gray-500 mb-1">Recent ledger</p>
+            <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50">
+              {data.entries.slice(0, 8).map(en => (
+                <div key={en.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                  <span className="text-gray-600">{REASON_LABELS[en.reason] || en.reason}{en.notes ? ` · ${en.notes}` : ''}</span>
+                  <span className={`font-semibold ${Number(en.delta) < 0 ? 'text-red-600' : 'text-emerald-700'}`}>{Number(en.delta) > 0 ? '+' : ''}{Number(en.delta)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+        <div className="flex gap-3 pt-1">
+          <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving}>{saving ? 'Saving…' : 'Apply Adjustment'}</button>
         </div>
       </form>
     </Modal>
