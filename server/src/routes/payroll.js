@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadEsslReport, deleteFromStorage, downloadFromStorage } = require('../middleware/upload');
-const { parseEssl, matchEmployees, labourOtHours } = require('../lib/esslParser');
+const { parseEssl, matchEmployees, esslOtHours } = require('../lib/esslParser');
 
 // ── Payroll ───────────────────────────────────────────────────────────────────
 // Worker groups and policies (confirmed by owner):
@@ -31,7 +31,10 @@ const MONTHLY_ACCRUAL = { fixed_admin: 1, fixed_production: 2 };
 // production never receive petrol reimbursement.
 const PETROL_GROUPS = ['fixed_admin', 'fixed_production'];
 const MONTH_BASIS_DAYS = 30; // fixed salary ÷ 30, always
-const OT_DIVISOR = 8;        // OT hour = day pay ÷ 8 for every group
+// OT hourly rate = day pay ÷ standard-hours: 8h for labour/admin, 10h for
+// production (their day is 10h). Only labour + production-no-leave earn OT.
+const OT_DIVISOR = 8;
+const OT_DIVISOR_BY_GROUP = { labour: 8, fixed_admin: 8, fixed_production: 10, fixed_production_nl: 10 };
 const MAX_CARRYFORWARD = 5;  // leaves carried into a new year
 const MAX_TOGETHER = 7;      // more than this together → flag, excess unpaid
 
@@ -50,12 +53,13 @@ function computeLine(emp, line, holidays = 0) {
   // Only Admin and Production (with leave) get petrol
   const petrol = PETROL_GROUPS.includes(emp.worker_group) ? Number(line.petrol ?? emp.petrol_monthly ?? 0) : 0;
   const advance = Number(line.advance_deduction || 0);
+  const otDiv = OT_DIVISOR_BY_GROUP[emp.worker_group] ?? OT_DIVISOR;
 
   if (emp.worker_group === 'labour') {
     const rate = Number(line.daily_rate ?? emp.daily_rate ?? 0);
     const base = r2(rate * present);
     const holidayPay = r2(rate * hol);
-    const otAmount = r2((rate / OT_DIVISOR) * ot);
+    const otAmount = r2((rate / otDiv) * ot);
     return {
       daily_rate: rate, monthly_salary: null,
       base_pay: base, ot_amount: otAmount, absent_deduction: 0,
@@ -72,7 +76,7 @@ function computeLine(emp, line, holidays = 0) {
   const deductibleAbsent = Math.max(absent - hol, 0);
   const chargedAbsent = Math.max(deductibleAbsent - creditUsed, 0);
   const absentDeduction = r2(perDay * chargedAbsent);
-  const otAmount = r2((perDay / OT_DIVISOR) * ot);
+  const otAmount = r2((perDay / otDiv) * ot);
   return {
     daily_rate: r2(perDay), monthly_salary: salary,
     base_pay: r2(salary - absentDeduction), ot_amount: otAmount, absent_deduction: absentDeduction,
@@ -108,15 +112,14 @@ async function esslToAttendance(buffer, employees, workingDays) {
   const updates = [];
   for (const [empId, agg] of matched) {
     const emp = empById[empId];
-    const present = agg.present;
-    const isFixed = FIXED_GROUPS.includes(emp.worker_group);
-    // Only per-day labour earns OT (clock-out based, from 5:30 PM); fixed = 0
-    const otHours = emp.worker_group === 'labour' ? labourOtHours(agg.outMinsList) : 0;
     updates.push({
       employee_id: empId,
-      present_days: present,
-      absent_days: isFixed ? Math.max(workingDays - present, 0) : agg.absent,
-      ot_hours: otHours,
+      present_days: agg.present,
+      // Deduct only the days the device actually marked Absent (Sundays already
+      // excluded) — same for fixed and labour; never (working_days − present).
+      absent_days: agg.absent,
+      // OT: labour (5:30 PM) + production-no-leave (7:30 PM); others 0
+      ot_hours: esslOtHours(emp.worker_group, agg.outMinsList),
       late_stay_days: emp.worker_group === 'fixed_admin' ? agg.lateStays : 0,
       sick_credit_earned: emp.worker_group === 'fixed_admin' ? agg.sickCreditWeeks : 0,
     });

@@ -23,11 +23,12 @@ const pdfParse = require('pdf-parse');
 const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
 const LATE_STAY_MIN = 18 * 60 + 30;     // 18:30 — admin 6:30 sick-credit threshold
 
-// OT is per-day-labour only, based on the clock-out time. Base shift is 9:00–
-// 5:30 (8h); OT runs from 5:30 PM. OT minutes are rounded to the nearest ½ hour
-// with a 20-minute threshold: 0–19 min into a half-hour are dropped, 20+ rounds
-// up (out 7:15 → 1:30, out 7:20 → 2:00).
-const OT_START_MIN = 17 * 60 + 30; // 5:30 PM
+// OT is clock-out based and earned only by per-day labour (shift 9:00–5:30, OT
+// from 5:30 PM) and Production-no-leave (shift 9:00–7:30, OT from 7:30 PM).
+// Admin and Production-with-leave earn no OT. OT minutes round to the nearest ½
+// hour with a 20-minute threshold: 0–19 min into a half-hour drop, 20+ rounds up
+// (out 7:15 → 1:30, out 7:20 → 2:00).
+const OT_START = { labour: 17 * 60 + 30, fixed_production_nl: 19 * 60 + 30 }; // 5:30 PM / 7:30 PM
 
 function roundOtBlock(min) {
   if (min <= 0) return 0;
@@ -35,10 +36,15 @@ function roundOtBlock(min) {
   return (rem >= 20 ? blocks + 1 : blocks) * 30;
 }
 
-// Labour OT hours: sum over present days of the rounded (clock-out − 5:30)
-function labourOtHours(outMinsList) {
-  const mins = (outMinsList || []).reduce((s, o) => s + roundOtBlock(Math.max((Number(o) || 0) - OT_START_MIN, 0)), 0);
+function otHoursFromClockOut(outMinsList, startMin) {
+  const mins = (outMinsList || []).reduce((s, o) => s + roundOtBlock(Math.max((Number(o) || 0) - startMin, 0)), 0);
   return Math.round((mins / 60) * 100) / 100;
+}
+
+// OT hours for a worker by group — 0 for groups that don't earn OT
+function esslOtHours(group, outMinsList) {
+  const start = OT_START[group];
+  return start == null ? 0 : otHoursFromClockOut(outMinsList, start);
 }
 
 const toMin = (t) => {
@@ -168,8 +174,8 @@ async function parseEssl(buffer) {
   }
 
   // Weekly 6:30 rule: a Mon–Sun week with 4+ late stays earns +1 sick credit.
-  // otHours is the labour clock-out OT; esslToAttendance zeroes it for fixed
-  // groups (only per-day labour earns OT).
+  // otHours here is a labour-basis default; esslToAttendance recomputes it per
+  // worker_group (labour 5:30, production-no-leave 7:30, others 0).
   for (const w of workers.values()) {
     const weeks = new Map();
     for (const d of w.lateStayDates) {
@@ -181,7 +187,7 @@ async function parseEssl(buffer) {
     }
     w.lateStays = w.lateStayDates.length;
     w.sickCreditWeeks = [...weeks.values()].filter(n => n >= 4).length;
-    w.otHours = labourOtHours(w.outMinsList);
+    w.otHours = esslOtHours('labour', w.outMinsList);
     w.nameShift = w.display; // back-compat with callers/logs
   }
 
@@ -216,4 +222,4 @@ function matchEmployees(workers, employees) {
   return { matched, unmatched };
 }
 
-module.exports = { parseEssl, matchEmployees, normName, matchKey, labourOtHours };
+module.exports = { parseEssl, matchEmployees, normName, matchKey, esslOtHours };
