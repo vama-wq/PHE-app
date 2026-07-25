@@ -59,12 +59,18 @@ function splitNameShift(blob) {
   return { name: s, shift: '' };
 }
 
-const STATUS_ALT = '(?:Absent\\s*\\(No\\s*OutPunch\\)|Absent|Present|Week\\s*Off|WO|Holiday|Half\\s*Day|Leave)';
+// Saturday is a full working day but the device has it configured as a weekly
+// off, so a worked Saturday shows as "WeeklyOff Present" (and an off Sunday as
+// bare "WeeklyOff"). The status matcher must capture the optional WeeklyOff
+// prefix, else those rows are silently dropped.
+const STATUS_ALT =
+  '(?:Week(?:ly)?\\s*Off\\s+)?½?\\s*(?:Absent\\s*\\(No\\s*OutPunch\\)|Absent|Present|Half\\s*Day)' +
+  '|Week(?:ly)?\\s*Off|Holiday|Leave|WO';
 const ROW_RE = new RegExp(
   '(\\d{1,6})' +                    // SNo + E.Code blob
   "([A-Za-z][A-Za-z .'()\\-]*?)" +  // name + shift (lazy)
   '((?:\\s*\\d{1,2}:\\d{2})+)' +    // time tokens
-  '\\s*(½\\s*)?(' + STATUS_ALT + ')', 'g');
+  '\\s*(' + STATUS_ALT + ')', 'g');
 
 // Parse one date-section's text into per-row records.
 function parseSection(text) {
@@ -75,9 +81,13 @@ function parseSection(text) {
   while ((m = ROW_RE.exec(flat)) !== null) {
     const { name, shift } = splitNameShift(m[2]);
     const times = (m[3].match(/\d{1,2}:\d{2}/g) || []).map(toMin);
-    const half = !!m[4];
-    let status = m[5].replace(/\s+/g, ' ');
-    if (half) status = 'Half Day';
+    const raw = m[4];
+    // "WeeklyOff Present" (worked Saturday) counts present; bare "WeeklyOff"/
+    // "Holiday"/"Leave" is an off day (neither present nor absent).
+    let status;
+    if (/Present/i.test(raw)) status = /½|Half/i.test(raw) ? 'Half Day' : 'Present';
+    else if (/Absent/i.test(raw)) status = /No\s*OutPunch/i.test(raw) ? 'Absent (No OutPunch)' : 'Absent';
+    else status = 'Off';
     rows.push({ codeBlob: m[1], name, shift, times, status });
   }
   return rows;
@@ -128,6 +138,11 @@ async function parseEssl(buffer) {
       if (!workers.has(key)) {
         workers.set(key, { display, present: 0, absent: 0, noOutPunch: 0, totMinsList: [], lateStayDates: [], days: 0 });
       }
+      // Sunday is the weekly off — a non-attendance there isn't an absence
+      // (the device inconsistently marks Sundays "WeeklyOff" or "Absent").
+      // Saturday IS a working day, so its absences DO count.
+      if (day.date.getUTCDay() === 0 && row.status !== 'Present' && row.status !== 'Half Day') continue;
+
       const w = workers.get(key);
       w.days += 1;
       const { outMin, totMin } = readTimes(row, format);
