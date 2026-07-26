@@ -189,7 +189,7 @@ export default function PayrollRun() {
 
       {/* ── Per-Day Labour ── */}
       {labour.length > 0 && (
-        <Section title="Per-Day Labour" subtitle={`Paid by present days × daily rate · OT = rate ÷ 8 per hour · no paid leave${holidays > 0 ? ` · +${holidays} paid festival holiday${holidays > 1 ? 's' : ''}` : ''}`}>
+        <Section title="Per-Day Labour" subtitle={`Paid by present days × daily rate · OT = rate ÷ 8 per hour · no paid leave · late past 9:10am cut 30min, +15min per extra 10min${holidays > 0 ? ` · +${holidays} paid festival holiday${holidays > 1 ? 's' : ''}` : ''}`}>
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -198,11 +198,13 @@ export default function PayrollRun() {
                 <th className="table-header text-right">Present</th>
                 <th className="table-header text-right">Absent</th>
                 <th className="table-header text-right">OT (hrs)</th>
+                <th className="table-header text-right" title="Days punched in after the grace time (auto from ESSL)">Late Days</th>
                 {isOwner && (
                   <>
                     <th className="table-header text-right">Salary (Present)</th>
                     {holidays > 0 && <th className="table-header text-right">Holiday Pay</th>}
                     <th className="table-header text-right">OT Amt</th>
+                    <th className="table-header text-right" title="Graduated late-arrival salary cut">Late Cut</th>
                     <th className="table-header text-right">Advance</th>
                     <th className="table-header text-right">Total</th>
                     <th className="table-header text-center">Paid</th>
@@ -219,11 +221,13 @@ export default function PayrollRun() {
                   <td className="table-cell text-right">{numInput(l, 'present_days')}</td>
                   <td className="table-cell text-right">{numInput(l, 'absent_days')}</td>
                   <td className="table-cell text-right">{numInput(l, 'ot_hours')}</td>
+                  <td className="table-cell text-right text-sm" title={l.late_cut_minutes ? `${l.late_cut_minutes} min cut` : ''}>{Number(l.late_days) || 0}</td>
                   {isOwner && (
                     <>
                       <td className="table-cell text-right text-sm">{inr(l.base_pay)}</td>
                       {holidays > 0 && <td className="table-cell text-right text-sm text-emerald-700">{inr(l.holiday_pay || 0)}</td>}
                       <td className="table-cell text-right text-sm">{inr(l.ot_amount)}</td>
+                      <td className="table-cell text-right text-sm text-red-600">{Number(l.late_deduction) ? `−${inr(l.late_deduction)}` : '—'}</td>
                       <td className="table-cell text-right">
                         {editable ? (
                           <input className="input text-sm py-1 px-1.5 text-right w-20" type="number" step="any" min="0"
@@ -254,7 +258,7 @@ export default function PayrollRun() {
       {/* ── Fixed Salary (Admin + Production) ── */}
       {fixed.length > 0 && (
         <Section title="Fixed Salary — Admin & Production"
-          subtitle="Salary ÷ 30 per day · OT = day pay ÷ 8 per hour · paid leave same pool (max 5 carried to next year, >7 together capped) · Admin: 1/month + 4+ days past 6:30pm in a week = +1 sick · Production: 2/month · Production (no leave): every absence deducts">
+          subtitle="Salary ÷ 30 per day · OT = day pay ÷ 8 per hour · paid leave same pool (max 5 carried to next year, >7 together capped) · Admin: 1/month + 4+ days past 6:30pm in a week = +1 sick · Production: 2/month · Production (no leave): every absence deducts · Late cut: no-leave past 9:10 (30/45/60…), with-leave past 9:20 & admin past 10:20 (60/75/90…)">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -264,12 +268,14 @@ export default function PayrollRun() {
                 <th className="table-header text-right">Absent</th>
                 <th className="table-header text-right">OT (hrs)</th>
                 <th className="table-header text-right" title="Days the worker stayed past 6:30pm (admin sick-credit rule)">6:30 Stays</th>
+                <th className="table-header text-right" title="Days punched in after the grace time (auto from ESSL)">Late Days</th>
                 {isOwner && (
                   <>
                     <th className="table-header text-right" title="Available leave credit balance">Leave Bal.</th>
                     <th className="table-header text-right" title="Absences to charge against leave credit (no salary cut)">Credit Used</th>
                     <th className="table-header text-right" title="Sick credits earned this month (admin 6:30 rule)">Sick +</th>
                     <th className="table-header text-right">Absent Ded.</th>
+                    <th className="table-header text-right" title="Graduated late-arrival salary cut">Late Cut</th>
                     <th className="table-header text-right">OT Amt</th>
                     <th className="table-header text-right">Petrol</th>
                     <th className="table-header text-right">Advance</th>
@@ -299,6 +305,7 @@ export default function PayrollRun() {
                       ? numInput(l, 'late_stay_days', { step: '1' })
                       : <span className="text-sm text-gray-300">—</span>}
                   </td>
+                  <td className="table-cell text-right text-sm" title={l.late_cut_minutes ? `${l.late_cut_minutes} min cut` : ''}>{Number(l.late_days) || 0}</td>
                   {isOwner && (
                     <>
                       {/* Leave columns only for groups that have paid leave */}
@@ -328,6 +335,7 @@ export default function PayrollRun() {
                         </>
                       )}
                       <td className="table-cell text-right text-sm text-red-600">{inr(l.absent_deduction)}</td>
+                      <td className="table-cell text-right text-sm text-red-600">{Number(l.late_deduction) ? `−${inr(l.late_deduction)}` : '—'}</td>
                       <td className="table-cell text-right text-sm">{inr(l.ot_amount)}</td>
                       <td className="table-cell text-right">
                         {l.worker_group === 'fixed_production_nl'

@@ -419,6 +419,12 @@ async function initDB(retries = 20, delayMs = 10000) {
         )`);
       await pool.query(`ALTER TABLE holidays ENABLE ROW LEVEL SECURITY`).catch(() => {});
       await pool.query(`ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS holiday_pay NUMERIC NOT NULL DEFAULT 0`);
+      // Late-arrival penalty (graduated): late_days = count of late arrivals,
+      // late_cut_minutes = total graduated cut minutes from the ESSL punch-ins,
+      // late_deduction = the money (cut_minutes/60 × hourly rate).
+      await pool.query(`ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS late_days NUMERIC NOT NULL DEFAULT 0`);
+      await pool.query(`ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS late_cut_minutes NUMERIC NOT NULL DEFAULT 0`);
+      await pool.query(`ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS late_deduction NUMERIC NOT NULL DEFAULT 0`);
       // employee_advances predates payroll_runs, so its settlement backlink FK
       // couldn't be inline — add it idempotently (ON DELETE SET NULL).
       await pool.query(`DO $$ BEGIN

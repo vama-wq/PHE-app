@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadEsslReport, deleteFromStorage, downloadFromStorage } = require('../middleware/upload');
-const { parseEssl, matchEmployees, esslOtHours } = require('../lib/esslParser');
+const { parseEssl, matchEmployees, esslOtHours, lateInfo } = require('../lib/esslParser');
 
 // ── Payroll ───────────────────────────────────────────────────────────────────
 // Worker groups and policies (confirmed by owner):
@@ -35,6 +35,8 @@ const MONTH_BASIS_DAYS = 30; // fixed salary ÷ 30, always
 // production (their day is 10h). Only labour + production-no-leave earn OT.
 const OT_DIVISOR = 8;
 const OT_DIVISOR_BY_GROUP = { labour: 8, fixed_admin: 8, fixed_production: 10, fixed_production_nl: 10 };
+// Late-arrival cut is graduated (esslParser.lateInfo → late_cut_minutes); the
+// money = cut minutes ÷ 60 × hourly rate (day pay ÷ OT divisor).
 const MAX_CARRYFORWARD = 5;  // leaves carried into a new year
 const MAX_TOGETHER = 7;      // more than this together → flag, excess unpaid
 
@@ -54,19 +56,22 @@ function computeLine(emp, line, holidays = 0) {
   const petrol = PETROL_GROUPS.includes(emp.worker_group) ? Number(line.petrol ?? emp.petrol_monthly ?? 0) : 0;
   const advance = Number(line.advance_deduction || 0);
   const otDiv = OT_DIVISOR_BY_GROUP[emp.worker_group] ?? OT_DIVISOR;
+  // Graduated late cut: money = total cut minutes ÷ 60 × hourly (day pay ÷ otDiv)
+  const lateCutMin = Math.max(Number(line.late_cut_minutes || 0), 0);
 
   if (emp.worker_group === 'labour') {
     const rate = Number(line.daily_rate ?? emp.daily_rate ?? 0);
     const base = r2(rate * present);
     const holidayPay = r2(rate * hol);
     const otAmount = r2((rate / otDiv) * ot);
+    const lateDeduction = r2((lateCutMin / 60) * (rate / otDiv));
     return {
       daily_rate: rate, monthly_salary: null,
       base_pay: base, ot_amount: otAmount, absent_deduction: 0,
-      holiday_pay: holidayPay,
+      holiday_pay: holidayPay, late_deduction: lateDeduction,
       petrol: 0, // labour never receives petrol
       advance_deduction: r2(advance),
-      total_payable: r2(base + otAmount + holidayPay - advance),
+      total_payable: r2(base + otAmount + holidayPay - advance - lateDeduction),
     };
   }
   // fixed_admin / fixed_production / fixed_production_nl
@@ -77,12 +82,14 @@ function computeLine(emp, line, holidays = 0) {
   const chargedAbsent = Math.max(deductibleAbsent - creditUsed, 0);
   const absentDeduction = r2(perDay * chargedAbsent);
   const otAmount = r2((perDay / otDiv) * ot);
+  const lateDeduction = r2((lateCutMin / 60) * (perDay / otDiv));
   return {
     daily_rate: r2(perDay), monthly_salary: salary,
     base_pay: r2(salary - absentDeduction), ot_amount: otAmount, absent_deduction: absentDeduction,
     holiday_pay: 0, // fixed salary already covers the paid holiday
+    late_deduction: lateDeduction,
     petrol: r2(petrol), advance_deduction: r2(advance),
-    total_payable: r2(salary - absentDeduction + otAmount + petrol - advance),
+    total_payable: r2(salary - absentDeduction + otAmount + petrol - advance - lateDeduction),
   };
 }
 
@@ -118,8 +125,10 @@ async function esslToAttendance(buffer, employees, workingDays) {
       // Deduct only the days the device actually marked Absent (Sundays already
       // excluded) — same for fixed and labour; never (working_days − present).
       absent_days: agg.absent,
-      // OT: labour (5:30 PM) + production-no-leave (7:30 PM); others 0
+      // OT: labour (5:30 PM) + production-no-leave (7:00 PM); others 0
       ot_hours: esslOtHours(emp.worker_group, agg.outMinsList),
+      // Late arrivals past the group's threshold → graduated cut minutes
+      ...(() => { const li = lateInfo(emp.worker_group, agg.inMinsList); return { late_days: li.lateDays, late_cut_minutes: li.cutMinutes }; })(),
       late_stay_days: emp.worker_group === 'fixed_admin' ? agg.lateStays : 0,
       sick_credit_earned: emp.worker_group === 'fixed_admin' ? agg.sickCreditWeeks : 0,
     });
@@ -140,25 +149,26 @@ async function applyAttendanceUpdates(client, runId, updates, holidays = 0) {
     const merged = {
       ...line,
       present_days: u.present_days, absent_days: u.absent_days,
-      ot_hours: u.ot_hours, late_stay_days: u.late_stay_days,
+      ot_hours: u.ot_hours, late_stay_days: u.late_stay_days, late_cut_minutes: u.late_cut_minutes,
     };
     const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
                   monthly_salary: line.e_salary, petrol_monthly: line.e_petrol };
     const pay = computeLine(emp, merged, holidays);
     await client.query(
       `UPDATE payroll_lines SET present_days=$1, absent_days=$2, ot_hours=$3, late_stay_days=$4,
-         sick_credit_earned=$5, long_leave_flag=$6,
-         base_pay=$7, ot_amount=$8, absent_deduction=$9, holiday_pay=$10, total_payable=$11
-       WHERE id=$12`,
+         sick_credit_earned=$5, long_leave_flag=$6, late_days=$7, late_cut_minutes=$8, late_deduction=$9,
+         base_pay=$10, ot_amount=$11, absent_deduction=$12, holiday_pay=$13, total_payable=$14
+       WHERE id=$15`,
       [u.present_days, u.absent_days, u.ot_hours, u.late_stay_days, u.sick_credit_earned || 0,
        LEAVE_GROUPS.includes(line.worker_group) && Number(u.absent_days) > MAX_TOGETHER,
+       u.late_days || 0, u.late_cut_minutes || 0, pay.late_deduction,
        pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.total_payable, line.id]);
   }
 }
 
 // Strip pay/bank fields for non-owner responses
 const ATTENDANCE_FIELDS = ['id', 'run_id', 'employee_id', 'worker_group', 'present_days', 'absent_days',
-  'ot_hours', 'late_stay_days', 'long_leave_flag', 'remarks', 'name', 'active'];
+  'ot_hours', 'late_stay_days', 'late_days', 'long_leave_flag', 'remarks', 'name', 'active'];
 function visibleLine(line, owner) {
   if (owner) return line;
   return Object.fromEntries(Object.entries(line).filter(([k]) => ATTENDANCE_FIELDS.includes(k)));
@@ -588,18 +598,20 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
           ot_hours: u.ot_hours != null ? Math.max(Number(u.ot_hours), 0) : line.ot_hours,
           late_stay_days: u.late_stay_days != null ? Math.max(parseInt(u.late_stay_days, 10) || 0, 0) : line.late_stay_days,
           leave_credit_used: clampedCredit,
+          // late_cut_minutes flows from the row (auto-computed at parse time)
         };
         const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
                       monthly_salary: line.e_salary, petrol_monthly: line.e_petrol };
         const pay = computeLine(emp, merged, holidays);
         await client.query(
           `UPDATE payroll_lines SET present_days=$1, absent_days=$2, ot_hours=$3, late_stay_days=$4,
-             leave_credit_used=$5, remarks=$6, long_leave_flag=$7,
-             base_pay=$8, ot_amount=$9, absent_deduction=$10, holiday_pay=$11, total_payable=$12
-           WHERE id=$13`,
+             leave_credit_used=$5, remarks=$6, long_leave_flag=$7, late_deduction=$8,
+             base_pay=$9, ot_amount=$10, absent_deduction=$11, holiday_pay=$12, total_payable=$13
+           WHERE id=$14`,
           [merged.present_days, merged.absent_days, merged.ot_hours, merged.late_stay_days, clampedCredit,
            u.remarks !== undefined ? ((u.remarks || '').trim() || null) : line.remarks,
            LEAVE_GROUPS.includes(line.worker_group) && Number(merged.absent_days) > MAX_TOGETHER,
+           pay.late_deduction,
            pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.total_payable, lineId]);
       }
     });
@@ -691,11 +703,11 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
         const pay = computeLine(emp, merged, holidays);
         await client.query(
           `UPDATE payroll_lines SET leave_credit_used=$1, sick_credit_earned=$2, petrol=$3, advance_deduction=$4,
-             remarks=$5, base_pay=$6, ot_amount=$7, absent_deduction=$8, holiday_pay=$9, total_payable=$10
-           WHERE id=$11`,
+             remarks=$5, base_pay=$6, ot_amount=$7, absent_deduction=$8, holiday_pay=$9, late_deduction=$10, total_payable=$11
+           WHERE id=$12`,
           [creditUsed, sickEarned, pay.petrol, advance,
            u.remarks !== undefined ? ((u.remarks || '').trim() || null) : line.remarks,
-           pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.total_payable, lineId]);
+           pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.late_deduction, pay.total_payable, lineId]);
       }
     });
     res.json({ message: 'Review saved', warnings: errors });
@@ -776,8 +788,8 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
         const pay = computeLine(emp, { ...line, leave_credit_used: creditUsed, advance_deduction: deduction, petrol: line.petrol }, holidays);
         await client.query(
           `UPDATE payroll_lines SET leave_credit_used=$1, advance_deduction=$2,
-             base_pay=$3, ot_amount=$4, absent_deduction=$5, holiday_pay=$6, total_payable=$7 WHERE id=$8`,
-          [creditUsed, deduction, pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.total_payable, line.id]);
+             base_pay=$3, ot_amount=$4, absent_deduction=$5, holiday_pay=$6, late_deduction=$7, total_payable=$8 WHERE id=$9`,
+          [creditUsed, deduction, pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.late_deduction, pay.total_payable, line.id]);
         total += Number(pay.total_payable);
         lineCount += 1;
 

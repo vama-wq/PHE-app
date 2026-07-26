@@ -46,6 +46,35 @@ function esslOtHours(group, outMinsList) {
   return start == null ? 0 : otHoursFromClockOut(outMinsList, start);
 }
 
+// Late-arrival: a present day is "late" when the arrival punch is strictly after
+// the group's threshold. The salary cut is graduated — a base cut at the
+// threshold, then +15 minutes of cut for each further 10 minutes late:
+//   labour / production-no-leave (after 9:10): 30 → 45 → 60 …  (base 30)
+//   production-with-leave (after 9:20):        60 → 75 → 90 …  (base 60)
+//   admin (after 10:20):                       60 → 75 → 90 …  (base 60)
+const LATE_THRESHOLD = { labour: 9 * 60 + 10, fixed_production_nl: 9 * 60 + 10, fixed_production: 9 * 60 + 20, fixed_admin: 10 * 60 + 20 };
+const LATE_BASE_MIN  = { labour: 30, fixed_production_nl: 30, fixed_production: 60, fixed_admin: 60 };
+const LATE_STEP_MIN = 15;   // extra cut per additional 10-minute bracket
+const LATE_BRACKET  = 10;   // bracket width
+
+// Cut minutes for a single arrival (0 if on time)
+function lateCutForArrival(group, inMin) {
+  const th = LATE_THRESHOLD[group];
+  if (th == null || !(Number(inMin) > th)) return 0;
+  const tier = Math.floor((Number(inMin) - th) / LATE_BRACKET);
+  return (LATE_BASE_MIN[group] || 0) + LATE_STEP_MIN * tier;
+}
+
+// Aggregate a worker's late days (count) and total graduated cut minutes
+function lateInfo(group, inMinsList) {
+  let lateDays = 0, cutMinutes = 0;
+  for (const i of (inMinsList || [])) {
+    const c = lateCutForArrival(group, i);
+    if (c > 0) { lateDays += 1; cutMinutes += c; }
+  }
+  return { lateDays, cutMinutes };
+}
+
 const toMin = (t) => {
   const m = /^(\d{1,2}):(\d{2})$/.exec(t);
   return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : null;
@@ -107,17 +136,16 @@ function parseSection(text) {
   return rows;
 }
 
-// Interpret a present row's time tokens for the given format → { outMin, totMin }.
-// totMin is total worked duration; OT is derived later from the worker's payroll
-// standard day, not here (the ESSL "shift" label doesn't map to worker_group).
-//  detailed present: S.In S.Out A.In A.Out Work OT Tot Late Early  (out=t[3], tot=t[6])
-//  basic present:    In Out Work OT Tot                            (out=t[1], tot=t[4])
+// Interpret a present row's time tokens for the given format → { inMin, outMin }.
+// inMin is the actual arrival (for late-day counting), outMin the clock-out (OT).
+//  detailed present: S.In S.Out A.In A.Out Work OT Tot Late Early  (in=t[2], out=t[3])
+//  basic present:    In Out Work OT Tot                            (in=t[0], out=t[1])
 function readTimes(row, format) {
   const t = row.times;
   if (format === 'detailed') {
-    return { outMin: t.length >= 9 ? t[3] : null, totMin: t.length >= 9 ? (t[6] || 0) : 0 };
+    return { inMin: t.length >= 9 ? t[2] : null, outMin: t.length >= 9 ? t[3] : null };
   }
-  return { outMin: t.length >= 5 ? t[1] : (t.length >= 2 ? t[1] : null), totMin: t.length >= 5 ? (t[4] || 0) : 0 };
+  return { inMin: t.length >= 2 ? t[0] : null, outMin: t.length >= 2 ? t[1] : null };
 }
 
 async function parseEssl(buffer) {
@@ -154,15 +182,16 @@ async function parseEssl(buffer) {
       // Saturday IS a working day, so its absences DO count.
       if (day.date.getUTCDay() === 0 && row.status !== 'Present' && row.status !== 'Half Day') continue;
       if (!workers.has(key)) {
-        workers.set(key, { display, present: 0, absent: 0, noOutPunch: 0, outMinsList: [], lateStayDates: [], days: 0 });
+        workers.set(key, { display, present: 0, absent: 0, noOutPunch: 0, inMinsList: [], outMinsList: [], lateStayDates: [], days: 0 });
       }
       const w = workers.get(key);
       w.days += 1;
-      const { outMin } = readTimes(row, format);
+      const { inMin, outMin } = readTimes(row, format);
 
       if (row.status === 'Present' || row.status === 'Half Day') {
         w.present += row.status === 'Half Day' ? 0.5 : 1;
-        w.outMinsList.push(outMin || 0);            // clock-out for labour OT
+        w.outMinsList.push(outMin || 0);            // clock-out for OT
+        if (inMin) w.inMinsList.push(inMin);        // arrival for late-day counting
         if (outMin != null && outMin >= LATE_STAY_MIN) w.lateStayDates.push(dayIso);
       } else if (/^Absent/.test(row.status)) {
         w.absent += 1;
@@ -221,4 +250,4 @@ function matchEmployees(workers, employees) {
   return { matched, unmatched };
 }
 
-module.exports = { parseEssl, matchEmployees, normName, matchKey, esslOtHours };
+module.exports = { parseEssl, matchEmployees, normName, matchKey, esslOtHours, lateInfo };
