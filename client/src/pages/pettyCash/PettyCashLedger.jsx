@@ -6,7 +6,7 @@ import SupplierModal from '../../components/SupplierModal';
 import InventoryItemModal from '../../components/InventoryItemModal';
 import CategorySelect from '../../components/CategorySelect';
 import { fmtDate, downloadExcel } from '../../lib/utils';
-import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle } from 'lucide-react';
+import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const MACHINERY = 'Machinery';
@@ -586,6 +586,10 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   const [receipt, setReceipt] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Machinery only: after the expense is saved, offer to also add the part to
+  // inventory using the full inventory form (prefilled from this expense).
+  const [addToInv, setAddToInv] = useState(false);
+  const [showInvModal, setShowInvModal] = useState(false);
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
   useEffect(() => {
@@ -662,12 +666,34 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
       if (f.description && !isEmpExpense) fd.append('description', f.description);
       if (receipt) fd.append('receipt', receipt);
       await api.post('/petty-cash', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      onSaved();
+      // Machinery + "add to inventory" checked → keep the flow open and hand off
+      // to the full inventory form; otherwise finish as usual.
+      if (isMachinery && addToInv) { setShowInvModal(true); setSaving(false); }
+      else onSaved();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to record entry');
       setSaving(false);
     }
   };
+
+  // The machinery expense is already recorded — now collect the full inventory
+  // details. Cancelling still finishes the expense flow (the item is optional).
+  if (showInvModal) {
+    return (
+      <InventoryItemModal
+        initial={{
+          name: f.description.trim(),
+          category: 'Machinery',
+          unit: 'nos',
+          current_stock: 1,
+          unit_cost: f.amount,
+          notes: f.paid_to ? `Machinery purchased from ${f.paid_to}` : '',
+        }}
+        onClose={onSaved}
+        onSave={onSaved}
+      />
+    );
+  }
 
   return (
     <Modal open title={isTopUp ? 'Add Cash Top-up' : 'Add Expense'} onClose={onClose}>
@@ -788,6 +814,17 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
               </div>
             )}
 
+            {isMachinery && (
+              <label className="flex items-start gap-2.5 border border-emerald-200 bg-emerald-50/50 rounded-xl p-3 cursor-pointer">
+                <input type="checkbox" className="mt-0.5 h-4 w-4 accent-emerald-600 flex-shrink-0"
+                  checked={addToInv} onChange={e => setAddToInv(e.target.checked)} />
+                <span className="text-sm text-emerald-800">
+                  <span className="font-medium flex items-center gap-1"><Boxes size={14} /> Also add this part to inventory</span>
+                  <span className="block text-xs text-emerald-700 mt-0.5">After saving the expense, you'll fill in the full inventory details (item code, unit, stock, price…).</span>
+                </span>
+              </label>
+            )}
+
             <div>
               <label className="label">
                 Receipt / Bill {needsReceipt ? <span className="text-red-500">*</span> : <span className="text-gray-400 font-normal">(optional below ₹{receiptLimit})</span>}
@@ -812,7 +849,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
         <div className="flex gap-3 pt-1">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary flex-1" disabled={saving}>
-            {saving ? 'Saving…' : isTopUp ? 'Add Top-up' : 'Record Expense'}
+            {saving ? 'Saving…' : isTopUp ? 'Add Top-up' : (isMachinery && addToInv) ? 'Save & Add to Inventory' : 'Record Expense'}
           </button>
         </div>
       </form>

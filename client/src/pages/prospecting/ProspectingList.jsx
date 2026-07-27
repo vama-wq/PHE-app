@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
-import { renderEmail, copyFor, bodyToHtml } from './applicationEmails';
+import { renderEmail, copyFor, bodyToHtml, renderSms } from './applicationEmails';
 import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye } from 'lucide-react';
 
 // Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
@@ -157,6 +157,16 @@ export default function ProspectingList() {
       setTimeout(() => setCopied(''), 2000);
     } catch { /* clipboard unavailable — user can select the text manually */ }
   };
+  // Application-tailored SMS message (short, GSM-7-safe). Follows the email's application.
+  const smsText = useMemo(() => renderSms(activeApplication), [activeApplication]);
+  const downloadTxt = (text, name) => {
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
+  };
+  const slug = s => String(s || 'all-applications').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   // One-click Zoho flow: download a complete .html file, then in Zoho use
   // "Import/Upload HTML → Upload from Computer" and drop the file in.
   const downloadHtml = () => {
@@ -165,13 +175,13 @@ export default function ProspectingList() {
       '<meta name="viewport" content="width=device-width, initial-scale=1">' +
       `<title>${shownEmail.subject.replace(/</g, '&lt;')}</title></head>\n` +
       '<body style="margin:0;padding:24px;background:#ffffff;">' + emailHtml + '</body></html>';
-    const slug = s => String(s || 'all-applications').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-    const blob = new Blob([fullHtml], { type: 'text/html' });
+    downloadTxt2Html(fullHtml, `PHE-${activeEmail === 'e1' ? 'intro' : 'followup'}-${slug(activeApplication)}.html`);
+  };
+  const downloadTxt2Html = (content, name) => {
+    const blob = new Blob([content], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `PHE-${activeEmail === 'e1' ? 'intro' : 'followup'}-${slug(activeApplication)}.html`;
-    a.click();
+    a.href = url; a.download = name; a.click();
     URL.revokeObjectURL(url);
   };
 

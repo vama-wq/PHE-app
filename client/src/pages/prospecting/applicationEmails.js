@@ -306,3 +306,33 @@ export function renderEmail(which, application) {
     ].join('\n'),
   };
 }
+
+// ── SMS templates ────────────────────────────────────────────────────────────
+// Short (<=2 SMS segments), GSM-7-safe, tailored per application. $[FNAME|team]$ is
+// Zoho's merge tag for the company name (stored in the First Name field).
+export const SMS_COPY = {
+  "Autoclaves & sterilizers": "Hi $[FNAME|team]$, PHE builds flanged and screw-plug immersion heaters in SS316 and Incoloy 800 for autoclaves and sterilizers. Made to your drawing, tested before dispatch, 6-month guarantee. Reply for a quote or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Fluid bed dryers & granulation": "Hi $[FNAME|team]$, for FBD inlet banks PHE makes finned tubular air heaters at low watt density so no scorch on your product. Custom sizing to your drawing, tested before dispatch. Reply to discuss or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Tablet coating & drying": "Hi $[FNAME|team]$, PHE supplies finned tubular air heaters for coating AHUs with split circuits for staged control. Made to your drawing, tested before dispatch, 5-7 day dispatch. Reply for details or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Stability chambers & incubators": "Hi $[FNAME|team]$, for stability chamber ducts PHE makes low watt density finned tubular air heaters for gentle even heat. Custom to your drawing, tested before dispatch. Reply to discuss or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Ovens & furnaces": "Hi $[FNAME|team]$, PHE makes Incoloy 800 oven elements and wound coil and muffle furnace elements for high temp duty. Made to your drawing, tested before dispatch, 6-month guarantee. Reply for a quote or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Dissolution & water baths": "Hi $[FNAME|team]$, for dissolution baths PHE supplies SS316 water-bath immersion and screw-plug elements for stable bath temp. Made to your drawing, tested before dispatch. Reply for details or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Aircraft manufacturing": "Hi $[FNAME|team]$, PHE builds finned air heaters for cure ovens and SS316 immersion heaters for process tanks. Made to your drawing, CNC bending, tested before dispatch. Reply to discuss or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Aircraft & engine MRO": "Hi $[FNAME|team]$, for MRO shops PHE makes immersion heaters and drying-cabinet air heaters. Made to your drawing, tested before dispatch, 5-7 day dispatch, export experience. Reply for details or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "UAV & composites": "Hi $[FNAME|team]$, PHE makes custom tubular elements, pitot and de-icing heaters, and cure-oven air heaters for UAV and composites work. Made to your drawing, CNC bending, tested. Reply to discuss or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Heating elements & distribution": "Hi $[FNAME|team]$, PHE makes tubular elements to your drawing in SS304, SS316 or Incoloy 800, plus cartridge and band lines you can resell. Tested, 5-7 day lead, 6-month guarantee. Reply for a quote or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Boilers & steam": "Hi $[FNAME|team]$, PHE builds flanged and screw-plug immersion heater bundles for electric and electrode boilers, made to your drawing and rating. Tested, 6-month guarantee, 5-7 day lead. Reply with your specs or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Furnaces & kilns": "Hi $[FNAME|team]$, PHE forms coil and muffle furnace elements to your chamber size and temperature. Custom CNC bending, tested before dispatch, 6-month guarantee. Reply with your chamber details or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Geysers & water heaters": "Hi $[FNAME|team]$, PHE supplies screw-plug and formed tubular immersion elements for geysers at volume, made to your drawing. Consistent quality, tested, 5-7 day lead. Reply for volume pricing or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Catering & bakery ovens": "Hi $[FNAME|team]$, PHE makes tubular deck and cavity oven elements plus bain-marie and fryer elements to your drawing. Custom bending, tested before dispatch, 6-month guarantee. Reply with your specs or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Electroplating & finishing": "Hi $[FNAME|team]$, PHE builds flanged and over-the-side immersion heaters for plating tanks, in SS316 or Incoloy 800 for corrosive baths. Tested, 6-month guarantee. Reply with tank details or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Industrial & curing ovens": "Hi $[FNAME|team]$, PHE makes finned tubular air heaters in SS304 or Incoloy 800 for curing and drying ovens, formed to your airflow and rating. Tested, 6-month guarantee. Reply for a quote or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Plastics machinery": "Hi $[FNAME|team]$, PHE supplies mica and ceramic band heaters and cartridge heaters for barrels and hot-runner zones, made to your dimensions and watt density. Tested, 5-7 day lead. Reply with your specs or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+  "Incubators & lab ovens": "Hi $[FNAME|team]$, PHE makes low watt density finned air heaters and SS316 tubular elements for incubators and lab ovens, for even gentle heat. Tested, 6-month guarantee. Reply for a quote or see phe.co.in. Vama, Peena Heat Elements. phe.co.in",
+};
+
+export const GENERIC_SMS = "Hi $[FNAME|team]$, Peena Heat Elements (Ahmedabad) makes tubular heating elements to your drawing - SS304, SS316 and Incoloy 800, tested before dispatch, 6-month guarantee. Reply for a quote or see phe.co.in. Vama, Peena Heat Elements. phe.co.in";
+
+export function renderSms(application) {
+  return (application && SMS_COPY[application]) || GENERIC_SMS;
+}
