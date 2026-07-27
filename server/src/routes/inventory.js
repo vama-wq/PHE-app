@@ -236,22 +236,39 @@ router.post('/:id/transactions', authenticate, authorize('owner', 'design', 'adm
 
 router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res) => {
   const db = getDB();
-  const item = await db.get('SELECT id FROM inventory_items WHERE id=$1', [req.params.id]);
+  const item = await db.get('SELECT id, current_stock FROM inventory_items WHERE id=$1', [req.params.id]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
 
-  const [txRow, poRow, fifoRow] = await Promise.all([
-    db.get('SELECT COUNT(*) AS n FROM inventory_transactions WHERE item_id=$1', [req.params.id]),
-    db.get('SELECT COUNT(*) AS n FROM purchase_order_items WHERE inventory_item_id=$1', [req.params.id]),
-    db.get('SELECT COUNT(*) AS n FROM inventory_fifo_lots WHERE item_id=$1', [req.params.id]),
-  ]);
-  const txCount = parseInt(txRow.n, 10), poCount = parseInt(poRow.n, 10), fifoCnt = parseInt(fifoRow.n, 10);
-  if (txCount + poCount + fifoCnt > 0) {
+  const poRow = await db.get('SELECT COUNT(*) AS n FROM purchase_order_items WHERE inventory_item_id=$1', [req.params.id]);
+  const poCount = parseInt(poRow.n, 10);
+  // Items tied to real purchase orders keep their procurement history — block.
+  if (poCount > 0) {
     return res.status(400).json({
-      error: `Cannot delete: this item has ${txCount} transaction(s) and ${poCount} purchase order line(s). Remove those first or archive the item instead.`,
+      error: `Cannot delete: this item is linked to ${poCount} purchase order line(s). Remove those first or archive the item instead.`,
+    });
+  }
+  // Don't delete an item that still has stock on hand — zero it out first so a
+  // live material can't vanish by accident. (Manual stock history like opening
+  // stock / adjustments is cascaded below; this is how test or retired items go.)
+  if (Number(item.current_stock) > 0) {
+    return res.status(400).json({
+      error: `Cannot delete: this item still has ${item.current_stock} in stock. Adjust the stock to 0 first, then delete.`,
     });
   }
 
-  await db.run('DELETE FROM inventory_items WHERE id=$1', [req.params.id]);
+  try {
+    await db.withTransaction(async (client) => {
+      await client.query('DELETE FROM inventory_fifo_lots WHERE item_id=$1', [req.params.id]);
+      await client.query('DELETE FROM inventory_transactions WHERE item_id=$1', [req.params.id]);
+      await client.query('DELETE FROM inventory_items WHERE id=$1', [req.params.id]);
+    });
+  } catch (e) {
+    // Referenced elsewhere (an order line, job card, etc.) — FK stops the delete.
+    if (e.code === '23503') {
+      return res.status(400).json({ error: 'Cannot delete: this item is still referenced by an order or job card. Remove those references first.' });
+    }
+    throw e;
+  }
   res.json({ message: 'Deleted' });
 });
 

@@ -150,7 +150,9 @@ export default function ProspectingList() {
     () => bodyToHtml(shownEmail.body, activeApplication),
     [shownEmail.body, activeApplication]);
   const doCopy = async kind => {
-    const text = kind === 'html' ? emailHtml : `${shownEmail.subject}\n\n${shownEmail.body}`;
+    const text = kind === 'html' ? emailHtml
+      : kind === 'sms' ? smsText
+      : `${shownEmail.subject}\n\n${shownEmail.body}`;
     try {
       await navigator.clipboard.writeText(text);
       setCopied(kind);
