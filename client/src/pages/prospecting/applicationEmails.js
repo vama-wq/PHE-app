@@ -175,37 +175,13 @@ export function copyFor(application) {
 export const WEBSITE = 'https://phe.co.in';
 
 const CAT_BASE = 'https://catalog.weblink.in/dynamic-files/ei/other-files/14746390';
-const CATALOGUES = {
-  main:       { label: 'Full product catalogue',        url: `${CAT_BASE}/phe-catalogue_compressed.pdf` },
-  industrial: { label: 'Industrial element catalogue',  url: `${CAT_BASE}/industrial-equipment-element-catalogue.pdf` },
-  lab:        { label: 'Laboratory equipment catalogue', url: `${CAT_BASE}/laboratory-equipment-catalogue-_compressed.pdf` },
-  kitchen:    { label: 'Kitchen & appliance catalogue',  url: `${CAT_BASE}/household-appliances-kitchen-equipment-ctalogue_compressed.pdf` },
-};
+// The full product catalogue is linked in every email, for every application
+// (per Vama's instruction). The email copy stays application-tailored; only the
+// catalogue attachment is always the complete one.
+const FULL_CATALOGUE = { label: 'Full product catalogue', url: `${CAT_BASE}/phe-catalogue_compressed.pdf` };
 
-// application → which catalogue is most relevant (falls back to the full catalogue)
-const APP_CATALOGUE = {
-  'Autoclaves & sterilizers': 'industrial',
-  'Fluid bed dryers & granulation': 'industrial',
-  'Tablet coating & drying': 'industrial',
-  'Stability chambers & incubators': 'lab',
-  'Ovens & furnaces': 'lab',
-  'Dissolution & water baths': 'lab',
-  'Aircraft manufacturing': 'industrial',
-  'Aircraft & engine MRO': 'industrial',
-  'UAV & composites': 'industrial',
-  'Heating elements & distribution': 'main',
-  'Boilers & steam': 'industrial',
-  'Furnaces & kilns': 'industrial',
-  'Geysers & water heaters': 'industrial',
-  'Catering & bakery ovens': 'kitchen',
-  'Electroplating & finishing': 'industrial',
-  'Industrial & curing ovens': 'industrial',
-  'Plastics machinery': 'industrial',
-  'Incubators & lab ovens': 'lab',
-};
-
-export function catalogueFor(application) {
-  return CATALOGUES[APP_CATALOGUE[application] || 'main'];
+export function catalogueFor(_application) {
+  return FULL_CATALOGUE;
 }
 
 // Footer appended to every email: website + the relevant catalogue link.
