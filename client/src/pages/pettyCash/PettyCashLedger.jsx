@@ -586,10 +586,12 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   const [receipt, setReceipt] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  // Machinery only: after the expense is saved, offer to also add the part to
-  // inventory using the full inventory form (prefilled from this expense).
+  // Machinery only: after the expense is saved, offer to add one or more parts
+  // to inventory using the full inventory form (prefilled from this expense).
   const [addToInv, setAddToInv] = useState(false);
   const [showInvModal, setShowInvModal] = useState(false);
+  const [partsAdded, setPartsAdded] = useState(0);   // how many parts stocked so far
+  const [betweenParts, setBetweenParts] = useState(false); // "add another?" step
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
   useEffect(() => {
@@ -677,20 +679,44 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   };
 
   // The machinery expense is already recorded — now collect the full inventory
-  // details. Cancelling still finishes the expense flow (the item is optional).
+  // details for each part it brought. The user can add as many parts as needed;
+  // every part is optional, so finishing at any point keeps the saved expense.
+  const invNotes = f.paid_to ? `Machinery purchased from ${f.paid_to}` : '';
+
+  // "Add another part?" step shown after each part is stocked.
+  if (betweenParts) {
+    return (
+      <Modal open title="Parts added to inventory" onClose={onSaved}>
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2.5 text-sm">
+            <CheckCircle size={16} className="flex-shrink-0" />
+            {partsAdded} part{partsAdded === 1 ? '' : 's'} added for this machinery expense.
+          </div>
+          <p className="text-sm text-gray-600">Did this purchase include another part to stock?</p>
+          <div className="flex gap-3 pt-1">
+            <button type="button" className="btn-secondary flex-1" onClick={onSaved}>Done</button>
+            <button type="button" className="btn-primary flex-1"
+              onClick={() => { setBetweenParts(false); setShowInvModal(true); }}>
+              <Boxes size={15} /> Add another part
+            </button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
   if (showInvModal) {
+    // First part is prefilled from the expense; extra parts start blank (the
+    // amount covers the whole purchase, so per-part price/qty is entered fresh).
+    const initial = partsAdded === 0
+      ? { name: f.description.trim(), category: 'Machinery', unit: 'nos', current_stock: 1, unit_cost: f.amount, notes: invNotes }
+      : { category: 'Machinery', unit: 'nos', current_stock: 1, notes: invNotes };
     return (
       <InventoryItemModal
-        initial={{
-          name: f.description.trim(),
-          category: 'Machinery',
-          unit: 'nos',
-          current_stock: 1,
-          unit_cost: f.amount,
-          notes: f.paid_to ? `Machinery purchased from ${f.paid_to}` : '',
-        }}
-        onClose={onSaved}
-        onSave={onSaved}
+        key={partsAdded}
+        initial={initial}
+        onSave={() => { setPartsAdded(n => n + 1); setShowInvModal(false); setBetweenParts(true); }}
+        onClose={() => { if (partsAdded > 0) setBetweenParts(true); else onSaved(); }}
       />
     );
   }
@@ -819,8 +845,8 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                 <input type="checkbox" className="mt-0.5 h-4 w-4 accent-emerald-600 flex-shrink-0"
                   checked={addToInv} onChange={e => setAddToInv(e.target.checked)} />
                 <span className="text-sm text-emerald-800">
-                  <span className="font-medium flex items-center gap-1"><Boxes size={14} /> Also add this part to inventory</span>
-                  <span className="block text-xs text-emerald-700 mt-0.5">After saving the expense, you'll fill in the full inventory details (item code, unit, stock, price…).</span>
+                  <span className="font-medium flex items-center gap-1"><Boxes size={14} /> Also add part(s) to inventory</span>
+                  <span className="block text-xs text-emerald-700 mt-0.5">After saving the expense, add one or more parts — each with the full inventory details (item code, unit, stock, price…).</span>
                 </span>
               </label>
             )}

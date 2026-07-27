@@ -454,6 +454,31 @@ export default function ProspectingList() {
             </p>
           </div>
 
+          {/* SMS template — matches the email's application */}
+          <div className="card p-4 mb-6">
+            <div className="flex items-center gap-2 mb-3">
+              <MessageSquare size={16} className="text-brand-700" />
+              <h3 className="text-sm font-semibold">SMS message</h3>
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                Tailored: {activeApplication || 'generic'}
+              </span>
+              <span className="text-xs text-gray-400">{smsText.length} chars · {smsText.length <= 160 ? '1' : Math.ceil(smsText.length / 153)} segment{smsText.length > 160 ? 's' : ''}</span>
+            </div>
+            <textarea className="input w-full font-sans text-sm leading-relaxed" rows={4} readOnly value={smsText} />
+            <div className="flex flex-wrap items-center gap-2 mt-3">
+              <button className="btn-primary flex items-center gap-1.5"
+                onClick={() => downloadTxt(smsText, `PHE-sms-${slug(activeApplication)}.txt`)}>
+                <Download size={15} /> Download SMS (.txt)
+              </button>
+              <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => doCopy('sms')}>
+                <Copy size={13} /> {copied === 'sms' ? 'Copied ✓' : 'Copy SMS text'}
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-2">
+              GSM-7 safe and kept under 2 SMS segments. Paste into your Zoho SMS campaign; send to the <strong>Export SMS list</strong> below. {'$[FNAME|team]$'} merges the company name.
+            </p>
+          </div>
+
           {/* Actions */}
           <div className="flex flex-wrap items-center gap-3">
             <button className="btn-primary flex items-center gap-1.5" disabled={!emailableSel.length || busy}
