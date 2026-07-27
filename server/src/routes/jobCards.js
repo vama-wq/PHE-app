@@ -265,7 +265,7 @@ router.get('/:id', authenticate, async (req, res) => {
 
 // ── POST create job card ──────────────────────────────────────────────────────
 router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, async (req, res) => {
-  const { job_card_no, order_id, qty, dispatch_date, notes, punching, drawing_no, product_name } = req.body;
+  const { job_card_no, order_id, qty, dispatch_date, notes, punching, drawing_no, product_name, order_item_id } = req.body;
   if (!job_card_no || !order_id || !dispatch_date) {
     return res.status(400).json({ error: 'Job card number, order, and dispatch date are required' });
   }
@@ -284,15 +284,33 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
     finalNo = `${finalNo}-${parseInt(count.c) + 1}`;
   }
 
-  // Link this job card to the order item it produces (match by drawing number)
-  // so its inventory deducts at this item's QC / dispatch.
+  // Link this job card to the SPECIFIC order item it produces so its inventory
+  // deducts at that item's QC / dispatch. Always prefer the item the user picked
+  // in the modal (order_item_id); only fall back to a drawing-number match for
+  // legacy/other callers that don't send it. Matching by drawing number alone is
+  // wrong when two items on the order share the same drawing number — it would
+  // link every such card to the first item and leave the others unfulfilled.
   let orderItemId = null;
-  if (drawing_no) {
+  if (order_item_id) {
+    const oi = await db.get(
+      'SELECT id FROM order_items WHERE id=$1 AND order_id=$2',
+      [parseInt(order_item_id, 10), parseInt(order_id, 10)]
+    );
+    orderItemId = oi?.id || null;
+  }
+  if (!orderItemId && drawing_no) {
     const oi = await db.get(
       'SELECT id FROM order_items WHERE order_id=$1 AND drawing_number=$2 ORDER BY id LIMIT 1',
       [parseInt(order_id, 10), drawing_no]
     );
     orderItemId = oi?.id || null;
+  }
+
+  // One job card per order item — block a duplicate upload onto an item that
+  // already has one (partial-dispatch splits use a separate endpoint).
+  if (orderItemId) {
+    const already = await db.get('SELECT id FROM job_cards WHERE order_item_id=$1', [orderItemId]);
+    if (already) return res.status(409).json({ error: 'This item already has a job card' });
   }
 
   try {

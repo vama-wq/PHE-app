@@ -46,6 +46,7 @@ export default function OrderDetail() {
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [showQuotationModal, setShowQuotationModal] = useState(false);
   const [showJobCardModal, setShowJobCardModal] = useState(false);
+  const [jobCardItemId, setJobCardItemId] = useState(null);
   const [showItemModal, setShowItemModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [invEditItem, setInvEditItem] = useState(null);
@@ -691,8 +692,12 @@ export default function OrderDetail() {
                       : itemDrawings.some(d => d.drawing_status === 'pending_review') ? 'pending_review'
                       : itemDrawings.some(d => d.drawing_status === 'rejected') ? 'rejected'
                       : itemDrawings.length > 0 ? 'pending_review' : null);
+                  // A job card belongs to THIS item only if it links to its id.
+                  // (Two items can share a drawing number — never match on that,
+                  // except as a fallback for legacy cards with no linked item id.)
                   const hasJC = (order.job_cards || []).some(jc =>
-                    item.drawing_number && jc.drawing_no === item.drawing_number
+                    jc.order_item_id === item.id
+                    || (jc.order_item_id == null && item.drawing_number && jc.drawing_no === item.drawing_number)
                   );
                   const rowColor = hasJC
                     ? 'border-gray-200 bg-gray-50'
@@ -715,7 +720,7 @@ export default function OrderDetail() {
                         </span>
                       ) : drawingStatus === 'approved' || order.drawing_bypassed ? (
                         <button className="btn-primary btn-sm py-1 px-2 text-xs"
-                          onClick={() => { setShowJobCardModal(true); }}>
+                          onClick={() => { setJobCardItemId(item.id); setShowJobCardModal(true); }}>
                           <Upload size={12} /> Upload Job Card
                         </button>
                       ) : drawingStatus === 'pending_review' ? (
@@ -976,11 +981,12 @@ export default function OrderDetail() {
         <UploadJobCardModal orderId={id}
           drawingBypassed={!!order.drawing_bypassed}
           defaultDispatchDate={order.dispatch_date || ''}
+          defaultItemId={jobCardItemId}
           items={order.items || []}
           jobCards={order.job_cards || []}
           itemDrawingStatus={itemDrawingStatus}
-          onClose={() => setShowJobCardModal(false)}
-          onSave={() => { setShowJobCardModal(false); load(); }}
+          onClose={() => { setShowJobCardModal(false); setJobCardItemId(null); }}
+          onSave={() => { setShowJobCardModal(false); setJobCardItemId(null); load(); }}
         />
       )}
       {showItemModal && (
@@ -1798,8 +1804,8 @@ function QuotationModal({ orderId, hasPriceRequest, onClose, onSave }) {
   );
 }
 
-function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchDate, items, jobCards, itemDrawingStatus = {}, onClose, onSave }) {
-  const [selectedItemId, setSelectedItemId] = useState('');
+function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchDate, defaultItemId = null, items, jobCards, itemDrawingStatus = {}, onClose, onSave }) {
+  const [selectedItemId, setSelectedItemId] = useState(defaultItemId ? String(defaultItemId) : '');
   const [form, setForm] = useState({
     qty: '', dispatch_date: defaultDispatchDate || '',
     notes: '', punching: '',
@@ -1809,9 +1815,15 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
   const [saving, setSaving] = useState(false);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  const takenDrawings = new Set(jobCards.map(jc => jc.drawing_no).filter(Boolean));
+  // An item is "taken" only once a job card links to its id — not merely because
+  // another item shares its drawing number. (Legacy cards with no linked item id
+  // still fall back to blocking by drawing number.)
+  const takenItemIds = new Set(jobCards.map(jc => jc.order_item_id).filter(Boolean));
+  const takenDrawings = new Set(jobCards.filter(jc => jc.order_item_id == null).map(jc => jc.drawing_no).filter(Boolean));
   const availableItems = items.filter(item =>
-    (drawingBypassed || itemDrawingStatus[item.id] === 'approved') && !takenDrawings.has(item.drawing_number)
+    (drawingBypassed || itemDrawingStatus[item.id] === 'approved')
+    && !takenItemIds.has(item.id)
+    && !takenDrawings.has(item.drawing_number)
   );
 
   // The selected item object
