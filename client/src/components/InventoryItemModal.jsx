@@ -3,14 +3,14 @@ import api from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import Modal from './ui/Modal';
 import CategorySelect from './CategorySelect';
-import { Upload } from 'lucide-react';
+import { Upload, Boxes } from 'lucide-react';
 
 // Add Inventory Item — the single source of truth for item creation. Used by the
 // Inventory page, inline from the PO form, and the sample-approval flow (which
 // passes `initial` to prefill fields from the sampling draft). onSave receives
 // the API response ({ id, approval_status }) so callers can keep working with
 // the new item.
-export default function NewItemModal({ onClose, onSave, initial }) {
+export default function NewItemModal({ onClose, onSave, initial, note, submitLabel }) {
   const { user } = useAuthStore();
   const [f, setF] = useState({ item_code: '', name: '', name_gu: '', category: '', unit: '', current_stock: 0, reorder_level: 0, min_order_qty: 0, unit_cost: '', notes: '', ...(initial || {}) });
   const [drawing, setDrawing] = useState(null);
@@ -37,6 +37,11 @@ export default function NewItemModal({ onClose, onSave, initial }) {
   return (
     <Modal open title="Add Inventory Item" onClose={onClose}>
       <form onSubmit={handleSubmit} className="space-y-4">
+        {note && (
+          <div className="flex items-start gap-2 text-sm rounded-xl px-3 py-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800">
+            <Boxes size={15} className="flex-shrink-0 mt-0.5" /> <span>{note}</span>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-4">
           <div><label className="label">Item Code *</label><input className="input" placeholder="e.g. WR-26SWG" value={f.item_code} onChange={set('item_code')} required /></div>
           <div><label className="label">Unit *</label><input className="input" placeholder="e.g. kg, mtr, nos" value={f.unit} onChange={set('unit')} required /></div>
@@ -68,7 +73,7 @@ export default function NewItemModal({ onClose, onSave, initial }) {
         {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
         <div className="flex gap-3 pt-2">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn-primary flex-1" disabled={saving}>{saving ? 'Saving...' : 'Add Item'}</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving}>{saving ? 'Saving...' : (submitLabel || 'Add Item')}</button>
         </div>
       </form>
     </Modal>

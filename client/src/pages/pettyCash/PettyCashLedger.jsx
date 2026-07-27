@@ -298,7 +298,7 @@ export default function PettyCashLedger() {
               )}
               <th className="table-header text-center">Receipt</th>
               <th className="table-header text-left">By</th>
-              {isOwner && <th className="table-header text-center"></th>}
+              {isOwner && <th className="table-header text-center">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -365,7 +365,7 @@ export default function PettyCashLedger() {
                               <CheckCircle size={14} />
                             </button>
                           )}
-                          <button className="p-1 text-gray-300 hover:text-red-600" onClick={() => handleDelete(e)} title="Delete entry">
+                          <button className="p-1 text-red-400 hover:text-red-600" onClick={() => handleDelete(e)} title="Delete entry">
                             <Trash2 size={14} />
                           </button>
                         </td>
@@ -715,6 +715,8 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
       <InventoryItemModal
         key={partsAdded}
         initial={initial}
+        note={`Adding part ${partsAdded + 1} for this machinery purchase${partsAdded > 0 ? ` (${partsAdded} already added)` : ''}. After you add it, you can add another part or finish.`}
+        submitLabel="Add Part"
         onSave={() => { setPartsAdded(n => n + 1); setShowInvModal(false); setBetweenParts(true); }}
         onClose={() => { if (partsAdded > 0) setBetweenParts(true); else onSaved(); }}
       />
