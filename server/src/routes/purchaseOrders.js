@@ -236,6 +236,32 @@ router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'acco
   }
 });
 
+// Record an ADVANCE against a PO before goods are received. Logs one Unpaid-Bank
+// Account-Statement entry linked to the PO (two-step: the owner later marks it
+// Paid, which deducts the Bank). Because it's linked by po_id, the advance auto-
+// nets against the PO's received payable later — so it can't be double-paid.
+router.post('/:id/advance', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const poId = parseInt(req.params.id, 10);
+  const amount = Math.round(Number(req.body.amount) * 100) / 100;
+  const entryDate = req.body.entry_date || new Date().toISOString().slice(0, 10);
+  const note = (req.body.note || '').trim();
+  if (!Number.isInteger(poId)) return res.status(400).json({ error: 'Invalid PO' });
+  if (!(amount > 0)) return res.status(400).json({ error: 'Enter a valid advance amount' });
+  const db = getDB();
+  const po = await db.get(
+    `SELECT po.po_number, po.status, s.name AS supplier_name
+       FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id=$1`, [poId]);
+  if (!po) return res.status(404).json({ error: 'PO not found' });
+  if (['draft', 'rejected'].includes(po.status)) return res.status(400).json({ error: 'Advance can be recorded only on an active PO' });
+  const r = await db.insert(
+    `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount,
+       payment_method, affects_cash, po_id, created_by)
+     VALUES ($1,'expense','Purchase Payment',$2,$3,$4,'unpaid_bank',FALSE,$5,$6)`,
+    [entryDate, `Advance for ${po.po_number}${note ? ` — ${note}` : ''}`, po.supplier_name, amount, poId, req.user.id]);
+  await logActivity(null, null, 'purchase_advance', `Advance ₹${amount} logged for ${po.po_number} (unpaid bank)`, req.user.id);
+  res.status(201).json({ id: r.lastInsertRowid });
+});
+
 router.get('/:id', authenticate, async (req, res) => {
   const db = getDB();
 
@@ -289,7 +315,16 @@ router.get('/:id', authenticate, async (req, res) => {
     [req.params.id]
   );
 
-  res.json({ ...po, items, material_qc: materialQc || null });
+  // Purchase payments (advances before receipt + bill payments after) linked to
+  // this PO — so the page can show what's been paid/pending against it.
+  const payments = await db.all(
+    `SELECT id, entry_date, amount, payment_method, description, created_at
+       FROM petty_cash_entries WHERE po_id = $1 AND entry_type = 'expense'
+      ORDER BY entry_date, id`, [req.params.id]);
+  const sumBy = (m) => Math.round(payments.filter(p => p.payment_method === m).reduce((s, p) => s + Number(p.amount), 0) * 100) / 100;
+
+  res.json({ ...po, items, material_qc: materialQc || null,
+    payments, paid_cleared: sumBy('paid_bank'), paid_pending: sumBy('unpaid_bank') });
 });
 
 router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
