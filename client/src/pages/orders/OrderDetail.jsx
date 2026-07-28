@@ -1192,6 +1192,29 @@ function ChatPanel({ orderId, currentUser }) {
     }
   };
 
+  // Let users paste (Cmd/Ctrl+V) or drag-drop screenshots/files straight into the
+  // composer. Pasted images arrive without a filename, so give them one — else
+  // the server has no extension to key on and the image silently drops.
+  const addFiles = (fileList) => {
+    const files = Array.from(fileList || []).filter(Boolean).map((f, i) => {
+      if (f.name && f.name.trim()) return f;
+      const ext = ((f.type && f.type.split('/')[1]) || 'png').replace('jpeg', 'jpg');
+      return new File([f], `screenshot-${Date.now()}-${i}.${ext}`, { type: f.type || 'image/png' });
+    });
+    if (files.length) setAttachments(prev => [...prev, ...files]);
+    return files.length > 0;
+  };
+  const handlePaste = (e) => {
+    const imgs = Array.from(e.clipboardData?.items || [])
+      .filter(it => it.kind === 'file')
+      .map(it => it.getAsFile())
+      .filter(f => f && f.type.startsWith('image/'));
+    if (imgs.length && addFiles(imgs)) e.preventDefault();
+  };
+  const handleDrop = (e) => {
+    if (e.dataTransfer?.files?.length) { e.preventDefault(); addFiles(e.dataTransfer.files); }
+  };
+
   return (
     <div className="flex flex-col" style={{ height: '480px' }}>
       {/* Header */}
@@ -1299,7 +1322,7 @@ function ChatPanel({ orderId, currentUser }) {
             ))}
           </div>
         )}
-        <div className="flex gap-2 items-end">
+        <div className="flex gap-2 items-end" onDrop={handleDrop} onDragOver={e => e.preventDefault()}>
           <input type="file" ref={fileInputRef} className="hidden" multiple
             accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.pdf,.doc,.docx,.xls,.xlsx"
             onChange={e => { if (e.target.files?.length) setAttachments(prev => [...prev, ...Array.from(e.target.files)]); e.target.value = ''; }}
@@ -1311,10 +1334,11 @@ function ChatPanel({ orderId, currentUser }) {
           <textarea
             ref={textareaRef}
             className="input flex-1 resize-none text-sm py-2 leading-snug"
-            placeholder="Type a message… use @ to mention someone"
+            placeholder="Type a message… @ to mention · paste or drop a screenshot to attach"
             value={newMsg}
             onChange={handleChange}
             onKeyDown={handleKey}
+            onPaste={handlePaste}
             rows={2}
             style={{ minHeight: '40px', maxHeight: '80px' }}
           />
