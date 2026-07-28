@@ -144,6 +144,89 @@ router.get('/pending-material-qc', authenticate, authorize('design', 'owner', 'a
   res.json(pos);
 });
 
+// ── Purchase payments: monthly "payments due" planning ────────────────────────
+// A purchase becomes payable for the value of goods actually received & QC-
+// approved (material only: rate × qc_received_qty). What's been allocated to it
+// = Σ of its linked Account-Statement entries (both pending unpaid-bank and
+// cleared paid-bank). Remaining = received value − allocated. Only bills with a
+// positive remaining show up. Must be defined BEFORE '/:id'.
+router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const db = getDB();
+  const rows = await db.all(`
+    SELECT * FROM (
+      SELECT po.id, po.po_number, po.created_at, s.name AS supplier_name,
+        COALESCE((SELECT SUM(poi.rate * poi.qc_received_qty) FROM purchase_order_items poi
+                  WHERE poi.po_id = po.id AND poi.qc_status = 'approved'
+                    AND poi.qc_received_qty IS NOT NULL), 0) AS received_value,
+        COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
+                  WHERE pce.po_id = po.id AND pce.entry_type = 'expense'
+                    AND pce.payment_method = 'paid_bank'), 0) AS paid_cleared,
+        COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
+                  WHERE pce.po_id = po.id AND pce.entry_type = 'expense'
+                    AND pce.payment_method = 'unpaid_bank'), 0) AS paid_pending
+      FROM purchase_orders po
+      JOIN suppliers s ON s.id = po.supplier_id
+      WHERE po.status NOT IN ('draft', 'rejected')
+    ) t
+    WHERE t.received_value - t.paid_cleared - t.paid_pending > 0.009
+    ORDER BY t.created_at DESC`);
+  const bills = rows.map(r => ({
+    ...r,
+    received_value: Number(r.received_value),
+    paid_cleared: Number(r.paid_cleared),
+    paid_pending: Number(r.paid_pending),
+    remaining: Math.round((Number(r.received_value) - Number(r.paid_cleared) - Number(r.paid_pending)) * 100) / 100,
+  }));
+  const total_remaining = Math.round(bills.reduce((s, b) => s + b.remaining, 0) * 100) / 100;
+  res.json({ bills, total_remaining });
+});
+
+// Create this month's purchase payments. Each selected bill posts ONE unpaid-
+// bank Account-Statement entry (Paid To = supplier) linked to the PO. The owner
+// later marks it paid, which deducts the bank. Partial amounts are allowed but
+// never more than the bill's remaining balance.
+router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const payments = Array.isArray(req.body.payments) ? req.body.payments : [];
+  const entryDate = req.body.entry_date || new Date().toISOString().slice(0, 10);
+  if (!payments.length) return res.status(400).json({ error: 'Select at least one bill to pay' });
+  const db = getDB();
+  try {
+    let created = 0;
+    const errors = [];
+    await db.withTransaction(async (client) => {
+      for (const p of payments) {
+        const poId = parseInt(p.po_id, 10);
+        const amount = Math.round(Number(p.amount) * 100) / 100;
+        if (!Number.isInteger(poId) || !(amount > 0)) { errors.push('Invalid payment row skipped'); continue; }
+        const po = await client.query(
+          `SELECT po.po_number, s.name AS supplier_name,
+             COALESCE((SELECT SUM(poi.rate * poi.qc_received_qty) FROM purchase_order_items poi
+                       WHERE poi.po_id = po.id AND poi.qc_status='approved' AND poi.qc_received_qty IS NOT NULL),0) AS received_value,
+             COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
+                       WHERE pce.po_id = po.id AND pce.entry_type='expense'
+                         AND pce.payment_method IN ('paid_bank','unpaid_bank')),0) AS allocated
+           FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id=$1`, [poId]);
+        const row = po.rows[0];
+        if (!row) { errors.push(`PO ${poId} not found`); continue; }
+        const remaining = Math.round((Number(row.received_value) - Number(row.allocated)) * 100) / 100;
+        if (remaining <= 0) { errors.push(`${row.po_number}: already fully allocated`); continue; }
+        if (amount > remaining + 0.009) { errors.push(`${row.po_number}: ₹${amount} exceeds remaining ₹${remaining}`); continue; }
+        await client.query(
+          `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount,
+             payment_method, affects_cash, po_id, created_by)
+           VALUES ($1,'expense','Purchase Payment',$2,$3,$4,'unpaid_bank',FALSE,$5,$6)`,
+          [entryDate, `Payment for ${row.po_number}`, row.supplier_name, amount, poId, req.user.id]);
+        created += 1;
+      }
+      if (created === 0) throw new Error(errors[0] || 'No valid payments to record');
+    });
+    await logActivity(null, null, 'purchase_payments_planned', `${created} purchase payment(s) sent to unpaid bank`, req.user.id);
+    res.status(201).json({ created, warnings: errors });
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'Failed to record payments' });
+  }
+});
+
 router.get('/:id', authenticate, async (req, res) => {
   const db = getDB();
 

@@ -597,7 +597,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   useEffect(() => {
     if (isTopUp) return;
     // Hide the system-managed 'Salary' category from manual entry
-    api.get('/petty-cash/categories').then(r => setCategories((r.data || []).filter(c => c !== 'Salary'))).catch(() => {});
+    api.get('/petty-cash/categories').then(r => setCategories((r.data || []).filter(c => c !== 'Salary' && c !== 'Purchase Payment'))).catch(() => {});
     api.get('/petty-cash/companies').then(r => setCompanies(r.data || [])).catch(() => {});
     api.get('/payroll/employees').then(r => setEmployees((r.data || []).filter(e => e.active))).catch(() => {});
   }, []);

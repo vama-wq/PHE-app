@@ -19,6 +19,7 @@ import AccountSettings from './pages/account/AccountSettings';
 import UserManagement from './pages/account/UserManagement';
 import SupplierList from './pages/purchases/SupplierList';
 import PurchaseOrderList from './pages/purchases/PurchaseOrderList';
+import PurchasePaymentsDue from './pages/purchases/PurchasePaymentsDue';
 import PurchaseOrderDetail from './pages/purchases/PurchaseOrderDetail';
 import PurchaseOrderForm from './pages/purchases/PurchaseOrderForm';
 import PettyCashLedger from './pages/pettyCash/PettyCashLedger';
@@ -152,6 +153,11 @@ export default function App() {
           <Route path="purchases/new" element={
             <ProtectedRoute roles={['owner','admin','accounts']} module="purchases">
               <PurchaseOrderForm />
+            </ProtectedRoute>
+          } />
+          <Route path="purchases/payments" element={
+            <ProtectedRoute roles={['owner','admin','accounts']} module="purchases">
+              <PurchasePaymentsDue />
             </ProtectedRoute>
           } />
           <Route path="purchases/:id" element={

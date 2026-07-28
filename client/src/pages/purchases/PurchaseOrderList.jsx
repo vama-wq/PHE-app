@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import { fmtDate } from '../../lib/utils';
-import { Plus, Search, ShoppingCart, Trash2, X } from 'lucide-react';
+import { Plus, Search, ShoppingCart, Trash2, X, Wallet } from 'lucide-react';
 
 const STATUS_STYLES = {
   draft:    'bg-gray-100 text-gray-600',
@@ -75,9 +75,14 @@ export default function PurchaseOrderList() {
           </h1>
           <p className="text-gray-500 text-sm mt-0.5">{pos.length} total orders</p>
         </div>
-        <Link to="/purchases/new" className="btn-primary">
-          <Plus size={16} /> New PO
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link to="/purchases/payments" className="btn-secondary">
+            <Wallet size={16} /> Payments Due
+          </Link>
+          <Link to="/purchases/new" className="btn-primary">
+            <Plus size={16} /> New PO
+          </Link>
+        </div>
       </div>
 
       <div className="flex gap-3 mb-3 flex-wrap">
