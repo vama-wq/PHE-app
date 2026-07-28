@@ -30,12 +30,12 @@ export default function PurchasePaymentsDue() {
   };
   useEffect(() => { load(); }, []);
 
-  // Group by PO month (YYYY-MM), oldest month first so the longest-outstanding
-  // dues surface at the top.
+  // Group by the RECEIVED month (YYYY-MM), oldest month first so the longest-
+  // outstanding dues surface at the top.
   const groups = useMemo(() => {
     const m = new Map();
     for (const b of bills) {
-      const key = (b.created_at || '').slice(0, 7) || 'unknown';
+      const key = (b.received_at || '').slice(0, 7) || 'unknown';
       if (!m.has(key)) m.set(key, { key, label: key === 'unknown' ? 'Undated' : monthLabel(key), bills: [], total: 0 });
       const g = m.get(key); g.bills.push(b); g.total += b.remaining;
     }
@@ -96,13 +96,15 @@ export default function PurchasePaymentsDue() {
     const w = window.open('', '_blank');
     if (!w) return setError('Allow pop-ups to export the report.');
     const section = (g) => `
-      <h3>${esc(g.label)} <span class="muted">· ${g.bills.length} bill${g.bills.length > 1 ? 's' : ''} · outstanding ${inr(g.total)}</span></h3>
+      <h3>${esc(g.label)} <span class="muted">· received · ${g.bills.length} bill${g.bills.length > 1 ? 's' : ''} · outstanding ${inr(g.total)}</span></h3>
       <table>
         <thead><tr><th>Supplier</th><th>PO #</th><th>Received</th>
-          <th class="r">Received Value</th><th class="r">Paid</th><th class="r">Pending</th><th class="r">Remaining</th><th class="r">Proposed</th></tr></thead>
+          <th class="r">Material</th><th class="r">GST %</th><th class="r">Payable</th>
+          <th class="r">Paid</th><th class="r">Pending</th><th class="r">Remaining</th><th class="r">Proposed</th></tr></thead>
         <tbody>${g.bills.map(b => `<tr>
-          <td>${esc(b.supplier_name)}</td><td>${esc(b.po_number)}</td><td>${fmtDate(b.created_at)}</td>
-          <td class="r">${inr(b.received_value)}</td><td class="r">${b.paid_cleared > 0 ? inr(b.paid_cleared) : '—'}</td>
+          <td>${esc(b.supplier_name)}</td><td>${esc(b.po_number)}</td><td>${fmtDate(b.received_at)}</td>
+          <td class="r">${inr(b.material_value)}</td><td class="r">${b.igst_percent}%</td><td class="r">${inr(b.received_value)}</td>
+          <td class="r">${b.paid_cleared > 0 ? inr(b.paid_cleared) : '—'}</td>
           <td class="r">${b.paid_pending > 0 ? inr(b.paid_pending) : '—'}</td><td class="r">${inr(b.remaining)}</td>
           <td class="r">${sel[b.id] != null ? inr(parseFloat(sel[b.id]) || 0) : '—'}</td></tr>`).join('')}</tbody>
       </table>`;
@@ -189,7 +191,7 @@ export default function PurchasePaymentsDue() {
                     <th className="table-header text-left">Supplier</th>
                     <th className="table-header text-left">PO #</th>
                     <th className="table-header text-left">Received</th>
-                    <th className="table-header text-right">Received Value</th>
+                    <th className="table-header text-right" title="Material (rate × received qty) + PO's IGST %, rounded to the nearest rupee">Payable (incl. GST)</th>
                     <th className="table-header text-right">Paid</th>
                     <th className="table-header text-right">Pending</th>
                     <th className="table-header text-right">Remaining</th>
@@ -208,8 +210,8 @@ export default function PurchasePaymentsDue() {
                         </td>
                         <td className="table-cell text-sm font-medium text-gray-800">{b.supplier_name}</td>
                         <td className="table-cell text-sm"><Link to={`/purchases/${b.id}`} className="text-brand-600 hover:underline">{b.po_number}</Link></td>
-                        <td className="table-cell text-xs text-gray-500">{fmtDate(b.created_at)}</td>
-                        <td className="table-cell text-right text-sm">{inr(b.received_value)}</td>
+                        <td className="table-cell text-xs text-gray-500">{fmtDate(b.received_at)}</td>
+                        <td className="table-cell text-right text-sm" title={`Material ${inr(b.material_value)} + ${b.igst_percent}% GST`}>{inr(b.received_value)}</td>
                         <td className="table-cell text-right text-sm text-green-700">{b.paid_cleared > 0 ? inr(b.paid_cleared) : '—'}</td>
                         <td className="table-cell text-right text-sm text-amber-700">{b.paid_pending > 0 ? inr(b.paid_pending) : '—'}</td>
                         <td className="table-cell text-right text-sm font-bold text-red-700">{inr(b.remaining)}</td>
