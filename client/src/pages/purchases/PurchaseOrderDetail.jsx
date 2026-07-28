@@ -9,7 +9,7 @@ import {
   ArrowLeft, Printer, Send, CheckCircle, XCircle,
   PackageCheck, Pencil, Loader2, Truck, Upload, FileText,
   ExternalLink, RefreshCw, MessageSquare, Trash2, AlertTriangle,
-  Paperclip, X, File, Download
+  Paperclip, X, File, Download, Wallet
 } from 'lucide-react';
 import { compressImages } from '../../lib/compressImage';
 
@@ -67,6 +67,13 @@ export default function PurchaseOrderDetail() {
   const [acting, setActing] = useState('');
   const [showApproveModal, setShowApproveModal] = useState(false);
   const [showReceiveModal, setShowReceiveModal] = useState(false);
+  const [showAdvanceModal, setShowAdvanceModal] = useState(false);
+
+  const markAdvancePaid = async (p) => {
+    if (!window.confirm(`Mark this ₹${Number(p.amount).toLocaleString('en-IN')} payment as PAID from bank? It will then reduce the Bank balance.`)) return;
+    try { await api.put(`/petty-cash/${p.id}/mark-paid`); load(); }
+    catch (e) { alert(e.response?.data?.error || 'Failed'); }
+  };
 
   // delivery status update (for purchase manager)
   const [newDeliveryStatus, setNewDeliveryStatus] = useState('');
@@ -218,6 +225,11 @@ export default function PurchaseOrderDetail() {
             <span className="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full font-medium">
               ⏳ QC {po.items.filter(i => i.qc_status).length}/{po.items.length} · received {po.items.filter(i => i.received).length}/{po.items.length}
             </span>
+          )}
+          {canManagePO && !['draft', 'rejected'].includes(po.status) && (
+            <button className="btn-secondary btn-sm flex items-center gap-1.5" onClick={() => setShowAdvanceModal(true)}>
+              <Wallet size={13} /> Record Advance
+            </button>
           )}
           <button className="btn-secondary btn-sm flex items-center gap-1.5" onClick={() => window.print()}>
             <Printer size={13} /> Print / PDF
@@ -532,6 +544,50 @@ export default function PurchaseOrderDetail() {
         </div>
       </div>
 
+      {/* ── Payments (advances + bill payments; screen only) ── */}
+      {canManagePO && (po.payments?.length > 0 || !['draft', 'rejected'].includes(po.status)) && (
+        <div className="mt-6 card p-5 no-print">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Wallet size={16} className="text-brand-500" /> Payments</h3>
+            <button className="btn-secondary btn-sm" onClick={() => setShowAdvanceModal(true)}><Wallet size={13} /> Record Advance</button>
+          </div>
+          {po.payments?.length > 0 ? (
+            <>
+              <div className="flex gap-6 mb-3 text-sm">
+                <div><span className="text-gray-400 text-xs uppercase tracking-wide">Paid (bank)</span><div className="font-bold text-green-700">₹{Number(po.paid_cleared || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div></div>
+                <div><span className="text-gray-400 text-xs uppercase tracking-wide">Pending (unpaid bank)</span><div className="font-bold text-amber-700">₹{Number(po.paid_pending || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div></div>
+              </div>
+              <div className="divide-y divide-gray-100 border border-gray-100 rounded-xl overflow-hidden">
+                {po.payments.map(p => (
+                  <div key={p.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                    <div className="min-w-0">
+                      <span className="font-medium text-gray-800">₹{Number(p.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      <span className="text-gray-500 ml-2 text-xs">{p.description}</span>
+                      <span className="text-gray-400 ml-2 text-xs">· {fmtDate(p.entry_date)}</span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {p.payment_method === 'paid_bank' ? (
+                        <span className="text-xs font-semibold text-green-700 bg-green-50 rounded-full px-2 py-0.5">Paid</span>
+                      ) : (
+                        <>
+                          <span className="text-xs font-semibold text-amber-700 bg-amber-50 rounded-full px-2 py-0.5">Unpaid Bank</span>
+                          {user?.role === 'owner' && (
+                            <button className="text-xs text-brand-600 hover:underline" onClick={() => markAdvancePaid(p)}>Mark Paid</button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-gray-400 mt-2">Advances and bill payments both count against this PO's payable — the balance in Payments Due is net of everything here.</p>
+            </>
+          ) : (
+            <p className="text-gray-400 text-sm">No payments yet. Record an advance if the supplier needs paying before delivery.</p>
+          )}
+        </div>
+      )}
+
       {/* ── Chat Panel (screen only) ── */}
       <div className="mt-6 card no-print overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
@@ -558,7 +614,68 @@ export default function PurchaseOrderDetail() {
           onDone={() => { setShowReceiveModal(false); load(); }}
         />
       )}
+      {showAdvanceModal && (
+        <AdvanceModal
+          poId={id}
+          poNumber={po.po_number}
+          supplier={po.supplier_name}
+          onClose={() => setShowAdvanceModal(false)}
+          onSaved={() => { setShowAdvanceModal(false); load(); }}
+        />
+      )}
     </div>
+  );
+}
+
+// Record an advance against a PO (before goods arrive). Logs an Unpaid-Bank
+// entry linked to the PO; the owner marks it Paid to deduct the bank.
+function AdvanceModal({ poId, poNumber, supplier, onClose, onSaved }) {
+  const [amount, setAmount] = useState('');
+  const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!(parseFloat(amount) > 0)) return setError('Enter a valid advance amount.');
+    setSaving(true);
+    try {
+      await api.post(`/purchase-orders/${poId}/advance`, { amount, entry_date: entryDate, note });
+      onSaved();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to record advance');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title={`Record Advance — ${poNumber}`} onClose={onClose} size="sm">
+      <form onSubmit={submit} className="space-y-4">
+        <p className="text-xs text-gray-500">
+          Logs an <b>Unpaid Bank</b> entry to the Account Statement (Paid To: {supplier}). The owner marks it Paid to deduct the bank. It auto-nets against this PO's payable once goods are received.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Advance Amount (₹) <span className="text-red-500">*</span></label>
+            <input className="input" type="number" min="0.01" step="any" value={amount} onChange={e => { setAmount(e.target.value); setError(''); }} required />
+          </div>
+          <div>
+            <label className="label">Date <span className="text-red-500">*</span></label>
+            <input className="input" type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)} required />
+          </div>
+        </div>
+        <div>
+          <label className="label">Note <span className="text-gray-400 font-normal">(optional)</span></label>
+          <input className="input" placeholder="e.g. 50% advance as per supplier terms" value={note} onChange={e => setNote(e.target.value)} />
+        </div>
+        {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+        <div className="flex gap-3 pt-1">
+          <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving}>{saving ? 'Saving…' : 'Record Advance'}</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
