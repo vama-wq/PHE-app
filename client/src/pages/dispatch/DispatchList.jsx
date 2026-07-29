@@ -654,8 +654,12 @@ function DispatchDocModal({ jc, onClose, onSave }) {
 
   const invoiceDoc = docs.find(d => d.doc_type === 'invoice');
   const otherDocs = docs.filter(d => d.doc_type !== 'invoice');
-  // Repaired returns were already invoiced on the original dispatch — invoice optional here.
+  // Repaired returns AND replacement cards were already invoiced on the original
+  // dispatch — a new invoice here would double-count the sale, so it's optional.
   const isRepair = jc.active_query_status === 'product_return' && jc.active_query_return_type === 'repair';
+  const isReplacement = !!jc.replacement_query_id;
+  const invoiceOptional = isRepair || isReplacement;
+  const optionalReason = isReplacement ? 'replacement — already invoiced' : 'repaired return';
 
   return (
     <Modal open title={`Dispatch — ${jc.job_card_no}`} onClose={onClose} size="lg">
@@ -669,16 +673,19 @@ function DispatchDocModal({ jc, onClose, onSave }) {
 
       <div className="space-y-5">
         {/* ── Step 1: Invoice (mandatory, except repaired returns) ── */}
-        <div className={`rounded-xl border-2 p-4 ${invoiceUploaded ? 'border-green-200 bg-green-50' : isRepair ? 'border-gray-200 bg-gray-50' : 'border-red-200 bg-red-50'}`}>
+        <div className={`rounded-xl border-2 p-4 ${invoiceUploaded ? 'border-green-200 bg-green-50' : invoiceOptional ? 'border-gray-200 bg-gray-50' : 'border-red-200 bg-red-50'}`}>
           <div className="flex items-center gap-2 mb-2">
             {invoiceUploaded
               ? <CheckCircle size={18} className="text-green-600" />
-              : <AlertTriangle size={18} className={isRepair ? 'text-gray-400' : 'text-red-500'} />
+              : <AlertTriangle size={18} className={invoiceOptional ? 'text-gray-400' : 'text-red-500'} />
             }
             <h3 className="font-semibold text-sm">
-              {invoiceUploaded ? 'Invoice Uploaded' : isRepair ? 'Invoice (optional — repaired return)' : 'Invoice Required *'}
+              {invoiceUploaded ? 'Invoice Uploaded' : invoiceOptional ? `Invoice (optional — ${optionalReason})` : 'Invoice Required *'}
             </h3>
           </div>
+          {invoiceOptional && !invoiceUploaded && (
+            <p className="text-xs text-gray-500 mb-2">No invoice needed — this was already invoiced on the original dispatch. Add a transport document below only if there's an extra freight charge.</p>
+          )}
 
           {invoiceDoc ? (
             <div className="flex items-center justify-between bg-white rounded-lg border border-gray-200 p-2.5">
@@ -786,8 +793,8 @@ function DispatchDocModal({ jc, onClose, onSave }) {
         <div className="flex gap-3">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button className="btn-primary flex-1" onClick={handleDispatch}
-            disabled={saving || (!invoiceUploaded && !isRepair)}
-            title={!invoiceUploaded && !isRepair ? 'Upload an invoice first' : ''}>
+            disabled={saving || (!invoiceUploaded && !invoiceOptional)}
+            title={!invoiceUploaded && !invoiceOptional ? 'Upload an invoice first' : ''}>
             {saving ? 'Dispatching...' : 'Mark as Dispatched'}
           </button>
         </div>
