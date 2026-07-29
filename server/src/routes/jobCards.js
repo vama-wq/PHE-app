@@ -274,15 +274,7 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
   }
 
   const db = getDB();
-  let finalNo = job_card_no.toUpperCase();
-  const dup = await db.get('SELECT id FROM job_cards WHERE job_card_no = $1', [finalNo]);
-  if (dup) {
-    const count = await db.get(
-      "SELECT COUNT(*) as c FROM job_cards WHERE job_card_no = $1 OR job_card_no LIKE $2",
-      [finalNo, `${finalNo}-%`]
-    );
-    finalNo = `${finalNo}-${parseInt(count.c) + 1}`;
-  }
+  const baseNo = job_card_no.toUpperCase();
 
   // Link this job card to the SPECIFIC order item it produces so its inventory
   // deducts at that item's QC / dispatch. Always prefer the item the user picked
@@ -313,29 +305,49 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
     if (already) return res.status(409).json({ error: 'This item already has a job card' });
   }
 
-  try {
-    const r = await db.insert(`
-      INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, punching, drawing_no, product_name, uploaded_by, order_item_id)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-    `, [
-      finalNo, parseInt(order_id, 10),
-      req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null,
-      qty || null, dispatch_date, notes || null,
-      punching || null, drawing_no || null, product_name || null,
-      req.user.id, orderItemId
-    ]);
+  // Pick the smallest free number for this base: the base itself if untaken,
+  // else base-2, base-3, … skipping any already used. This is gap-safe — the old
+  // COUNT(*)+1 scheme collided whenever a card in the sequence had been deleted
+  // (e.g. base and base-3 exist → COUNT+1 = base-3, which is taken).
+  const pickFreeNo = async () => {
+    const exists = await db.get('SELECT id FROM job_cards WHERE job_card_no=$1', [baseNo]);
+    if (!exists) return baseNo;
+    const rows = await db.all('SELECT job_card_no FROM job_cards WHERE job_card_no=$1 OR job_card_no LIKE $2', [baseNo, `${baseNo}-%`]);
+    const taken = new Set(rows.map(r => r.job_card_no));
+    let n = 2;
+    while (taken.has(`${baseNo}-${n}`)) n++;
+    return `${baseNo}-${n}`;
+  };
 
-    const existing = await db.get('SELECT COUNT(*) as c FROM job_cards WHERE order_id=$1', [order_id]);
-    if (parseInt(existing.c, 10) <= 1) {
-      await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [order_id]);
+  let finalNo, r;
+  for (let attempt = 0; ; attempt++) {
+    finalNo = await pickFreeNo();
+    try {
+      r = await db.insert(`
+        INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, punching, drawing_no, product_name, uploaded_by, order_item_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      `, [
+        finalNo, parseInt(order_id, 10),
+        req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null,
+        qty || null, dispatch_date, notes || null,
+        punching || null, drawing_no || null, product_name || null,
+        req.user.id, orderItemId
+      ]);
+      break;
+    } catch (e) {
+      // A concurrent upload grabbed the same number — recompute and retry a few times.
+      if (e.code === '23505' && attempt < 5) continue;
+      if (e.code === '23505') return res.status(409).json({ error: 'Could not allocate a job card number — please retry' });
+      throw e;
     }
-
-    await logActivity(order_id, r.lastInsertRowid, 'job_card_created', `Job Card ${finalNo} uploaded`, req.user.id);
-    res.status(201).json({ id: r.lastInsertRowid, job_card_no: finalNo });
-  } catch (e) {
-    if (e.code === '23505') return res.status(409).json({ error: 'Job card number already exists' });
-    throw e;
   }
+
+  const existing = await db.get('SELECT COUNT(*) as c FROM job_cards WHERE order_id=$1', [order_id]);
+  if (parseInt(existing.c, 10) <= 1) {
+    await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [order_id]);
+  }
+  await logActivity(order_id, r.lastInsertRowid, 'job_card_created', `Job Card ${finalNo} uploaded`, req.user.id);
+  res.status(201).json({ id: r.lastInsertRowid, job_card_no: finalNo });
 });
 
 // ── PUT update job card metadata ──────────────────────────────────────────────
