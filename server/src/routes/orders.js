@@ -19,6 +19,17 @@ async function finsIdSet(db, ids) {
   return new Set(rows.map(r => r.id));
 }
 
+// Every production BOM must include a terminal pin — design can't submit an
+// inventory selection without one. (Finished-goods orders are exempt: the
+// heater is already built, nothing is consumed.)
+async function hasTerminalPin(db, ids) {
+  if (!ids.length) return false;
+  const row = await db.get(
+    `SELECT 1 AS ok FROM inventory_items WHERE id = ANY($1)
+       AND TRIM(category) IN ('Terminal Pin', 'Heavy Terminal Pin') LIMIT 1`, [ids]);
+  return !!row;
+}
+
 // ── Mentions ──────────────────────────────────────────────────────────────────
 router.get('/my-mentions', authenticate, async (req, res) => {
   const db = getDB();
@@ -488,8 +499,11 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
   if (!sels.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity)' });
   const item = await db.get('SELECT id, inventory_deducted FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
-  const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
+  const ord = await db.get('SELECT order_code, order_type FROM orders WHERE id=$1', [req.params.id]);
   const orderCode = ord?.order_code || `Order #${req.params.id}`;
+  if (ord?.order_type !== 'finished_goods' && !(await hasTerminalPin(db, sels.map(s => parseInt(s.id))))) {
+    return res.status(400).json({ error: 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory' });
+  }
 
   const wasDeducted = item.inventory_deducted;
   if (wasDeducted) await restoreItemInventory(db, item.id, orderCode, req.user.id, 'Inventory edited');
@@ -543,16 +557,15 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     const { notes, item_id } = req.body;
     if (!item_id) return res.status(400).json({ error: 'Item is required for the drawing' });
 
+    const db = getDB();
+    const ord = await db.get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]);
+    const isFgOrder = ord?.order_type === 'finished_goods';
     // Finished-Goods orders may record the inventory selection without a drawing
     // file; every other order type still requires the file.
-    if (!req.file) {
-      const ord = await getDB().get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]);
-      if (ord?.order_type !== 'finished_goods') return res.status(400).json({ error: 'File required' });
-    }
+    if (!req.file && !isFgOrder) return res.status(400).json({ error: 'File required' });
 
     // Design selects the inventory consumed by this item along with the drawing.
     // It arrives as a JSON string in the multipart form.
-    const db = getDB();
     let invSelections = [];
     try { invSelections = JSON.parse(req.body.inventory_item_ids || '[]'); } catch { invSelections = []; }
     invSelections = (invSelections || []).filter(s => s && s.id);
@@ -560,6 +573,9 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     const finsIds = await finsIdSet(db, invSelections.map(s => parseInt(s.id)));
     invSelections = invSelections.filter(s => parseFloat(s.qty) > 0 || finsIds.has(parseInt(s.id)));
     if (!invSelections.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing' });
+    if (!isFgOrder && !(await hasTerminalPin(db, invSelections.map(s => parseInt(s.id))))) {
+      return res.status(400).json({ error: 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory' });
+    }
     const r = await db.insert(
       `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,

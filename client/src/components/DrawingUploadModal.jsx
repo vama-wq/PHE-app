@@ -46,6 +46,10 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   // Fins need no qty — they deduct automatically by tube length at QC approval
   const isFins = (i) => (i?.category || '').trim().toLowerCase() === 'finns';
   const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
+  // Every production BOM must include a terminal pin (finished-goods exempt —
+  // fileOptional marks FG orders, where the heater is already built).
+  const isTerminalPin = (i) => ['terminal pin', 'heavy terminal pin'].includes((i?.category || '').trim().toLowerCase());
+  const hasTerminalPin = selectedList.some(isTerminalPin);
 
   const handleUpload = async () => {
     if (!file && !fileOptional) return setError('Please choose a drawing file');
@@ -53,6 +57,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
     if (ids.length === 0) return setError('Select at least one inventory item for this drawing');
     const missingQty = ids.filter(id => !finsIds.has(String(id)) && (!selected[id] || parseFloat(selected[id]) <= 0));
     if (missingQty.length) return setError('Enter a quantity for every selected inventory item');
+    if (!fileOptional && !hasTerminalPin) return setError('A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory.');
 
     const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : parseFloat(selected[id]) }));
     const fd = new FormData();
@@ -113,6 +118,11 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
           <label className="label flex items-center gap-1.5">
             <Package size={13} /> Inventory consumed by this item <span className="text-red-500">*</span>
           </label>
+          {!fileOptional && (
+            <p className={`text-[11px] mb-1.5 rounded-lg px-2 py-1 border ${hasTerminalPin ? 'text-green-700 bg-green-50 border-green-200' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
+              {hasTerminalPin ? '✓ Terminal Pin included' : 'A Terminal Pin (or Heavy Terminal Pin) part is compulsory in every item\'s inventory.'}
+            </p>
+          )}
           <div className="relative">
             <input className="input" placeholder="Search inventory by code or name..."
               value={invSearch}
