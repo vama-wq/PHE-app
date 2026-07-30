@@ -47,9 +47,12 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   const isFins = (i) => (i?.category || '').trim().toLowerCase() === 'finns';
   const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
   // Every production BOM must include a terminal pin (finished-goods exempt —
-  // fileOptional marks FG orders, where the heater is already built).
-  const isTerminalPin = (i) => ['terminal pin', 'heavy terminal pin'].includes((i?.category || '').trim().toLowerCase());
-  const hasTerminalPin = selectedList.some(isTerminalPin);
+  // fileOptional marks FG orders, where the heater is already built). Which pin
+  // depends on the item's remark: any variation of "heavy terminal pin" there
+  // means the Heavy Terminal Pin category is required; otherwise the regular one.
+  const needsHeavyPin = /heavy[\s\-_.]*terminal[\s\-_.]*pin/i.test(item?.remark || '');
+  const requiredPinCat = needsHeavyPin ? 'heavy terminal pin' : 'terminal pin';
+  const hasTerminalPin = selectedList.some(i => (i?.category || '').trim().toLowerCase() === requiredPinCat);
 
   const handleUpload = async () => {
     if (!file && !fileOptional) return setError('Please choose a drawing file');
@@ -57,7 +60,11 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
     if (ids.length === 0) return setError('Select at least one inventory item for this drawing');
     const missingQty = ids.filter(id => !finsIds.has(String(id)) && (!selected[id] || parseFloat(selected[id]) <= 0));
     if (missingQty.length) return setError('Enter a quantity for every selected inventory item');
-    if (!fileOptional && !hasTerminalPin) return setError('A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory.');
+    if (!fileOptional && !hasTerminalPin) {
+      return setError(needsHeavyPin
+        ? 'This item\'s remark calls for a Heavy Terminal Pin — add one from the Heavy Terminal Pin category.'
+        : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory.');
+    }
 
     const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : parseFloat(selected[id]) }));
     const fd = new FormData();
@@ -120,7 +127,11 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
           </label>
           {!fileOptional && (
             <p className={`text-[11px] mb-1.5 rounded-lg px-2 py-1 border ${hasTerminalPin ? 'text-green-700 bg-green-50 border-green-200' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
-              {hasTerminalPin ? '✓ Terminal Pin included' : 'A Terminal Pin (or Heavy Terminal Pin) part is compulsory in every item\'s inventory.'}
+              {hasTerminalPin
+                ? `✓ ${needsHeavyPin ? 'Heavy Terminal Pin' : 'Terminal Pin'} included`
+                : needsHeavyPin
+                  ? 'This item\'s remark calls for a HEAVY Terminal Pin — one from the Heavy Terminal Pin category is compulsory.'
+                  : 'A Terminal Pin part is compulsory in every item\'s inventory.'}
             </p>
           )}
           <div className="relative">

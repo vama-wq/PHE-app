@@ -21,12 +21,17 @@ async function finsIdSet(db, ids) {
 
 // Every production BOM must include a terminal pin — design can't submit an
 // inventory selection without one. (Finished-goods orders are exempt: the
-// heater is already built, nothing is consumed.)
-async function hasTerminalPin(db, ids) {
+// heater is already built, nothing is consumed.) Which pin depends on the
+// item's remark: any variation of "heavy terminal pin" there → the 'Heavy
+// Terminal Pin' category is required; otherwise the regular 'Terminal Pin'.
+const HEAVY_PIN_REMARK_RE = /heavy[\s\-_.]*terminal[\s\-_.]*pin/i;
+const requiredPinCategory = (remark) =>
+  HEAVY_PIN_REMARK_RE.test(remark || '') ? 'Heavy Terminal Pin' : 'Terminal Pin';
+async function hasPinCategory(db, ids, category) {
   if (!ids.length) return false;
   const row = await db.get(
-    `SELECT 1 AS ok FROM inventory_items WHERE id = ANY($1)
-       AND TRIM(category) IN ('Terminal Pin', 'Heavy Terminal Pin') LIMIT 1`, [ids]);
+    `SELECT 1 AS ok FROM inventory_items WHERE id = ANY($1) AND TRIM(category) = $2 LIMIT 1`,
+    [ids, category]);
   return !!row;
 }
 
@@ -497,12 +502,19 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
   const fins = await finsIdSet(db, raw.map(s => parseInt(s.id)));
   const sels = raw.filter(s => parseFloat(s.qty) > 0 || fins.has(parseInt(s.id)));
   if (!sels.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity)' });
-  const item = await db.get('SELECT id, inventory_deducted FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
+  const item = await db.get('SELECT id, inventory_deducted, remark FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
   const ord = await db.get('SELECT order_code, order_type FROM orders WHERE id=$1', [req.params.id]);
   const orderCode = ord?.order_code || `Order #${req.params.id}`;
-  if (ord?.order_type !== 'finished_goods' && !(await hasTerminalPin(db, sels.map(s => parseInt(s.id))))) {
-    return res.status(400).json({ error: 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory' });
+  if (ord?.order_type !== 'finished_goods') {
+    const pinCat = requiredPinCategory(item.remark);
+    if (!(await hasPinCategory(db, sels.map(s => parseInt(s.id)), pinCat))) {
+      return res.status(400).json({
+        error: pinCat === 'Heavy Terminal Pin'
+          ? 'This item\'s remark calls for a Heavy Terminal Pin — add one from the Heavy Terminal Pin category'
+          : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory',
+      });
+    }
   }
 
   const wasDeducted = item.inventory_deducted;
@@ -573,8 +585,16 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     const finsIds = await finsIdSet(db, invSelections.map(s => parseInt(s.id)));
     invSelections = invSelections.filter(s => parseFloat(s.qty) > 0 || finsIds.has(parseInt(s.id)));
     if (!invSelections.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing' });
-    if (!isFgOrder && !(await hasTerminalPin(db, invSelections.map(s => parseInt(s.id))))) {
-      return res.status(400).json({ error: 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory' });
+    if (!isFgOrder) {
+      const itemRow = await db.get('SELECT remark FROM order_items WHERE id=$1 AND order_id=$2', [parseInt(item_id), req.params.id]);
+      const pinCat = requiredPinCategory(itemRow?.remark);
+      if (!(await hasPinCategory(db, invSelections.map(s => parseInt(s.id)), pinCat))) {
+        return res.status(400).json({
+          error: pinCat === 'Heavy Terminal Pin'
+            ? 'This item\'s remark calls for a Heavy Terminal Pin — add one from the Heavy Terminal Pin category'
+            : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory',
+        });
+      }
     }
     const r = await db.insert(
       `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
