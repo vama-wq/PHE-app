@@ -30,8 +30,9 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
   const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : null;
   const category = (req.query.category || '').trim() || null;
   const company = (req.query.company || '').trim() || null;
-  if ((category || company) && req.user.role !== 'owner') {
-    return res.status(403).json({ error: 'Category / company ledgers are owner-only' });
+  const method = ['cash', 'paid_bank', 'unpaid_bank'].includes(req.query.method) ? req.query.method : null;
+  if ((category || company || method) && req.user.role !== 'owner') {
+    return res.status(403).json({ error: 'Ledger filters are owner-only' });
   }
 
   const conds = [];
@@ -39,6 +40,7 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
   if (month)    { params.push(month);    conds.push(`to_char(entry_date, 'YYYY-MM') = $${params.length}`); }
   if (category) { params.push(category); conds.push(`TRIM(category) = $${params.length}`); }
   if (company)  { params.push(company);  conds.push(`TRIM(category) = '${MACHINERY}' AND TRIM(paid_to) = $${params.length}`); }
+  if (method)   { params.push(method);   conds.push(`payment_method = $${params.length}`); }
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
   const entries = await db.all(`
@@ -68,6 +70,13 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
       if (company)  { bp.push(company);  bc.push(`TRIM(category) = '${MACHINERY}' AND TRIM(paid_to) = $${bp.length}`); }
       const o = await db.get(`SELECT COALESCE(SUM(amount),0) AS t FROM petty_cash_entries WHERE ${bc.join(' AND ')}`, bp);
       opening = Number(o.t);
+    } else if (method) {
+      // Bank / Cash carry a running balance (top-up − expense); Unpaid Bank a
+      // cumulative pending total.
+      const o = method === 'unpaid_bank'
+        ? await db.get(`SELECT COALESCE(SUM(amount),0) AS t FROM petty_cash_entries WHERE to_char(entry_date,'YYYY-MM') < $1 AND entry_type='expense' AND payment_method='unpaid_bank'`, [month])
+        : await db.get(`SELECT ${acctSum(method)} AS t FROM petty_cash_entries WHERE to_char(entry_date,'YYYY-MM') < $1`, [month]);
+      opening = Number(o.t);
     } else {
       const o = await db.get(`
         SELECT ${acctSum('cash')} AS cash, ${acctSum('paid_bank')} AS bank
@@ -94,9 +103,9 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
     unpaid_pending: isOwner ? Number(bal.unpaid_pending) : null,
     opening_cash,
     opening_bank: isOwner ? opening_bank : null,
-    opening_balance: opening, // cumulative spend, for filtered ledger views
+    opening_balance: opening, // cumulative spend / running balance for filtered views
     category_totals,
-    filter: { category, company },
+    filter: { category, company, method },
     receipt_required_above: RECEIPT_REQUIRED_ABOVE,
   });
 });
@@ -115,7 +124,20 @@ router.get('/ledgers', authenticate, authorize('owner'), async (req, res) => {
       COALESCE((SELECT COUNT(*) FROM petty_cash_entries e WHERE TRIM(e.category)='${MACHINERY}' AND TRIM(e.paid_to)=co.name AND e.entry_type='expense'), 0) AS entry_count,
       (lower(co.name) = '${NO_CASH_COMPANY}') AS no_cash
     FROM petty_cash_companies co ORDER BY co.id`);
-  res.json({ categories, companies });
+  // Payment-method ledgers: Bank shows its live balance (top-up − expense);
+  // Unpaid Bank shows the pending total awaiting payment.
+  const m = await db.get(`
+    SELECT
+      COALESCE(SUM(CASE WHEN payment_method='paid_bank' THEN (CASE WHEN entry_type='top_up' THEN amount ELSE -amount END) ELSE 0 END), 0) AS bank_balance,
+      COALESCE(COUNT(*) FILTER (WHERE payment_method='paid_bank'), 0) AS bank_count,
+      COALESCE(SUM(CASE WHEN payment_method='unpaid_bank' AND entry_type='expense' THEN amount ELSE 0 END), 0) AS unpaid_total,
+      COALESCE(COUNT(*) FILTER (WHERE payment_method='unpaid_bank'), 0) AS unpaid_count
+    FROM petty_cash_entries`);
+  const methods = [
+    { key: 'paid_bank',   label: 'Bank',        total: Number(m.bank_balance),  count: Number(m.bank_count),   balance: true },
+    { key: 'unpaid_bank', label: 'Unpaid Bank', total: Number(m.unpaid_total),  count: Number(m.unpaid_count) },
+  ];
+  res.json({ categories, companies, methods });
 });
 
 // Category list (fixed, owner-managed)

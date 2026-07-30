@@ -39,6 +39,7 @@ export default function PettyCashLedger() {
     const params = new URLSearchParams({ month });
     if (filter?.category) params.set('category', filter.category);
     if (filter?.company) params.set('company', filter.company);
+    if (filter?.method) params.set('method', filter.method);
     api.get(`/petty-cash?${params}`).then(r => setData(r.data)).finally(() => setLoading(false));
   };
   const loadLedgers = () => { if (isOwner) api.get('/petty-cash/ledgers').then(r => setLedgers(r.data)).catch(() => {}); };
@@ -67,9 +68,13 @@ export default function PettyCashLedger() {
     catch (err) { alert(err.response?.data?.error || 'Failed'); }
   };
 
-  const isLedgerView = !!(filter?.category || filter?.company);
+  const isLedgerView = !!(filter?.category || filter?.company || filter?.method);
+  // A Bank / Cash method ledger runs as a live balance (top-up +, expense −);
+  // everything else (category, company, Unpaid Bank) runs as cumulative spend.
+  const methodIsBalance = filter?.method === 'paid_bank' || filter?.method === 'cash';
+  const runLabel = methodIsBalance ? 'Balance' : 'Cumulative';
   // Running columns: main view = Cash + Bank balances per payment method;
-  // ledger view = cumulative spend in that account.
+  // ledger view = cumulative spend (or running balance) in that account.
   let cashRun = data?.opening_cash ?? 0;
   let bankRun = data?.opening_bank ?? 0;
   let cumRun = data?.opening_balance ?? 0;
@@ -78,12 +83,15 @@ export default function PettyCashLedger() {
     const delta = e.entry_type === 'top_up' ? amt : -amt;
     if (e.payment_method === 'cash') cashRun += delta;
     else if (e.payment_method === 'paid_bank') bankRun += delta;
-    if (e.entry_type === 'expense') cumRun += amt;
+    if (methodIsBalance) cumRun += delta;
+    else if (e.entry_type === 'expense') cumRun += amt;
     return { ...e, cashRun, bankRun, cumRun };
   });
   const monthIn = (data?.entries || []).filter(e => e.entry_type === 'top_up').reduce((a, e) => a + Number(e.amount), 0);
   const monthOut = (data?.entries || []).filter(e => e.entry_type === 'expense').reduce((a, e) => a + Number(e.amount), 0);
-  const ledgerTitle = filter?.company ? `Machinery — ${filter.company}` : filter?.category;
+  const ledgerTitle = filter?.company ? `Machinery — ${filter.company}`
+    : filter?.method ? ({ paid_bank: 'Bank', unpaid_bank: 'Unpaid Bank', cash: 'Cash' }[filter.method])
+    : filter?.category;
   const cols = isOwner ? 11 : 9; // accounts has no Bank Bal. column or actions column
 
   return (
@@ -166,6 +174,21 @@ export default function PettyCashLedger() {
               </button>
             ))}
           </div>
+          {ledgers.methods?.length > 0 && (
+            <>
+              <h3 className="text-xs font-semibold text-gray-500 mt-3 mb-1.5 flex items-center gap-1"><Landmark size={13} /> By payment method</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {ledgers.methods.map(m => (
+                  <button key={m.key} onClick={() => setFilter({ method: m.key })}
+                    className="card p-3 text-left hover:border-emerald-300 transition-colors">
+                    <div className="text-sm font-medium text-gray-800 truncate">{m.label}{m.balance ? ' Balance' : ''}</div>
+                    <div className={`text-lg font-bold ${m.total < 0 ? 'text-red-600' : 'text-gray-900'}`}>{inr(m.total)}</div>
+                    <div className="text-xs text-gray-400">{m.count} entr{m.count == 1 ? 'y' : 'ies'}</div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           {ledgers.companies.length > 0 && (
             <>
               <h3 className="text-xs font-semibold text-gray-500 mt-3 mb-1.5 flex items-center gap-1"><Building2 size={13} /> Machinery — by company</h3>
@@ -291,7 +314,7 @@ export default function PettyCashLedger() {
               <th className="table-header text-right">In</th>
               <th className="table-header text-right">Out</th>
               {isLedgerView ? (
-                <th className="table-header text-right">Cumulative</th>
+                <th className="table-header text-right">{runLabel}</th>
               ) : (
                 <>
                   <th className="table-header text-right">Cash Bal.</th>
