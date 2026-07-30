@@ -6,7 +6,7 @@ import SupplierModal from '../../components/SupplierModal';
 import InventoryItemModal from '../../components/InventoryItemModal';
 import CategorySelect from '../../components/CategorySelect';
 import { fmtDate, downloadExcel } from '../../lib/utils';
-import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes } from 'lucide-react';
+import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const MACHINERY = 'Machinery';
@@ -14,6 +14,7 @@ const SAMPLING = 'Sampling';
 const EMPLOYEE_EXPENSE = 'Employee Expense';
 const PLATING = 'Plating';
 const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise'];
+const PLATING_TRANSPORT = 'Plating Transportation';
 const EMP_TYPES = ['Advance Paid', 'Employee Welfare', 'Employee Care', 'Miscellaneous'];
 const EMP_TYPES_WORKER = ['Advance Paid', 'Employee Care']; // pick a worker from payroll
 const METHOD_BADGES = {
@@ -617,6 +618,12 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   const [showInvModal, setShowInvModal] = useState(false);
   const [partsAdded, setPartsAdded] = useState(0);   // how many parts stocked so far
   const [betweenParts, setBetweenParts] = useState(false); // "add another?" step
+  // Plating Transportation: pick which Nickel/Electropolish items this trip
+  // carries (send out or bring back) — one cash bill shared across them.
+  const [platingDir, setPlatingDir] = useState('sent');   // 'sent' | 'returned'
+  const [platingItems, setPlatingItems] = useState([]);   // eligible order items
+  const [platingSel, setPlatingSel] = useState({});       // order_item_id -> true
+  const [platingVendor, setPlatingVendor] = useState('');
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
   useEffect(() => {
@@ -631,8 +638,19 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   const isSampling = f.category === SAMPLING;
   const isEmpExpense = f.category === EMPLOYEE_EXPENSE;
   const isPlating = f.category === PLATING;
+  const isPlatingTransport = f.category === PLATING_TRANSPORT;
   const empNeedsWorker = isEmpExpense && EMP_TYPES_WORKER.includes(f.emp_expense_type);
-  const needsReceipt = !isTopUp && parseFloat(f.amount) > receiptLimit;
+  const needsReceipt = !isTopUp && !isPlatingTransport && parseFloat(f.amount) > receiptLimit;
+
+  // Load the eligible plating items whenever the trip direction changes
+  useEffect(() => {
+    if (!isPlatingTransport) return;
+    setPlatingSel({});
+    api.get(`/plating/eligible?direction=${platingDir}`).then(r => setPlatingItems(r.data || [])).catch(() => setPlatingItems([]));
+  }, [isPlatingTransport, platingDir]);
+  const platingSelIds = Object.keys(platingSel).map(Number);
+  const platingShare = platingSelIds.length && parseFloat(f.amount) > 0
+    ? Math.round((parseFloat(f.amount) / platingSelIds.length) * 100) / 100 : 0;
 
   const addCategory = async () => {
     const name = window.prompt('New category name:');
@@ -663,6 +681,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
       }
       if (isMachinery && !f.description.trim()) return setError('Description is required for Machinery.');
       if (isPlating && !receipt) return setError('A payment QR is required for Plating.');
+      if (isPlatingTransport && platingSelIds.length === 0) return setError('Select the item(s) this transport carried.');
       if (isSampling) {
         if (!f.item_name.trim()) return setError('Item name is required for Sampling.');
         if (!f.unit.trim()) return setError('Unit is required for Sampling.');
@@ -672,6 +691,17 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
     }
     setSaving(true);
     try {
+      // Plating Transportation posts as a plating trip: the server records the
+      // items' send/return status AND creates the cash ledger entry in one go.
+      if (isPlatingTransport) {
+        await api.post('/plating/trips', {
+          direction: platingDir, item_ids: platingSelIds, vendor: platingVendor,
+          paid_to: f.paid_to.trim(), transport_cost: f.amount,
+          trip_date: f.entry_date, notes: f.description,
+        });
+        onSaved();
+        return;
+      }
       const fd = new FormData();
       fd.append('entry_type', type);
       fd.append('entry_date', f.entry_date);
@@ -766,7 +796,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
 
         <div>
           <label className="label">{isTopUp ? 'Top-up Into' : 'Payment Method'} <span className="text-red-500">*</span></label>
-          <select className="input" value={f.payment_method} onChange={set('payment_method')} disabled={isPlating}>
+          <select className="input" value={f.payment_method} onChange={set('payment_method')} disabled={isPlating || isPlatingTransport}>
             {!isTopUp && <option value="">— select —</option>}
             <option value="cash">Cash{isTopUp ? ' in Hand' : ''}</option>
             <option value="paid_bank">{isTopUp ? 'Bank' : 'Paid Bank'}</option>
@@ -774,6 +804,9 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
           </select>
           {isPlating && (
             <p className="text-[11px] text-amber-700 mt-1">Plating always goes to Unpaid Bank first — the owner marks it Paid to deduct the Bank.</p>
+          )}
+          {isPlatingTransport && (
+            <p className="text-[11px] text-emerald-700 mt-1">Plating transport is always paid in Cash.</p>
           )}
           {!isPlating && f.payment_method === 'unpaid_bank' && (
             <p className="text-[11px] text-amber-700 mt-1">Recorded but not deducted — the owner can mark it Paid later, which then reduces the Bank balance.</p>
@@ -788,7 +821,9 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                 {isOwner && <button type="button" className="text-xs text-brand-600 hover:underline" onClick={addCategory}>＋ New category</button>}
               </label>
               <select className="input" value={f.category}
-                onChange={e => setF(p => ({ ...p, category: e.target.value, paid_to: '', payment_method: e.target.value === PLATING ? 'unpaid_bank' : p.payment_method }))}>
+                onChange={e => setF(p => ({ ...p, category: e.target.value, paid_to: '',
+                  payment_method: e.target.value === PLATING ? 'unpaid_bank'
+                    : e.target.value === PLATING_TRANSPORT ? 'cash' : p.payment_method }))}>
                 <option value="">— select category —</option>
                 {categories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -868,6 +903,61 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                     <input className="input" type="number" step="any" min="0" value={f.sample_qty} onChange={set('sample_qty')} />
                   </div>
                 </div>
+              </div>
+            )}
+
+            {isPlatingTransport && (
+              <div className="border border-cyan-200 bg-cyan-50/50 rounded-xl p-3 space-y-3">
+                <p className="text-xs text-cyan-700 font-medium flex items-center gap-1">
+                  <Droplets size={13} /> Which items did this transport carry? Paid To above is the transporter.
+                </p>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setPlatingDir('sent')}
+                    className={`btn-sm rounded-lg px-3 py-1.5 text-xs font-medium border ${platingDir === 'sent' ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+                    Sending to plating
+                  </button>
+                  <button type="button" onClick={() => setPlatingDir('returned')}
+                    className={`btn-sm rounded-lg px-3 py-1.5 text-xs font-medium border ${platingDir === 'returned' ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+                    Returning from plating
+                  </button>
+                </div>
+                {platingDir === 'sent' && (
+                  <div>
+                    <label className="label">Plating vendor</label>
+                    <select className="input" value={platingVendor} onChange={e => setPlatingVendor(e.target.value)}>
+                      <option value="">— select —</option>
+                      {PLATING_COMPANIES.map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <label className="label">Items ({platingDir === 'sent' ? 'ready to send' : 'currently out for plating'}) <span className="text-red-500">*</span></label>
+                  {platingItems.length === 0 ? (
+                    <p className="text-xs text-gray-400 bg-white border border-gray-100 rounded-lg px-3 py-2">
+                      {platingDir === 'sent' ? 'No Nickel-Plating / Electropolish items are ready to send.' : 'Nothing is currently out for plating.'}
+                    </p>
+                  ) : (
+                    <div className="max-h-44 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50 bg-white">
+                      {platingItems.map(it => {
+                        const checked = !!platingSel[it.order_item_id];
+                        return (
+                          <button type="button" key={it.order_item_id}
+                            onClick={() => setPlatingSel(p => { const n = { ...p }; if (n[it.order_item_id]) delete n[it.order_item_id]; else n[it.order_item_id] = true; return n; })}
+                            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-gray-50 ${checked ? 'bg-cyan-50/60' : ''}`}>
+                            {checked ? <CheckSquare size={15} className="text-cyan-600 flex-shrink-0" /> : <Square size={15} className="text-gray-300 flex-shrink-0" />}
+                            <span className="text-sm text-gray-800 truncate">{it.drawing_number || it.product_code}</span>
+                            <span className="text-xs text-gray-400 truncate">{it.order_code} · {it.plating_instructions} · qty {it.quantity}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                {platingShare > 0 && (
+                  <p className="text-[11px] text-cyan-800">
+                    {platingSelIds.length} item(s) — per-item transport share: <b>₹{platingShare.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</b>
+                  </p>
+                )}
               </div>
             )}
 

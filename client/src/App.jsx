@@ -23,7 +23,6 @@ import PurchasePaymentsDue from './pages/purchases/PurchasePaymentsDue';
 import PurchaseOrderDetail from './pages/purchases/PurchaseOrderDetail';
 import PurchaseOrderForm from './pages/purchases/PurchaseOrderForm';
 import PettyCashLedger from './pages/pettyCash/PettyCashLedger';
-import PlatingTransport from './pages/plating/PlatingTransport';
 import PayrollList from './pages/payroll/PayrollList';
 import PayrollRun from './pages/payroll/PayrollRun';
 import ReportsDashboard from './pages/reports/ReportsDashboard';
@@ -175,12 +174,6 @@ export default function App() {
           <Route path="petty-cash" element={
             <ProtectedRoute roles={['owner','accounts']} module="petty-cash">
               <PettyCashLedger />
-            </ProtectedRoute>
-          } />
-
-          <Route path="plating" element={
-            <ProtectedRoute roles={['owner','admin','accounts']}>
-              <PlatingTransport />
             </ProtectedRoute>
           } />
 
