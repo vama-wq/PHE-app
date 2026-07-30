@@ -15,6 +15,9 @@ import {
   Clock, AlertTriangle, Image as ImageIcon, Send, X, RefreshCw, ClipboardList, Paperclip, Download, File, RotateCcw
 } from 'lucide-react';
 
+// Fixed plating-instruction choices for order items.
+const PLATING_OPTIONS = ['Nickel Plating', 'Electropolish', 'Buffing', 'No Plating'];
+
 // ── Required-field validation (mirrors OrderList) ────────────────────────────
 function validateItem(f) {
   const missing = [];
@@ -1618,7 +1621,13 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
         </div>
         <div className="col-span-2">
           <label className="label">Plating Instructions <span className="text-red-500">*</span></label>
-          <input className="input" placeholder="e.g. Nickel Plating / None" value={f.plating_instructions ?? ''} onChange={set('plating_instructions')} />
+          <select className="input" value={f.plating_instructions ?? ''} onChange={set('plating_instructions')}>
+            <option value="">— select —</option>
+            {PLATING_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+            {f.plating_instructions && !PLATING_OPTIONS.includes(f.plating_instructions) && (
+              <option value={f.plating_instructions}>{f.plating_instructions} (existing)</option>
+            )}
+          </select>
         </div>
         <div>
           <label className="label">Quantity <span className="text-red-500">*</span></label>

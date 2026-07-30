@@ -9,6 +9,9 @@ import FileUpload from '../../components/ui/FileUpload';
 import { fmtDate, downloadExcel } from '../../lib/utils';
 import { Plus, Search, Trash2, Edit2, Package, Image as ImageIcon, X, Download, RotateCcw } from 'lucide-react';
 
+// Fixed plating-instruction choices for order items.
+const PLATING_OPTIONS = ['Nickel Plating', 'Electropolish', 'Buffing', 'No Plating'];
+
 // ── Validation helper ────────────────────────────────────────────────────────
 function validateItem(f) {
   const missing = [];
@@ -441,8 +444,13 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
         {/* Plating */}
         <div className="col-span-2">
           <label className="label">Plating Instructions <span className="text-red-500">*</span></label>
-          <input className="input" placeholder="e.g. Nickel Plating / None"
-            value={f.plating_instructions} onChange={set('plating_instructions')} />
+          <select className="input" value={f.plating_instructions ?? ''} onChange={set('plating_instructions')}>
+            <option value="">— select —</option>
+            {PLATING_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+            {f.plating_instructions && !PLATING_OPTIONS.includes(f.plating_instructions) && (
+              <option value={f.plating_instructions}>{f.plating_instructions} (existing)</option>
+            )}
+          </select>
         </div>
 
         {/* Quantity + Remark */}
