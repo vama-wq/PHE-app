@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadPettyCashReceipt, deleteFromStorage } = require('../middleware/upload');
+const { createNotification } = require('./notifications');
 
 // Office Expense — Petty Cash ledger.
 // Categories are a fixed, owner-managed list. Accounts records expenses; the
@@ -13,6 +14,8 @@ const RECEIPT_REQUIRED_ABOVE = 500;
 const MACHINERY = 'Machinery';
 const SAMPLING = 'Sampling';
 const EMPLOYEE_EXPENSE = 'Employee Expense';
+const PLATING = 'Plating';
+const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise'];
 const NO_CASH_COMPANY = 'jay bhramani'; // lower-cased for comparison
 // Employee Expense sub-types (stored in `description`). Advance Paid & Employee
 // Care pick a worker from the payroll list; the others need a free-text Paid To.
@@ -171,7 +174,7 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
     const amt = parseFloat(amount);
     if (!(amt > 0)) return fail(400, 'Enter a valid amount');
 
-    const method = String(req.body.payment_method || '').trim();
+    let method = String(req.body.payment_method || '').trim();
     // Top-ups can only land in cash or paid_bank; expenses may also be unpaid_bank
     const validMethods = entry_type === 'top_up' ? ['cash', 'paid_bank'] : ['cash', 'paid_bank', 'unpaid_bank'];
     if (!validMethods.includes(method)) {
@@ -193,6 +196,7 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
       if (!known) return fail(400, 'Pick a valid category');
       cat = known.name;
       if (cat === 'Salary') return fail(400, 'Salary entries are posted automatically from Payroll');
+      if (cat === 'Purchase Payment') return fail(400, 'Purchase Payment entries are posted from Purchases → Payments Due');
 
       if (cat === EMPLOYEE_EXPENSE) {
         const type = (req.body.emp_expense_type || '').trim();
@@ -217,6 +221,16 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
         if (!(description || '').trim()) return fail(400, 'Description is required for Machinery expenses');
         const co = await db.get('SELECT id FROM petty_cash_companies WHERE lower(name)=lower($1)', [to]);
         if (!co) return fail(400, 'Pick a company from the list (or add it)');
+      }
+      if (cat === PLATING) {
+        // One of the three plating companies, a mandatory payment QR, and always
+        // Unpaid Bank first (the owner marks it Paid to deduct the bank).
+        if (!PLATING_COMPANIES.some(c => c.toLowerCase() === to.toLowerCase())) {
+          return fail(400, 'Pick a plating company (A S Plating / Aesha Plating / Akshar Enterprise)');
+        }
+        finalPaidTo = PLATING_COMPANIES.find(c => c.toLowerCase() === to.toLowerCase());
+        if (!req.file) return fail(400, 'A payment QR is required for Plating expenses');
+        method = 'unpaid_bank';
       }
       if (cat === SAMPLING) {
         const itemName = (req.body.item_name || '').trim();
@@ -268,6 +282,22 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
       entry_type === 'top_up'
         ? `Petty cash top-up: ₹${amt} (${methodLabel})`
         : `Petty cash expense: ₹${amt} — ${cat}${paid_to ? ` (${paid_to})` : ''} [${methodLabel}]`, req.user.id);
+
+    // Notify owners of a new Unpaid-Bank expense that needs paying (Plating &
+    // Employee Expense), so it surfaces in their notification box.
+    if (entry_type === 'expense' && method === 'unpaid_bank' && (cat === PLATING || cat === EMPLOYEE_EXPENSE)) {
+      try {
+        const owners = await db.all("SELECT id FROM users WHERE role='owner' AND id != $1", [req.user.id]);
+        for (const o of owners) {
+          await createNotification(db, {
+            userId: o.id, type: 'petty_cash_unpaid',
+            title: `Unpaid ${cat}: ₹${amt}`,
+            body: `${finalPaidTo || cat} — awaiting bank payment`,
+            link: '/petty-cash', sourceUserId: req.user.id,
+          });
+        }
+      } catch (e) { console.error('unpaid-expense notify failed:', e.message); }
+    }
     res.status(201).json({ id: entryId });
   } catch (e) {
     console.error('petty cash entry error:', e);

@@ -240,7 +240,7 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_pc_company ON petty_cash_companies(lower(name))`);
       // Jay Bhramani (Machinery) entries are recorded but don't reduce cash-in-hand.
       await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS affects_cash BOOLEAN NOT NULL DEFAULT TRUE`);
-      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling', 'Employee Expense', 'Salary', 'Purchase Payment']) {
+      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling', 'Employee Expense', 'Salary', 'Purchase Payment', 'Plating']) {
         await pool.query(`INSERT INTO petty_cash_categories (name) VALUES ($1) ON CONFLICT DO NOTHING`, [c]);
       }
       await pool.query(`INSERT INTO petty_cash_companies (name) VALUES ($1) ON CONFLICT DO NOTHING`, ['Jay Bhramani']);

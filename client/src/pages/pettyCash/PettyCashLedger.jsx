@@ -12,6 +12,8 @@ const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigi
 const MACHINERY = 'Machinery';
 const SAMPLING = 'Sampling';
 const EMPLOYEE_EXPENSE = 'Employee Expense';
+const PLATING = 'Plating';
+const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise'];
 const EMP_TYPES = ['Advance Paid', 'Employee Welfare', 'Employee Care', 'Miscellaneous'];
 const EMP_TYPES_WORKER = ['Advance Paid', 'Employee Care']; // pick a worker from payroll
 const METHOD_BADGES = {
@@ -605,6 +607,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   const isMachinery = f.category === MACHINERY;
   const isSampling = f.category === SAMPLING;
   const isEmpExpense = f.category === EMPLOYEE_EXPENSE;
+  const isPlating = f.category === PLATING;
   const empNeedsWorker = isEmpExpense && EMP_TYPES_WORKER.includes(f.emp_expense_type);
   const needsReceipt = !isTopUp && parseFloat(f.amount) > receiptLimit;
 
@@ -636,6 +639,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
         return setError('Paid To is required.');
       }
       if (isMachinery && !f.description.trim()) return setError('Description is required for Machinery.');
+      if (isPlating && !receipt) return setError('A payment QR is required for Plating.');
       if (isSampling) {
         if (!f.item_name.trim()) return setError('Item name is required for Sampling.');
         if (!f.unit.trim()) return setError('Unit is required for Sampling.');
@@ -649,7 +653,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
       fd.append('entry_type', type);
       fd.append('entry_date', f.entry_date);
       fd.append('amount', f.amount);
-      fd.append('payment_method', f.payment_method);
+      fd.append('payment_method', isPlating ? 'unpaid_bank' : f.payment_method);
       if (!isTopUp) {
         fd.append('category', f.category);
         // For worker-linked employee expenses the payee is the selected worker
@@ -739,13 +743,16 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
 
         <div>
           <label className="label">{isTopUp ? 'Top-up Into' : 'Payment Method'} <span className="text-red-500">*</span></label>
-          <select className="input" value={f.payment_method} onChange={set('payment_method')}>
+          <select className="input" value={f.payment_method} onChange={set('payment_method')} disabled={isPlating}>
             {!isTopUp && <option value="">— select —</option>}
             <option value="cash">Cash{isTopUp ? ' in Hand' : ''}</option>
             <option value="paid_bank">{isTopUp ? 'Bank' : 'Paid Bank'}</option>
             {!isTopUp && <option value="unpaid_bank">Unpaid Bank (pending — no deduction yet)</option>}
           </select>
-          {f.payment_method === 'unpaid_bank' && (
+          {isPlating && (
+            <p className="text-[11px] text-amber-700 mt-1">Plating always goes to Unpaid Bank first — the owner marks it Paid to deduct the Bank.</p>
+          )}
+          {!isPlating && f.payment_method === 'unpaid_bank' && (
             <p className="text-[11px] text-amber-700 mt-1">Recorded but not deducted — the owner can mark it Paid later, which then reduces the Bank balance.</p>
           )}
         </div>
@@ -757,7 +764,8 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                 <span>Category <span className="text-red-500">*</span></span>
                 {isOwner && <button type="button" className="text-xs text-brand-600 hover:underline" onClick={addCategory}>＋ New category</button>}
               </label>
-              <select className="input" value={f.category} onChange={e => setF(p => ({ ...p, category: e.target.value, paid_to: '' }))}>
+              <select className="input" value={f.category}
+                onChange={e => setF(p => ({ ...p, category: e.target.value, paid_to: '', payment_method: e.target.value === PLATING ? 'unpaid_bank' : p.payment_method }))}>
                 <option value="">— select category —</option>
                 {categories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -801,6 +809,11 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                   <select className="input" value={f.paid_to} onChange={set('paid_to')}>
                     <option value="">— select company —</option>
                     {companies.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                ) : isPlating ? (
+                  <select className="input" value={f.paid_to} onChange={set('paid_to')}>
+                    <option value="">— select plating company —</option>
+                    {PLATING_COMPANIES.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 ) : (
                   <input className="input" value={f.paid_to} onChange={set('paid_to')}
@@ -855,11 +868,13 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
 
             <div>
               <label className="label">
-                Receipt / Bill {needsReceipt ? <span className="text-red-500">*</span> : <span className="text-gray-400 font-normal">(optional below ₹{receiptLimit})</span>}
+                {isPlating
+                  ? <>Payment QR <span className="text-red-500">*</span></>
+                  : <>Receipt / Bill {needsReceipt ? <span className="text-red-500">*</span> : <span className="text-gray-400 font-normal">(optional below ₹{receiptLimit})</span>}</>}
               </label>
               <label className="flex items-center gap-2 cursor-pointer border border-gray-200 rounded-lg px-3 py-2 hover:border-brand-400 transition-colors bg-gray-50">
                 <Upload size={15} className="text-gray-400 flex-shrink-0" />
-                <span className="text-sm text-gray-600 flex-1 truncate">{receipt ? receipt.name : 'Attach receipt photo / PDF…'}</span>
+                <span className="text-sm text-gray-600 flex-1 truncate">{receipt ? receipt.name : (isPlating ? 'Attach the payment QR (image / PDF)…' : 'Attach receipt photo / PDF…')}</span>
                 <input type="file" accept="image/*,.pdf" className="hidden"
                   onChange={e => { setReceipt(e.target.files[0] || null); setError(''); }} />
               </label>
