@@ -219,6 +219,7 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
       cat = known.name;
       if (cat === 'Salary') return fail(400, 'Salary entries are posted automatically from Payroll');
       if (cat === 'Purchase Payment') return fail(400, 'Purchase Payment entries are posted from Purchases → Payments Due');
+      if (cat === 'Purchase Transport') return fail(400, 'Purchase Transport entries are posted automatically when a purchase is received');
 
       if (cat === EMPLOYEE_EXPENSE) {
         const type = (req.body.emp_expense_type || '').trim();
