@@ -699,6 +699,34 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_local_transport_cost NUMERIC`);
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_local_transport_paid_to TEXT`);
 
+      // ── Plating transport tracking ──────────────────────────────────────────
+      // Order items with Nickel Plating / Electropolish are sent out to a plating
+      // vendor and come back. Each "trip" is one transport bill (Cash) shared by
+      // the items in it; per-item share = cost / item-count. order_items.plating_status
+      // tracks each item's current leg (out_for_plating / returned).
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS plating_status TEXT`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS plating_trips (
+          id SERIAL PRIMARY KEY,
+          direction TEXT NOT NULL CHECK (direction IN ('sent','returned')),
+          vendor TEXT,
+          paid_to TEXT,
+          transport_cost NUMERIC NOT NULL CHECK (transport_cost >= 0),
+          trip_date DATE NOT NULL,
+          notes TEXT,
+          petty_cash_entry_id INTEGER REFERENCES petty_cash_entries(id) ON DELETE SET NULL,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS plating_trip_items (
+          id SERIAL PRIMARY KEY,
+          trip_id INTEGER NOT NULL REFERENCES plating_trips(id) ON DELETE CASCADE,
+          order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE
+        )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_plating_trip_items_trip ON plating_trip_items(trip_id)`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_plating_trip_items_item ON plating_trip_items(order_item_id)`);
+
       await pool.query(`
         CREATE TABLE IF NOT EXISTS supplier_items (
           id SERIAL PRIMARY KEY,
