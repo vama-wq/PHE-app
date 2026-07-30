@@ -685,6 +685,9 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
   const [itemId, setItemId] = useState(items[0]?.id ? String(items[0].id) : '');
   const [file, setFile] = useState(null);
   const [transportCost, setTransportCost] = useState('');
+  const [transportPaidTo, setTransportPaidTo] = useState('');
+  const [localCost, setLocalCost] = useState('');
+  const [localPaidTo, setLocalPaidTo] = useState('');
   const [otherCost, setOtherCost] = useState('');
   const [otherReason, setOtherReason] = useState('');
   const [saving, setSaving] = useState(false);
@@ -693,11 +696,16 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
     if (!itemId) return setError('Select the item that was received');
     if (!file) return setError('Attach the invoice received with this item');
     if (Number(otherCost) > 0 && !otherReason.trim()) return setError('Please add a reason for the other cost');
+    if (Number(transportCost) > 0 && !transportPaidTo.trim()) return setError('Enter the main-vehicle transporter name');
+    if (Number(localCost) > 0 && !localPaidTo.trim()) return setError('Enter the local transporter name');
     setSaving(true); setError('');
     try {
       const fd = new FormData();
       fd.append('invoice', file);
       if (transportCost) fd.append('transport_cost', transportCost);
+      if (transportPaidTo) fd.append('transport_paid_to', transportPaidTo);
+      if (localCost) fd.append('local_transport_cost', localCost);
+      if (localPaidTo) fd.append('local_transport_paid_to', localPaidTo);
       if (otherCost) fd.append('other_cost', otherCost);
       if (otherReason) fd.append('other_cost_reason', otherReason);
       await uploadApi.post(`/purchase-orders/${poId}/items/${itemId}/receive`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
@@ -721,9 +729,30 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
               <label className="label">Invoice received with this item <span className="text-red-500">*</span></label>
               <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select invoice (PDF or image)" />
             </div>
-            <div>
-              <label className="label">Transport cost <span className="text-gray-400 font-normal">(₹, optional)</span></label>
-              <input className="input" type="number" step="any" min="0" value={transportCost} onChange={e => setTransportCost(e.target.value)} placeholder="0.00" />
+            <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-3">
+              <p className="text-xs text-gray-500">
+                Transport posts to the Account Statement: main freight → <b>Unpaid Bank</b> (owner pays via bank &amp; is notified), local → <b>Cash in Hand</b>. Both also fold into the item's landed cost.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Main vehicle transport <span className="text-gray-400 font-normal">(₹)</span></label>
+                  <input className="input" type="number" step="any" min="0" value={transportCost} onChange={e => setTransportCost(e.target.value)} placeholder="0.00" />
+                </div>
+                <div>
+                  <label className="label">Transporter {Number(transportCost) > 0 && <span className="text-red-500">*</span>}</label>
+                  <input className="input" value={transportPaidTo} onChange={e => setTransportPaidTo(e.target.value)} placeholder="Freight agency / vehicle owner" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Local transport, dock → unit <span className="text-gray-400 font-normal">(₹)</span></label>
+                  <input className="input" type="number" step="any" min="0" value={localCost} onChange={e => setLocalCost(e.target.value)} placeholder="0.00" />
+                </div>
+                <div>
+                  <label className="label">Transporter {Number(localCost) > 0 && <span className="text-red-500">*</span>}</label>
+                  <input className="input" value={localPaidTo} onChange={e => setLocalPaidTo(e.target.value)} placeholder="Local tempo / porter" />
+                </div>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -752,15 +781,17 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
 // One PO item's QC: material image + weight of 10 pcs (both mandatory to approve).
 function ItemQCRow({ poId, item, canQC, onDone, showCosts }) {
   const transport = Number(item.receive_transport_cost) || 0;
+  const localTransport = Number(item.receive_local_transport_cost) || 0;
   const other = Number(item.receive_other_cost) || 0;
   const landedQty = Number(item.qc_received_qty) || 0;
   const landedPerUnit = landedQty > 0
-    ? Math.round((Number(item.rate || 0) + (transport + other) / landedQty) * 100) / 100
+    ? Math.round((Number(item.rate || 0) + (transport + localTransport + other) / landedQty) * 100) / 100
     : null;
-  const costLine = showCosts && (transport > 0 || other > 0) ? (
+  const costLine = showCosts && (transport > 0 || localTransport > 0 || other > 0) ? (
     <div className="text-xs text-gray-500 mt-0.5">
-      {transport > 0 && <span>Transport: ₹{transport}</span>}
-      {other > 0 && <span>{transport > 0 ? ' · ' : ''}Other: ₹{other}{item.receive_other_cost_reason ? ` (${item.receive_other_cost_reason})` : ''}</span>}
+      {transport > 0 && <span>Freight: ₹{transport}{item.receive_transport_paid_to ? ` (${item.receive_transport_paid_to})` : ''}</span>}
+      {localTransport > 0 && <span>{transport > 0 ? ' · ' : ''}Local: ₹{localTransport}{item.receive_local_transport_paid_to ? ` (${item.receive_local_transport_paid_to})` : ''}</span>}
+      {other > 0 && <span>{(transport > 0 || localTransport > 0) ? ' · ' : ''}Other: ₹{other}{item.receive_other_cost_reason ? ` (${item.receive_other_cost_reason})` : ''}</span>}
       {item.qc_status === 'approved' && landedPerUnit != null && <span> · Landed cost: <b>₹{landedPerUnit}/unit</b></span>}
     </div>
   ) : null;

@@ -14,12 +14,15 @@ async function receiveItemStock(db, po, item, userId, qty) {
   const now = new Date().toISOString();
   const supplier = await db.get('SELECT name FROM suppliers WHERE id=$1', [po.supplier_id]);
 
-  // Landed unit cost = material rate + (transport + other receipt costs) spread
-  // across the received quantity, so stock valuation reflects the true cost.
+  // Landed unit cost = material rate + (transport + local transport + other
+  // receipt costs) spread across the received quantity, so stock valuation
+  // reflects the true cost — even though transport is also logged as its own
+  // Account-Statement expense.
   const baseRate = Number(item.rate) || 0;
   const transport = Number(item.receive_transport_cost) || 0;
+  const localTransport = Number(item.receive_local_transport_cost) || 0;
   const other = Number(item.receive_other_cost) || 0;
-  const extraPerUnit = (transport + other) / q;
+  const extraPerUnit = (transport + localTransport + other) / q;
   const landedUnitCost = Math.round((baseRate + extraPerUnit) * 100) / 100;
 
   await db.run(
@@ -520,16 +523,59 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     if (item.received) return res.status(400).json({ error: 'This item is already received' });
     if (!req.file) return res.status(400).json({ error: 'The invoice received with this item is required' });
 
-    const transportCost = Number(req.body.transport_cost) || 0;
+    const transportCost = Number(req.body.transport_cost) || 0;             // main vehicle freight
+    const transportPaidTo = (req.body.transport_paid_to || '').trim() || null;
+    const localCost = Number(req.body.local_transport_cost) || 0;           // transport dock → unit
+    const localPaidTo = (req.body.local_transport_paid_to || '').trim() || null;
     const otherCost = Number(req.body.other_cost) || 0;
     const otherReason = (req.body.other_cost_reason || '').trim() || null;
     if (otherCost > 0 && !otherReason) return res.status(400).json({ error: 'A reason is required for the other cost' });
+    if (transportCost > 0 && !transportPaidTo) return res.status(400).json({ error: 'Enter the main-vehicle transporter name' });
+    if (localCost > 0 && !localPaidTo) return res.status(400).json({ error: 'Enter the local transporter name' });
 
-    await db.run(
-      `UPDATE purchase_order_items SET received=TRUE, received_at=NOW(), invoice_file=$1, invoice_original_name=$2,
-         receive_transport_cost=$3, receive_other_cost=$4, receive_other_cost_reason=$5 WHERE id=$6`,
-      [req.file.storagePath, req.file.originalname, transportCost, otherCost, otherReason, item.id]
-    );
+    // Item update + the two Account-Statement transport entries commit together.
+    // Both transports still fold into the item's landed cost (see receiveItemStock);
+    // here they also become real cash/bank outflows to the transporter(s):
+    //   • main vehicle freight → Unpaid Bank (owner pays via bank, gets notified)
+    //   • local dock→unit transport → Cash in Hand (accounts pays now)
+    // They're NOT linked to the PO's payable (paid to a transporter, not the
+    // supplier) — the PO number is carried in the description for traceability.
+    await db.withTransaction(async (client) => {
+      await client.query(
+        `UPDATE purchase_order_items SET received=TRUE, received_at=NOW(), invoice_file=$1, invoice_original_name=$2,
+           receive_transport_cost=$3, receive_other_cost=$4, receive_other_cost_reason=$5,
+           receive_transport_paid_to=$6, receive_local_transport_cost=$7, receive_local_transport_paid_to=$8 WHERE id=$9`,
+        [req.file.storagePath, req.file.originalname, transportCost, otherCost, otherReason,
+         transportPaidTo, localCost, localPaidTo, item.id]
+      );
+      if (transportCost > 0) {
+        await client.query(
+          `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, created_by)
+           VALUES (CURRENT_DATE,'expense','Purchase Transport',$1,$2,$3,'unpaid_bank',FALSE,$4)`,
+          [`Main vehicle transport — ${po.po_number} (${item.description})`, transportPaidTo, transportCost, req.user.id]);
+      }
+      if (localCost > 0) {
+        await client.query(
+          `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, created_by)
+           VALUES (CURRENT_DATE,'expense','Purchase Transport',$1,$2,$3,'cash',TRUE,$4)`,
+          [`Local transport (dock → unit) — ${po.po_number} (${item.description})`, localPaidTo, localCost, req.user.id]);
+      }
+    });
+
+    // Notify owners of the new Unpaid-Bank main-vehicle freight awaiting payment.
+    if (transportCost > 0) {
+      try {
+        const owners = await db.all("SELECT id FROM users WHERE role='owner' AND id != $1", [req.user.id]);
+        for (const o of owners) {
+          await createNotification(db, {
+            userId: o.id, type: 'petty_cash_unpaid',
+            title: `Main-vehicle transport: ₹${transportCost}`,
+            body: `${transportPaidTo} — ${po.po_number} freight, awaiting bank payment`,
+            link: '/petty-cash', sourceUserId: req.user.id,
+          });
+        }
+      } catch (e) { console.error('transport notify failed:', e.message); }
+    }
     // Move the PO into QC (if not already) so it surfaces in the QC section.
     if (po.delivery_status !== 'qc_pending') {
       await db.run("UPDATE purchase_orders SET delivery_status='qc_pending' WHERE id=$1", [po.id]);

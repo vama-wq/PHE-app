@@ -240,7 +240,7 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_pc_company ON petty_cash_companies(lower(name))`);
       // Jay Bhramani (Machinery) entries are recorded but don't reduce cash-in-hand.
       await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS affects_cash BOOLEAN NOT NULL DEFAULT TRUE`);
-      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling', 'Employee Expense', 'Salary', 'Purchase Payment', 'Plating']) {
+      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling', 'Employee Expense', 'Salary', 'Purchase Payment', 'Plating', 'Purchase Transport']) {
         await pool.query(`INSERT INTO petty_cash_categories (name) VALUES ($1) ON CONFLICT DO NOTHING`, [c]);
       }
       await pool.query(`INSERT INTO petty_cash_companies (name) VALUES ($1) ON CONFLICT DO NOTHING`, ['Jay Bhramani']);
@@ -693,6 +693,11 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_transport_cost NUMERIC`);
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_other_cost NUMERIC`);
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_other_cost_reason TEXT`);
+      // Split transport at receive: main vehicle freight (→ Unpaid Bank, owner pays)
+      // and local dock→unit transport (→ Cash), each with its own transporter name.
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_transport_paid_to TEXT`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_local_transport_cost NUMERIC`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_local_transport_paid_to TEXT`);
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS supplier_items (
