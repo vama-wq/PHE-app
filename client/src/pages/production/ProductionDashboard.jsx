@@ -921,7 +921,11 @@ function ChecklistModal({ card, onClose, onSave }) {
                       <span className={`text-sm font-medium ${isDone ? 'text-green-800' : 'text-gray-800'}`}>
                         {def.name}
                       </span>
-                      {def.optional && <span className="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded">Optional</span>}
+                      {(def.no === 15 && card?.requires_stage_15) || (def.no === 21 && card?.requires_stage_21) ? (
+                        <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-medium" title="This item's BOM has parts that deduct at this stage — it must be completed before QC">Required — inventory</span>
+                      ) : def.optional ? (
+                        <span className="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded">Optional</span>
+                      ) : null}
                       {isDone && sData.done_at && (
                         <span className="text-xs text-green-500 ml-auto flex-shrink-0">{fmtDateTime(sData.done_at)}</span>
                       )}
@@ -1224,11 +1228,16 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const rejQtyInt = parseInt(rejQty, 10) || 0;
   const canManage = ['production', 'owner', 'admin'].includes(user.role);
 
-  // Check if all mandatory stages are done (for stage 28 gate)
+  // Check if all mandatory stages are done (for stage 29 gate). Deduction
+  // stages 15 (Brazing) / 21 (Nipple Press) are compulsory when this card's
+  // item BOM contains their categories (server sends requires_stage_15/21).
   const mandatoryMissing = useMemo(() => {
     if (stageDef.no !== 29) return [];
-    return MANDATORY_STAGE_NOS.filter(n => !stageMap[n]?.done);
-  }, [stageDef.no, stageMap]);
+    const req = [...MANDATORY_STAGE_NOS];
+    if (card?.requires_stage_15) req.push(15);
+    if (card?.requires_stage_21) req.push(21);
+    return req.filter(n => !stageMap[n]?.done).sort((a, b) => a - b);
+  }, [stageDef.no, stageMap, card]);
 
   const canMarkDone = () => {
     if (isDone || saving) return false;

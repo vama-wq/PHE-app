@@ -4,7 +4,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { applyMaterialDeductions } = require('../lib/materialDeduction');
-const { deductStageCategories } = require('../lib/inventoryDeduction');
+const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventoryDeduction');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
 // Must match client MANDATORY_STAGE_NOS. Optional/excluded: 2, 13(Buffing), 15(Brazing),
@@ -34,6 +34,20 @@ router.get('/', authenticate, async (req, res) => {
       ) as net_qty,
       (SELECT dispatched_qty FROM production_checklist WHERE job_card_id = jc.id AND stage_no = 29 LIMIT 1) as dispatched_qty,
       jc.qc_dispatch_qty, jc.qc_fg_qty, jc.qc_route,
+      -- Deduction stages become mandatory when the item's BOM has their categories:
+      -- stage 15 (Brazing) → flange/brazing parts, stage 21 (Nipple Press) → nipple parts.
+      EXISTS(
+        SELECT 1 FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+        WHERE oii.order_item_id = COALESCE(jc.order_item_id,
+            (SELECT id FROM order_items WHERE order_id = jc.order_id AND drawing_number = jc.drawing_no ORDER BY id LIMIT 1))
+          AND TRIM(ii.category) IN ('Flange','Flange Cap','Flange Spare','Brazing EQ')
+      ) as requires_stage_15,
+      EXISTS(
+        SELECT 1 FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+        WHERE oii.order_item_id = COALESCE(jc.order_item_id,
+            (SELECT id FROM order_items WHERE order_id = jc.order_id AND drawing_number = jc.drawing_no ORDER BY id LIMIT 1))
+          AND TRIM(ii.category) IN ('Nipple Fastner','Nipple Washer','Nipple Nut+Washer')
+      ) as requires_stage_21,
       cq_active.id as active_query_id,
       cq_active.query_no as active_query_no,
       cq_active.subject as active_query_subject,
@@ -685,12 +699,27 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   // Gate stage 29 (Dispatch Preparation → triggers QC): all mandatory stages must be complete
   if (!isFg && stageNo === 29 && done) {
     const mandatory = [...MANDATORY_STAGES];
+    // Deduction stages are compulsory whenever the item's BOM contains parts
+    // they deduct: stage 15 (Brazing) → flange/brazing categories, stage 21
+    // (Nipple Press) → nipple categories. Skipping them would leave those BOM
+    // lines undrawn until the QC sweep and lose the stage-timed tracking.
+    const jcRow = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
+    const bomItemId = await resolveJobCardItemId(db, jcRow);
+    if (bomItemId) {
+      const catRows = await db.all(
+        `SELECT DISTINCT TRIM(ii.category) AS c
+         FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+         WHERE oii.order_item_id=$1`, [bomItemId]);
+      const cats = new Set(catRows.map(r => r.c));
+      if (['Flange', 'Flange Cap', 'Flange Spare', 'Brazing EQ'].some(c => cats.has(c))) mandatory.push(15);
+      if (['Nipple Fastner', 'Nipple Washer', 'Nipple Nut+Washer'].some(c => cats.has(c))) mandatory.push(21);
+    }
     const doneRows = await db.all(
       'SELECT stage_no FROM production_checklist WHERE job_card_id=$1 AND done=1',
       [jobCardId]
     );
     const doneSet = new Set(doneRows.map(r => r.stage_no));
-    const missing = mandatory.filter(s => !doneSet.has(s));
+    const missing = mandatory.filter(s => !doneSet.has(s)).sort((a, b) => a - b);
     if (missing.length > 0) {
       return res.status(400).json({
         error: `Cannot send to QC — complete mandatory stages first: ${missing.map(n => 'Stage ' + n).join(', ')}`,
