@@ -949,9 +949,6 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                             {checked ? <CheckSquare size={15} className="text-cyan-600 flex-shrink-0" /> : <Square size={15} className="text-gray-300 flex-shrink-0" />}
                             <span className="text-sm text-gray-800 truncate">{it.drawing_number || it.product_code}</span>
                             <span className="text-xs text-gray-400 truncate">{it.order_code} · {it.plating_instructions} · qty {it.quantity}</span>
-                            {platingDir === 'returned' && it.never_sent && (
-                              <span className="text-[10px] font-medium text-amber-600 bg-amber-50 rounded px-1 py-0.5 flex-shrink-0" title="This item was sent to plating before tracking existed — recording the return is fine">send not recorded</span>
-                            )}
                           </button>
                         );
                       })}

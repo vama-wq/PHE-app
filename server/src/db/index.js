@@ -726,6 +726,13 @@ async function initDB(retries = 20, delayMs = 10000) {
         )`);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_plating_trip_items_trip ON plating_trip_items(trip_id)`);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_plating_trip_items_item ON plating_trip_items(order_item_id)`);
+      // One-off: ORD-065-26's flange item was physically at the plating vendor
+      // before this tracking existed — mark it out_for_plating so its return can
+      // be recorded. NULL guard = runs once; after the return it stays 'returned'.
+      await pool.query(`
+        UPDATE order_items oi SET plating_status='out_for_plating'
+        FROM orders o WHERE o.id = oi.order_id AND o.order_code='ORD-065-26'
+          AND oi.plating_instructions ILIKE '%nickle%' AND oi.plating_status IS NULL`);
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS supplier_items (
