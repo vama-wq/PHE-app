@@ -28,6 +28,7 @@ async function buildMonth(db, startISO, endISO) {
   const cards = await db.all(`
     SELECT jc.id, jc.job_card_no, jc.qty, jc.dispatch_date, jc.drawing_no, jc.product_name, jc.created_at,
            jc.tube_used_qty, jc.tube_scrap_qty, jc.coil_used_qty, jc.coil_scrap_qty,
+           jc.qc_route, jc.qc_fg_qty, jc.qc_dispatch_qty,
            o.order_code, o.order_type, c.customer_code,
            oi.voltage, oi.wattage, oi.tube_material, oi.product_code,
            s29.done_at AS produced_at
@@ -81,7 +82,11 @@ async function buildMonth(db, startISO, endISO) {
     const matVal = round(((num(c.tube_used_qty)+num(c.tube_scrap_qty)) * (invCost[(c.tube_material||'').toUpperCase()]||0))
                        + ((num(c.coil_used_qty)+num(c.coil_scrap_qty)) * (invCost[gauge]||0)));
     const dispAt = dispMap[c.id] || null;
-    const onTime = dispAt ? (new Date(dispAt) <= new Date(c.dispatch_date) ? 'Yes' : 'No') : 'Pending';
+    // Cards QC-routed entirely into Finished Goods (e.g. inventory orders) are
+    // never dispatched — they count as produced but are excluded from the
+    // on-time/late tracking instead of sitting "Pending" forever.
+    const toFG = c.qc_route === 'finished_goods' && (num(c.qc_dispatch_qty) || 0) === 0;
+    const onTime = toFG ? 'To FG' : dispAt ? (new Date(dispAt) <= new Date(c.dispatch_date) ? 'Yes' : 'No') : 'Pending';
     const overduePending = onTime === 'Pending' && c.dispatch_date && now > new Date(c.dispatch_date);
     const lateDays = dispAt ? Math.max(0, daysBetween(c.dispatch_date, dispAt) || 0)
                             : (overduePending ? (daysBetween(c.dispatch_date, now) || 0) : 0);
@@ -110,7 +115,8 @@ async function buildMonth(db, startISO, endISO) {
       gauge: stg(1)?.value1 || '',
       tubeUsed: c.tube_used_qty ?? '', tubeScrap: c.tube_scrap_qty ?? '', wireUsed: c.coil_used_qty ?? '', wireScrap: c.coil_scrap_qty ?? '',
       matVal: matVal ?? '',
-      produced: dstr(c.produced_at), due: c.dispatch_date || '', dispatched: dstr(dispAt),
+      fgQty: num(c.qc_fg_qty) || 0,
+      produced: dstr(c.produced_at), due: c.dispatch_date || '', dispatched: toFG ? 'To Finished Goods' : dstr(dispAt),
       daysToDispatch: dispAt ? (daysBetween(c.created_at, dispAt) ?? '') : '',
       onTime, lateDays, cycleDays: daysBetween(c.created_at, c.produced_at) ?? '',
       delay, workers: [...wset].join(', '),
@@ -124,12 +130,15 @@ function summarize(rows) {
   const qty = rows.reduce((s,r)=>s+N(r,'qty'),0);
   const rejects = rows.reduce((s,r)=>s+N(r,'rejects'),0);
   const firstPass = rows.filter(r=>N(r,'rejects')===0).length;
-  const disp = rows.filter(r=>r.onTime!=='Pending');
+  // On-time % counts only cards that actually dispatched — FG-routed ('To FG')
+  // and still-pending cards are excluded from the denominator.
+  const disp = rows.filter(r=>r.onTime==='Yes'||r.onTime==='No');
   const ontime = disp.filter(r=>r.onTime==='Yes').length;
   const devs = rows.map(r=>r.ohmsDev).filter(v=>v!=='' && v!=null).map(Number);
   const dtd = rows.map(r=>r.daysToDispatch).filter(v=>v!=='' && v!=null).map(Number);
   return {
     items:n, qty, rejects, remakes: rows.reduce((s,r)=>s+N(r,'remakes'),0),
+    fgQty: rows.reduce((s,r)=>s+N(r,'fgQty'),0),
     rejectRate: qty ? round(rejects/qty*100,1) : 0,
     firstPass: n ? round(firstPass/n*100,1) : 0,
     onTime: disp.length ? round(ontime/disp.length*100,1) : 0,
@@ -214,6 +223,7 @@ async function generate(db, month) {
   an.addRow({ k:'OUTPUT' });
   addKpi('Items produced', A.items, B.items, 'higher', 'More items completed.', 'Fewer items — check capacity/holds.');
   addKpi('Units (qty)', A.qty, B.qty, 'higher', 'Higher output.', 'Lower output — investigate delays.');
+  addKpi('Qty stocked to Finished Goods', A.fgQty, B.fgQty, 'higher', 'More stocked for future orders (counted in output above, not in dispatch).', 'Less stocked to FG this month.');
   an.addRow({}); an.addRow({ k:'QUALITY' });
   addKpi('Reject rate %', A.rejectRate, B.rejectRate, 'lower', 'Fewer rejects.', 'More rejects — see "Rejections by stage" below and fix the top stage.');
   addKpi('First-pass yield %', A.firstPass, B.firstPass, 'higher', 'More right-first-time.', 'More rework — target the worst stage/worker.');
@@ -266,9 +276,10 @@ async function generate(db, month) {
     { type:'containsText', operator:'containsText', text:'OK',  style:{ fill:FILL(GREEN) }, priority:2 },
   ]);
   cf('onTime', [
-    { type:'containsText', operator:'containsText', text:'No',      style:{ fill:FILL(RED) }, priority:1 },
-    { type:'containsText', operator:'containsText', text:'Yes',     style:{ fill:FILL(GREEN) }, priority:2 },
-    { type:'containsText', operator:'containsText', text:'Pending', style:{ fill:FILL(AMBER) }, priority:3 },
+    { type:'containsText', operator:'containsText', text:'To FG',   style:{ fill:FILL(BLUE) }, priority:1 },
+    { type:'containsText', operator:'containsText', text:'No',      style:{ fill:FILL(RED) }, priority:2 },
+    { type:'containsText', operator:'containsText', text:'Yes',     style:{ fill:FILL(GREEN) }, priority:3 },
+    { type:'containsText', operator:'containsText', text:'Pending', style:{ fill:FILL(AMBER) }, priority:4 },
   ]);
   cf('rejects',  [{ type:'cellIs', operator:'greaterThan', formulae:['0'], style:{ fill:FILL(AMBER) }, priority:1 }]);
   cf('lateDays', [{ type:'cellIs', operator:'greaterThan', formulae:['0'], style:{ fill:FILL(RED) }, priority:1 }]);
