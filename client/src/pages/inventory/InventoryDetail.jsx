@@ -46,6 +46,14 @@ export default function InventoryDetail() {
     catch (e) { alert(e.response?.data?.error || 'Failed to remove transaction'); }
   };
 
+  // Owner-only: remove a FIFO cost lot — its remaining qty leaves stock and the
+  // average landed cost recomputes from the remaining lots.
+  const handleDeleteLot = async (l) => {
+    if (!window.confirm(`Remove this FIFO lot (${l.qty_remaining} ${item.unit} remaining @ ₹${l.unit_cost})?\n\nStock reduces by ${l.qty_remaining} ${item.unit} and the average landed cost recomputes.`)) return;
+    try { await api.delete(`/inventory/${id}/fifo-lots/${l.id}`); load(); }
+    catch (e) { alert(e.response?.data?.error || 'Failed to remove lot'); }
+  };
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <div className="flex items-center gap-4 mb-6">
@@ -181,6 +189,7 @@ export default function InventoryDetail() {
                   <th className="table-header text-right">Qty Remaining</th>
                   <th className="table-header text-right">Landed Cost / {item.unit}</th>
                   <th className="table-header text-right">Lot Value</th>
+                  {user.role === 'owner' && <th className="table-header w-8"></th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -191,6 +200,14 @@ export default function InventoryDetail() {
                     <td className="table-cell text-right text-gray-700">{l.qty_remaining} <span className="text-gray-400">/ {l.qty_original}</span></td>
                     <td className="table-cell text-right font-medium text-gray-800">₹{Number(l.unit_cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                     <td className="table-cell text-right text-gray-700">₹{(Number(l.qty_remaining) * Number(l.unit_cost)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    {user.role === 'owner' && (
+                      <td className="table-cell text-center">
+                        <button className="p-1 text-red-400 hover:text-red-600" title="Remove lot (stock reduces by its remaining qty; avg cost recomputes)"
+                          onClick={() => handleDeleteLot(l)}>
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

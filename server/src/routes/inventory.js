@@ -250,6 +250,9 @@ router.delete('/:id/transactions/:txId', authenticate, authorize('owner'), async
   if (/^Order:\s/i.test(notes)) {
     return res.status(400).json({ error: 'This entry was posted automatically by production/QC — record a manual adjustment instead of deleting it' });
   }
+  if (/^FIFO lot removed/i.test(notes)) {
+    return res.status(400).json({ error: 'This is the audit record of a deleted FIFO lot — it can\'t be removed' });
+  }
   const isInbound = ['opening_stock', 'purchase_in', 'return_from_production'].includes(tx.transaction_type);
   const delta = isInbound ? -parseFloat(tx.quantity) : parseFloat(tx.quantity);
   await db.withTransaction(async (client) => {
@@ -260,6 +263,40 @@ router.delete('/:id/transactions/:txId', authenticate, authorize('owner'), async
   await logActivity(null, null, 'inventory_tx_deleted',
     `Stock transaction removed: ${tx.transaction_type} ${tx.quantity} (item #${req.params.id}) — stock ${delta > 0 ? '+' : ''}${delta}`, req.user.id);
   res.json({ message: 'Transaction removed and stock reversed' });
+});
+
+// Owner-only: delete a FIFO cost lot. Its remaining quantity leaves stock (it
+// was counted in current stock), the moving-average cost recomputes from the
+// lots that are left, and an audit adjustment row records the removal.
+router.delete('/:id/fifo-lots/:lotId', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const lot = await db.get('SELECT * FROM inventory_fifo_lots WHERE id=$1 AND item_id=$2',
+    [req.params.lotId, req.params.id]);
+  if (!lot) return res.status(404).json({ error: 'Lot not found' });
+  const item = await db.get('SELECT * FROM inventory_items WHERE id=$1', [req.params.id]);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const qtyOut = Number(lot.qty_remaining) || 0;
+  await db.withTransaction(async (client) => {
+    await client.query('DELETE FROM inventory_fifo_lots WHERE id=$1', [lot.id]);
+    const newStock = (Number(item.current_stock) || 0) - qtyOut;
+    const { rows: lots } = await client.query(
+      'SELECT qty_remaining, unit_cost FROM inventory_fifo_lots WHERE item_id=$1 AND qty_remaining > 0', [req.params.id]);
+    const totQ = lots.reduce((s, l) => s + Number(l.qty_remaining), 0);
+    const totC = lots.reduce((s, l) => s + Number(l.qty_remaining) * Number(l.unit_cost), 0);
+    const avg = totQ > 0 ? Math.round(totC / totQ * 100) / 100 : item.unit_cost;
+    await client.query('UPDATE inventory_items SET current_stock=$1, unit_cost=$2 WHERE id=$3',
+      [newStock, avg, req.params.id]);
+    if (qtyOut > 0) {
+      await client.query(
+        `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+         VALUES ($1,'adjustment',$2,$3,$4,$5)`,
+        [req.params.id, qtyOut, newStock,
+         `FIFO lot removed${lot.po_id ? ` (PO #${lot.po_id})` : ''}: ${qtyOut} remaining @ ₹${lot.unit_cost}`, req.user.id]);
+    }
+  });
+  await logActivity(null, null, 'inventory_lot_deleted',
+    `FIFO lot removed on item #${req.params.id}: ${qtyOut} @ ₹${lot.unit_cost}`, req.user.id);
+  res.json({ message: 'Lot removed — stock and average cost updated' });
 });
 
 router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res) => {
