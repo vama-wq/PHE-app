@@ -234,6 +234,34 @@ router.post('/:id/transactions', authenticate, authorize('owner', 'design', 'adm
   res.status(201).json({ id: r.lastInsertRowid, new_stock: newStock });
 });
 
+// Owner-only: delete a single MANUAL stock transaction, reversing its effect on
+// current stock. Auto-posted rows are protected — PO receives carry a FIFO lot,
+// and production/QC deductions ('Order: …' notes) track BOM consumption; both
+// must be adjusted through their own flows, not deleted here.
+router.delete('/:id/transactions/:txId', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const tx = await db.get('SELECT * FROM inventory_transactions WHERE id=$1 AND item_id=$2',
+    [req.params.txId, req.params.id]);
+  if (!tx) return res.status(404).json({ error: 'Transaction not found' });
+  const notes = tx.notes || '';
+  if (/PO received/i.test(notes)) {
+    return res.status(400).json({ error: 'This entry came from a purchase receive (it has a FIFO stock lot) — adjust it through the PO, not here' });
+  }
+  if (/^Order:\s/i.test(notes)) {
+    return res.status(400).json({ error: 'This entry was posted automatically by production/QC — record a manual adjustment instead of deleting it' });
+  }
+  const isInbound = ['opening_stock', 'purchase_in', 'return_from_production'].includes(tx.transaction_type);
+  const delta = isInbound ? -parseFloat(tx.quantity) : parseFloat(tx.quantity);
+  await db.withTransaction(async (client) => {
+    await client.query('DELETE FROM inventory_transactions WHERE id=$1', [tx.id]);
+    await client.query('UPDATE inventory_items SET current_stock = current_stock + $1 WHERE id=$2',
+      [delta, req.params.id]);
+  });
+  await logActivity(null, null, 'inventory_tx_deleted',
+    `Stock transaction removed: ${tx.transaction_type} ${tx.quantity} (item #${req.params.id}) — stock ${delta > 0 ? '+' : ''}${delta}`, req.user.id);
+  res.json({ message: 'Transaction removed and stock reversed' });
+});
+
 router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res) => {
   const db = getDB();
   const item = await db.get('SELECT id, current_stock FROM inventory_items WHERE id=$1', [req.params.id]);

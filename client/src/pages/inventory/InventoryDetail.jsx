@@ -38,6 +38,14 @@ export default function InventoryDetail() {
     }
   };
 
+  // Owner-only: remove a manual stock transaction; the server reverses its
+  // stock effect (auto-posted PO/production rows are protected server-side).
+  const handleDeleteTx = async (t) => {
+    if (!window.confirm(`Remove this ${t.transaction_type.replace(/_/g, ' ')} of ${t.quantity} ${item.unit}?\n\nStock will be adjusted back accordingly.`)) return;
+    try { await api.delete(`/inventory/${id}/transactions/${t.id}`); load(); }
+    catch (e) { alert(e.response?.data?.error || 'Failed to remove transaction'); }
+  };
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <div className="flex items-center gap-4 mb-6">
@@ -112,11 +120,12 @@ export default function InventoryDetail() {
                   <th className="table-header text-right">Balance</th>
                   <th className="table-header text-left">Reference</th>
                   <th className="table-header text-left">Notes</th>
+                  {user.role === 'owner' && <th className="table-header w-8"></th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {item.transactions?.length === 0 ? (
-                  <tr><td colSpan={6} className="table-cell text-center text-gray-400 py-6">No transactions yet</td></tr>
+                  <tr><td colSpan={user.role === 'owner' ? 7 : 6} className="table-cell text-center text-gray-400 py-6">No transactions yet</td></tr>
                 ) : item.transactions?.map(t => {
                   const isIn = ['opening_stock','purchase_in','return_from_production'].includes(t.transaction_type);
                   return (
@@ -138,6 +147,14 @@ export default function InventoryDetail() {
                         {t.po_number && <span className="text-gray-400"> ({t.po_number})</span>}
                       </td>
                       <td className="table-cell text-xs text-gray-400">{t.notes}</td>
+                      {user.role === 'owner' && (
+                        <td className="table-cell text-center">
+                          <button className="p-1 text-red-400 hover:text-red-600" title="Remove transaction (stock adjusts back)"
+                            onClick={() => handleDeleteTx(t)}>
+                            <Trash2 size={13} />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
