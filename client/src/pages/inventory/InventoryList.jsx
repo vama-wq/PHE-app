@@ -37,8 +37,10 @@ export default function InventoryList() {
     let r = items;
     if (search) r = r.filter(i => i.item_code.toLowerCase().includes(search.toLowerCase()) || i.name.toLowerCase().includes(search.toLowerCase()) || i.category?.toLowerCase().includes(search.toLowerCase()));
     if (category !== 'all') r = r.filter(i => (i.category || '') === category);
+    // Items with reorder level 0 are order-driven (bought only when an order
+    // needs them) — they're never "low", whatever their stock.
     if (stockStatus === 'in')  r = r.filter(i => i.current_stock > i.reorder_level);
-    if (stockStatus === 'low') r = r.filter(i => i.current_stock <= i.reorder_level && i.current_stock > 0);
+    if (stockStatus === 'low') r = r.filter(i => Number(i.reorder_level) > 0 && i.current_stock <= i.reorder_level && i.current_stock > 0);
     if (stockStatus === 'out') r = r.filter(i => i.current_stock <= 0);
     r = [...r].sort((a, b) => {
       if (sortBy === 'name')       return (a.name || '').localeCompare(b.name || '');
@@ -49,7 +51,7 @@ export default function InventoryList() {
     setFiltered(r);
   }, [items, search, category, stockStatus, sortBy]);
 
-  const lowCount = items.filter(i => i.current_stock <= i.reorder_level).length;
+  const lowCount = items.filter(i => Number(i.reorder_level) > 0 && i.current_stock <= i.reorder_level).length;
   const canManage = ['owner', 'admin'].includes(user.role);
   const showCost = user.role !== 'design'; // landed cost / valuation hidden from QC
   const totalValue = items.reduce((s, i) => s + Number(i.current_stock) * (Number(i.unit_cost) || 0), 0);
@@ -135,7 +137,7 @@ export default function InventoryList() {
             ) : filtered.length === 0 ? (
               <tr><td colSpan={showCost ? 8 : 6} className="table-cell text-center text-gray-400 py-12">No items found</td></tr>
             ) : filtered.map(item => {
-              const isLow = item.current_stock <= item.reorder_level;
+              const isLow = Number(item.reorder_level) > 0 && item.current_stock <= item.reorder_level;
               return (
                 <tr key={item.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/inventory/${item.id}`)}>
                   <td className="table-cell font-semibold text-brand-700">{item.item_code}</td>

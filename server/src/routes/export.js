@@ -120,7 +120,7 @@ router.get('/inventory', authenticate, authorize('owner', 'admin', 'accounts', '
     'Reorder Level':  r.reorder_level,
     'Min Order Qty':  r.min_order_qty || 0,
     ...(showCost ? { 'Unit Cost': r.unit_cost || 0 } : {}),
-    'Status':         r.current_stock <= r.reorder_level ? 'LOW STOCK' : 'OK',
+    'Status':         Number(r.reorder_level) > 0 && r.current_stock <= r.reorder_level ? 'LOW STOCK' : 'OK',
     'Notes':          r.notes || '',
   }));
 

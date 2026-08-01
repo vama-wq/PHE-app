@@ -22,7 +22,10 @@ router.get('/', authenticate, async (req, res) => {
 
 router.get('/low-stock', authenticate, async (req, res) => {
   res.json(stripCost(req, await getDB().all(
-    `SELECT * FROM inventory_items WHERE current_stock <= reorder_level AND COALESCE(approval_status,'approved')='approved' ORDER BY category, item_code`
+    `SELECT * FROM inventory_items
+      WHERE reorder_level > 0 AND current_stock <= reorder_level
+        AND COALESCE(approval_status,'approved')='approved'
+      ORDER BY category, item_code`
   )));
 });
 
