@@ -104,7 +104,7 @@ export default function OrderDetail() {
   };
 
   const handleDeleteDrawing = async (drawingId) => {
-    if (!window.confirm('Delete this drawing?')) return;
+    if (!window.confirm('Delete this drawing?\n\nA new drawing can then be uploaded for this item — it will go through owner approval again.')) return;
     await api.delete(`/orders/${id}/drawings/${drawingId}`);
     load();
   };
@@ -647,7 +647,10 @@ export default function OrderDetail() {
                               )}
                               <div className="text-xs text-gray-400">{d.uploaded_by_name} · {fmtDate(d.created_at)}</div>
                             </div>
-                            {canUploadDrawing && !itemApproved && (
+                            {/* Design/admin may delete only pre-approval; the OWNER can
+                                also delete an approved drawing so a fresh one can be
+                                uploaded and go through approval again. */}
+                            {((canUploadDrawing && !itemApproved) || user.role === 'owner') && (
                               <button className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded flex-shrink-0"
                                 onClick={() => handleDeleteDrawing(d.id)} title="Delete drawing">
                                 <Trash2 size={13} />
