@@ -765,6 +765,23 @@ async function initDB(retries = 20, delayMs = 10000) {
         UPDATE order_items oi SET plating_status='out_for_plating'
         FROM orders o WHERE o.id = oi.order_id AND o.order_code='ORD-065-26'
           AND oi.plating_instructions ILIKE '%nickle%' AND oi.plating_status IS NULL`);
+      // One-off: P PHE 05's single ₹480 freight bill also posted three duplicate
+      // Unpaid-Bank ledger entries (one per received item). Keep the earliest
+      // (relabelled), delete the rest — only while still unpaid, so a paid row
+      // is never touched. Idempotent: one row left → nothing more to delete.
+      await pool.query(`
+        DELETE FROM petty_cash_entries
+         WHERE category='Purchase Transport' AND payment_method='unpaid_bank'
+           AND amount=480 AND description LIKE 'Main vehicle transport%P PHE 05%'
+           AND id NOT IN (
+             SELECT MIN(id) FROM petty_cash_entries
+              WHERE category='Purchase Transport' AND payment_method='unpaid_bank'
+                AND amount=480 AND description LIKE 'Main vehicle transport%P PHE 05%')`);
+      await pool.query(`
+        UPDATE petty_cash_entries
+           SET description='Main vehicle transport — P PHE 05 (3 items)'
+         WHERE category='Purchase Transport' AND amount=480
+           AND description LIKE 'Main vehicle transport%P PHE 05%(MS Flange Cap%'`);
       // One-off: P PHE 05's single ₹480 freight bill was entered on each of its
       // items. Spread ₹480 across them by material value instead (the =480 guard
       // makes this run once; shares never equal exactly 480 with multiple items).
