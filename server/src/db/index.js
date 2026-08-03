@@ -733,6 +733,18 @@ async function initDB(retries = 20, delayMs = 10000) {
         UPDATE order_items oi SET plating_status='out_for_plating'
         FROM orders o WHERE o.id = oi.order_id AND o.order_code='ORD-065-26'
           AND oi.plating_instructions ILIKE '%nickle%' AND oi.plating_status IS NULL`);
+      // One-off: P PHE 05's single ₹480 freight bill was entered on each of its
+      // items. Spread ₹480 across them by material value instead (the =480 guard
+      // makes this run once; shares never equal exactly 480 with multiple items).
+      await pool.query(`
+        UPDATE purchase_order_items poi
+           SET receive_transport_cost = ROUND(480.0 * poi.amount / NULLIF(t.total, 0), 2)
+          FROM purchase_orders po,
+               (SELECT SUM(poi2.amount) AS total
+                  FROM purchase_order_items poi2 JOIN purchase_orders po2 ON po2.id = poi2.po_id
+                 WHERE po2.po_number = 'P PHE 05') t
+         WHERE po.id = poi.po_id AND po.po_number = 'P PHE 05'
+           AND poi.receive_transport_cost = 480`);
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS supplier_items (

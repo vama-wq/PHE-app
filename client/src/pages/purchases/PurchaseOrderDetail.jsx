@@ -610,6 +610,7 @@ export default function PurchaseOrderDetail() {
         <ReceiveItemModal
           poId={id}
           items={po.items.filter(i => !i.received)}
+          allItems={po.items}
           onClose={() => setShowReceiveModal(false)}
           onDone={() => { setShowReceiveModal(false); load(); }}
         />
@@ -681,7 +682,7 @@ function AdvanceModal({ poId, poNumber, supplier, onClose, onSaved }) {
 
 // Receive a single item: pick it from the dropdown of not-yet-received items and
 // attach that item's invoice (mandatory). The item then goes to QC.
-function ReceiveItemModal({ poId, items, onClose, onDone }) {
+function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
   const [itemId, setItemId] = useState(items[0]?.id ? String(items[0].id) : '');
   const [file, setFile] = useState(null);
   const [transportCost, setTransportCost] = useState('');
@@ -690,8 +691,30 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
   const [localPaidTo, setLocalPaidTo] = useState('');
   const [otherCost, setOtherCost] = useState('');
   const [otherReason, setOtherReason] = useState('');
+  // Which OTHER items of this PO came in the same vehicle (one shared bill).
+  // Defaults to all — one truck bringing the whole PO is the common case.
+  const [covered, setCovered] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  const otherItems = allItems.filter(i => String(i.id) !== String(itemId));
+  useEffect(() => {
+    setCovered(Object.fromEntries(allItems.filter(i => String(i.id) !== String(itemId)).map(i => [i.id, true])));
+  }, [itemId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const coveredList = [
+    ...allItems.filter(i => String(i.id) === String(itemId)),
+    ...otherItems.filter(i => covered[i.id]),
+  ];
+  // Freight already recorded on this PO (an earlier item's receive) — remind
+  // accounts so the same bill isn't entered twice.
+  const priorFreight = allItems.filter(i => Number(i.receive_transport_cost) > 0);
+  const hasTransportInput = Number(transportCost) > 0 || Number(localCost) > 0;
+  // Live share preview: split by material value (item.amount), like the server.
+  const shareBase = coveredList.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  const shareFor = (it, total) => shareBase > 0
+    ? Math.round(total * (Number(it.amount) || 0) / shareBase * 100) / 100
+    : Math.round(total / (coveredList.length || 1) * 100) / 100;
+
   const submit = async () => {
     if (!itemId) return setError('Select the item that was received');
     if (!file) return setError('Attach the invoice received with this item');
@@ -706,6 +729,7 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
       if (transportPaidTo) fd.append('transport_paid_to', transportPaidTo);
       if (localCost) fd.append('local_transport_cost', localCost);
       if (localPaidTo) fd.append('local_transport_paid_to', localPaidTo);
+      if (hasTransportInput) fd.append('transport_covered_item_ids', JSON.stringify(coveredList.map(i => i.id)));
       if (otherCost) fd.append('other_cost', otherCost);
       if (otherReason) fd.append('other_cost_reason', otherReason);
       await uploadApi.post(`/purchase-orders/${poId}/items/${itemId}/receive`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
@@ -731,8 +755,13 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
             </div>
             <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-3">
               <p className="text-xs text-gray-500">
-                Transport posts to the Account Statement: main freight → <b>Unpaid Bank</b> (owner pays via bank &amp; is notified), local → <b>Cash in Hand</b>. Both also fold into the item's landed cost.
+                Enter the <b>whole bill</b> once — tick below which items it covered and it splits across them by value for landed cost. Posts once to the Account Statement: main freight → <b>Unpaid Bank</b> (owner pays &amp; is notified), local → <b>Cash in Hand</b>.
               </p>
+              {priorFreight.length > 0 && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                  Freight already recorded on this PO: {priorFreight.map(i => `${i.description} ₹${Number(i.receive_transport_cost).toLocaleString('en-IN')}`).join(' · ')}. Leave blank unless this item came on a <b>separate</b> vehicle/bill.
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="label">Main vehicle transport <span className="text-gray-400 font-normal">(₹)</span></label>
@@ -753,6 +782,29 @@ function ReceiveItemModal({ poId, items, onClose, onDone }) {
                   <input className="input" value={localPaidTo} onChange={e => setLocalPaidTo(e.target.value)} placeholder="Local tempo / porter" />
                 </div>
               </div>
+              {hasTransportInput && otherItems.length > 0 && (
+                <div>
+                  <label className="label">This bill also covered <span className="text-gray-400 font-normal">(same vehicle)</span></label>
+                  <div className="border border-gray-100 rounded-lg divide-y divide-gray-50 bg-white">
+                    {otherItems.map(oi => (
+                      <label key={oi.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50">
+                        <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600"
+                          checked={!!covered[oi.id]}
+                          onChange={() => setCovered(p => ({ ...p, [oi.id]: !p[oi.id] }))} />
+                        <span className="text-sm text-gray-800 truncate">{oi.description}</span>
+                        {covered[oi.id] && Number(transportCost) > 0 && (
+                          <span className="text-xs text-gray-400 ml-auto flex-shrink-0">₹{shareFor(oi, Number(transportCost)).toLocaleString('en-IN')} share</span>
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                  {Number(transportCost) > 0 && coveredList.length > 1 && (
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      ₹{Number(transportCost).toLocaleString('en-IN')} splits across {coveredList.length} items by value — this item's share ₹{shareFor(coveredList[0], Number(transportCost)).toLocaleString('en-IN')}.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>

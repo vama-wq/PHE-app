@@ -523,9 +523,9 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     if (item.received) return res.status(400).json({ error: 'This item is already received' });
     if (!req.file) return res.status(400).json({ error: 'The invoice received with this item is required' });
 
-    const transportCost = Number(req.body.transport_cost) || 0;             // main vehicle freight
+    const transportCost = Number(req.body.transport_cost) || 0;             // main vehicle freight (the whole bill)
     const transportPaidTo = (req.body.transport_paid_to || '').trim() || null;
-    const localCost = Number(req.body.local_transport_cost) || 0;           // transport dock → unit
+    const localCost = Number(req.body.local_transport_cost) || 0;           // dock → unit transport (the whole bill)
     const localPaidTo = (req.body.local_transport_paid_to || '').trim() || null;
     const otherCost = Number(req.body.other_cost) || 0;
     const otherReason = (req.body.other_cost_reason || '').trim() || null;
@@ -533,32 +533,72 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     if (transportCost > 0 && !transportPaidTo) return res.status(400).json({ error: 'Enter the main-vehicle transporter name' });
     if (localCost > 0 && !localPaidTo) return res.status(400).json({ error: 'Enter the local transporter name' });
 
-    // Item update + the two Account-Statement transport entries commit together.
-    // Both transports still fold into the item's landed cost (see receiveItemStock);
-    // here they also become real cash/bank outflows to the transporter(s):
-    //   • main vehicle freight → Unpaid Bank (owner pays via bank, gets notified)
-    //   • local dock→unit transport → Cash in Hand (accounts pays now)
-    // They're NOT linked to the PO's payable (paid to a transporter, not the
-    // supplier) — the PO number is carried in the description for traceability.
+    // One transport bill can cover several items of the delivery (one truck
+    // bringing the whole PO). The client sends the covered item ids: the bill
+    // posts ONCE to the Account Statement, and each covered item gets a
+    // landed-cost share proportional to its material value (poi.amount) —
+    // added, not overwritten, so a later second vehicle's bill stacks onto
+    // whichever items it carried. Entries are NOT linked to the PO's payable
+    // (paid to a transporter, not the supplier).
+    let coveredIds = [item.id];
+    try {
+      const raw = JSON.parse(req.body.transport_covered_item_ids || '[]');
+      if (Array.isArray(raw) && raw.length) {
+        coveredIds = [...new Set(raw.map(n => parseInt(n, 10)).filter(Number.isInteger).concat(item.id))];
+      }
+    } catch { /* default: just this item */ }
+    const covered = (transportCost > 0 || localCost > 0)
+      ? await db.all('SELECT id, description, amount FROM purchase_order_items WHERE id = ANY($1) AND po_id=$2', [coveredIds, po.id])
+      : [];
+    if ((transportCost > 0 || localCost > 0) && covered.length !== coveredIds.length) {
+      return res.status(400).json({ error: 'Covered items must belong to this PO' });
+    }
+    // Value-based shares that sum exactly to the bill (last item takes the remainder)
+    const shares = (total) => {
+      const base = covered.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+      let acc = 0;
+      return covered.map((c, i) => {
+        if (i === covered.length - 1) return Math.round((total - acc) * 100) / 100;
+        const sh = Math.round((base > 0 ? total * (Number(c.amount) || 0) / base : total / covered.length) * 100) / 100;
+        acc += sh;
+        return sh;
+      });
+    };
+    const tShares = transportCost > 0 ? shares(transportCost) : [];
+    const lShares = localCost > 0 ? shares(localCost) : [];
+
     await db.withTransaction(async (client) => {
       await client.query(
         `UPDATE purchase_order_items SET received=TRUE, received_at=NOW(), invoice_file=$1, invoice_original_name=$2,
-           receive_transport_cost=$3, receive_other_cost=$4, receive_other_cost_reason=$5,
-           receive_transport_paid_to=$6, receive_local_transport_cost=$7, receive_local_transport_paid_to=$8 WHERE id=$9`,
-        [req.file.storagePath, req.file.originalname, transportCost, otherCost, otherReason,
-         transportPaidTo, localCost, localPaidTo, item.id]
+           receive_other_cost=$3, receive_other_cost_reason=$4 WHERE id=$5`,
+        [req.file.storagePath, req.file.originalname, otherCost, otherReason, item.id]
       );
+      for (let i = 0; i < covered.length; i++) {
+        if (transportCost > 0) {
+          await client.query(
+            `UPDATE purchase_order_items SET receive_transport_cost = COALESCE(receive_transport_cost,0) + $1,
+               receive_transport_paid_to = COALESCE(receive_transport_paid_to, $2) WHERE id=$3`,
+            [tShares[i], transportPaidTo, covered[i].id]);
+        }
+        if (localCost > 0) {
+          await client.query(
+            `UPDATE purchase_order_items SET receive_local_transport_cost = COALESCE(receive_local_transport_cost,0) + $1,
+               receive_local_transport_paid_to = COALESCE(receive_local_transport_paid_to, $2) WHERE id=$3`,
+            [lShares[i], localPaidTo, covered[i].id]);
+        }
+      }
+      const coveredLabel = covered.length > 1 ? `${covered.length} items` : (item.description || '1 item');
       if (transportCost > 0) {
         await client.query(
           `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, created_by)
            VALUES (CURRENT_DATE,'expense','Purchase Transport',$1,$2,$3,'unpaid_bank',FALSE,$4)`,
-          [`Main vehicle transport — ${po.po_number} (${item.description})`, transportPaidTo, transportCost, req.user.id]);
+          [`Main vehicle transport — ${po.po_number} (${coveredLabel})`, transportPaidTo, transportCost, req.user.id]);
       }
       if (localCost > 0) {
         await client.query(
           `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, created_by)
            VALUES (CURRENT_DATE,'expense','Purchase Transport',$1,$2,$3,'cash',TRUE,$4)`,
-          [`Local transport (dock → unit) — ${po.po_number} (${item.description})`, localPaidTo, localCost, req.user.id]);
+          [`Local transport (dock → unit) — ${po.po_number} (${coveredLabel})`, localPaidTo, localCost, req.user.id]);
       }
     });
 
