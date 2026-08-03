@@ -136,7 +136,30 @@ const uploaders = {
   chatAttachment:  makeUploader('chat-attachments',   fileFilter, 10),
   pettyCashReceipt: makeUploader('petty-cash',        fileFilter),
   esslReport:      makeUploader('essl-reports',       fileFilter, 25),
+  debitNote:       makeUploader('debit-notes',        fileFilter),
 };
+
+// Purchase-item QC takes TWO groups in one request: the material image plus
+// rejection photos (compulsory for any rejected qty). multer .fields() puts
+// them in req.files as an object, so the standard array push doesn't apply.
+const purchaseItemQCFields = uploaders.purchaseItemQC.upload.fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'rejection_photos', maxCount: 10 },
+]);
+async function pushPurchaseItemQCFields(req, res, next) {
+  const groups = req.files || {};
+  const all = [...(groups.image || []), ...(groups.rejection_photos || [])];
+  try {
+    for (const f of all) {
+      const ts = Date.now();
+      const safe = f.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+      f.filename = `${ts}_${safe}`;
+      f.storagePath = await uploadToStorage('purchase-qc', f.filename, f.buffer, f.mimetype);
+      f.path = f.storagePath;
+    }
+  } catch (err) { return next(err); }
+  next();
+}
 
 // Export multer + push middleware pairs, matching the old named-export API
 module.exports = {
@@ -157,6 +180,8 @@ module.exports = {
   uploadEsslReport:      [uploaders.esslReport.upload.single('essl'),           uploaders.esslReport.pushToStorage],
   uploadPurchaseInvoice: [uploaders.purchaseInvoice.upload.single('invoice'), uploaders.purchaseInvoice.pushToStorage],
   uploadPurchaseItemQC:  [uploaders.purchaseItemQC.upload.single('image'),   uploaders.purchaseItemQC.pushToStorage],
+  uploadPurchaseItemQCFields: [purchaseItemQCFields, pushPurchaseItemQCFields],
+  uploadDebitNote:       [uploaders.debitNote.upload.single('file'),         uploaders.debitNote.pushToStorage],
   uploadChatAttachments: [uploaders.chatAttachment.upload.array('attachments', 5), uploaders.chatAttachment.pushToStorage],
 
   // Utilities for route handlers

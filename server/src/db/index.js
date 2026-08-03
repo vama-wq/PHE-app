@@ -684,6 +684,38 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_at TIMESTAMPTZ`);
       // QC records the actual quantity received; only that qty is added to stock.
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_received_qty NUMERIC`);
+      // Purchase QC can approve part of an item's qty and reject the rest:
+      // qc_status gains 'partial', the rejected qty is tracked, every rejection
+      // (full or partial) carries photos, and each rejection spawns a pending
+      // debit note for accounts to raise against the supplier.
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qc_rejected_qty NUMERIC`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS purchase_item_rejection_photos (
+          id SERIAL PRIMARY KEY,
+          item_id INTEGER NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
+          file_path TEXT NOT NULL,
+          original_name TEXT,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS purchase_debit_notes (
+          id SERIAL PRIMARY KEY,
+          po_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+          po_item_id INTEGER REFERENCES purchase_order_items(id) ON DELETE SET NULL,
+          rejected_qty NUMERIC NOT NULL,
+          suggested_amount NUMERIC,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','raised')),
+          note_no TEXT,
+          amount NUMERIC,
+          notes TEXT,
+          file_path TEXT,
+          original_name TEXT,
+          raised_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          raised_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pdn_po ON purchase_debit_notes(po_id)`);
       // Receiving is per item, each with its own invoice; then per-item QC.
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS received BOOLEAN DEFAULT FALSE`);
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ`);

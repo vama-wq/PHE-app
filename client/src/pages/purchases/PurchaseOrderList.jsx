@@ -165,6 +165,11 @@ export default function PurchaseOrderList() {
                   <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_STYLES[po.status]}`}>
                     {STATUS_LABELS[po.status] || po.status}
                   </span>
+                  {Number(po.pending_debit_notes) > 0 && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700 ml-1" title="Rejected material — debit note to be raised">
+                      DN ×{po.pending_debit_notes}
+                    </span>
+                  )}
                 </td>
                 {['owner', 'admin'].includes(user?.role) && (
                   <td className="table-cell text-center">

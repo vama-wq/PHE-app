@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseItemQC, uploadChatAttachments } = require('../middleware/upload');
+const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseItemQC, uploadPurchaseItemQCFields, uploadDebitNote, uploadChatAttachments } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 
 // Add a single received PO item's stock to inventory (FIFO lot + moving-average
@@ -114,7 +114,8 @@ async function nextPoNumber(db) {
 
 router.get('/', authenticate, async (req, res) => {
   const pos = await getDB().all(
-    `SELECT po.*, s.name as supplier_name, u.name as created_by_name
+    `SELECT po.*, s.name as supplier_name, u.name as created_by_name,
+       (SELECT COUNT(*) FROM purchase_debit_notes dn WHERE dn.po_id = po.id AND dn.status='pending') AS pending_debit_notes
      FROM purchase_orders po
      JOIN suppliers s ON s.id = po.supplier_id
      JOIN users u ON u.id = po.created_by
@@ -275,7 +276,7 @@ router.get('/:id', authenticate, async (req, res) => {
     if (!po) return res.status(404).json({ error: 'Not found' });
     const items = await db.all(
       `SELECT poi.id, poi.description, poi.qty, poi.received, poi.received_at,
-              poi.qc_status, poi.qc_weight_10, poi.qc_received_qty, poi.qc_image_file, poi.qc_image_name,
+              poi.qc_status, poi.qc_weight_10, poi.qc_received_qty, poi.qc_rejected_qty, poi.qc_image_file, poi.qc_image_name,
               poi.qc_observations, poi.qc_rejection_reason,
               ii.item_code, ii.name as item_name, ii.unit as item_unit,
               ii.drawing_file, ii.drawing_original_name
@@ -326,7 +327,20 @@ router.get('/:id', authenticate, async (req, res) => {
       ORDER BY entry_date, id`, [req.params.id]);
   const sumBy = (m) => Math.round(payments.filter(p => p.payment_method === m).reduce((s, p) => s + Number(p.amount), 0) * 100) / 100;
 
-  res.json({ ...po, items, material_qc: materialQc || null,
+  // Rejection photos per item + the PO's debit notes (pending & raised)
+  if (items.length) {
+    const rej = await db.all('SELECT * FROM purchase_item_rejection_photos WHERE item_id = ANY($1) ORDER BY id',
+      [items.map(i => i.id)]);
+    items.forEach(i => { i.rejection_photos = rej.filter(r => r.item_id === i.id); });
+  }
+  const debitNotes = await db.all(
+    `SELECT dn.*, poi.description AS item_description, u.name AS raised_by_name
+       FROM purchase_debit_notes dn
+       LEFT JOIN purchase_order_items poi ON poi.id = dn.po_item_id
+       LEFT JOIN users u ON u.id = dn.raised_by
+      WHERE dn.po_id = $1 ORDER BY dn.id`, [req.params.id]);
+
+  res.json({ ...po, items, material_qc: materialQc || null, debit_notes: debitNotes,
     payments, paid_cleared: sumBy('paid_bank'), paid_pending: sumBy('unpaid_bank') });
 });
 
@@ -638,11 +652,15 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
   }
 );
 
-// Per-item QC: a material image and weight of 10 pcs are mandatory to approve.
-// Approving an item adds its stock to inventory; once every item is resolved the
-// PO is finalised (received, or material_rejected if any item was rejected).
+// Per-item QC with three outcomes:
+//   approved — everything accepted (material image + weight of 10 mandatory);
+//   rejected — everything rejected (reason + ≥1 rejection photo mandatory);
+//   partial  — accepted qty goes to stock, rejected qty (reason + photos) doesn't.
+// Any rejected qty (full or partial) opens a PENDING DEBIT NOTE for the item —
+// suggested amount = rejected qty × rate + the PO's IGST — and notifies accounts
+// to raise it with the supplier (photos attached on the PO page).
 router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 'admin'),
-  ...uploadPurchaseItemQC, async (req, res) => {
+  ...uploadPurchaseItemQCFields, async (req, res) => {
    try {
     const db = getDB();
     const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
@@ -651,43 +669,123 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
     const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
     if (!item) return res.status(404).json({ error: 'Item not found' });
     if (!item.received) return res.status(400).json({ error: 'This item must be marked received before QC' });
-    if (item.qc_status === 'approved') return res.status(400).json({ error: 'This item is already QC-approved' });
-
-    const { result, weight_10, received_qty, observations, rejection_reason } = req.body;
-    const accepted = result !== 'rejected';
-    if (accepted) {
-      if (!req.file) return res.status(400).json({ error: 'A material image is required to approve this item' });
-      if (!weight_10 || Number(weight_10) <= 0) return res.status(400).json({ error: 'Weight of 10 pcs is required to approve this item' });
-      if (!received_qty || Number(received_qty) <= 0) return res.status(400).json({ error: 'Actual quantity received is required to approve this item' });
-    } else if (!rejection_reason?.trim()) {
-      return res.status(400).json({ error: 'A rejection reason is required' });
+    if (['approved', 'rejected', 'partial'].includes(item.qc_status)) {
+      return res.status(400).json({ error: 'This item\'s QC is already recorded' });
     }
 
-    await db.run(
-      `UPDATE purchase_order_items SET qc_status=$1, qc_weight_10=$2, qc_received_qty=$3, qc_image_file=$4, qc_image_name=$5,
-         qc_observations=$6, qc_rejection_reason=$7, qc_by=$8, qc_at=NOW() WHERE id=$9`,
-      [accepted ? 'approved' : 'rejected', accepted ? Number(weight_10) : null, accepted ? Number(received_qty) : null,
-       req.file?.storagePath || null, req.file?.originalname || null,
-       observations || null, accepted ? null : rejection_reason.trim(), req.user.id, item.id]
-    );
+    const { result, weight_10, received_qty, rejected_qty, observations, rejection_reason } = req.body;
+    if (!['approved', 'rejected', 'partial'].includes(result)) {
+      return res.status(400).json({ error: 'Pick a QC result (approved / partial / rejected)' });
+    }
+    const materialImage = req.files?.image?.[0] || null;
+    const rejPhotos = req.files?.rejection_photos || [];
+    const acceptedQty = result === 'rejected' ? 0 : Number(received_qty);
+    const rejectedQty = result === 'approved' ? 0
+      : result === 'partial' ? Number(rejected_qty)
+      : (Number(rejected_qty) > 0 ? Number(rejected_qty) : Number(item.qty));
 
-    if (accepted) await receiveItemStock(db, po, item, req.user.id, Number(received_qty));
+    if (result !== 'rejected') {
+      if (!materialImage) return res.status(400).json({ error: 'A material image is required to approve material' });
+      if (!weight_10 || Number(weight_10) <= 0) return res.status(400).json({ error: 'Weight of 10 pcs is required to approve material' });
+      if (!(acceptedQty > 0)) return res.status(400).json({ error: 'Enter the accepted quantity' });
+    }
+    if (result !== 'approved') {
+      if (!rejection_reason?.trim()) return res.status(400).json({ error: 'A rejection reason is required' });
+      if (!rejPhotos.length) return res.status(400).json({ error: 'At least one rejection photo is required for any rejection' });
+      if (!(rejectedQty > 0)) return res.status(400).json({ error: 'Enter the rejected quantity' });
+    }
+
+    let debitNoteId = null;
+    await db.withTransaction(async (client) => {
+      await client.query(
+        `UPDATE purchase_order_items SET qc_status=$1, qc_weight_10=$2, qc_received_qty=$3, qc_rejected_qty=$4,
+           qc_image_file=$5, qc_image_name=$6, qc_observations=$7, qc_rejection_reason=$8, qc_by=$9, qc_at=NOW() WHERE id=$10`,
+        [result, result !== 'rejected' ? Number(weight_10) : null, acceptedQty > 0 ? acceptedQty : null,
+         rejectedQty > 0 ? rejectedQty : null,
+         materialImage?.storagePath || null, materialImage?.originalname || null,
+         observations || null, result !== 'approved' ? rejection_reason.trim() : null, req.user.id, item.id]
+      );
+      for (const p of rejPhotos) {
+        await client.query(
+          'INSERT INTO purchase_item_rejection_photos (item_id, file_path, original_name, created_by) VALUES ($1,$2,$3,$4)',
+          [item.id, p.storagePath, p.originalname, req.user.id]);
+      }
+      if (rejectedQty > 0) {
+        // One debit note per item: rejected qty × rate, plus the PO's IGST —
+        // editable by accounts when they actually raise it.
+        const suggested = Math.round(rejectedQty * (Number(item.rate) || 0) * (1 + (Number(po.igst_percent) || 0) / 100) * 100) / 100;
+        const { rows: dn } = await client.query(
+          `INSERT INTO purchase_debit_notes (po_id, po_item_id, rejected_qty, suggested_amount) VALUES ($1,$2,$3,$4) RETURNING id`,
+          [po.id, item.id, rejectedQty, suggested]);
+        debitNoteId = dn[0].id;
+      }
+    });
+
+    if (acceptedQty > 0) await receiveItemStock(db, po, item, req.user.id, acceptedQty);
+
+    // Accounts raise the debit note — tell them what, how much, and where.
+    if (debitNoteId) {
+      try {
+        const accountsUsers = await db.all("SELECT id FROM users WHERE role IN ('accounts','owner') AND id != $1", [req.user.id]);
+        for (const u of accountsUsers) {
+          await createNotification(db, {
+            userId: u.id, type: 'debit_note_pending',
+            title: `Debit note needed — ${po.po_number}`,
+            body: `${item.description}: ${rejectedQty} rejected at QC. Raise a debit note to the supplier (photos on the PO page).`,
+            link: `/purchases/${po.id}`, sourceUserId: req.user.id,
+          });
+        }
+      } catch (e) { console.error('debit-note notify failed:', e.message); }
+    }
 
     // Finalise the PO once every item has been QC-resolved.
     const items = await db.all('SELECT qc_status FROM purchase_order_items WHERE po_id=$1', [po.id]);
-    const allResolved = items.every(i => i.qc_status === 'approved' || i.qc_status === 'rejected');
+    const allResolved = items.every(i => ['approved', 'rejected', 'partial'].includes(i.qc_status));
     if (allResolved) {
-      const anyRejected = items.some(i => i.qc_status === 'rejected');
+      // Fully-rejected POs flag as material_rejected; partials received (their
+      // accepted stock is in — the rejection lives on in the debit note).
+      const anyFullReject = items.some(i => i.qc_status === 'rejected');
       await db.run(
         "UPDATE purchase_orders SET status='received', received_at=NOW(), delivery_status=$1 WHERE id=$2",
-        [anyRejected ? 'material_rejected' : 'received', po.id]
+        [anyFullReject ? 'material_rejected' : 'received', po.id]
       );
     }
-    await logActivity(null, null, 'purchase_qc', `PO ${po.po_number}: item QC ${accepted ? 'approved' : 'rejected'}`, req.user.id);
-    res.json({ message: accepted ? 'Item QC approved — stock added' : 'Item QC rejected', allResolved });
+    await logActivity(null, null, 'purchase_qc',
+      `PO ${po.po_number}: item QC ${result}${rejectedQty > 0 ? ` (${rejectedQty} rejected → debit note pending)` : ''}`, req.user.id);
+    res.json({ message: result === 'approved' ? 'Item QC approved — stock added'
+      : result === 'partial' ? `Partial: ${acceptedQty} accepted to stock, ${rejectedQty} rejected — debit note pending`
+      : 'Item QC rejected — debit note pending', allResolved });
    } catch (err) {
     console.error('[po/item-qc] error:', err);
     res.status(500).json({ error: err.message || 'Failed to record QC' });
+   }
+  }
+);
+
+// Accounts raises a pending debit note: note number required, amount defaults
+// to the suggestion but is editable, optional document upload of what was sent.
+router.put('/:id/debit-notes/:dnId/raise', authenticate, authorize('accounts', 'owner', 'admin'),
+  ...uploadDebitNote, async (req, res) => {
+   try {
+    const db = getDB();
+    const dn = await db.get('SELECT * FROM purchase_debit_notes WHERE id=$1 AND po_id=$2', [req.params.dnId, req.params.id]);
+    if (!dn) return res.status(404).json({ error: 'Debit note not found' });
+    if (dn.status === 'raised') return res.status(400).json({ error: 'This debit note is already raised' });
+    const noteNo = (req.body.note_no || '').trim();
+    if (!noteNo) return res.status(400).json({ error: 'Enter the debit note number' });
+    const amount = Math.round((Number(req.body.amount) > 0 ? Number(req.body.amount) : Number(dn.suggested_amount)) * 100) / 100;
+    await db.run(
+      `UPDATE purchase_debit_notes SET status='raised', note_no=$1, amount=$2, notes=$3,
+         file_path=$4, original_name=$5, raised_by=$6, raised_at=NOW() WHERE id=$7`,
+      [noteNo, amount, (req.body.notes || '').trim() || null,
+       req.file?.storagePath || null, req.file?.originalname || null, req.user.id, dn.id]);
+    const po = await db.get('SELECT po_number FROM purchase_orders WHERE id=$1', [req.params.id]);
+    await logActivity(null, null, 'debit_note_raised',
+      `Debit note ${noteNo} (₹${amount}) raised for ${po?.po_number || `PO #${req.params.id}`}`, req.user.id);
+    res.json({ message: 'Debit note raised' });
+   } catch (err) {
+    console.error('[po/debit-note] error:', err);
+    res.status(500).json({ error: err.message || 'Failed to raise debit note' });
    }
   }
 );

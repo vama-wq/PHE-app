@@ -588,6 +588,27 @@ export default function PurchaseOrderDetail() {
         </div>
       )}
 
+      {/* ── Debit Notes (rejected material → supplier; screen only) ── */}
+      {canManagePO && po.debit_notes?.length > 0 && (
+        <div className="mt-6 card p-5 no-print">
+          <h3 className="font-semibold text-gray-900 text-sm flex items-center gap-2 mb-3">
+            <FileText size={16} className="text-red-500" /> Debit Notes
+            {po.debit_notes.some(d => d.status === 'pending') && (
+              <span className="text-[10px] font-bold bg-red-100 text-red-700 rounded-full px-2 py-0.5">
+                {po.debit_notes.filter(d => d.status === 'pending').length} to raise
+              </span>
+            )}
+          </h3>
+          <div className="space-y-3">
+            {po.debit_notes.map(dn => (
+              <DebitNoteRow key={dn.id} poId={id} dn={dn}
+                photos={(po.items.find(i => i.id === dn.po_item_id)?.rejection_photos) || []}
+                onDone={load} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Chat Panel (screen only) ── */}
       <div className="mt-6 card no-print overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
@@ -844,33 +865,43 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts }) {
       {transport > 0 && <span>Freight: ₹{transport}{item.receive_transport_paid_to ? ` (${item.receive_transport_paid_to})` : ''}</span>}
       {localTransport > 0 && <span>{transport > 0 ? ' · ' : ''}Local: ₹{localTransport}{item.receive_local_transport_paid_to ? ` (${item.receive_local_transport_paid_to})` : ''}</span>}
       {other > 0 && <span>{(transport > 0 || localTransport > 0) ? ' · ' : ''}Other: ₹{other}{item.receive_other_cost_reason ? ` (${item.receive_other_cost_reason})` : ''}</span>}
-      {item.qc_status === 'approved' && landedPerUnit != null && <span> · Landed cost: <b>₹{landedPerUnit}/unit</b></span>}
+      {['approved', 'partial'].includes(item.qc_status) && landedPerUnit != null && <span> · Landed cost: <b>₹{landedPerUnit}/unit</b></span>}
     </div>
   ) : null;
   const [open, setOpen] = useState(false);
   const [image, setImage] = useState(null);
   const [weight10, setWeight10] = useState('');
-  const [receivedQty, setReceivedQty] = useState('');
+  const [receivedQty, setReceivedQty] = useState('');   // accepted qty
+  const [rejectedQty, setRejectedQty] = useState('');
   const [observations, setObservations] = useState('');
-  const [mode, setMode] = useState('approve'); // approve | reject
+  const [mode, setMode] = useState('approved'); // approved | partial | rejected
   const [rejectReason, setRejectReason] = useState('');
+  const [rejPhotos, setRejPhotos] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  // Resolved QC (approved/rejected) — read-only summary.
-  if (item.qc_status === 'approved' || item.qc_status === 'rejected') {
+  // Resolved QC (approved / partial / rejected) — read-only summary.
+  if (['approved', 'partial', 'rejected'].includes(item.qc_status)) {
+    const cls = item.qc_status === 'approved' ? 'bg-green-50 border-green-200'
+      : item.qc_status === 'partial' ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200';
     return (
-      <div className={`rounded-lg px-3 py-2.5 border ${item.qc_status === 'approved' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+      <div className={`rounded-lg px-3 py-2.5 border ${cls}`}>
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-gray-800">{item.description}</span>
-          <span className={`text-xs font-semibold ${item.qc_status === 'approved' ? 'text-green-700' : 'text-red-700'}`}>
-            {item.qc_status === 'approved' ? '✓ QC Approved' : '✕ Rejected'}
+          <span className={`text-xs font-semibold ${item.qc_status === 'approved' ? 'text-green-700' : item.qc_status === 'partial' ? 'text-amber-700' : 'text-red-700'}`}>
+            {item.qc_status === 'approved' ? '✓ QC Approved' : item.qc_status === 'partial' ? '◐ Partial — debit note' : '✕ Rejected — debit note'}
           </span>
         </div>
         <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
-          {item.qc_status === 'approved'
-            ? <span>Received: <b>{item.qc_received_qty}</b> · Weight of 10: <b>{item.qc_weight_10}</b>{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</span>
-            : <span>Reason: {item.qc_rejection_reason}</span>}
+          {item.qc_status !== 'rejected' && (
+            <span>Accepted: <b>{item.qc_received_qty}</b> · Weight of 10: <b>{item.qc_weight_10}</b>{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</span>
+          )}
+          {item.qc_status !== 'approved' && (
+            <span className="text-red-600">Rejected: <b>{item.qc_rejected_qty}</b> — {item.qc_rejection_reason}</span>
+          )}
+          {(item.rejection_photos || []).map((p, i) => (
+            <a key={p.id} className="text-brand-600 hover:underline" href={`/uploads/${p.file_path}`} target="_blank" rel="noopener noreferrer">photo {i + 1}</a>
+          ))}
           {item.invoice_file && <a className="text-brand-600 hover:underline" href={`/uploads/${item.invoice_file}`} target="_blank" rel="noopener noreferrer">invoice</a>}
         </div>
         {costLine}
@@ -894,17 +925,26 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts }) {
 
   const submit = async () => {
     setError('');
-    if (mode === 'approve') {
+    if (mode !== 'rejected') {
       if (!image) return setError('Material image is required');
       if (!weight10 || Number(weight10) <= 0) return setError('Weight of 10 pcs is required');
-      if (!receivedQty || Number(receivedQty) <= 0) return setError('Actual quantity received is required');
-    } else if (!rejectReason.trim()) return setError('Rejection reason is required');
+      if (!receivedQty || Number(receivedQty) <= 0) return setError('Enter the accepted quantity');
+    }
+    if (mode !== 'approved') {
+      if (!rejectReason.trim()) return setError('Rejection reason is required');
+      if (!rejPhotos.length) return setError('At least one rejection photo is required');
+      if (mode === 'partial' && !(Number(rejectedQty) > 0)) return setError('Enter the rejected quantity');
+    }
     setSaving(true);
     try {
       const fd = new FormData();
-      fd.append('result', mode === 'approve' ? 'accepted' : 'rejected');
-      if (mode === 'approve') { fd.append('image', image); fd.append('weight_10', weight10); fd.append('received_qty', receivedQty); fd.append('observations', observations); }
-      else fd.append('rejection_reason', rejectReason);
+      fd.append('result', mode);
+      if (mode !== 'rejected') { fd.append('image', image); fd.append('weight_10', weight10); fd.append('received_qty', receivedQty); fd.append('observations', observations); }
+      if (mode !== 'approved') {
+        fd.append('rejection_reason', rejectReason);
+        if (rejectedQty) fd.append('rejected_qty', rejectedQty);
+        rejPhotos.forEach(p => fd.append('rejection_photos', p));
+      }
       await uploadApi.post(`/purchase-orders/${poId}/items/${item.id}/qc`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onDone();
     } catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
@@ -928,17 +968,23 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts }) {
       {open && canQC && (
         <div className="mt-3 space-y-2.5 border-t border-gray-200 pt-3">
           <div className="flex gap-2">
-            <button className={`btn-sm text-xs flex-1 ${mode === 'approve' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('approve')}>Approve</button>
-            <button className={`btn-sm text-xs flex-1 ${mode === 'reject' ? 'btn-primary bg-red-600 border-red-600 hover:bg-red-700' : 'btn-secondary'}`} onClick={() => setMode('reject')}>Reject</button>
+            <button className={`btn-sm text-xs flex-1 ${mode === 'approved' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('approved')}>Approve all</button>
+            <button className={`btn-sm text-xs flex-1 ${mode === 'partial' ? 'btn-primary bg-amber-600 border-amber-600 hover:bg-amber-700' : 'btn-secondary'}`} onClick={() => setMode('partial')}>Partial</button>
+            <button className={`btn-sm text-xs flex-1 ${mode === 'rejected' ? 'btn-primary bg-red-600 border-red-600 hover:bg-red-700' : 'btn-secondary'}`} onClick={() => setMode('rejected')}>Reject all</button>
           </div>
-          {mode === 'approve' ? (
+          {mode !== 'approved' && (
+            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+              The rejected quantity opens a <b>debit note</b> for accounts to raise with the supplier — rejection photos are compulsory.
+            </p>
+          )}
+          {mode !== 'rejected' && (
             <>
               <div>
                 <label className="label text-xs">Material image <span className="text-red-500">*</span></label>
                 <FileUpload onFile={setImage} accept=".jpg,.jpeg,.png,.webp" label="Select material image" />
               </div>
               <div>
-                <label className="label text-xs">Actual quantity received <span className="text-red-500">*</span></label>
+                <label className="label text-xs">{mode === 'partial' ? 'Accepted quantity' : 'Actual quantity received'} <span className="text-red-500">*</span></label>
                 <input className="input text-sm" type="number" step="any" min="0" value={receivedQty} onChange={e => setReceivedQty(e.target.value)} placeholder={`ordered: ${item.qty}`} />
                 <p className="text-xs text-gray-400 mt-0.5">Only this quantity is added to inventory.</p>
               </div>
@@ -951,18 +997,124 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts }) {
                 <input className="input text-sm" value={observations} onChange={e => setObservations(e.target.value)} />
               </div>
             </>
-          ) : (
-            <div>
-              <label className="label text-xs">Rejection reason <span className="text-red-500">*</span></label>
-              <input className="input text-sm" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
-            </div>
+          )}
+          {mode !== 'approved' && (
+            <>
+              <div>
+                <label className="label text-xs">Rejected quantity <span className="text-red-500">*</span></label>
+                <input className="input text-sm" type="number" step="any" min="0" value={rejectedQty} onChange={e => setRejectedQty(e.target.value)}
+                  placeholder={mode === 'rejected' ? `default: ordered ${item.qty}` : 'e.g. 5'} />
+              </div>
+              <div>
+                <label className="label text-xs">Rejection reason <span className="text-red-500">*</span></label>
+                <input className="input text-sm" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+              </div>
+              <div>
+                <label className="label text-xs">Rejection photos <span className="text-red-500">*</span></label>
+                <label className="flex items-center gap-2 cursor-pointer border border-gray-200 rounded-lg px-3 py-2 hover:border-brand-400 transition-colors bg-white">
+                  <Upload size={14} className="text-gray-400 flex-shrink-0" />
+                  <span className="text-xs text-gray-600 flex-1 truncate">
+                    {rejPhotos.length ? `${rejPhotos.length} photo${rejPhotos.length > 1 ? 's' : ''} selected` : 'Add photo(s) of the rejected material…'}
+                  </span>
+                  <input type="file" multiple accept=".jpg,.jpeg,.png,.webp" className="hidden"
+                    onChange={e => { if (e.target.files?.length) setRejPhotos(prev => [...prev, ...Array.from(e.target.files)]); e.target.value = ''; }} />
+                </label>
+                {rejPhotos.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {rejPhotos.map((f, i) => (
+                      <span key={i} className="flex items-center gap-1 bg-gray-100 rounded px-1.5 py-0.5 text-[11px] text-gray-600">
+                        {f.name}
+                        <button type="button" className="text-gray-400 hover:text-red-500" onClick={() => setRejPhotos(prev => prev.filter((_, j) => j !== i))}>
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
           )}
           {error && <p className="text-red-600 text-xs">{error}</p>}
           <div className="flex gap-2">
             <button className="btn-secondary btn-sm text-xs flex-1" onClick={() => setOpen(false)} disabled={saving}>Cancel</button>
             <button className="btn-primary btn-sm text-xs flex-1" onClick={submit} disabled={saving}>
-              {saving ? 'Saving…' : mode === 'approve' ? 'Approve item' : 'Reject item'}
+              {saving ? 'Saving…' : mode === 'approved' ? 'Approve item' : mode === 'partial' ? 'Record partial QC' : 'Reject item'}
             </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One debit note per rejected item: accounts enters the note number (amount
+// pre-filled from rejected qty × rate + GST, editable), optionally uploads the
+// sent document, and marks it Raised.
+function DebitNoteRow({ poId, dn, photos, onDone }) {
+  const [open, setOpen] = useState(false);
+  const [noteNo, setNoteNo] = useState('');
+  const [amount, setAmount] = useState(String(dn.suggested_amount ?? ''));
+  const [notes, setNotes] = useState('');
+  const [file, setFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+
+  const raise = async () => {
+    if (!noteNo.trim()) return setError('Enter the debit note number');
+    setSaving(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('note_no', noteNo.trim());
+      if (amount) fd.append('amount', amount);
+      if (notes) fd.append('notes', notes);
+      if (file) fd.append('file', file);
+      await uploadApi.put(`/purchase-orders/${poId}/debit-notes/${dn.id}/raise`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      onDone();
+    } catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
+  };
+
+  return (
+    <div className={`rounded-lg border px-3 py-2.5 ${dn.status === 'raised' ? 'bg-green-50 border-green-200' : 'bg-red-50/50 border-red-200'}`}>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="text-sm">
+          <span className="font-medium text-gray-800">{dn.item_description || 'Item'}</span>
+          <span className="text-xs text-gray-500 ml-2">rejected qty <b>{dn.rejected_qty}</b> · suggested {inr(dn.suggested_amount)}</span>
+          {photos.map((p, i) => (
+            <a key={p.id} className="text-xs text-brand-600 hover:underline ml-2" href={`/uploads/${p.file_path}`} target="_blank" rel="noopener noreferrer">photo {i + 1}</a>
+          ))}
+        </div>
+        {dn.status === 'raised' ? (
+          <span className="text-xs font-semibold text-green-700">
+            ✓ {dn.note_no} · {inr(dn.amount)} · {fmtDate(dn.raised_at)}{dn.raised_by_name ? ` · ${dn.raised_by_name}` : ''}
+            {dn.file_path && <a className="text-brand-600 hover:underline ml-1.5" href={`/uploads/${dn.file_path}`} target="_blank" rel="noopener noreferrer">document</a>}
+          </span>
+        ) : !open ? (
+          <button className="btn-primary btn-sm text-xs" onClick={() => setOpen(true)}>Raise Debit Note</button>
+        ) : null}
+      </div>
+      {dn.status !== 'raised' && open && (
+        <div className="mt-3 grid grid-cols-2 gap-2.5 border-t border-red-100 pt-3">
+          <div>
+            <label className="label text-xs">Debit note no. <span className="text-red-500">*</span></label>
+            <input className="input text-sm" value={noteNo} onChange={e => setNoteNo(e.target.value)} placeholder="e.g. DN-2026-01" />
+          </div>
+          <div>
+            <label className="label text-xs">Amount (₹)</label>
+            <input className="input text-sm" type="number" step="any" min="0" value={amount} onChange={e => setAmount(e.target.value)} />
+          </div>
+          <div className="col-span-2">
+            <label className="label text-xs">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
+            <input className="input text-sm" value={notes} onChange={e => setNotes(e.target.value)} />
+          </div>
+          <div className="col-span-2">
+            <label className="label text-xs">Debit note document <span className="text-gray-400 font-normal">(optional — PDF/image sent to supplier)</span></label>
+            <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Attach the debit note" />
+          </div>
+          {error && <p className="text-red-600 text-xs col-span-2">{error}</p>}
+          <div className="flex gap-2 col-span-2">
+            <button className="btn-secondary btn-sm text-xs flex-1" onClick={() => setOpen(false)} disabled={saving}>Cancel</button>
+            <button className="btn-primary btn-sm text-xs flex-1" onClick={raise} disabled={saving}>{saving ? 'Saving…' : 'Mark Raised'}</button>
           </div>
         </div>
       )}
