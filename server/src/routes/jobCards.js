@@ -1098,32 +1098,55 @@ router.put('/split-requests/:reqId/approve', authenticate, authorize('owner'), a
   if (!jc) return res.status(404).json({ error: 'Job card not found' });
   if (sr.qty >= jc.qty) return res.status(400).json({ error: `Job card qty is now ${jc.qty}; cannot split off ${sr.qty}` });
 
+  // Has the parent finished production (stage 29 done)? A finished split has
+  // nothing left to produce and goes straight to QC as before. A mid-production
+  // split instead gets its OWN checklist: it inherits the parent's completed
+  // stages and continues from the current stage to Ready-for-Dispatch (29),
+  // which then triggers QC exactly like any card. Inventory timing unchanged.
+  const s29done = await db.get(
+    'SELECT id FROM production_checklist WHERE job_card_id=$1 AND stage_no=29 AND done=1', [jc.id]);
+  const childStatus = s29done ? 'qc_pending' : 'in_progress';
+
   const childCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE parent_job_card_id=$1', [jc.id]);
   const childNo = `${jc.job_card_no}-P${parseInt(childCount.n, 10) + 1}`;
-  const child = await db.insert(
-    `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name, replacement_query_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'qc_pending',$9,$10,$11,$12,$13,$14,$15,$16)`,
-    [childNo, jc.order_id, sr.qty, jc.dispatch_date, jc.current_stage || 0, jc.punching, jc.drawing_no, jc.product_name,
-     `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id, jc.order_item_id,
-     // Carry the parent's job-card document so the shopfloor can open it on the child too
-     jc.file_path, jc.file_name, jc.original_name,
-     // Inherit the replacement link so a split replacement card stays invoice-exempt
-     jc.replacement_query_id || null]
-  );
-  await db.run('UPDATE job_cards SET qty = qty - $1 WHERE id=$2', [sr.qty, jc.id]);
-  await db.run('UPDATE job_card_split_requests SET status=$1, child_job_card_id=$2, approved_by=$3, approved_at=NOW() WHERE id=$4',
-    ['approved', child.lastInsertRowid, req.user.id, sr.id]);
+  const childId = await db.withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name, replacement_query_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
+      [childNo, jc.order_id, sr.qty, jc.dispatch_date, jc.current_stage || 0, jc.punching, jc.drawing_no, jc.product_name,
+       childStatus,
+       `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id, jc.order_item_id,
+       // Carry the parent's job-card document so the shopfloor can open it on the child too
+       jc.file_path, jc.file_name, jc.original_name,
+       // Inherit the replacement link so a split replacement card stays invoice-exempt
+       jc.replacement_query_id || null]);
+    const newId = rows[0].id;
+    // The split pieces went through the parent's completed stages as part of the
+    // batch — copy those rows (values, worker, time, notes) so their records
+    // travel with them and the stage-29 mandatory gate sees them as done.
+    // Rejection/remade/dispatched/scrap quantities stay with the parent (its
+    // accounting); stage 29 is never copied so the child's dispatch is its own.
+    await client.query(
+      `INSERT INTO production_checklist (job_card_id, stage_no, done, value1, value2, worker_name, done_at, notes, coil_weight)
+       SELECT $1, stage_no, done, value1, value2, worker_name, done_at, notes, coil_weight
+       FROM production_checklist WHERE job_card_id=$2 AND done=1 AND stage_no <> 29`,
+      [newId, jc.id]);
+    await client.query('UPDATE job_cards SET qty = qty - $1 WHERE id=$2', [sr.qty, jc.id]);
+    await client.query('UPDATE job_card_split_requests SET status=$1, child_job_card_id=$2, approved_by=$3, approved_at=NOW() WHERE id=$4',
+      ['approved', newId, req.user.id, sr.id]);
+    return newId;
+  });
 
   if (sr.created_by) {
     await createNotification(db, {
       userId: sr.created_by, type: 'split_approved',
       title: `Partial dispatch approved — ${childNo}`,
-      body: `${sr.qty} units split off as ${childNo} (now in QC). ${jc.job_card_no} continues with ${jc.qty - sr.qty}.`,
-      link: `/job-cards/${child.lastInsertRowid}`, sourceUserId: req.user.id,
+      body: `${sr.qty} units split off as ${childNo} (${s29done ? 'now in QC' : 'continue its checklist to Ready for Dispatch'}). ${jc.job_card_no} continues with ${jc.qty - sr.qty}.`,
+      link: `/job-cards/${childId}`, sourceUserId: req.user.id,
     });
   }
-  await logActivity(jc.order_id, jc.id, 'split_approved', `Partial dispatch approved: ${sr.qty} → ${childNo}; ${jc.job_card_no} now ${jc.qty - sr.qty}`, req.user.id);
-  res.json({ message: 'Approved', child_job_card_id: child.lastInsertRowid, child_job_card_no: childNo });
+  await logActivity(jc.order_id, jc.id, 'split_approved', `Partial dispatch approved: ${sr.qty} → ${childNo}${s29done ? ' (to QC)' : ' (continues production)'}; ${jc.job_card_no} now ${jc.qty - sr.qty}`, req.user.id);
+  res.json({ message: 'Approved', child_job_card_id: childId, child_job_card_no: childNo });
 });
 
 router.put('/split-requests/:reqId/reject', authenticate, authorize('owner'), async (req, res) => {
