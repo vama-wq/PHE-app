@@ -271,7 +271,7 @@ export default function PayrollRun() {
                 <th className="table-header text-right" title="Days punched in after the grace time (auto from ESSL)">Late Days</th>
                 {isOwner && (
                   <>
-                    <th className="table-header text-right" title="Available leave credit balance">Leave Bal.</th>
+                    <th className="table-header text-right" title="Paid leaves the worker currently has: carried balance + this month's accrual (+1 admin / +2 production) + 6:30 sick credits earned this run − credits used this run">Leaves Avail.</th>
                     <th className="table-header text-right" title="Absences to charge against leave credit (no salary cut)">Credit Used</th>
                     <th className="table-header text-right" title="Sick credits earned this month (admin 6:30 rule)">Sick +</th>
                     <th className="table-header text-right">Absent Ded.</th>
@@ -317,7 +317,24 @@ export default function PayrollRun() {
                         </>
                       ) : (
                         <>
-                          <td className="table-cell text-right text-sm font-semibold">{leaveBal?.[l.employee_id] ?? 0}</td>
+                          <td className="table-cell text-right text-sm font-semibold">
+                            {(() => {
+                              // What the worker CURRENTLY has, not just the ledger:
+                              // carried + this month's accrual + 6:30 credits − used.
+                              const carried = Number(leaveBal?.[l.employee_id] ?? 0);
+                              const accrual = l.worker_group === 'fixed_admin' ? 1 : l.worker_group === 'fixed_production' ? 2 : 0;
+                              const sickPlus = l.worker_group === 'fixed_admin' ? (Number(val(l, 'sick_credit_earned')) || 0) : 0;
+                              const used = Number(val(l, 'leave_credit_used')) || 0;
+                              const avail = carried + accrual + sickPlus - used;
+                              return (
+                                <span title={`Carried ${carried} + monthly ${accrual}${sickPlus ? ` + 6:30 credits ${sickPlus}` : ''}${used ? ` − used ${used}` : ''}`}
+                                  className={avail < 0 ? 'text-red-600' : ''}>
+                                  {avail}
+                                  <span className="font-normal text-[10px] text-gray-400 ml-1">({carried} c/f)</span>
+                                </span>
+                              );
+                            })()}
+                          </td>
                           <td className="table-cell text-right">
                             {editable ? (
                               <input className="input text-sm py-1 px-1.5 text-right w-14" type="number" step="0.5" min="0"
