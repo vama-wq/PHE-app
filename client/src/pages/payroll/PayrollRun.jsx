@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import { downloadExcel } from '../../lib/utils';
-import { ArrowLeft, Banknote, Download, FileText, Send, CheckCircle, AlertTriangle, Save, Upload, Trash2 } from 'lucide-react';
+import { ArrowLeft, Banknote, Download, FileText, Send, CheckCircle, AlertTriangle, Save, Upload, Trash2, Pencil } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const STATUS_BADGES = {
@@ -29,6 +29,23 @@ export default function PayrollRun() {
   const [error, setError] = useState('');
 
   const load = () => api.get(`/payroll/runs/${id}`).then(r => { setData(r.data); setEdits({}); }).catch(e => setError(e.response?.data?.error || 'Failed to load'));
+
+  // Owner sets a worker's carried leave balance directly from the run page —
+  // the difference posts as a manual entry in the leave ledger (audited).
+  const adjustCarried = async (l, carried) => {
+    const input = window.prompt(
+      `Set carried leave balance for ${l.name} (currently ${carried}).\n\nThe difference is posted as a manual leave-ledger adjustment.`,
+      String(carried));
+    if (input === null) return;
+    const target = parseFloat(input);
+    if (Number.isNaN(target)) return alert('Enter a number.');
+    const delta = Math.round((target - carried) * 100) / 100;
+    if (!delta) return;
+    try {
+      await api.post(`/payroll/employees/${l.employee_id}/leave`, { delta, notes: `Set to ${target} from run page` });
+      load();
+    } catch (e) { alert(e.response?.data?.error || 'Failed to adjust leave balance'); }
+  };
   useEffect(() => { load(); }, [id]);
 
   const reparseEssl = async (file) => {
@@ -327,10 +344,16 @@ export default function PayrollRun() {
                               const used = Number(val(l, 'leave_credit_used')) || 0;
                               const avail = carried + accrual + sickPlus - used;
                               return (
-                                <span title={`Carried ${carried} + monthly ${accrual}${sickPlus ? ` + 6:30 credits ${sickPlus}` : ''}${used ? ` − used ${used}` : ''}`}
-                                  className={avail < 0 ? 'text-red-600' : ''}>
-                                  {avail}
-                                  <span className="font-normal text-[10px] text-gray-400 ml-1">({carried} c/f)</span>
+                                <span className="inline-flex items-center gap-1">
+                                  <span title={`Carried ${carried} + monthly ${accrual}${sickPlus ? ` + 6:30 credits ${sickPlus}` : ''}${used ? ` − used ${used}` : ''}`}
+                                    className={avail < 0 ? 'text-red-600' : ''}>
+                                    {avail}
+                                    <span className="font-normal text-[10px] text-gray-400 ml-1">({carried} c/f)</span>
+                                  </span>
+                                  <button type="button" className="p-0.5 text-gray-300 hover:text-brand-600" title="Edit carried balance (posts a manual leave-ledger adjustment)"
+                                    onClick={() => adjustCarried(l, carried)}>
+                                    <Pencil size={11} />
+                                  </button>
                                 </span>
                               );
                             })()}
