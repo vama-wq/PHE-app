@@ -679,6 +679,19 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   const rejQty = parseInt(rejection_qty, 10) || 0;
   const remQty = parseInt(remade_qty, 10) || 0;
 
+  // Coil scrap (Stage 3, grams total) and tube scrap (Stage 5, inches per pc)
+  // are COMPULSORY and numeric — 0 counts, blank doesn't. They drive the
+  // spring-gauge / tube FIFO draws, so a skipped field silently under-scraps.
+  if (done && !isFg && (stageNo === 3 || stageNo === 5)) {
+    const sv = String(scrap_value ?? '').trim();
+    if (sv === '' || isNaN(Number(sv)) || Number(sv) < 0) {
+      return res.status(400).json({
+        error: `${stageNo === 3 ? 'Coil' : 'Tube'} scrap value is required — enter 0 if there was no scrap`,
+        code: 'SCRAP_REQUIRED',
+      });
+    }
+  }
+
   // FG cards: stage 4 (Ready → QC) requires stages 1-3 complete
   if (isFg && stageNo === 4 && done) {
     const doneRows = await db.all(
@@ -823,7 +836,10 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
       updated_by  = EXCLUDED.updated_by,
       updated_at  = NOW()
   `, [jobCardId, stageNo, done ? 1 : 0, value1 ?? null, value2 ?? null, rejQty, remQty,
-    worker_name || null, scrap_value || null, notes || null, coilWeightNum, done ? now : null, req.user.id]);
+    worker_name || null,
+    // '0' is a real scrap entry — only blank/absent becomes NULL
+    (scrap_value != null && String(scrap_value).trim() !== '') ? String(scrap_value).trim() : null,
+    notes || null, coilWeightNum, done ? now : null, req.user.id]);
 
   // When the ready stage is re-submitted to QC, clear the QC rejection flag
   if (((stageNo === 29 && !isFg) || (stageNo === 4 && isFg)) && done) {

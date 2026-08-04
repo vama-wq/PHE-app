@@ -1145,6 +1145,10 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
 
   const needsWorker = WORKER_NAME_STAGES.has(stageDef.no);
   const hasScrap = SCRAP_VALUE_STAGES.has(stageDef.no);
+  // Coil scrap (Stage 3) and tube scrap (Stage 5) are compulsory & numeric —
+  // 0 is a valid entry, blank is not (they drive the material FIFO draws).
+  const scrapRequired = hasScrap && !card.is_fg && (stageDef.no === 3 || stageDef.no === 5);
+  const scrapInvalid = String(scrapValue).trim() === '' || isNaN(Number(scrapValue)) || Number(scrapValue) < 0;
   const isHvLight = !!stageDef.hvLight;
 
   // HV + Light Check specific state — stored as JSON in value1
@@ -1271,6 +1275,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (!field1?.required && !value1.trim() && stageDef.fields.length > 0) return false;
     }
     if (stageDef.coilWeight && !(parseFloat(coilWeight) > 0)) return false; // total coil weight required (stage 3)
+    if (scrapRequired && scrapInvalid) return false; // coil/tube scrap compulsory (0 allowed)
     if (stageDef.gaugeSelect && card.material_deduction && !value1) return false; // gauge required for material-tracked orders (stage 1)
     if (photoAlwaysRequired) return false; // photo upload IS the done action for these stages
     if (photoRequiredForStage && !stagePhotoFile) return false; // stage requires photo before marking done
@@ -1334,7 +1339,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
     fd.append('rejection_qty', isDispatchStage ? '0' : String(rejQtyInt));
     fd.append('remade_qty', isDispatchStage ? String(remadeAtDispatch) : (remadeQty || '0'));
     if (workerName) fd.append('worker_name', workerName);
-    if (scrapValue) fd.append('scrap_value', scrapValue);
+    if (String(scrapValue).trim() !== '') fd.append('scrap_value', scrapValue); // '0' is a real entry
     const { v1, v2 } = buildValues();
     fd.append('value1', isDispatchStage ? (dispatchRemadeReason || '') : (v1 || ''));
     if (!isDispatchStage && v2) fd.append('value2', v2);
@@ -1373,7 +1378,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         rejection_qty: isDispatch ? 0 : rejQtyInt,
         remade_qty: isDispatch ? remadeAtDispatch : (parseInt(remadeQty, 10) || 0),
         worker_name: workerName || null,
-        scrap_value: scrapValue || null,
+        scrap_value: String(scrapValue).trim() !== '' ? scrapValue : null, // '0' is a real entry
         notes: notes || null,
         ...(stageDef.coilWeight ? { coil_weight: coilWeight } : {}),
         ...(isDispatch ? { dispatched_qty: finalDispatchQty } : {}),
@@ -1885,24 +1890,34 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         </div>
       )}
 
-      {/* Scrap Value (optional, only for specific stages) */}
+      {/* Scrap Value — compulsory & numeric for coil (St.3) / tube (St.5); optional elsewhere */}
       {hasScrap && (
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Scrap Value <span className="text-xs text-gray-400 font-normal">(optional)</span>
+            {scrapRequired
+              ? <>{stageDef.no === 3 ? 'Coil Scrap (g, total)' : 'Tube Scrap (inches, per pc)'} <span className="text-red-500">*</span> <span className="text-xs text-gray-400 font-normal">— enter 0 if none</span></>
+              : <>Scrap Value <span className="text-xs text-gray-400 font-normal">(optional)</span></>}
           </label>
           {isDone && stageData.scrap_value ? (
             <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
               {stageData.scrap_value}
             </div>
           ) : (
-            <input
-              className="input w-full"
-              placeholder="Enter scrap value (optional)"
-              value={scrapValue}
-              onChange={e => setScrapValue(e.target.value)}
-              disabled={isDone}
-            />
+            <>
+              <input
+                className="input w-full"
+                type="number"
+                step="any"
+                min="0"
+                placeholder={scrapRequired ? 'Numbers only — 0 if no scrap' : 'Enter scrap value (optional)'}
+                value={scrapValue}
+                onChange={e => setScrapValue(e.target.value)}
+                disabled={isDone}
+              />
+              {scrapRequired && scrapInvalid && !isDone && (
+                <p className="text-[11px] text-red-600 mt-1">Scrap value is compulsory — enter a number (0 counts).</p>
+              )}
+            </>
           )}
         </div>
       )}
