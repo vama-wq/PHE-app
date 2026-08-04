@@ -1111,15 +1111,19 @@ router.put('/split-requests/:reqId/approve', authenticate, authorize('owner'), a
   const childNo = `${jc.job_card_no}-P${parseInt(childCount.n, 10) + 1}`;
   const childId = await db.withTransaction(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name, replacement_query_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
+      `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name, replacement_query_id, tube_deducted, coil_deducted, fill_deducted)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
       [childNo, jc.order_id, sr.qty, jc.dispatch_date, jc.current_stage || 0, jc.punching, jc.drawing_no, jc.product_name,
        childStatus,
        `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id, jc.order_item_id,
        // Carry the parent's job-card document so the shopfloor can open it on the child too
        jc.file_path, jc.file_name, jc.original_name,
        // Inherit the replacement link so a split replacement card stays invoice-exempt
-       jc.replacement_query_id || null]);
+       jc.replacement_query_id || null,
+       // Inherit the material-deduction flags: the parent's stage 3/5/6 draws
+       // covered the whole batch (child pieces included), so re-ticking those
+       // stages on the child must NOT deduct tube/coil/filling a second time.
+       jc.tube_deducted || false, jc.coil_deducted || false, jc.fill_deducted || false]);
     const newId = rows[0].id;
     // The split pieces went through the parent's completed stages as part of the
     // batch — copy those rows (values, worker, time, notes) so their records
