@@ -782,6 +782,56 @@ async function initDB(retries = 20, delayMs = 10000) {
            SET description='Main vehicle transport — P PHE 05 (3 items)'
          WHERE category='Purchase Transport' AND amount=480
            AND description LIKE 'Main vehicle transport%P PHE 05%(MS Flange Cap%'`);
+      // One-off: a fins deduction parsed a stage-8 range entry ("1610-1625") as
+      // 16,101,625mm and drew 163,868.9kg of FIN-MS-08 (JC …63.5MS-2KW-P1,
+      // ORD-077-26). Reverse it and post the correct draw from the first number
+      // of the stage value. Idempotent: keyed on the unique '16101625mm' note.
+      {
+        const bad = await pool.query(
+          `SELECT * FROM inventory_transactions
+            WHERE notes LIKE '%16101625mm%' AND transaction_type='dispatch_to_production' LIMIT 1`);
+        if (bad.rows.length) {
+          const tx = bad.rows[0];
+          const qty = Number(tx.quantity);
+          const jcRow = await pool.query(
+            `SELECT id, order_item_id, qc_dispatch_qty, qc_fg_qty, qty FROM job_cards
+              WHERE job_card_no='PT-MTYPESTRAIGHT-63.5MS-2KW-P1' LIMIT 1`);
+          const jc = jcRow.rows[0];
+          // 1) reverse: stock back, BOM qty_deducted back, drop the bad row
+          await pool.query('UPDATE inventory_items SET current_stock = current_stock + $1 WHERE id=$2', [qty, tx.item_id]);
+          if (jc?.order_item_id) {
+            await pool.query(
+              `UPDATE order_item_inventory SET qty_deducted = GREATEST(COALESCE(qty_deducted,0) - $1, 0)
+                WHERE order_item_id=$2 AND inventory_item_id=$3`, [qty, jc.order_item_id, tx.item_id]);
+          }
+          await pool.query('DELETE FROM inventory_transactions WHERE id=$1', [tx.id]);
+          // 2) re-deduct correctly from the stage-8 value (first number only)
+          if (jc) {
+            const s8 = await pool.query(
+              'SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=8', [jc.id]);
+            const lengthMm = parseFloat((String(s8.rows[0]?.value1 || '').replace(/,/g, '').match(/\d+(?:\.\d+)?/) || [])[0]);
+            const pcs = parseInt((String(tx.notes).match(/× (\d+) pcs/) || [])[1], 10)
+              || (Number(jc.qc_dispatch_qty) || 0) + (Number(jc.qc_fg_qty) || 0) || Number(jc.qty) || 0;
+            if (lengthMm > 0 && lengthMm <= 20000 && pcs > 0) {
+              const kgs = Math.round((lengthMm / 50.8) * 0.011 * pcs * 1000) / 1000;
+              const inv = await pool.query('SELECT current_stock FROM inventory_items WHERE id=$1', [tx.item_id]);
+              const newStock = Number(inv.rows[0].current_stock) - kgs;
+              await pool.query('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, tx.item_id]);
+              if (jc.order_item_id) {
+                await pool.query(
+                  `UPDATE order_item_inventory SET qty_deducted = COALESCE(qty_deducted,0) + $1
+                    WHERE order_item_id=$2 AND inventory_item_id=$3`, [kgs, jc.order_item_id, tx.item_id]);
+              }
+              await pool.query(
+                `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+                 VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
+                [tx.item_id, kgs, newStock,
+                 `Order: ORD-077-26 | Fins by tube length (corrected): ${lengthMm}mm × 0.011kg/50.8mm × ${pcs} pcs = ${kgs}kg (JC PT-MTYPESTRAIGHT-63.5MS-2KW-P1)`,
+                 tx.created_by]);
+            }
+          }
+        }
+      }
       // One-off: P PHE 05's single ₹480 freight bill was entered on each of its
       // items. Spread ₹480 across them by material value instead (the =480 guard
       // makes this run once; shares never equal exactly 480 with multiple items).
