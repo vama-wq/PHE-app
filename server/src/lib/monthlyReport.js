@@ -13,7 +13,14 @@ const RPT_STAGES = {
 };
 const num = (x) => Number(x) || 0;
 const round = (x, n=2) => (x==null || isNaN(x)) ? null : Math.round(x * 10**n) / 10**n;
-const parseOhms = (v1) => { try { const d = JSON.parse(v1); const o = parseFloat(d?.ohms); return isNaN(o) ? null : o; } catch { return null; } };
+// Ohms may be entered as several readings ("56,57" / "56-57") — use the average.
+const parseOhms = (v1) => {
+  try {
+    const d = JSON.parse(v1);
+    const nums = (String(d?.ohms ?? '').match(/\d+(?:\.\d+)?/g) || []).map(Number);
+    return nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length * 100) / 100 : null;
+  } catch { return null; }
+};
 const dstr = (d) => d ? new Date(d).toISOString().slice(0,10) : '';
 const daysBetween = (a, b) => (a && b) ? Math.round((new Date(b) - new Date(a)) / 864e5) : null;
 // Finished Goods is keyed by the job-card/drawing name (base_drawing_no), i.e. the

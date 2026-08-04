@@ -20,6 +20,14 @@ const { logActivity } = require('../db');
 
 const r4 = (n) => Math.round(Number(n) * 1e4) / 1e4;
 
+// Workers sometimes record several readings in one field — "1610-1625",
+// "12.5+12.6", "56, 57" — so measurement fields deduct on the AVERAGE of every
+// number found, whatever separates them (+ , - / spaces).
+const avgNumbers = (v) => {
+  const nums = (String(v ?? '').match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
+};
+
 async function invByCode(db, code, category) {
   if (!code) return null;
   return db.get(
@@ -120,7 +128,7 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
     if (isDone && !jc.tube_deducted) {
       if (!tube) return; // Tube Material isn't a "Tube" inventory code — nothing to deduct
       const s5 = await db.get('SELECT value1, scrap_value FROM production_checklist WHERE job_card_id=$1 AND stage_no=5', [jobCardId]);
-      const lenMm = parseFloat(s5?.value1) || 0;
+      const lenMm = avgNumbers(s5?.value1);
       let scrapIn = parseFloat(s5?.scrap_value) || 0; // per-piece scrap, inches
       // Abnormally large scrap (a bad cut/rework, not normal trim waste) is excluded from
       // scrap accounting entirely — not deducted. Copper: 14in or more; other tube
@@ -186,7 +194,7 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
     if (isDone && !jc.fill_deducted) {
       if (!pvc && !mgo) return; // no matching bush/powder items — nothing to deduct
       const s5 = await db.get('SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=5', [jobCardId]);
-      const lenMm = parseFloat(s5?.value1) || 0;
+      const lenMm = avgNumbers(s5?.value1);
       const pvcQty = pvc ? r4(2 * qty) : 0; // 2 bushes per piece × qty
       let mgoKg = 0;
       if (mgo && mgoGPerInch != null && lenMm > 0) {

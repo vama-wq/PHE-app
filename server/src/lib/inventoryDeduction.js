@@ -135,10 +135,12 @@ async function deductFinsByLength(db, jc, userId) {
   const s8 = await db.get(
     'SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=8', [jc.id]
   );
-  // Take the FIRST number in the value. Stripping all non-digits mashed range
-  // entries like "1610-1625" into 16101625mm (16 km!) and once drew 163,868kg
-  // of fins. Guard against implausible per-piece lengths as a second net.
-  const lengthMm = parseFloat((String(s8?.value1 || '').replace(/,/g, '').match(/\d+(?:\.\d+)?/) || [])[0]);
+  // Workers may record several readings in one field ("1610-1625", "1610+1620"):
+  // deduct on the AVERAGE of every number found. (Stripping all non-digits once
+  // mashed a range into 16,101,625mm and drew 163,868kg of fins.) The >20m guard
+  // below stays as a second net against implausible entries.
+  const s8nums = (String(s8?.value1 || '').match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  const lengthMm = s8nums.length ? s8nums.reduce((a, b) => a + b, 0) / s8nums.length : NaN;
   if (!(lengthMm > 0)) {
     console.warn(`[fins] JC ${jc.job_card_no}: no stage-8 Total Length — fins not deducted`);
     return;
