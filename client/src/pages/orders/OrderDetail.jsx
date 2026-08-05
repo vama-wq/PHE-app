@@ -502,7 +502,10 @@ export default function OrderDetail() {
                   One drawing per item · owner approves/rejects each individually · approved items can have job cards uploaded
                 </p>
               </div>
-              {user.role === 'owner' && orderApproved && (
+              {/* Owner-only, any status except rejected — bypassing before order
+                  approval is fine, it simply takes effect once approval unlocks
+                  job cards. */}
+              {user.role === 'owner' && order.status !== 'rejected' && (
                 order.drawing_bypassed ? (
                   <button className="btn-secondary btn-sm text-xs"
                     onClick={async () => {
