@@ -782,51 +782,26 @@ async function initDB(retries = 20, delayMs = 10000) {
            SET description='Main vehicle transport — P PHE 05 (3 items)'
          WHERE category='Purchase Transport' AND amount=480
            AND description LIKE 'Main vehicle transport%P PHE 05%(MS Flange Cap%'`);
-      // One-off (July run, only while unapproved): 24 Jul was a device outage —
-      // nine workers punched in but the evening out-punches are missing device-
-      // wide, so the report marked them absent. Owner: count 24 Jul as a FULL
-      // present day for them. Remark-stamped → runs once per line.
+      // One-off (only while the 2026-07 run is unapproved): owner set July leave
+      // availability — Ajay 6 and Nayan 8 already read correctly on the run, so
+      // ONLY Gayaji is corrected: with his July line's accrual (+1 admin) and
+      // sick credit (+1) his carried ledger must be −1 for the run to show 1.
+      // Attendance numbers are NOT touched (owner curates those by hand).
       {
         const run = await pool.query(
           `SELECT id FROM payroll_runs WHERE month='2026-07' AND status IN ('draft','submitted') LIMIT 1`);
         if (run.rows.length) {
-          const runId = run.rows[0].id;
-          const NINE = ['reena%', 'sita%', 'shakuntala%', 'samir%', 'sanjan%', 'raju%', 'chanchal%', 'sheela%', 'nayan%'];
-          for (const pat of NINE) {
-            await pool.query(`
-              UPDATE payroll_lines pl SET
-                absent_days  = GREATEST(COALESCE(pl.absent_days, 0) - 1, 0),
-                present_days = COALESCE(pl.present_days, 0) + 1,
-                remarks = TRIM(COALESCE(pl.remarks, '') || ' [24 Jul outage counted present]')
-              FROM employees e
-              WHERE e.id = pl.employee_id AND pl.run_id = $1
-                AND e.name ILIKE $2
-                AND COALESCE(pl.remarks, '') NOT LIKE '%[24 Jul outage%'`, [runId, pat]);
-          }
-          // Owner-set leave availability for July — Gaya 1, Ajay 6, Nayan 8,
-          // INCLUSIVE of this month's accrual: carried = target − accrual
-          // (admin +1, production +2), and no extra 6:30 credits stack on top.
-          // Idempotent: once the ledger equals the target the delta is 0.
-          const targets = [
-            { pat: 'gaya%',  carried: 0, zeroSick: true },   // 0 + 1 admin accrual  = 1
-            { pat: 'ajay%',  carried: 4, zeroSick: false },  // 4 + 2 production     = 6
-            { pat: 'nayan%', carried: 7, zeroSick: true },   // 7 + 1 admin accrual  = 8
-          ];
-          for (const t of targets) {
-            const emp = await pool.query('SELECT id FROM employees WHERE name ILIKE $1 LIMIT 1', [t.pat]);
-            if (!emp.rows.length) continue;
+          const emp = await pool.query(`SELECT id FROM employees WHERE name='Gayaji' LIMIT 1`);
+          if (emp.rows.length) {
             const empId = emp.rows[0].id;
             const bal = await pool.query(
               'SELECT COALESCE(SUM(delta),0) AS b FROM employee_leave_ledger WHERE employee_id=$1', [empId]);
-            const delta = t.carried - Number(bal.rows[0].b);
+            const delta = -1 - Number(bal.rows[0].b);
             if (delta !== 0) {
               await pool.query(
                 `INSERT INTO employee_leave_ledger (employee_id, delta, reason, notes)
-                 VALUES ($1,$2,'manual','Owner-set carried balance (July availability incl. accrual)')`,
+                 VALUES ($1,$2,'manual','Owner-set: July availability = 1 (carried −1 + accrual 1 + sick 1)')`,
                 [empId, delta]);
-            }
-            if (t.zeroSick) {
-              await pool.query('UPDATE payroll_lines SET sick_credit_earned=0 WHERE run_id=$1 AND employee_id=$2', [runId, empId]);
             }
           }
         }
