@@ -824,8 +824,13 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
               </label>
               <select className="input" value={f.category}
                 onChange={e => setF(p => ({ ...p, category: e.target.value, paid_to: '',
+                  // Plating locks the method (unpaid bank / cash). Leaving one of
+                  // those categories CLEARS the method instead of silently keeping
+                  // the forced value — the user must re-pick, so an expense can't
+                  // land as Cash when they'd chosen Unpaid Bank before browsing.
                   payment_method: e.target.value === PLATING ? 'unpaid_bank'
-                    : e.target.value === PLATING_TRANSPORT ? 'cash' : p.payment_method }))}>
+                    : e.target.value === PLATING_TRANSPORT ? 'cash'
+                    : [PLATING, PLATING_TRANSPORT].includes(p.category) ? '' : p.payment_method }))}>
                 <option value="">— select category —</option>
                 {categories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>

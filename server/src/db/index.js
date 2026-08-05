@@ -782,6 +782,16 @@ async function initDB(retries = 20, delayMs = 10000) {
            SET description='Main vehicle transport — P PHE 05 (3 items)'
          WHERE category='Purchase Transport' AND amount=480
            AND description LIKE 'Main vehicle transport%P PHE 05%(MS Flange Cap%'`);
+      // One-off: two 05-Aug Office Expenses were entered as Unpaid Bank but a
+      // category-browsing quirk stomped the method to Cash (Canteen TDS ₹7,917
+      // + umiya zerox ₹10,966 → cash went ₹−18,183). Convert them to
+      // unpaid_bank so the owner pays them from the bank as intended.
+      // Idempotent: the method='cash' guard stops re-runs.
+      await pool.query(`
+        UPDATE petty_cash_entries SET payment_method='unpaid_bank', affects_cash=FALSE
+         WHERE entry_date='2026-08-05' AND category='Office Expense'
+           AND entry_type='expense' AND payment_method='cash'
+           AND ((paid_to ILIKE 'tds' AND amount=7917) OR (paid_to ILIKE 'umiya%zerox' AND amount=10966))`);
       // One-off (only while the 2026-07 run is unapproved): the last-saved July
       // payroll is FINAL and late cuts are waived for this month. Zero the
       // stored cut minutes + deduction (so any later Save/approve recompute
