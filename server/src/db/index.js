@@ -782,6 +782,25 @@ async function initDB(retries = 20, delayMs = 10000) {
            SET description='Main vehicle transport — P PHE 05 (3 items)'
          WHERE category='Purchase Transport' AND amount=480
            AND description LIKE 'Main vehicle transport%P PHE 05%(MS Flange Cap%'`);
+      // One-off (only while the 2026-07 run is unapproved): the last-saved July
+      // payroll is FINAL and late cuts are waived for this month. Zero the
+      // stored cut minutes + deduction (so any later Save/approve recompute
+      // also yields no cut) and give the amount back on each line's total.
+      // Late-day counts stay for information. Future months keep the rule.
+      {
+        const run = await pool.query(
+          `SELECT id FROM payroll_runs WHERE month='2026-07' AND status IN ('draft','submitted') LIMIT 1`);
+        if (run.rows.length) {
+          await pool.query(`
+            UPDATE payroll_lines SET
+              total_payable    = COALESCE(total_payable, 0) + COALESCE(late_deduction, 0),
+              late_deduction   = 0,
+              late_cut_minutes = 0
+            WHERE run_id = $1
+              AND (COALESCE(late_deduction, 0) > 0 OR COALESCE(late_cut_minutes, 0) > 0)`,
+            [run.rows[0].id]);
+        }
+      }
       // One-off (only while the 2026-07 run is unapproved): owner set July leave
       // availability — Ajay 6 and Nayan 8 already read correctly on the run, so
       // ONLY Gayaji is corrected: with his July line's accrual (+1 admin) and
