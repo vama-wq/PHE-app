@@ -30,7 +30,15 @@ const MONTHLY_ACCRUAL = { fixed_admin: 1, fixed_production: 2 };
 // Only Admin and Production (with leave) get petrol — labour and no-leave
 // production never receive petrol reimbursement.
 const PETROL_GROUPS = ['fixed_admin', 'fixed_production'];
-const MONTH_BASIS_DAYS = 30; // fixed salary ÷ 30, always
+const MONTH_BASIS_DAYS = 30; // no-leave production stays ÷30
+// Admin and production-WITH-leave divide by the month's ACTUAL days (July/Aug
+// 31, Feb 28/29). No-leave production keeps the flat ÷30 (owner's scoping).
+const daysInMonth = (month) => {
+  const [y, m] = String(month || '').split('-').map(Number);
+  return y && m ? new Date(Date.UTC(y, m, 0)).getUTCDate() : MONTH_BASIS_DAYS;
+};
+const basisDays = (month, group) =>
+  (group === 'fixed_admin' || group === 'fixed_production') ? daysInMonth(month) : MONTH_BASIS_DAYS;
 // OT hourly rate = day pay ÷ standard-hours: 8h for labour/admin, 10h for
 // production (their day is 10h). Only labour + production-no-leave earn OT.
 const OT_DIVISOR = 8;
@@ -46,7 +54,7 @@ const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
 // Salary maths — single source of truth. `holidays` = paid festival holidays in
 // the run's month: labour gets +1 day's rate each; fixed workers aren't deducted
 // for them (holiday days come off the deductible-absent count).
-function computeLine(emp, line, holidays = 0) {
+function computeLine(emp, line, holidays = 0, month = null) {
   const present = Number(line.present_days || 0);
   const absent = Number(line.absent_days || 0);
   const ot = Number(line.ot_hours || 0);
@@ -76,7 +84,7 @@ function computeLine(emp, line, holidays = 0) {
   }
   // fixed_admin / fixed_production / fixed_production_nl
   const salary = Number(line.monthly_salary ?? emp.monthly_salary ?? 0);
-  const perDay = salary / MONTH_BASIS_DAYS;
+  const perDay = salary / basisDays(month, emp.worker_group);
   // Paid festival holidays are never deducted (come off absents before credits)
   const deductibleAbsent = Math.max(absent - hol, 0);
   const chargedAbsent = Math.max(deductibleAbsent - creditUsed, 0);
@@ -138,6 +146,8 @@ async function esslToAttendance(buffer, employees, workingDays) {
 
 // Write parsed attendance onto the run's lines (used by create + re-parse).
 async function applyAttendanceUpdates(client, runId, updates, holidays = 0) {
+  const runRow = await client.query('SELECT month FROM payroll_runs WHERE id=$1', [runId]);
+  const runMonth = runRow.rows[0]?.month || null;
   for (const u of updates) {
     const { rows } = await client.query(
       `SELECT pl.*, e.worker_group AS eg, e.daily_rate AS e_rate, e.monthly_salary AS e_salary,
@@ -153,7 +163,7 @@ async function applyAttendanceUpdates(client, runId, updates, holidays = 0) {
     };
     const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
                   monthly_salary: line.e_salary, petrol_monthly: line.e_petrol };
-    const pay = computeLine(emp, merged, holidays);
+    const pay = computeLine(emp, merged, holidays, runMonth);
     await client.query(
       `UPDATE payroll_lines SET present_days=$1, absent_days=$2, ot_hours=$3, late_stay_days=$4,
          sick_credit_earned=$5, long_leave_flag=$6, late_days=$7, late_cut_minutes=$8, late_deduction=$9,
@@ -463,7 +473,7 @@ router.post('/runs', authenticate, authorize('owner', 'accounts'), ...uploadEssl
           `INSERT INTO payroll_lines (run_id, employee_id, worker_group, daily_rate, monthly_salary, petrol, advance_deduction)
            VALUES ($1,$2,$3,$4,$5,$6,$7)`,
           [rows[0].id, emp.id, emp.worker_group,
-           emp.worker_group === 'labour' ? emp.daily_rate : r2(Number(emp.monthly_salary || 0) / MONTH_BASIS_DAYS),
+           emp.worker_group === 'labour' ? emp.daily_rate : r2(Number(emp.monthly_salary || 0) / basisDays(month, emp.worker_group)),
            FIXED_GROUPS.includes(emp.worker_group) ? emp.monthly_salary : null,
            petrol, emp.advance_balance || 0]);
       }
@@ -602,7 +612,7 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
         };
         const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
                       monthly_salary: line.e_salary, petrol_monthly: line.e_petrol };
-        const pay = computeLine(emp, merged, holidays);
+        const pay = computeLine(emp, merged, holidays, run.month);
         await client.query(
           `UPDATE payroll_lines SET present_days=$1, absent_days=$2, ot_hours=$3, late_stay_days=$4,
              leave_credit_used=$5, remarks=$6, long_leave_flag=$7, late_deduction=$8,
@@ -700,7 +710,7 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
           petrol: u.petrol != null ? Number(u.petrol) : Number(line.petrol) };
         const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
                       monthly_salary: line.e_salary, petrol_monthly: merged.petrol };
-        const pay = computeLine(emp, merged, holidays);
+        const pay = computeLine(emp, merged, holidays, run.month);
         await client.query(
           `UPDATE payroll_lines SET leave_credit_used=$1, sick_credit_earned=$2, petrol=$3, advance_deduction=$4,
              remarks=$5, base_pay=$6, ot_amount=$7, absent_deduction=$8, holiday_pay=$9, late_deduction=$10, total_payable=$11
@@ -785,7 +795,7 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
         const deduction = Math.max(0, Math.min(Number(line.advance_deduction || 0), liveAdvBal));
 
         // Recompute pay with the final clamped values and freeze it on the line
-        const pay = computeLine(emp, { ...line, leave_credit_used: creditUsed, advance_deduction: deduction, petrol: line.petrol }, holidays);
+        const pay = computeLine(emp, { ...line, leave_credit_used: creditUsed, advance_deduction: deduction, petrol: line.petrol }, holidays, run.month);
         await client.query(
           `UPDATE payroll_lines SET leave_credit_used=$1, advance_deduction=$2,
              base_pay=$3, ot_amount=$4, absent_deduction=$5, holiday_pay=$6, late_deduction=$7, total_payable=$8 WHERE id=$9`,
@@ -880,7 +890,7 @@ router.post('/runs/:id/add-employee', authenticate, authorize('owner'), async (r
       `INSERT INTO payroll_lines (run_id, employee_id, worker_group, daily_rate, monthly_salary, petrol, advance_deduction)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [id, empId, emp.worker_group,
-       emp.worker_group === 'labour' ? emp.daily_rate : r2(Number(emp.monthly_salary || 0) / MONTH_BASIS_DAYS),
+       emp.worker_group === 'labour' ? emp.daily_rate : r2(Number(emp.monthly_salary || 0) / basisDays(run.month, emp.worker_group)),
        FIXED_GROUPS.includes(emp.worker_group) ? emp.monthly_salary : null, petrol, emp.advance_balance || 0]);
     res.status(201).json({ message: 'Worker added to run' });
   } catch (e) {

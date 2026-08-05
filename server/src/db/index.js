@@ -850,6 +850,39 @@ async function initDB(retries = 20, delayMs = 10000) {
           }
         }
       }
+      // One-off (while 2026-07 unapproved): owner switched admin & production-
+      // with-leave to a days-in-month basis INCLUDING July (÷31). Recompute the
+      // divisor-driven money fields on those July lines; attendance, leaves and
+      // the late-cut waiver (late_cut_minutes = 0) are untouched. Deterministic
+      // → safe to re-run.
+      {
+        const run = await pool.query(
+          `SELECT id FROM payroll_runs WHERE month='2026-07' AND status IN ('draft','submitted') LIMIT 1`);
+        if (run.rows.length) {
+          const runId = run.rows[0].id;
+          const hol = await pool.query(
+            `SELECT COUNT(*)::int AS n FROM holidays WHERE paid=TRUE AND to_char(holiday_date,'YYYY-MM')='2026-07'`);
+          const holidays = Number(hol.rows[0]?.n || 0);
+          const lines = await pool.query(
+            `SELECT * FROM payroll_lines WHERE run_id=$1 AND worker_group IN ('fixed_admin','fixed_production')`, [runId]);
+          const r2m = (n) => Math.round(Number(n || 0) * 100) / 100;
+          for (const l of lines.rows) {
+            const salary = Number(l.monthly_salary || 0);
+            const perDay = salary / 31;
+            const otDiv = l.worker_group === 'fixed_production' ? 10 : 8;
+            const deductible = Math.max(Number(l.absent_days || 0) - holidays, 0);
+            const charged = Math.max(deductible - Number(l.leave_credit_used || 0), 0);
+            const absentDed = r2m(perDay * charged);
+            const otAmt = r2m((perDay / otDiv) * Number(l.ot_hours || 0));
+            const lateDed = r2m((Number(l.late_cut_minutes || 0) / 60) * (perDay / otDiv));
+            const total = r2m(salary - absentDed + otAmt + Number(l.petrol || 0) - Number(l.advance_deduction || 0) - lateDed);
+            await pool.query(
+              `UPDATE payroll_lines SET daily_rate=$1, base_pay=$2, ot_amount=$3, absent_deduction=$4,
+                 late_deduction=$5, total_payable=$6 WHERE id=$7`,
+              [r2m(perDay), r2m(salary - absentDed), otAmt, absentDed, lateDed, total, l.id]);
+          }
+        }
+      }
       // Sweep: reverse ANY fins draw whose parsed length was implausible (>20m
       // per piece — mashed multi-value stage-8 entries like "1610-1625" →
       // 16101625mm or "930-897" → 930897mm) and re-post the correct draw from
