@@ -30,15 +30,15 @@ const MONTHLY_ACCRUAL = { fixed_admin: 1, fixed_production: 2 };
 // Only Admin and Production (with leave) get petrol — labour and no-leave
 // production never receive petrol reimbursement.
 const PETROL_GROUPS = ['fixed_admin', 'fixed_production'];
-const MONTH_BASIS_DAYS = 30; // no-leave production stays ÷30
-// Admin and production-WITH-leave divide by the month's ACTUAL days (July/Aug
-// 31, Feb 28/29). No-leave production keeps the flat ÷30 (owner's scoping).
+const MONTH_BASIS_DAYS = 30; // fallback when no month is known
+// ALL fixed groups (admin, production with/without leave) divide by the month's
+// ACTUAL days (July/Aug 31, Feb 28/29) — owner extended this to no-leave
+// production on 2026-08-05.
 const daysInMonth = (month) => {
   const [y, m] = String(month || '').split('-').map(Number);
   return y && m ? new Date(Date.UTC(y, m, 0)).getUTCDate() : MONTH_BASIS_DAYS;
 };
-const basisDays = (month, group) =>
-  (group === 'fixed_admin' || group === 'fixed_production') ? daysInMonth(month) : MONTH_BASIS_DAYS;
+const basisDays = (month, _group) => daysInMonth(month);
 // OT hourly rate = day pay ÷ standard-hours: 8h for labour/admin, 10h for
 // production (their day is 10h). Only labour + production-no-leave earn OT.
 const OT_DIVISOR = 8;

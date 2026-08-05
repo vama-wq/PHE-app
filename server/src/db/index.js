@@ -864,12 +864,12 @@ async function initDB(retries = 20, delayMs = 10000) {
             `SELECT COUNT(*)::int AS n FROM holidays WHERE paid=TRUE AND to_char(holiday_date,'YYYY-MM')='2026-07'`);
           const holidays = Number(hol.rows[0]?.n || 0);
           const lines = await pool.query(
-            `SELECT * FROM payroll_lines WHERE run_id=$1 AND worker_group IN ('fixed_admin','fixed_production')`, [runId]);
+            `SELECT * FROM payroll_lines WHERE run_id=$1 AND worker_group IN ('fixed_admin','fixed_production','fixed_production_nl')`, [runId]);
           const r2m = (n) => Math.round(Number(n || 0) * 100) / 100;
           for (const l of lines.rows) {
             const salary = Number(l.monthly_salary || 0);
             const perDay = salary / 31;
-            const otDiv = l.worker_group === 'fixed_production' ? 10 : 8;
+            const otDiv = l.worker_group === 'fixed_admin' ? 8 : 10;
             const deductible = Math.max(Number(l.absent_days || 0) - holidays, 0);
             const charged = Math.max(deductible - Number(l.leave_credit_used || 0), 0);
             const absentDed = r2m(perDay * charged);

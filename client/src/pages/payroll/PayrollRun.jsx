@@ -275,7 +275,7 @@ export default function PayrollRun() {
       {/* ── Fixed Salary (Admin + Production) ── */}
       {fixed.length > 0 && (
         <Section title="Fixed Salary — Admin & Production"
-          subtitle="Salary ÷ days in month per day (admin & production with leave; no-leave ÷ 30) · OT = day pay ÷ 8 per hour · paid leave same pool (max 5 carried to next year, >7 together capped) · Admin: 1/month + 4+ days past 6:30pm in a week = +1 sick · Production: 2/month · Production (no leave): every absence deducts · Late cut: no-leave past 9:10 (30/45/60…), with-leave past 9:20 & admin past 10:20 (60/75/90…)">
+          subtitle="Salary ÷ days in month per day (all fixed groups) · OT = day pay ÷ 8 per hour · paid leave same pool (max 5 carried to next year, >7 together capped) · Admin: 1/month + 4+ days past 6:30pm in a week = +1 sick · Production: 2/month · Production (no leave): every absence deducts · Late cut: no-leave past 9:10 (30/45/60…), with-leave past 9:20 & admin past 10:20 (60/75/90…)">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
