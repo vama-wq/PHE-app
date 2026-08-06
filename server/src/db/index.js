@@ -240,7 +240,7 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_pc_company ON petty_cash_companies(lower(name))`);
       // Jay Bhramani (Machinery) entries are recorded but don't reduce cash-in-hand.
       await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS affects_cash BOOLEAN NOT NULL DEFAULT TRUE`);
-      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling', 'Employee Expense', 'Salary', 'Purchase Payment', 'Plating', 'Purchase Transport']) {
+      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling', 'Employee Expense', 'Salary', 'Purchase Payment', 'Plating', 'Purchase Transport', 'Bank Withdrawal']) {
         await pool.query(`INSERT INTO petty_cash_categories (name) VALUES ($1) ON CONFLICT DO NOTHING`, [c]);
       }
       await pool.query(`INSERT INTO petty_cash_companies (name) VALUES ($1) ON CONFLICT DO NOTHING`, ['Jay Bhramani']);
@@ -402,6 +402,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       // Links a 'Purchase Payment' unpaid-bank entry back to the PO it settles,
       // so a PO's paid/remaining balance = its received value − Σ linked entries.
       await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS po_id INTEGER REFERENCES purchase_orders(id) ON DELETE SET NULL`);
+      // Bank Withdrawal: a paid_bank expense (bank down) whose linked cash
+      // top-up (cash up) carries transfer_entry_id → the expense; deleting the
+      // expense cascades the top-up so the pair can never diverge.
+      await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS transfer_entry_id INTEGER REFERENCES petty_cash_entries(id) ON DELETE CASCADE`);
       // Consolidate a pre-existing owner-added 'Employee Expenses' (plural) into
       // the canonical 'Employee Expense' the Employee-Expense form keys on.
       await pool.query(`UPDATE petty_cash_entries SET category='Employee Expense' WHERE category='Employee Expenses'`);

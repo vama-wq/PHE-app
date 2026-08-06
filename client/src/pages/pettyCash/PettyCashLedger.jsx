@@ -15,6 +15,7 @@ const EMPLOYEE_EXPENSE = 'Employee Expense';
 const PLATING = 'Plating';
 const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise'];
 const PLATING_TRANSPORT = 'Plating Transportation';
+const BANK_WITHDRAWAL = 'Bank Withdrawal'; // bank down → cash in hand up (linked top-up)
 const EMP_TYPES = ['Advance Paid', 'Employee Welfare', 'Employee Care', 'Miscellaneous'];
 const EMP_TYPES_WORKER = ['Advance Paid', 'Employee Care']; // pick a worker from payroll
 const METHOD_BADGES = {
@@ -655,8 +656,9 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   const isEmpExpense = f.category === EMPLOYEE_EXPENSE;
   const isPlating = f.category === PLATING;
   const isPlatingTransport = f.category === PLATING_TRANSPORT;
+  const isBankWithdrawal = f.category === BANK_WITHDRAWAL;
   const empNeedsWorker = isEmpExpense && EMP_TYPES_WORKER.includes(f.emp_expense_type);
-  const needsReceipt = !isTopUp && !isPlatingTransport && parseFloat(f.amount) > receiptLimit;
+  const needsReceipt = !isTopUp && !isPlatingTransport && !isBankWithdrawal && parseFloat(f.amount) > receiptLimit;
 
   // Load the eligible plating items whenever the trip direction changes
   useEffect(() => {
@@ -692,7 +694,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
         if (!f.emp_expense_type) return setError('Pick the expense type.');
         if (empNeedsWorker && !f.employee_id) return setError('Select the employee.');
         if (!empNeedsWorker && !f.paid_to.trim()) return setError('Paid To is required.');
-      } else if (!f.paid_to.trim()) {
+      } else if (!isBankWithdrawal && !f.paid_to.trim()) {
         return setError('Paid To is required.');
       }
       if (isMachinery && !f.description.trim()) return setError('Description is required for Machinery.');
@@ -812,7 +814,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
 
         <div>
           <label className="label">{isTopUp ? 'Top-up Into' : 'Payment Method'} <span className="text-red-500">*</span></label>
-          <select className="input" value={f.payment_method} onChange={set('payment_method')} disabled={isPlating || isPlatingTransport}>
+          <select className="input" value={f.payment_method} onChange={set('payment_method')} disabled={isPlating || isPlatingTransport || isBankWithdrawal}>
             {!isTopUp && <option value="">— select —</option>}
             <option value="cash">Cash{isTopUp ? ' in Hand' : ''}</option>
             <option value="paid_bank">{isTopUp ? 'Bank' : 'Paid Bank'}</option>
@@ -823,6 +825,9 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
           )}
           {isPlatingTransport && (
             <p className="text-[11px] text-emerald-700 mt-1">Plating transport is always paid in Cash.</p>
+          )}
+          {isBankWithdrawal && (
+            <p className="text-[11px] text-emerald-700 mt-1">Withdraws from the Bank and adds the same amount to Cash in Hand (a linked cash top-up is recorded automatically).</p>
           )}
           {!isPlating && f.payment_method === 'unpaid_bank' && (
             <p className="text-[11px] text-amber-700 mt-1">Recorded but not deducted — the owner can mark it Paid later, which then reduces the Bank balance.</p>
@@ -838,13 +843,14 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
               </label>
               <select className="input" value={f.category}
                 onChange={e => setF(p => ({ ...p, category: e.target.value, paid_to: '',
-                  // Plating locks the method (unpaid bank / cash). Leaving one of
-                  // those categories CLEARS the method instead of silently keeping
-                  // the forced value — the user must re-pick, so an expense can't
-                  // land as Cash when they'd chosen Unpaid Bank before browsing.
+                  // Some categories lock the method (Plating → unpaid bank,
+                  // Plating Transport → cash, Bank Withdrawal → paid bank).
+                  // Leaving a forced category CLEARS the method instead of
+                  // silently keeping the forced value — the user must re-pick.
                   payment_method: e.target.value === PLATING ? 'unpaid_bank'
                     : e.target.value === PLATING_TRANSPORT ? 'cash'
-                    : [PLATING, PLATING_TRANSPORT].includes(p.category) ? '' : p.payment_method }))}>
+                    : e.target.value === BANK_WITHDRAWAL ? 'paid_bank'
+                    : [PLATING, PLATING_TRANSPORT, BANK_WITHDRAWAL].includes(p.category) ? '' : p.payment_method }))}>
                 <option value="">— select category —</option>
                 {categories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -877,6 +883,10 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                     <input className="input" value={f.paid_to} onChange={set('paid_to')} placeholder="Person / shop / description" />
                   </div>
                 ) : null}
+              </div>
+            ) : isBankWithdrawal ? (
+              <div className="text-sm rounded-xl px-3 py-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800">
+                Bank → Cash in Hand transfer: no payee needed. The Bank balance drops and Cash in Hand rises by the amount above, as two linked entries.
               </div>
             ) : (
               <div>

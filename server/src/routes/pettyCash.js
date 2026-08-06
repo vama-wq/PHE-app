@@ -16,6 +16,9 @@ const SAMPLING = 'Sampling';
 const EMPLOYEE_EXPENSE = 'Employee Expense';
 const PLATING = 'Plating';
 const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise'];
+// Bank → Cash transfer: a paid_bank expense (bank down) + auto-created linked
+// cash top-up (cash up), committed together.
+const BANK_WITHDRAWAL = 'Bank Withdrawal';
 const NO_CASH_COMPANY = 'jay bhramani'; // lower-cased for comparison
 // Employee Expense sub-types (stored in `description`). Advance Paid & Employee
 // Care pick a worker from the payroll list; the others need a free-text Paid To.
@@ -221,7 +224,13 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
       if (cat === 'Purchase Payment') return fail(400, 'Purchase Payment entries are posted from Purchases → Payments Due');
       if (cat === 'Purchase Transport') return fail(400, 'Purchase Transport entries are posted automatically when a purchase is received');
 
-      if (cat === EMPLOYEE_EXPENSE) {
+      if (cat === BANK_WITHDRAWAL) {
+        // Internal transfer: money leaves the Bank and lands in Cash in Hand.
+        // No payee, no receipt — the linked top-up is created below.
+        method = 'paid_bank';
+        finalPaidTo = 'Cash in Hand';
+        if (!finalDescription) finalDescription = 'Cash withdrawn from bank';
+      } else if (cat === EMPLOYEE_EXPENSE) {
         const type = (req.body.emp_expense_type || '').trim();
         if (!EMP_TYPES.includes(type)) return fail(400, 'Pick an expense type (Advance Paid / Employee Welfare / Employee Care / Miscellaneous)');
         finalDescription = type; // the sub-type is stored as the description
@@ -264,7 +273,7 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
         if (!(qty > 0)) return fail(400, 'Enter a valid sample quantity');
         sample = { item_name: itemName, category: (req.body.item_category || '').trim() || null, unit, qty };
       }
-      if (amt > RECEIPT_REQUIRED_ABOVE && !req.file) {
+      if (amt > RECEIPT_REQUIRED_ABOVE && !req.file && cat !== BANK_WITHDRAWAL) {
         return fail(400, `A receipt/bill photo is required for expenses above ₹${RECEIPT_REQUIRED_ABOVE}`);
       }
     }
@@ -296,6 +305,14 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
           [rows[0].id, paid_to.trim(), sample.item_name, sample.category, sample.unit,
            sample.qty, amt, (description || '').trim() || null, req.user.id]);
+      }
+      // Bank Withdrawal: the linked cash top-up lands in the same transaction —
+      // bank down + cash up always move together (FK cascade keeps the pair).
+      if (cat === BANK_WITHDRAWAL) {
+        await client.query(
+          `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, transfer_entry_id, created_by)
+           VALUES ($1,'top_up',NULL,$2,NULL,$3,'cash',TRUE,$4,$5)`,
+          [entry_date, 'Cash withdrawn from bank', amt, rows[0].id, req.user.id]);
       }
       return rows[0].id;
     });
@@ -519,6 +536,12 @@ router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {
             [Number(a[0].amount), a[0].employee_id]);
           await client.query('DELETE FROM employee_advances WHERE id=$1', [e.advance_id]);
         }
+      }
+      // Bank-Withdrawal pairs live and die together: deleting the linked cash
+      // top-up removes the withdrawal too (FK cascade then clears this row),
+      // and deleting the withdrawal cascades its top-up.
+      if (e.transfer_entry_id) {
+        await client.query('DELETE FROM petty_cash_entries WHERE id=$1', [e.transfer_entry_id]);
       }
       await client.query('DELETE FROM petty_cash_entries WHERE id=$1', [id]);
     });
