@@ -105,7 +105,21 @@ export default function PettyCashLedger() {
           <p className="text-gray-500 text-sm mt-0.5">Cash &amp; bank expense ledger — receipts required above ₹{data?.receipt_required_above ?? 500}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <input type="month" className="input w-[160px]" value={month} onChange={e => setMonth(e.target.value)} />
+          {/* Month + Year dropdowns — pick any past month to see its entries
+              (the table shows that month with its brought-forward balances). */}
+          <select className="input w-auto text-sm" value={month.split('-')[1]}
+            onChange={e => setMonth(`${month.split('-')[0]}-${e.target.value}`)}>
+            {['January','February','March','April','May','June','July','August','September','October','November','December'].map((name, i) => {
+              const v = String(i + 1).padStart(2, '0');
+              return <option key={v} value={v}>{name}</option>;
+            })}
+          </select>
+          <select className="input w-auto text-sm" value={month.split('-')[0]}
+            onChange={e => setMonth(`${e.target.value}-${month.split('-')[1]}`)}>
+            {Array.from({ length: new Date().getFullYear() - 2025 + 1 }, (_, i) => String(2025 + i)).map(yy => (
+              <option key={yy} value={yy}>{yy}</option>
+            ))}
+          </select>
           <button className="btn-secondary flex items-center gap-1.5 text-sm"
             onClick={() => downloadExcel('petty-cash?account=cash', 'cash_in_hand.xlsx')}
             title="Export the Cash-in-Hand statement">
