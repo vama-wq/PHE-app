@@ -6,7 +6,7 @@ import SupplierModal from '../../components/SupplierModal';
 import InventoryItemModal from '../../components/InventoryItemModal';
 import CategorySelect from '../../components/CategorySelect';
 import { fmtDate, downloadExcel } from '../../lib/utils';
-import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets } from 'lucide-react';
+import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets, ChevronDown, ChevronRight } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const MACHINERY = 'Machinery';
@@ -31,6 +31,7 @@ export default function PettyCashLedger() {
   const [ledgers, setLedgers] = useState(null); // owner-only accounts summary
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [filter, setFilter] = useState(null); // { category } | { company } | null
+  const [showLedgers, setShowLedgers] = useState(false); // ledger cards collapsed by default
   const [showEntry, setShowEntry] = useState(null); // 'expense' | 'top_up'
   const [samples, setSamples] = useState([]);
   const [approving, setApproving] = useState(null); // sample being approved
@@ -177,9 +178,18 @@ export default function PettyCashLedger() {
       {/* Owner-only: ledger accounts (each category + each Machinery company) */}
       {isOwner && ledgers && !isLedgerView && (
         <div className="mb-6">
-          <h2 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5 mb-2">
-            <BookOpen size={15} className="text-emerald-600" /> Ledger Accounts <span className="text-gray-400 font-normal">(owner only)</span>
-          </h2>
+          {/* Collapsed by default — the cards are a drill-down tool, not
+              something to scroll past on every visit. */}
+          <button type="button" onClick={() => setShowLedgers(v => !v)}
+            className="w-full flex items-center gap-1.5 text-sm font-semibold text-gray-800 mb-2 hover:text-emerald-700 transition-colors">
+            {showLedgers ? <ChevronDown size={15} className="text-emerald-600" /> : <ChevronRight size={15} className="text-emerald-600" />}
+            <BookOpen size={15} className="text-emerald-600" /> Ledger Accounts
+            <span className="text-gray-400 font-normal">(owner only)</span>
+            <span className="text-xs text-gray-400 font-normal ml-auto">
+              {showLedgers ? 'hide' : `${ledgers.categories.length + (ledgers.methods?.length || 0) + ledgers.companies.length} accounts — show`}
+            </span>
+          </button>
+          {showLedgers && (<>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             {ledgers.categories.map(c => (
               <button key={c.name} onClick={() => setFilter({ category: c.name })}
@@ -220,6 +230,7 @@ export default function PettyCashLedger() {
               </div>
             </>
           )}
+          </>)}
         </div>
       )}
 
