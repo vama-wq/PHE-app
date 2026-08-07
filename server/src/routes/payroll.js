@@ -845,13 +845,16 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
 
         // Post the net salary into the Account Statement as an Unpaid Bank entry,
         // linked to this line so marking it paid there flips the line to paid.
-        if (Number(pay.total_payable) > 0) {
+        // The PAYMENT is rounded to the nearest rupee (banks/cash don't deal in
+        // paise); the payroll line keeps its exact computed figure.
+        const payAmount = Math.round(Number(pay.total_payable));
+        if (payAmount > 0) {
           await client.query(
             `INSERT INTO petty_cash_entries
                (entry_date, entry_type, category, description, paid_to, amount,
                 payment_method, affects_cash, payroll_line_id, created_by)
              VALUES (CURRENT_DATE, 'expense', 'Salary', $1, $2, $3, 'unpaid_bank', FALSE, $4, $5)`,
-            [`Salary ${run.month}`, line.name, r2(pay.total_payable), line.id, req.user.id]);
+            [`Salary ${run.month}`, line.name, payAmount, line.id, req.user.id]);
         }
       }
       await client.query(
