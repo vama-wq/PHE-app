@@ -846,6 +846,36 @@ async function initDB(retries = 20, delayMs = 10000) {
             { name: 'Ajay', avail: 6 },
             { name: 'Nayan Bhai', avail: 10 },
           ];
+          // Owner: Gayaji uses 1 leave credit this month (2 available → 1 left).
+          // Credits offset an absence, so her charged absences drop by 1 and the
+          // line's money fields are recomputed on the ÷31 basis. (Nayan's 2
+          // credits are NOT set: he has 0 recorded absences and the save/approve
+          // paths clamp credits to absent days, so they would be dropped.)
+          {
+            const g = await pool.query(`SELECT id FROM employees WHERE name='Gayaji' LIMIT 1`);
+            if (g.rows.length) {
+              const gl = await pool.query(
+                'SELECT * FROM payroll_lines WHERE run_id=$1 AND employee_id=$2 LIMIT 1', [runId, g.rows[0].id]);
+              const l = gl.rows[0];
+              if (l && Number(l.leave_credit_used || 0) === 0 && Number(l.absent_days || 0) >= 1) {
+                const holQ = await pool.query(
+                  `SELECT COUNT(*)::int AS n FROM holidays WHERE paid=TRUE AND to_char(holiday_date,'YYYY-MM')='2026-07'`);
+                const holidays = Number(holQ.rows[0]?.n || 0);
+                const salary = Number(l.monthly_salary || 0);
+                const perDay = salary / 31;
+                const otDiv = 8; // admin
+                const charged = Math.max(Math.max(Number(l.absent_days || 0) - holidays, 0) - 1, 0);
+                const absentDed = Math.round(perDay * charged * 100) / 100;
+                const otAmt = Math.round((perDay / otDiv) * Number(l.ot_hours || 0) * 100) / 100;
+                const lateDed = Math.round((Number(l.late_cut_minutes || 0) / 60) * (perDay / otDiv) * 100) / 100;
+                const total = Math.round(salary - absentDed + otAmt + Number(l.petrol || 0) - Number(l.advance_deduction || 0) - lateDed);
+                await pool.query(
+                  `UPDATE payroll_lines SET leave_credit_used=1, base_pay=$1, absent_deduction=$2,
+                     ot_amount=$3, late_deduction=$4, total_payable=$5 WHERE id=$6`,
+                  [Math.round((salary - absentDed) * 100) / 100, absentDed, otAmt, lateDed, total, l.id]);
+              }
+            }
+          }
           for (const t of targets) {
             const emp = await pool.query('SELECT id, worker_group FROM employees WHERE name=$1 LIMIT 1', [t.name]);
             if (!emp.rows.length) continue;
