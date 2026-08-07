@@ -786,6 +786,16 @@ async function initDB(retries = 20, delayMs = 10000) {
            SET description='Main vehicle transport — P PHE 05 (3 items)'
          WHERE category='Purchase Transport' AND amount=480
            AND description LIKE 'Main vehicle transport%P PHE 05%(MS Flange Cap%'`);
+      // One-off: the 07-Aug ₹3,000 Machinery entry was booked to payee "lathe
+      // repair"; owner renamed the payee to "Gayatri Guddu Bhai". Add the
+      // company (Machinery payees come from petty_cash_companies) and repoint
+      // the entry. Idempotent: the old paid_to guard stops re-runs.
+      await pool.query(
+        `INSERT INTO petty_cash_companies (name) VALUES ('Gayatri Guddu Bhai') ON CONFLICT DO NOTHING`);
+      await pool.query(`
+        UPDATE petty_cash_entries SET paid_to='Gayatri Guddu Bhai'
+         WHERE category='Machinery' AND entry_date='2026-08-07'
+           AND amount=3000 AND TRIM(paid_to)='lathe repair'`);
       // One-off: two 05-Aug Office Expenses were entered as Unpaid Bank but a
       // category-browsing quirk stomped the method to Cash (Canteen TDS ₹7,917
       // + umiya zerox ₹10,966 → cash went ₹−18,183). Convert them to
