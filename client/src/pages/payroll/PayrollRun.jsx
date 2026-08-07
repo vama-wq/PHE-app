@@ -288,7 +288,7 @@ export default function PayrollRun() {
                 <th className="table-header text-right" title="Days punched in after the grace time (auto from ESSL)">Late Days</th>
                 {isOwner && (
                   <>
-                    <th className="table-header text-right" title="Paid leaves the worker currently has: carried balance + this month's accrual (+1 admin / +2 production) + 6:30 sick credits earned this run − credits used this run">Leaves Avail.</th>
+                    <th className="table-header text-right" title="Paid leaves available to spend this month: carried balance + this month's accrual (+1 admin / +2 production) + 6:30 sick credits. '→ N left' shows what remains after the credits used this run.">Leaves Avail.</th>
                     <th className="table-header text-right" title="Absences to charge against leave credit (no salary cut)">Credit Used</th>
                     <th className="table-header text-right" title="Sick credits earned this month (admin 6:30 rule)">Sick +</th>
                     <th className="table-header text-right">Absent Ded.</th>
@@ -336,19 +336,24 @@ export default function PayrollRun() {
                         <>
                           <td className="table-cell text-right text-sm font-semibold">
                             {(() => {
-                              // What the worker CURRENTLY has, not just the ledger:
-                              // carried + this month's accrual + 6:30 credits − used.
+                              // AVAILABLE = what the worker has to spend this month
+                              // (carried + this month's accrual + 6:30 credits),
+                              // BEFORE the credits used below. The small "→ N left"
+                              // shows what remains once this month's usage applies.
                               const carried = Number(leaveBal?.[l.employee_id] ?? 0);
                               const accrual = l.worker_group === 'fixed_admin' ? 1 : l.worker_group === 'fixed_production' ? 2 : 0;
                               const sickPlus = l.worker_group === 'fixed_admin' ? (Number(val(l, 'sick_credit_earned')) || 0) : 0;
                               const used = Number(val(l, 'leave_credit_used')) || 0;
-                              const avail = carried + accrual + sickPlus - used;
+                              const avail = carried + accrual + sickPlus;
+                              const left = avail - used;
                               return (
                                 <span className="inline-flex items-center gap-1">
-                                  <span title={`Carried ${carried} + monthly ${accrual}${sickPlus ? ` + 6:30 credits ${sickPlus}` : ''}${used ? ` − used ${used}` : ''}`}
+                                  <span title={`Available ${avail} = carried ${carried} + monthly ${accrual}${sickPlus ? ` + 6:30 credits ${sickPlus}` : ''}${used ? ` · using ${used} this month → ${left} left` : ''}`}
                                     className={avail < 0 ? 'text-red-600' : ''}>
                                     {avail}
-                                    <span className="font-normal text-[10px] text-gray-400 ml-1">({carried} c/f)</span>
+                                    {used > 0 && (
+                                      <span className={`font-normal text-[10px] ml-1 ${left < 0 ? 'text-red-600' : 'text-gray-400'}`}>→ {left} left</span>
+                                    )}
                                   </span>
                                   <button type="button" className="p-0.5 text-gray-300 hover:text-brand-600" title="Edit carried balance (posts a manual leave-ledger adjustment)"
                                     onClick={() => adjustCarried(l, carried)}>

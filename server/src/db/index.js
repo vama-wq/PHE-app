@@ -826,20 +826,25 @@ async function initDB(retries = 20, delayMs = 10000) {
         }
       }
       // One-off (only while the 2026-07 run is unapproved): owner-final July
-      // leave availability — Gayaji 1, Ajay 6, Nayan Bhai 8, as displayed.
-      // ONLY the leave ledger moves: carried is set so that with each line's
-      // CURRENT accrual (+1 admin / +2 production), sick credit and credit-used,
-      // the run's Leaves Avail. reads exactly the target. Nothing else changes.
+      // leave AVAILABILITY (before this month's usage) — Gayaji 2, Ajay 6,
+      // Nayan Bhai 10. ONLY the leave ledger moves: carried is set so that with
+      // each line's CURRENT accrual (+1 admin / +2 production) and sick credit
+      // the run reads exactly the target. Also rounds the run's stored totals to
+      // whole rupees so the grid ties out with the payments posted at approval.
       {
         const run = await pool.query(
           `SELECT id FROM payroll_runs WHERE month='2026-07' AND status IN ('draft','submitted') LIMIT 1`);
         if (run.rows.length) {
           const runId = run.rows[0].id;
+          await pool.query(
+            'UPDATE payroll_lines SET total_payable = ROUND(total_payable) WHERE run_id=$1', [runId]);
           const ACCRUAL = { fixed_admin: 1, fixed_production: 2 };
           const targets = [
-            { name: 'Gayaji', avail: 1 },
+            // AVAILABLE to spend this month (before the credits used in the run):
+            // Gayaji 2 (uses 1 → 1 left), Nayan 10 (uses 2 → 8 left), Ajay 6 (uses 0).
+            { name: 'Gayaji', avail: 2 },
             { name: 'Ajay', avail: 6 },
-            { name: 'Nayan Bhai', avail: 8 },
+            { name: 'Nayan Bhai', avail: 10 },
           ];
           for (const t of targets) {
             const emp = await pool.query('SELECT id, worker_group FROM employees WHERE name=$1 LIMIT 1', [t.name]);
@@ -851,7 +856,8 @@ async function initDB(retries = 20, delayMs = 10000) {
                  FROM payroll_lines WHERE run_id=$1 AND employee_id=$2 LIMIT 1`, [runId, empId]);
             const sick = Number(line.rows[0]?.sick || 0);
             const used = Number(line.rows[0]?.used || 0);
-            const targetCarried = t.avail - accrual - sick + used;
+            // "Available" now excludes this month's usage, so no +used term.
+            const targetCarried = t.avail - accrual - sick;
             const bal = await pool.query(
               'SELECT COALESCE(SUM(delta),0) AS b FROM employee_leave_ledger WHERE employee_id=$1', [empId]);
             const delta = targetCarried - Number(bal.rows[0].b);

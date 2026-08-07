@@ -79,7 +79,9 @@ function computeLine(emp, line, holidays = 0, month = null) {
       holiday_pay: holidayPay, late_deduction: lateDeduction,
       petrol: 0, // labour never receives petrol
       advance_deduction: r2(advance),
-      total_payable: r2(base + otAmount + holidayPay - advance - lateDeduction),
+      // Net pay is rounded to the WHOLE RUPEE at source, so the grid, the
+      // export and the posted bank payment all tie out exactly.
+      total_payable: Math.round(base + otAmount + holidayPay - advance - lateDeduction),
     };
   }
   // fixed_admin / fixed_production / fixed_production_nl
@@ -97,7 +99,7 @@ function computeLine(emp, line, holidays = 0, month = null) {
     holiday_pay: 0, // fixed salary already covers the paid holiday
     late_deduction: lateDeduction,
     petrol: r2(petrol), advance_deduction: r2(advance),
-    total_payable: r2(salary - absentDeduction + otAmount + petrol - advance - lateDeduction),
+    total_payable: Math.round(salary - absentDeduction + otAmount + petrol - advance - lateDeduction),
   };
 }
 
