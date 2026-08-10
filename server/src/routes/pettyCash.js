@@ -15,7 +15,8 @@ const MACHINERY = 'Machinery';
 const SAMPLING = 'Sampling';
 const EMPLOYEE_EXPENSE = 'Employee Expense';
 const PLATING = 'Plating';
-const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise'];
+// External coating vendors: the three electroplaters + Peena Traders (Teflon).
+const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise', 'Peena Traders'];
 // Bank → Cash transfer: a paid_bank expense (bank down) + auto-created linked
 // cash top-up (cash up), committed together.
 const BANK_WITHDRAWAL = 'Bank Withdrawal';
@@ -258,10 +259,10 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
         if (!co) return fail(400, 'Pick a company from the list (or add it)');
       }
       if (cat === PLATING) {
-        // One of the three plating companies, a mandatory payment QR, and always
+        // One of the coating vendors, a mandatory payment QR, and always
         // Unpaid Bank first (the owner marks it Paid to deduct the bank).
         if (!PLATING_COMPANIES.some(c => c.toLowerCase() === to.toLowerCase())) {
-          return fail(400, 'Pick a plating company (A S Plating / Aesha Plating / Akshar Enterprise)');
+          return fail(400, `Pick a plating company (${PLATING_COMPANIES.join(' / ')})`);
         }
         finalPaidTo = PLATING_COMPANIES.find(c => c.toLowerCase() === to.toLowerCase());
         if (!req.file) return fail(400, 'A payment QR is required for Plating expenses');
