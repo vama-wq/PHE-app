@@ -786,6 +786,36 @@ async function initDB(retries = 20, delayMs = 10000) {
            SET description='Main vehicle transport — P PHE 05 (3 items)'
          WHERE category='Purchase Transport' AND amount=480
            AND description LIKE 'Main vehicle transport%P PHE 05%(MS Flange Cap%'`);
+      // One-off: the July run was APPROVED before Gayaji's 1 leave credit was
+      // applied, freezing her at ₹22,452 (7 charged absences). Owner-confirmed
+      // figures: credit 1 → 6 charged → ded ₹5,613 → total ₹23,387. Fix the
+      // frozen line, the posted (still-unpaid) Salary entry, and post the
+      // 'used' ledger row approval would have written. Guarded on the old
+      // values + her entry being unpaid → runs once, never touches paid money.
+      {
+        const gl = await pool.query(`
+          SELECT pl.id FROM payroll_lines pl
+            JOIN payroll_runs r ON r.id = pl.run_id
+            JOIN employees e ON e.id = pl.employee_id
+           WHERE r.month='2026-07' AND e.name='Gayaji'
+             AND COALESCE(pl.leave_credit_used,0)=0 AND ROUND(pl.total_payable)=22452 LIMIT 1`);
+        if (gl.rows.length) {
+          const lineId = gl.rows[0].id;
+          const sal = await pool.query(
+            `SELECT id FROM petty_cash_entries
+              WHERE payroll_line_id=$1 AND payment_method='unpaid_bank' AND amount=22452 LIMIT 1`, [lineId]);
+          if (sal.rows.length) {
+            await pool.query(`
+              UPDATE payroll_lines SET leave_credit_used=1, absent_deduction=5613,
+                base_pay=23387, total_payable=23387 WHERE id=$1`, [lineId]);
+            await pool.query('UPDATE petty_cash_entries SET amount=23387 WHERE id=$1', [sal.rows[0].id]);
+            await pool.query(`
+              INSERT INTO employee_leave_ledger (employee_id, delta, reason, payroll_run_id, notes)
+              SELECT pl.employee_id, -1, 'used', pl.run_id, 'Used in 2026-07 (applied post-approval)'
+                FROM payroll_lines pl WHERE pl.id=$1`, [lineId]);
+          }
+        }
+      }
       // One-off: restore the accidentally-deleted 05-Aug Sampling entry (id 66,
       // SS Plate ₹3,540 paid_bank, SHIVAKSH LASER TECH INDUSTRIES) and its
       // cascade-deleted pending sample (id 2). Receipt already re-uploaded to
