@@ -868,11 +868,17 @@ async function initDB(retries = 20, delayMs = 10000) {
             'UPDATE payroll_lines SET total_payable = ROUND(total_payable) WHERE run_id=$1', [runId]);
           const ACCRUAL = { fixed_admin: 1, fixed_production: 2 };
           const targets = [
-            // AVAILABLE to spend this month (before the credits used in the run):
-            // Gayaji 2 (uses 1 → 1 left), Nayan 10 (uses 2 → 8 left), Ajay 6 (uses 0).
+            // Owner's targets are the balance REMAINING AFTER this run:
+            // Gayaji 1, Ajay 6, Nayan 8. Approval posts +accrual +sick −used, so
+            //   after = carried + accrual + sick − used.
+            // Gayaji: 0 + 1 + 1 − 1 = 1 ✓ (avail 2, uses 1)
+            // Ajay:   4 + 1 + 1 − 0 = 6 ✓ (avail 6, uses 0)
+            // Nayan:  6 + 2 + 0 − 0 = 8 ✓ — carried reduced by 2 (owner's call)
+            //   in place of the 2 accrued credits he spent on late days, which
+            //   the system can't consume (credits only offset recorded absences).
             { name: 'Gayaji', avail: 2 },
             { name: 'Ajay', avail: 6 },
-            { name: 'Nayan Bhai', avail: 10 },
+            { name: 'Nayan Bhai', avail: 8 },
           ];
           // Owner: Gayaji uses 1 leave credit this month (2 available → 1 left).
           // Credits offset an absence, so her charged absences drop by 1 and the
