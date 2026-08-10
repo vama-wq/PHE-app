@@ -15,6 +15,9 @@ const SAMPLING = 'Sampling';
 const EMPLOYEE_EXPENSE = 'Employee Expense';
 const PLATING = 'Plating';
 const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise', 'Peena Traders'];
+// Vendors that keep the goods — sending there is a one-way transfer, no return
+// leg (kept in sync with server/src/lib/plating.js).
+const ONE_WAY_VENDORS = ['Peena Traders'];
 const PLATING_TRANSPORT = 'Plating Transportation';
 const BANK_WITHDRAWAL = 'Bank Withdrawal'; // bank down → cash in hand up (linked top-up)
 const EMP_TYPES = ['Advance Paid', 'Employee Welfare', 'Employee Care', 'Miscellaneous'];
@@ -1070,6 +1073,12 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                       <option value="">— select —</option>
                       {PLATING_COMPANIES.map(v => <option key={v} value={v}>{v}</option>)}
                     </select>
+                    {ONE_WAY_VENDORS.includes(platingVendor) && (
+                      <p className="text-[11px] text-amber-700 mt-1">
+                        {platingVendor} keeps the goods — these items are marked <b>transferred</b>, no return trip is expected.
+                        The order carries on to QC &amp; Dispatch as usual.
+                      </p>
+                    )}
                   </div>
                 )}
                 <div>

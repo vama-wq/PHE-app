@@ -3,6 +3,7 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadPettyCashReceipt, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
+const { statusAfterTrip } = require('../lib/plating');
 
 // Office Expense — Petty Cash ledger.
 // Categories are a fixed, owner-managed list. Accounts records expenses; the
@@ -558,11 +559,11 @@ router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {
           'SELECT order_item_id FROM plating_trip_items WHERE trip_id=$1', [trip.id]);
         for (const ti of tItems) {
           const { rows: prev } = await client.query(
-            `SELECT pt.direction FROM plating_trip_items pti
+            `SELECT pt.direction, pt.vendor FROM plating_trip_items pti
                JOIN plating_trips pt ON pt.id = pti.trip_id
               WHERE pti.order_item_id=$1 AND pt.id <> $2
               ORDER BY pt.id DESC LIMIT 1`, [ti.order_item_id, trip.id]);
-          const status = prev.length ? (prev[0].direction === 'sent' ? 'out_for_plating' : 'returned') : null;
+          const status = prev.length ? statusAfterTrip(prev[0].direction, prev[0].vendor) : null;
           await client.query('UPDATE order_items SET plating_status=$1 WHERE id=$2', [status, ti.order_item_id]);
         }
         await client.query('DELETE FROM plating_trips WHERE id=$1', [trip.id]); // cascades trip items

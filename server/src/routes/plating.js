@@ -3,10 +3,11 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 
 // Only nickel-plating / electropolish / teflon-coating items go to an external
-// vendor (Buffing / No Plating stay in-house). Matched loosely so legacy
-// free-text values ("nickle plating", "Electro Polish", "PTFE", etc.) qualify.
-const PLATING_MATCH_SQL = 'nickel|nickle|electro|teflon|ptfe';
-const PLATING_MATCH_RE = /nickel|nickle|electro|teflon|ptfe/i;
+// vendor (Buffing / No Plating stay in-house); one-way vendors never return the
+// goods. Both rules live in lib/plating.js so the delete/unwind path agrees.
+const {
+  PLATING_MATCH_SQL, PLATING_MATCH_RE, AWAY_STATUSES, isOneWayVendor, sentStatus,
+} = require('../lib/plating');
 // Terminal / not-yet-started orders are excluded; everything else is "active".
 const INACTIVE_ORDER_STATES = ['dispatched', 'resolved_dispatched', 'rejected'];
 
@@ -19,8 +20,10 @@ router.get('/eligible', authenticate, authorize('accounts', 'owner', 'admin'), a
   try {
     const db = getDB();
     const direction = req.query.direction === 'returned' ? 'returned' : 'sent';
+    // Sent → anything not currently away (out for plating, or transferred for
+    // good to a one-way vendor). Returned → only what is actually out.
     const statusCond = direction === 'sent'
-      ? `(oi.plating_status IS NULL OR oi.plating_status <> 'out_for_plating')`
+      ? `(oi.plating_status IS NULL OR oi.plating_status <> ALL($3))`
       : `oi.plating_status = 'out_for_plating'`;
     const rows = await db.all(`
       SELECT oi.id AS order_item_id, oi.drawing_number, oi.product_code, oi.quantity,
@@ -36,7 +39,9 @@ router.get('/eligible', authenticate, authorize('accounts', 'owner', 'admin'), a
         AND o.status <> ALL($2)
         AND ${statusCond}
       ORDER BY o.order_code, oi.id`,
-      [PLATING_MATCH_SQL, INACTIVE_ORDER_STATES]);
+      direction === 'sent'
+        ? [PLATING_MATCH_SQL, INACTIVE_ORDER_STATES, AWAY_STATUSES]
+        : [PLATING_MATCH_SQL, INACTIVE_ORDER_STATES]);
     res.json(rows);
   } catch (e) {
     console.error('plating eligible error:', e);
@@ -72,13 +77,17 @@ router.post('/trips', authenticate, authorize('accounts', 'owner', 'admin'), asy
       if (direction === 'sent' && it.plating_status === 'out_for_plating') {
         return res.status(400).json({ error: 'One of the items is already out for plating' });
       }
+      if (direction === 'sent' && it.plating_status === 'transferred') {
+        return res.status(400).json({ error: 'One of the items was already transferred for good and cannot be sent again' });
+      }
       if (direction === 'returned' && it.plating_status !== 'out_for_plating') {
         return res.status(400).json({ error: 'One of the items being returned is not currently out for plating' });
       }
     }
 
     const tripId = await db.withTransaction(async (client) => {
-      const desc = `Plating transport (${direction === 'sent' ? 'to vendor' : 'return'}) — ${itemIds.length} item${itemIds.length > 1 ? 's' : ''}${vendor ? ` · ${vendor}` : ''}`;
+      const leg = direction === 'sent' ? (isOneWayVendor(vendor) ? 'transfer' : 'to vendor') : 'return';
+      const desc = `Plating transport (${leg}) — ${itemIds.length} item${itemIds.length > 1 ? 's' : ''}${vendor ? ` · ${vendor}` : ''}`;
       const { rows: pe } = await client.query(
         `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, created_by)
          VALUES ($1,'expense','Plating Transportation',$2,$3,$4,'cash',TRUE,$5) RETURNING id`,
@@ -91,8 +100,10 @@ router.post('/trips', authenticate, authorize('accounts', 'owner', 'admin'), asy
       for (const id of itemIds) {
         await client.query('INSERT INTO plating_trip_items (trip_id, order_item_id) VALUES ($1,$2)', [newTripId, id]);
       }
+      // A one-way vendor (Peena Traders) keeps the goods: mark them transferred
+      // so no return leg is expected and they leave the return list.
       await client.query('UPDATE order_items SET plating_status=$1 WHERE id = ANY($2)',
-        [direction === 'sent' ? 'out_for_plating' : 'returned', itemIds]);
+        [direction === 'sent' ? sentStatus(vendor) : 'returned', itemIds]);
       return newTripId;
     });
     await logActivity(null, null, 'plating_trip', `Plating ${direction}: ${itemIds.length} item(s), transport ₹${cost}`, req.user.id);
