@@ -946,16 +946,23 @@ router.put('/runs/:id/mark-paid', authenticate, authorize('owner'), async (req, 
     }
     // Mark lines paid + flip the linked Account-Statement salary entries to Paid
     // Bank, and settle the run — all in one transaction so they never desync.
+    // Salaries always go out of the primary bank account (Kotak), so the
+    // entries are tagged with it here — otherwise a bulk mark-paid would leave
+    // every salary untagged and neither account would reconcile.
+    const primaryBank = await db.get('SELECT id FROM bank_accounts WHERE active AND is_primary ORDER BY id LIMIT 1');
+    const bankId = primaryBank?.id || null;
     const remainingN = await db.withTransaction(async (client) => {
       if (Array.isArray(req.body.line_ids) && req.body.line_ids.length) {
         const ids = req.body.line_ids.map(n => parseInt(n, 10)).filter(Number.isInteger);
         await client.query(`UPDATE payroll_lines SET paid=TRUE WHERE run_id=$1 AND id = ANY($2)`, [id, ids]);
-        await client.query(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE
-                      WHERE payment_method='unpaid_bank' AND payroll_line_id = ANY($1)`, [ids]);
+        await client.query(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE,
+                             bank_account_id=COALESCE(bank_account_id, $2)
+                      WHERE payment_method='unpaid_bank' AND payroll_line_id = ANY($1)`, [ids, bankId]);
       } else {
         await client.query('UPDATE payroll_lines SET paid=TRUE WHERE run_id=$1', [id]);
-        await client.query(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE
-                      WHERE payment_method='unpaid_bank' AND payroll_line_id IN (SELECT id FROM payroll_lines WHERE run_id=$1)`, [id]);
+        await client.query(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE,
+                             bank_account_id=COALESCE(bank_account_id, $2)
+                      WHERE payment_method='unpaid_bank' AND payroll_line_id IN (SELECT id FROM payroll_lines WHERE run_id=$1)`, [id, bankId]);
       }
       const { rows } = await client.query(
         'SELECT COUNT(*)::int AS n FROM payroll_lines WHERE run_id=$1 AND paid=FALSE', [id]);

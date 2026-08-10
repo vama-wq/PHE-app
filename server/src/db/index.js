@@ -923,6 +923,18 @@ async function initDB(retries = 20, delayMs = 10000) {
           }
         }
       }
+      // Owner-confirmed correction to that backfill: the 05-Aug ₹1,41,596.55
+      // loan repayment went out of the KALUPUR account, not Kotak. (The 06-Aug
+      // ₹3,000 Machinery entry is Kotak, which the backfill already gets right.)
+      // Runs AFTER the backfill — doing it before would leave a tagged row and
+      // trip the backfill's "nothing tagged yet" guard. Idempotent: it only
+      // touches the row while it is still on the wrong account.
+      await pool.query(`
+        UPDATE petty_cash_entries
+           SET bank_account_id = (SELECT id FROM bank_accounts WHERE lower(name)='kalupur')
+         WHERE payment_method='paid_bank' AND amount=141596.55
+           AND TRIM(COALESCE(paid_to,'')) ILIKE 'Kalupur Loan Account'
+           AND bank_account_id IS DISTINCT FROM (SELECT id FROM bank_accounts WHERE lower(name)='kalupur')`);
       // One-off (only while the 2026-07 run is unapproved): the last-saved July
       // payroll is FINAL and late cuts are waived for this month. Zero the
       // stored cut minutes + deduction (so any later Save/approve recompute
