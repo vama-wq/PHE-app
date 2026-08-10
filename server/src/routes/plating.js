@@ -6,7 +6,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 // vendor (Buffing / No Plating stay in-house); one-way vendors never return the
 // goods. Both rules live in lib/plating.js so the delete/unwind path agrees.
 const {
-  PLATING_MATCH_SQL, PLATING_MATCH_RE, AWAY_STATUSES, isOneWayVendor, sentStatus,
+  PLATING_MATCH_SQL, PLATING_MATCH_RE, PLATING_COMPANIES, isOneWayVendor, sentStatus,
 } = require('../lib/plating');
 // Terminal / not-yet-started orders are excluded; everything else is "active".
 const INACTIVE_ORDER_STATES = ['dispatched', 'resolved_dispatched', 'rejected'];
@@ -20,10 +20,12 @@ router.get('/eligible', authenticate, authorize('accounts', 'owner', 'admin'), a
   try {
     const db = getDB();
     const direction = req.query.direction === 'returned' ? 'returned' : 'sent';
-    // Sent → anything not currently away (out for plating, or transferred for
-    // good to a one-way vendor). Returned → only what is actually out.
+    // Sent → anything not currently out at a vendor. A 'transferred' item stays
+    // sendable: one order item often ships in several consignments (partial
+    // dispatch splits and remakes share the parent's order_item_id), so a later
+    // batch must still be recordable. Returned → only what is actually out.
     const statusCond = direction === 'sent'
-      ? `(oi.plating_status IS NULL OR oi.plating_status <> ALL($3))`
+      ? `(oi.plating_status IS NULL OR oi.plating_status <> 'out_for_plating')`
       : `oi.plating_status = 'out_for_plating'`;
     const rows = await db.all(`
       SELECT oi.id AS order_item_id, oi.drawing_number, oi.product_code, oi.quantity,
@@ -39,9 +41,7 @@ router.get('/eligible', authenticate, authorize('accounts', 'owner', 'admin'), a
         AND o.status <> ALL($2)
         AND ${statusCond}
       ORDER BY o.order_code, oi.id`,
-      direction === 'sent'
-        ? [PLATING_MATCH_SQL, INACTIVE_ORDER_STATES, AWAY_STATUSES]
-        : [PLATING_MATCH_SQL, INACTIVE_ORDER_STATES]);
+      [PLATING_MATCH_SQL, INACTIVE_ORDER_STATES]);
     res.json(rows);
   } catch (e) {
     console.error('plating eligible error:', e);
@@ -67,6 +67,15 @@ router.post('/trips', authenticate, authorize('accounts', 'owner', 'admin'), asy
     if (!itemIds.length) return res.status(400).json({ error: 'Select at least one item' });
     if (!(cost >= 0)) return res.status(400).json({ error: 'Enter a valid transport cost' });
     if (!paidTo) return res.status(400).json({ error: 'Enter who the transport was paid to' });
+    // The vendor decides whether the goods are expected back, so a send trip
+    // cannot be left blank or free-text — a wrong/missing name would silently
+    // put a one-way transfer back on the return list.
+    if (direction === 'sent') {
+      if (!vendor) return res.status(400).json({ error: 'Select the plating vendor' });
+      if (!PLATING_COMPANIES.some(c => c.toLowerCase() === vendor.toLowerCase())) {
+        return res.status(400).json({ error: `Select a vendor from the list (${PLATING_COMPANIES.join(' / ')})` });
+      }
+    }
 
     const items = await db.all('SELECT id, plating_status, plating_instructions FROM order_items WHERE id = ANY($1)', [itemIds]);
     if (items.length !== itemIds.length) return res.status(400).json({ error: 'Some selected items no longer exist' });
@@ -74,11 +83,10 @@ router.post('/trips', authenticate, authorize('accounts', 'owner', 'admin'), asy
       if (!PLATING_MATCH_RE.test(it.plating_instructions || '')) {
         return res.status(400).json({ error: 'Only Nickel Plating / Electropolish / Teflon Coating items can be sent for plating' });
       }
+      // 'transferred' is deliberately NOT blocked here: the same order item can
+      // go out in more than one consignment, and a later batch must be recordable.
       if (direction === 'sent' && it.plating_status === 'out_for_plating') {
         return res.status(400).json({ error: 'One of the items is already out for plating' });
-      }
-      if (direction === 'sent' && it.plating_status === 'transferred') {
-        return res.status(400).json({ error: 'One of the items was already transferred for good and cannot be sent again' });
       }
       if (direction === 'returned' && it.plating_status !== 'out_for_plating') {
         return res.status(400).json({ error: 'One of the items being returned is not currently out for plating' });

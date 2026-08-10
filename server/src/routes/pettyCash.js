@@ -3,7 +3,7 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadPettyCashReceipt, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
-const { statusAfterTrip } = require('../lib/plating');
+const { statusAfterTrip, PLATING_COMPANIES } = require('../lib/plating');
 
 // Office Expense — Petty Cash ledger.
 // Categories are a fixed, owner-managed list. Accounts records expenses; the
@@ -16,8 +16,8 @@ const MACHINERY = 'Machinery';
 const SAMPLING = 'Sampling';
 const EMPLOYEE_EXPENSE = 'Employee Expense';
 const PLATING = 'Plating';
-// External coating vendors: the three electroplaters + Peena Traders (Teflon).
-const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise', 'Peena Traders'];
+// External coating vendors come from lib/plating (imported above) so the payee
+// list and the trip vendor list can never diverge.
 // Bank → Cash transfer: a paid_bank expense (bank down) + auto-created linked
 // cash top-up (cash up), committed together.
 const BANK_WITHDRAWAL = 'Bank Withdrawal';

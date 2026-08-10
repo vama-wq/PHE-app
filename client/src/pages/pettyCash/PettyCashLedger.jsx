@@ -814,6 +814,9 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
       if (isMachinery && !f.description.trim()) return setError('Description is required for Machinery.');
       if (isPlating && !receipt) return setError('A payment QR is required for Plating.');
       if (isPlatingTransport && platingSelIds.length === 0) return setError('Select the item(s) this transport carried.');
+      // The vendor decides whether the goods are expected back — leaving it
+      // blank would silently put a one-way transfer on the return list.
+      if (isPlatingTransport && platingDir === 'sent' && !platingVendor) return setError('Select the plating vendor.');
       if (isSampling) {
         if (!f.item_name.trim()) return setError('Item name is required for Sampling.');
         if (!f.unit.trim()) return setError('Unit is required for Sampling.');
@@ -1068,7 +1071,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                 </div>
                 {platingDir === 'sent' && (
                   <div>
-                    <label className="label">Plating vendor</label>
+                    <label className="label">Plating vendor <span className="text-red-500">*</span></label>
                     <select className="input" value={platingVendor} onChange={e => setPlatingVendor(e.target.value)}>
                       <option value="">— select —</option>
                       {PLATING_COMPANIES.map(v => <option key={v} value={v}>{v}</option>)}
