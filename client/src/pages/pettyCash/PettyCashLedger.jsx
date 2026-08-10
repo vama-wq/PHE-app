@@ -39,6 +39,8 @@ export default function PettyCashLedger() {
   const [showEntry, setShowEntry] = useState(null); // 'expense' | 'top_up'
   const [samples, setSamples] = useState([]);
   const [approving, setApproving] = useState(null); // sample being approved
+  const [banks, setBanks] = useState([]); // bank accounts (Kotak / Kalupur / …)
+  const [payingEntry, setPayingEntry] = useState(null); // unpaid entry awaiting "paid from which bank?"
   const [loading, setLoading] = useState(true);
 
   const load = () => {
@@ -58,8 +60,10 @@ export default function PettyCashLedger() {
   };
   const loadLedgers = () => { if (isOwner) api.get('/petty-cash/ledgers').then(r => setLedgers(r.data)).catch(() => {}); };
   const loadSamples = () => api.get('/petty-cash/samples').then(r => setSamples(r.data || [])).catch(() => {});
+  const loadBanks = () => api.get('/petty-cash/bank-accounts').then(r => setBanks(r.data || [])).catch(() => {});
   useEffect(() => { load(); }, [month, filter]);
   useEffect(() => { loadLedgers(); loadSamples(); }, [showEntry]);
+  useEffect(() => { loadBanks(); }, []);
 
   const handleRejectSample = async (s) => {
     const reason = window.prompt(`Reject sample "${s.item_name}" from ${s.supplier_name}?\n\nRejection reason (required):`);
@@ -76,16 +80,25 @@ export default function PettyCashLedger() {
     catch (err) { alert(err.response?.data?.error || 'Failed'); }
   };
 
-  const handleMarkPaid = async (e) => {
-    if (!window.confirm(`Mark this ${inr(e.amount)} expense (${e.paid_to || e.category}) as PAID from bank? It will then reduce the Bank balance.`)) return;
-    try { await api.put(`/petty-cash/${e.id}/mark-paid`); load(); loadLedgers(); }
+  // Marking paid is the moment the money leaves a real bank, so it has to say
+  // WHICH bank — otherwise neither account can be reconciled afterwards.
+  const handleMarkPaid = (e) => setPayingEntry(e);
+  const confirmMarkPaid = async (entry, bankAccountId) => {
+    try {
+      await api.put(`/petty-cash/${entry.id}/mark-paid`, { bank_account_id: bankAccountId });
+      setPayingEntry(null); load(); loadLedgers();
+    } catch (err) { alert(err.response?.data?.error || 'Failed'); }
+  };
+  const handleRetag = async (e, bankAccountId) => {
+    try { await api.put(`/petty-cash/${e.id}/bank-account`, { bank_account_id: bankAccountId }); load(); }
     catch (err) { alert(err.response?.data?.error || 'Failed'); }
   };
 
-  const isLedgerView = !!(filter?.category || filter?.company || filter?.method);
+  const isLedgerView = !!(filter?.category || filter?.company || filter?.method || filter?.bank_account);
   // A Bank / Cash method ledger runs as a live balance (top-up +, expense −);
   // everything else (category, company, Unpaid Bank) runs as cumulative spend.
-  const methodIsBalance = filter?.method === 'paid_bank' || filter?.method === 'cash';
+  // A single bank account's ledger is a balance ledger too.
+  const methodIsBalance = filter?.method === 'paid_bank' || filter?.method === 'cash' || !!filter?.bank_account;
   const runLabel = methodIsBalance ? 'Balance' : 'Cumulative';
   // Running columns: main view = Cash + Bank balances per payment method;
   // ledger view = cumulative spend (or running balance) in that account.
@@ -103,7 +116,10 @@ export default function PettyCashLedger() {
   });
   const monthIn = (data?.entries || []).filter(e => e.entry_type === 'top_up').reduce((a, e) => a + Number(e.amount), 0);
   const monthOut = (data?.entries || []).filter(e => e.entry_type === 'expense').reduce((a, e) => a + Number(e.amount), 0);
+  const bankName = filter?.bank_account
+    ? (banks.find(b => b.id === filter.bank_account)?.name || 'Bank account') : null;
   const ledgerTitle = filter?.company ? `Machinery — ${filter.company}`
+    : bankName ? `${bankName} bank`
     : filter?.method ? ({ paid_bank: 'Bank', unpaid_bank: 'Unpaid Bank', cash: 'Cash' }[filter.method])
     : filter?.category;
   const cols = isOwner ? 11 : 9; // accounts has no Bank Bal. column or actions column
@@ -115,7 +131,8 @@ export default function PettyCashLedger() {
   const printStatement = () => {
     // Print only what was actually fetched — never label a stale month's rows
     // with a newly picked month.
-    if (!data || data.loaded_month !== month || data.filter?.method !== filter?.method) {
+    if (!data || data.loaded_month !== month || data.filter?.method !== filter?.method
+        || (data.filter?.bank_account || null) !== (filter?.bank_account || null)) {
       return alert('Still loading this month — try again in a moment.');
     }
     const w = window.open('', '_blank');
@@ -161,12 +178,15 @@ export default function PettyCashLedger() {
             <td class="r">${inr(debits)}</td><td class="r">${inr(closing)}</td></tr></tfoot>
         </table>`;
     const title = isCash ? 'Cash in Hand Statement'
+      : bankName ? `${bankName} — Bank Statement`
       : methodIsBalance ? 'Bank Statement' : 'Unpaid Bank — Payments Pending';
     const summary = methodIsBalance
       ? `Opening <b>${inr(opening)}</b> · ${isCash ? 'Received' : 'Credits'} <b>${inr(credits)}</b> · ${isCash ? 'Spent' : 'Debits'} <b>${inr(debits)}</b> · Closing <b>${inr(closing)}</b>`
       : `Brought forward <b>${inr(opening)}</b> · Added in ${esc(monthName)} <b>${inr(debits)}</b> · Total outstanding <b>${inr(closing)}</b>`;
     const foot = isCash
       ? 'Cash-in-hand account of the PHE Account Statement ledger — in = cash top-ups (including bank withdrawals), out = cash paid out. Closing balance should match the physical cash box.'
+      : bankName
+      ? `${esc(bankName)} account only, as recorded in the PHE Account Statement ledger — credits are deposits, debits are payments made from this account. Closing balance should match the ${esc(bankName)} statement for the same period.`
       : methodIsBalance
       ? 'Bank account of the PHE Account Statement ledger — credits are deposits / top-ups, debits are payments made from the bank.'
       : `Amounts recorded but not yet paid from the bank as of ${new Date().toLocaleDateString('en-IN')} — once marked Paid, an entry moves to the Bank statement (under its original date).`;
@@ -253,6 +273,25 @@ export default function PettyCashLedger() {
               <div className={`text-2xl font-bold mt-1 ${Number(data?.bank_balance) < 0 ? 'text-red-600' : 'text-gray-900'}`}>
                 {data ? inr(data.bank_balance) : '—'}
               </div>
+              {/* Per-account split — each one reconciles against its own statement */}
+              {data?.bank_accounts?.length > 0 && (
+                <div className="mt-1.5 space-y-0.5">
+                  {data.bank_accounts.map(a => (
+                    <button key={a.id} type="button" onClick={() => setFilter({ bank_account: a.id })}
+                      className="w-full flex items-center justify-between text-xs text-gray-500 hover:text-blue-700"
+                      title={`Open the ${a.name} ledger`}>
+                      <span>{a.name}</span>
+                      <span className={`font-semibold ${Number(a.balance) < 0 ? 'text-red-600' : 'text-gray-700'}`}>{inr(a.balance)}</span>
+                    </button>
+                  ))}
+                  {data.bank_untagged?.entry_count > 0 && (
+                    <div className="flex items-center justify-between text-xs text-amber-700">
+                      <span>Untagged ({data.bank_untagged.entry_count})</span>
+                      <span className="font-semibold">{inr(data.bank_untagged.balance)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="card p-4">
               <div className="text-sm text-gray-500 flex items-center gap-1"><Clock size={14} className="text-amber-500" /> Unpaid (pending)</div>
@@ -305,6 +344,24 @@ export default function PettyCashLedger() {
                     <div className="text-sm font-medium text-gray-800 truncate">{m.label}{m.balance ? ' Balance' : ''}</div>
                     <div className={`text-lg font-bold ${m.total < 0 ? 'text-red-600' : 'text-gray-900'}`}>{inr(m.total)}</div>
                     <div className="text-xs text-gray-400">{m.count} entr{m.count == 1 ? 'y' : 'ies'}</div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {data?.bank_accounts?.length > 0 && (
+            <>
+              <h3 className="text-xs font-semibold text-gray-500 mt-3 mb-1.5 flex items-center gap-1">
+                <Landmark size={13} /> By bank account
+                <span className="text-gray-400 font-normal">— each reconciles against its own statement</span>
+              </h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {data.bank_accounts.map(a => (
+                  <button key={a.id} onClick={() => setFilter({ bank_account: a.id })}
+                    className="card p-3 text-left hover:border-emerald-300 transition-colors">
+                    <div className="text-sm font-medium text-gray-800 truncate">{a.name}</div>
+                    <div className={`text-lg font-bold ${Number(a.balance) < 0 ? 'text-red-600' : 'text-gray-900'}`}>{inr(a.balance)}</div>
+                    <div className="text-xs text-gray-400">{a.entry_count} entr{a.entry_count == 1 ? 'y' : 'ies'}</div>
                   </button>
                 ))}
               </div>
@@ -410,7 +467,7 @@ export default function PettyCashLedger() {
           </button>
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-semibold text-gray-800">{ledgerTitle} ledger</h2>
-            {filter?.method && (
+            {(filter?.method || filter?.bank_account) && (
               <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={printStatement}
                 disabled={loading || !data} title="Print this ledger as a statement (save as PDF from the print dialog)">
                 <Printer size={15} /> Print Statement
@@ -489,6 +546,23 @@ export default function PettyCashLedger() {
                       <td className="table-cell text-sm text-gray-600">{e.paid_to || '—'}</td>
                       <td className="table-cell">
                         <span className={`text-[10px] font-semibold rounded-full px-2 py-0.5 whitespace-nowrap ${badge.cls}`}>{badge.label}</span>
+                        {/* Which bank it moved through. Owner can re-tag inline —
+                            entries aren't otherwise editable, and a wrong tag
+                            breaks the reconciliation the tag exists for. */}
+                        {e.payment_method === 'paid_bank' && (
+                          isOwner && banks.length > 0 ? (
+                            <select
+                              className={`block mt-0.5 text-[10px] rounded border px-1 py-0.5 bg-white ${e.bank_account_id ? 'border-gray-200 text-gray-600' : 'border-amber-300 text-amber-700'}`}
+                              value={e.bank_account_id || ''}
+                              onChange={ev => ev.target.value && handleRetag(e, parseInt(ev.target.value, 10))}
+                              title="Which bank account this moved through">
+                              <option value="">untagged</option>
+                              {banks.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                            </select>
+                          ) : (
+                            <span className="block mt-0.5 text-[10px] text-gray-400">{e.bank_account_name || ''}</span>
+                          )
+                        )}
                       </td>
                       <td className="table-cell text-right text-sm font-semibold text-green-700">
                         {e.entry_type === 'top_up' ? inr(e.amount) : ''}
@@ -536,7 +610,33 @@ export default function PettyCashLedger() {
 
       {showEntry && (
         <EntryModal type={showEntry} isOwner={isOwner} receiptLimit={data?.receipt_required_above ?? 500}
+          banks={banks}
           onClose={() => setShowEntry(null)} onSaved={() => { setShowEntry(null); load(); }} />
+      )}
+
+      {/* Mark-paid asks which bank the money left, so the entry lands in the
+          right account's statement instead of a combined blob. */}
+      {payingEntry && (
+        <Modal open title="Mark as paid — from which bank?" onClose={() => setPayingEntry(null)}>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              {inr(payingEntry.amount)} — {payingEntry.paid_to || payingEntry.category}
+            </p>
+            {banks.length === 0 ? (
+              <p className="text-sm text-red-600">No bank accounts set up yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {banks.map(b => (
+                  <button key={b.id} type="button" className="btn-secondary w-full justify-center"
+                    onClick={() => confirmMarkPaid(payingEntry, b.id)}>
+                    Paid from {b.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="text-[11px] text-gray-400">This reduces that account's balance from today.</p>
+          </div>
+        </Modal>
       )}
 
       {approving && (
@@ -726,12 +826,13 @@ function SampleApproveFlow({ sample, onClose, onDone }) {
   );
 }
 
-function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
+function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved }) {
   const isTopUp = type === 'top_up';
   const [f, setF] = useState({
     entry_date: new Date().toISOString().slice(0, 10),
     category: '', description: '', paid_to: '', amount: '',
     payment_method: isTopUp ? 'cash' : '',
+    bank_account_id: '',
     item_name: '', item_category: '', unit: '', sample_qty: '',
     emp_expense_type: '', employee_id: '',
   });
@@ -802,6 +903,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
     setError('');
     if (!(parseFloat(f.amount) > 0)) return setError('Enter a valid amount.');
     if (!f.payment_method) return setError(isTopUp ? 'Select Cash or Bank.' : 'Select a payment method.');
+    if (f.payment_method === 'paid_bank' && !f.bank_account_id) return setError('Select which bank account this is.');
     if (!isTopUp) {
       if (!f.category) return setError('Category is required.');
       if (isEmpExpense) {
@@ -842,6 +944,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
       fd.append('entry_date', f.entry_date);
       fd.append('amount', f.amount);
       fd.append('payment_method', isPlating ? 'unpaid_bank' : f.payment_method);
+      if (f.bank_account_id) fd.append('bank_account_id', f.bank_account_id);
       if (!isTopUp) {
         fd.append('category', f.category);
         // For worker-linked employee expenses the payee is the selected worker
@@ -947,9 +1050,24 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
             <p className="text-[11px] text-emerald-700 mt-1">Withdraws from the Bank and adds the same amount to Cash in Hand (a linked cash top-up is recorded automatically).</p>
           )}
           {!isPlating && f.payment_method === 'unpaid_bank' && (
-            <p className="text-[11px] text-amber-700 mt-1">Recorded but not deducted — the owner can mark it Paid later, which then reduces the Bank balance.</p>
+            <p className="text-[11px] text-amber-700 mt-1">Recorded but not deducted — the owner can mark it Paid later, which then reduces the Bank balance (you'll pick the account then).</p>
           )}
         </div>
+
+        {/* Which bank the money actually moved through — required whenever this
+            entry hits a bank, so each account reconciles on its own. */}
+        {f.payment_method === 'paid_bank' && (
+          <div>
+            <label className="label">Bank account <span className="text-red-500">*</span></label>
+            <select className="input" value={f.bank_account_id} onChange={set('bank_account_id')}>
+              <option value="">— select —</option>
+              {banks.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+            {isBankWithdrawal && (
+              <p className="text-[11px] text-emerald-700 mt-1">The cash is withdrawn from this account.</p>
+            )}
+          </div>
+        )}
 
         {!isTopUp && (
           <>
@@ -967,7 +1085,10 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                   payment_method: e.target.value === PLATING ? 'unpaid_bank'
                     : e.target.value === PLATING_TRANSPORT ? 'cash'
                     : e.target.value === BANK_WITHDRAWAL ? 'paid_bank'
-                    : [PLATING, PLATING_TRANSPORT, BANK_WITHDRAWAL].includes(p.category) ? '' : p.payment_method }))}>
+                    : [PLATING, PLATING_TRANSPORT, BANK_WITHDRAWAL].includes(p.category) ? '' : p.payment_method,
+                  // A category that moves off the bank must not keep a stale account.
+                  bank_account_id: (e.target.value === PLATING || e.target.value === PLATING_TRANSPORT)
+                    ? '' : p.bank_account_id }))}>
                 <option value="">— select category —</option>
                 {categories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>

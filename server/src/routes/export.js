@@ -441,8 +441,10 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
   }
 
   const rows = await getDB().all(`
-    SELECT e.*, u.name AS created_by_name
-    FROM petty_cash_entries e LEFT JOIN users u ON u.id = e.created_by
+    SELECT e.*, u.name AS created_by_name, ba.name AS bank_account_name
+    FROM petty_cash_entries e
+    LEFT JOIN users u ON u.id = e.created_by
+    LEFT JOIN bank_accounts ba ON ba.id = e.bank_account_id
     ORDER BY e.entry_date ASC, e.id ASC`);
 
   // Two running balances driven by payment_method:
@@ -462,6 +464,7 @@ router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (r
       'Description':  r.description || '',
       'Paid To':      r.paid_to || '',
       'Method':       METHOD_LABELS[r.payment_method] || r.payment_method || '',
+      'Bank Account': r.bank_account_name || '',
       'In':           r.entry_type === 'top_up' ? amt : '',
       'Out':          r.entry_type === 'expense' ? amt : '',
       'Cash Balance': cashBal,

@@ -881,6 +881,48 @@ async function initDB(retries = 20, delayMs = 10000) {
          WHERE entry_date='2026-08-05' AND category='Office Expense'
            AND entry_type='expense' AND payment_method='cash'
            AND ((paid_to ILIKE 'tds' AND amount=7917) OR (paid_to ILIKE 'umiya%zerox' AND amount=10966))`);
+      // Bank accounts: the company runs two (Kotak + Kalupur), but the ledger
+      // kept ONE combined Bank balance, so neither could be reconciled against
+      // its own statement. Every bank entry now carries the account it moved
+      // through. Owner-managed rows, not a hardcoded list.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS bank_accounts (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+          active BOOLEAN NOT NULL DEFAULT TRUE,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_bank_account ON bank_accounts(lower(name))`);
+      await pool.query(`INSERT INTO bank_accounts (name, is_primary) VALUES ('Kotak', TRUE) ON CONFLICT DO NOTHING`);
+      await pool.query(`INSERT INTO bank_accounts (name, is_primary) VALUES ('Kalupur', FALSE) ON CONFLICT DO NOTHING`);
+      await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS bank_account_id INTEGER REFERENCES bank_accounts(id) ON DELETE SET NULL`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pce_bank_account ON petty_cash_entries(bank_account_id)`);
+      {
+        // One-time backfill: every existing bank entry is Kotak except the
+        // 22-Jul "Bank KCC" opening, which IS the Kalupur balance. Verified by
+        // reconciliation — the app's July total ties to Kotak's 31-Jul closing
+        // plus that KCC opening, to ₹0.80. Guarded on nothing being tagged yet,
+        // so it never re-runs and never overwrites the owner's own tagging.
+        const { rows: done } = await pool.query(
+          `SELECT COUNT(*)::int AS n FROM petty_cash_entries WHERE bank_account_id IS NOT NULL`);
+        if (done[0].n === 0) {
+          const { rows: accts } = await pool.query(`SELECT id, name FROM bank_accounts`);
+          const idOf = (n) => (accts.find(a => a.name.toLowerCase() === n) || {}).id || null;
+          const kotak = idOf('kotak'), kalupur = idOf('kalupur');
+          if (kotak) {
+            await pool.query(
+              `UPDATE petty_cash_entries SET bank_account_id=$1
+                WHERE payment_method='paid_bank' AND bank_account_id IS NULL`, [kotak]);
+          }
+          if (kalupur) {
+            await pool.query(
+              `UPDATE petty_cash_entries SET bank_account_id=$1
+                WHERE payment_method='paid_bank' AND TRIM(COALESCE(description,'')) ILIKE 'bank kcc'`, [kalupur]);
+          }
+        }
+      }
       // One-off (only while the 2026-07 run is unapproved): the last-saved July
       // payroll is FINAL and late cuts are waived for this month. Zero the
       // stored cut minutes + deduction (so any later Save/approve recompute

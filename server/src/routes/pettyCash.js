@@ -36,7 +36,8 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
   const category = (req.query.category || '').trim() || null;
   const company = (req.query.company || '').trim() || null;
   const method = ['cash', 'paid_bank', 'unpaid_bank'].includes(req.query.method) ? req.query.method : null;
-  if ((category || company || method) && req.user.role !== 'owner') {
+  const bankAccount = Number.isInteger(parseInt(req.query.bank_account, 10)) ? parseInt(req.query.bank_account, 10) : null;
+  if ((category || company || method || bankAccount) && req.user.role !== 'owner') {
     return res.status(403).json({ error: 'Ledger filters are owner-only' });
   }
 
@@ -46,11 +47,15 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
   if (category) { params.push(category); conds.push(`TRIM(category) = $${params.length}`); }
   if (company)  { params.push(company);  conds.push(`TRIM(category) = '${MACHINERY}' AND TRIM(paid_to) = $${params.length}`); }
   if (method)   { params.push(method);   conds.push(`payment_method = $${params.length}`); }
+  // A bank-account ledger is the paid_bank entries of that one account.
+  if (bankAccount) { params.push(bankAccount); conds.push(`bank_account_id = $${params.length} AND payment_method='paid_bank'`); }
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
   const entries = await db.all(`
-    SELECT e.*, u.name AS created_by_name
-    FROM petty_cash_entries e LEFT JOIN users u ON u.id = e.created_by
+    SELECT e.*, u.name AS created_by_name, ba.name AS bank_account_name
+    FROM petty_cash_entries e
+    LEFT JOIN users u ON u.id = e.created_by
+    LEFT JOIN bank_accounts ba ON ba.id = e.bank_account_id
     ${where}
     ORDER BY e.entry_date ASC, e.id ASC`, params);
 
@@ -75,6 +80,12 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
       if (company)  { bp.push(company);  bc.push(`TRIM(category) = '${MACHINERY}' AND TRIM(paid_to) = $${bp.length}`); }
       const o = await db.get(`SELECT COALESCE(SUM(amount),0) AS t FROM petty_cash_entries WHERE ${bc.join(' AND ')}`, bp);
       opening = Number(o.t);
+    } else if (bankAccount) {
+      // One bank account's own running balance before this month.
+      const o = await db.get(
+        `SELECT ${acctSum('paid_bank')} AS t FROM petty_cash_entries
+          WHERE to_char(entry_date,'YYYY-MM') < $1 AND bank_account_id = $2`, [month, bankAccount]);
+      opening = Number(o.t);
     } else if (method) {
       // Bank / Cash carry a running balance (top-up − expense); Unpaid Bank a
       // cumulative pending total.
@@ -98,6 +109,24 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
     WHERE entry_type='expense' ${month ? `AND to_char(entry_date, 'YYYY-MM') = $1` : ''}
     GROUP BY TRIM(category) ORDER BY total DESC`, catParams);
 
+  // Per-account bank balances, so each one reconciles against its own
+  // statement. Anything still untagged surfaces as "Unassigned" rather than
+  // being quietly folded into an account.
+  const bank_accounts = await db.all(`
+    SELECT ba.id, ba.name, ba.is_primary,
+           COALESCE(SUM(CASE WHEN e.payment_method='paid_bank'
+             THEN (CASE WHEN e.entry_type='top_up' THEN e.amount ELSE -e.amount END) ELSE 0 END), 0) AS balance,
+           COUNT(e.id) FILTER (WHERE e.payment_method='paid_bank') AS entry_count
+      FROM bank_accounts ba
+      LEFT JOIN petty_cash_entries e ON e.bank_account_id = ba.id
+     WHERE ba.active
+     GROUP BY ba.id, ba.name, ba.is_primary
+     ORDER BY ba.is_primary DESC, ba.id`);
+  const untagged = await db.get(`
+    SELECT ${acctSum('paid_bank')} AS balance,
+           COUNT(*) FILTER (WHERE payment_method='paid_bank') AS entry_count
+      FROM petty_cash_entries WHERE bank_account_id IS NULL`);
+
   // Bank balance figures are owner-only — accounts keeps the entries list and
   // the cash balance (they manage the physical cash box), nothing bank-side.
   const isOwner = req.user.role === 'owner';
@@ -106,11 +135,17 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
     cash_balance: Number(bal.cash),
     bank_balance: isOwner ? Number(bal.bank) : null,
     unpaid_pending: isOwner ? Number(bal.unpaid_pending) : null,
+    bank_accounts: isOwner
+      ? bank_accounts.map(a => ({ ...a, balance: Number(a.balance), entry_count: Number(a.entry_count) }))
+      : null,
+    bank_untagged: isOwner
+      ? { balance: Number(untagged.balance), entry_count: Number(untagged.entry_count) }
+      : null,
     opening_cash,
     opening_bank: isOwner ? opening_bank : null,
     opening_balance: opening, // cumulative spend / running balance for filtered views
     category_totals,
-    filter: { category, company, method },
+    filter: { category, company, method, bank_account: bankAccount },
     receipt_required_above: RECEIPT_REQUIRED_ABOVE,
   });
 });
@@ -146,6 +181,53 @@ router.get('/ledgers', authenticate, authorize('owner'), async (req, res) => {
     { key: 'unpaid_bank', label: 'Unpaid Bank', total: Number(m.unpaid_total),  count: Number(m.unpaid_count) },
   ];
   res.json({ categories, companies, methods });
+});
+
+// Re-tag a bank entry to a different account. Entries are otherwise not
+// editable, so without this a mis-tagged one could never be corrected — and a
+// wrong tag silently breaks the reconciliation the tag exists to provide.
+router.put('/:id/bank-account', authenticate, authorize('owner'), async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid entry id' });
+  const db = getDB();
+  const e = await db.get('SELECT id, payment_method, amount FROM petty_cash_entries WHERE id=$1', [id]);
+  if (!e) return res.status(404).json({ error: 'Entry not found' });
+  if (e.payment_method !== 'paid_bank') {
+    return res.status(400).json({ error: 'Only a Paid Bank entry belongs to a bank account' });
+  }
+  const bankAccountId = parseInt(req.body?.bank_account_id, 10);
+  if (!Number.isInteger(bankAccountId)) return res.status(400).json({ error: 'Select a bank account' });
+  const acct = await db.get('SELECT id, name FROM bank_accounts WHERE id=$1 AND active', [bankAccountId]);
+  if (!acct) return res.status(400).json({ error: 'Select a valid bank account' });
+  await db.run('UPDATE petty_cash_entries SET bank_account_id=$2 WHERE id=$1', [id, bankAccountId]);
+  await logActivity(null, null, 'petty_cash_bank_account',
+    `Entry #${id} (₹${e.amount}) moved to ${acct.name}`, req.user.id);
+  res.json({ message: `Moved to ${acct.name}` });
+});
+
+// Bank accounts the company runs (Kotak / Kalupur / …). Anyone who can record a
+// bank entry needs the list; only the owner can add one.
+router.get('/bank-accounts', authenticate, authorize('accounts', 'owner'), async (req, res) => {
+  const rows = await getDB().all(
+    'SELECT id, name, is_primary FROM bank_accounts WHERE active ORDER BY is_primary DESC, id');
+  res.json(rows);
+});
+
+router.post('/bank-accounts', authenticate, authorize('owner'), async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Enter the account name' });
+  try {
+    const row = await getDB().get(
+      'INSERT INTO bank_accounts (name, created_by) VALUES ($1,$2) RETURNING id, name, is_primary',
+      [name, req.user.id]);
+    await logActivity(null, null, 'bank_account_added', `Bank account added: ${name}`, req.user.id);
+    res.status(201).json(row);
+  } catch (e) {
+    if (String(e.message).includes('uniq_bank_account')) {
+      return res.status(400).json({ error: 'That account already exists' });
+    }
+    throw e;
+  }
 });
 
 // Category list (fixed, owner-managed)
@@ -283,6 +365,17 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
       }
     }
 
+    // Which bank account the money moved through. Only meaningful once the
+    // category branches above have settled `method` — an Unpaid Bank entry has
+    // no account yet (it is captured when the owner marks it paid).
+    let bankAccountId = null;
+    if (method === 'paid_bank') {
+      bankAccountId = parseInt(req.body.bank_account_id, 10);
+      if (!Number.isInteger(bankAccountId)) return fail(400, 'Select which bank account this came from');
+      const acct = await db.get('SELECT id FROM bank_accounts WHERE id=$1 AND active', [bankAccountId]);
+      if (!acct) return fail(400, 'Select a valid bank account');
+    }
+
     // Entry + sampling draft (+ auto payroll advance) commit atomically.
     const entryId = await db.withTransaction(async (client) => {
       // Advance Paid → create the payroll advance so it deducts from the
@@ -298,12 +391,12 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
           [amt, empExpense.employee_id]);
       }
       const { rows } = await client.query(
-        `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, receipt_file, receipt_original_name, employee_id, advance_id, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+        `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, receipt_file, receipt_original_name, employee_id, advance_id, bank_account_id, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
         [entry_date, entry_type, cat, finalDescription, finalPaidTo || null, amt,
          method, method !== 'unpaid_bank',
          req.file?.storagePath || null, req.file?.originalname || null,
-         empExpense?.employee_id || null, advanceId, req.user.id]);
+         empExpense?.employee_id || null, advanceId, bankAccountId, req.user.id]);
       if (sample) {
         await client.query(
           `INSERT INTO petty_cash_samples (entry_id, supplier_name, item_name, category, unit, sample_qty, sample_cost, description, created_by)
@@ -477,8 +570,18 @@ router.put('/:id/mark-paid', authenticate, authorize('owner'), async (req, res) 
     if (e.entry_type !== 'expense' || e.payment_method !== 'unpaid_bank') {
       return res.status(400).json({ error: 'Only an Unpaid Bank expense can be marked paid' });
     }
+    // This is the moment the money actually leaves a bank, so it is where the
+    // account gets pinned down.
+    const bankAccountId = parseInt(req.body?.bank_account_id, 10);
+    if (!Number.isInteger(bankAccountId)) {
+      return res.status(400).json({ error: 'Select which bank account paid this' });
+    }
+    const acct = await db.get('SELECT id, name FROM bank_accounts WHERE id=$1 AND active', [bankAccountId]);
+    if (!acct) return res.status(400).json({ error: 'Select a valid bank account' });
     await db.withTransaction(async (client) => {
-      await client.query("UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE WHERE id=$1", [id]);
+      await client.query(
+        "UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE, bank_account_id=$2 WHERE id=$1",
+        [id, bankAccountId]);
       if (e.payroll_line_id) {
         await client.query('UPDATE payroll_lines SET paid=TRUE WHERE id=$1', [e.payroll_line_id]);
         const { rows: r } = await client.query('SELECT run_id FROM payroll_lines WHERE id=$1', [e.payroll_line_id]);
