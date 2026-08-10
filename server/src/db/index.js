@@ -786,6 +786,34 @@ async function initDB(retries = 20, delayMs = 10000) {
            SET description='Main vehicle transport — P PHE 05 (3 items)'
          WHERE category='Purchase Transport' AND amount=480
            AND description LIKE 'Main vehicle transport%P PHE 05%(MS Flange Cap%'`);
+      // One-off: reverse the 10-Aug ₹3,100 Plating Transportation entry (porter,
+      // 1 item sent). Removes the trip + its ledger entry and reverts the item's
+      // plating_status to whatever its previous trip left it in — the same
+      // unwind the delete endpoint now performs. Guarded → runs once.
+      {
+        const ent = await pool.query(
+          `SELECT id FROM petty_cash_entries
+            WHERE entry_date='2026-08-10' AND category='Plating Transportation'
+              AND amount=3100 AND TRIM(paid_to)='porter' LIMIT 1`);
+        if (ent.rows.length) {
+          const entryId = ent.rows[0].id;
+          const trips = await pool.query('SELECT id FROM plating_trips WHERE petty_cash_entry_id=$1', [entryId]);
+          for (const trip of trips.rows) {
+            const tItems = await pool.query('SELECT order_item_id FROM plating_trip_items WHERE trip_id=$1', [trip.id]);
+            for (const ti of tItems.rows) {
+              const prev = await pool.query(
+                `SELECT pt.direction FROM plating_trip_items pti
+                   JOIN plating_trips pt ON pt.id = pti.trip_id
+                  WHERE pti.order_item_id=$1 AND pt.id <> $2
+                  ORDER BY pt.id DESC LIMIT 1`, [ti.order_item_id, trip.id]);
+              const status = prev.rows.length ? (prev.rows[0].direction === 'sent' ? 'out_for_plating' : 'returned') : null;
+              await pool.query('UPDATE order_items SET plating_status=$1 WHERE id=$2', [status, ti.order_item_id]);
+            }
+            await pool.query('DELETE FROM plating_trips WHERE id=$1', [trip.id]);
+          }
+          await pool.query('DELETE FROM petty_cash_entries WHERE id=$1', [entryId]);
+        }
+      }
       // One-off: the 07-Aug ₹3,000 Machinery entry was booked to payee "lathe
       // repair"; owner renamed the payee to "Gayatri Guddu Bhai". Add the
       // company (Machinery payees come from petty_cash_companies) and repoint

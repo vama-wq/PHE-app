@@ -543,6 +543,26 @@ router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {
       if (e.transfer_entry_id) {
         await client.query('DELETE FROM petty_cash_entries WHERE id=$1', [e.transfer_entry_id]);
       }
+      // A Plating-Transportation entry is the money side of a plating trip:
+      // reverse the trip too, else its items stay stuck out-for-plating. Each
+      // item reverts to the state its PREVIOUS trip left it in (sent →
+      // out_for_plating, returned → returned, none → never tracked).
+      const { rows: trips } = await client.query(
+        'SELECT id FROM plating_trips WHERE petty_cash_entry_id=$1', [id]);
+      for (const trip of trips) {
+        const { rows: tItems } = await client.query(
+          'SELECT order_item_id FROM plating_trip_items WHERE trip_id=$1', [trip.id]);
+        for (const ti of tItems) {
+          const { rows: prev } = await client.query(
+            `SELECT pt.direction FROM plating_trip_items pti
+               JOIN plating_trips pt ON pt.id = pti.trip_id
+              WHERE pti.order_item_id=$1 AND pt.id <> $2
+              ORDER BY pt.id DESC LIMIT 1`, [ti.order_item_id, trip.id]);
+          const status = prev.length ? (prev[0].direction === 'sent' ? 'out_for_plating' : 'returned') : null;
+          await client.query('UPDATE order_items SET plating_status=$1 WHERE id=$2', [status, ti.order_item_id]);
+        }
+        await client.query('DELETE FROM plating_trips WHERE id=$1', [trip.id]); // cascades trip items
+      }
       await client.query('DELETE FROM petty_cash_entries WHERE id=$1', [id]);
     });
     await deleteFromStorage(e.receipt_file).catch(() => {});
