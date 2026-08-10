@@ -67,21 +67,26 @@ function computeLine(emp, line, holidays = 0, month = null) {
   // Graduated late cut: money = total cut minutes ÷ 60 × hourly (day pay ÷ otDiv)
   const lateCutMin = Math.max(Number(line.late_cut_minutes || 0), 0);
 
+  // Every money figure is rounded to the WHOLE RUPEE, and the total is the sum
+  // of those rounded parts — so the grid, the export and the bank payment tie
+  // out and the row adds up by hand. (daily_rate keeps paise: it's a rate, not
+  // a payment.)
+  const rnd = (n) => Math.round(Number(n) || 0);
+
   if (emp.worker_group === 'labour') {
     const rate = Number(line.daily_rate ?? emp.daily_rate ?? 0);
-    const base = r2(rate * present);
-    const holidayPay = r2(rate * hol);
-    const otAmount = r2((rate / otDiv) * ot);
-    const lateDeduction = r2((lateCutMin / 60) * (rate / otDiv));
+    const base = rnd(rate * present);
+    const holidayPay = rnd(rate * hol);
+    const otAmount = rnd((rate / otDiv) * ot);
+    const lateDeduction = rnd((lateCutMin / 60) * (rate / otDiv));
+    const adv = rnd(advance);
     return {
       daily_rate: rate, monthly_salary: null,
       base_pay: base, ot_amount: otAmount, absent_deduction: 0,
       holiday_pay: holidayPay, late_deduction: lateDeduction,
       petrol: 0, // labour never receives petrol
-      advance_deduction: r2(advance),
-      // Net pay is rounded to the WHOLE RUPEE at source, so the grid, the
-      // export and the posted bank payment all tie out exactly.
-      total_payable: Math.round(base + otAmount + holidayPay - advance - lateDeduction),
+      advance_deduction: adv,
+      total_payable: base + otAmount + holidayPay - adv - lateDeduction,
     };
   }
   // fixed_admin / fixed_production / fixed_production_nl
@@ -90,16 +95,18 @@ function computeLine(emp, line, holidays = 0, month = null) {
   // Paid festival holidays are never deducted (come off absents before credits)
   const deductibleAbsent = Math.max(absent - hol, 0);
   const chargedAbsent = Math.max(deductibleAbsent - creditUsed, 0);
-  const absentDeduction = r2(perDay * chargedAbsent);
-  const otAmount = r2((perDay / otDiv) * ot);
-  const lateDeduction = r2((lateCutMin / 60) * (perDay / otDiv));
+  const absentDeduction = rnd(perDay * chargedAbsent);
+  const otAmount = rnd((perDay / otDiv) * ot);
+  const lateDeduction = rnd((lateCutMin / 60) * (perDay / otDiv));
+  const pet = rnd(petrol);
+  const adv = rnd(advance);
   return {
     daily_rate: r2(perDay), monthly_salary: salary,
-    base_pay: r2(salary - absentDeduction), ot_amount: otAmount, absent_deduction: absentDeduction,
+    base_pay: rnd(salary) - absentDeduction, ot_amount: otAmount, absent_deduction: absentDeduction,
     holiday_pay: 0, // fixed salary already covers the paid holiday
     late_deduction: lateDeduction,
-    petrol: r2(petrol), advance_deduction: r2(advance),
-    total_payable: Math.round(salary - absentDeduction + otAmount + petrol - advance - lateDeduction),
+    petrol: pet, advance_deduction: adv,
+    total_payable: rnd(salary) - absentDeduction + otAmount + pet - adv - lateDeduction,
   };
 }
 

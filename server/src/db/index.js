@@ -864,8 +864,29 @@ async function initDB(retries = 20, delayMs = 10000) {
           `SELECT id FROM payroll_runs WHERE month='2026-07' AND status IN ('draft','submitted') LIMIT 1`);
         if (run.rows.length) {
           const runId = run.rows[0].id;
-          await pool.query(
-            'UPDATE payroll_lines SET total_payable = ROUND(total_payable) WHERE run_id=$1', [runId]);
+          // Round EVERY money field on unapproved runs to the whole rupee and
+          // rebuild the total from those rounded parts, matching computeLine —
+          // so each row adds up by hand. Idempotent (rounding an integer is a
+          // no-op), and it self-heals any run created before this rule.
+          await pool.query(`
+            UPDATE payroll_lines pl SET
+              base_pay          = ROUND(COALESCE(pl.base_pay, 0)),
+              ot_amount         = ROUND(COALESCE(pl.ot_amount, 0)),
+              absent_deduction  = ROUND(COALESCE(pl.absent_deduction, 0)),
+              holiday_pay       = ROUND(COALESCE(pl.holiday_pay, 0)),
+              late_deduction    = ROUND(COALESCE(pl.late_deduction, 0)),
+              petrol            = ROUND(COALESCE(pl.petrol, 0)),
+              advance_deduction = ROUND(COALESCE(pl.advance_deduction, 0)),
+              total_payable     = CASE WHEN pl.worker_group = 'labour'
+                THEN ROUND(COALESCE(pl.base_pay,0)) + ROUND(COALESCE(pl.ot_amount,0))
+                     + ROUND(COALESCE(pl.holiday_pay,0)) - ROUND(COALESCE(pl.advance_deduction,0))
+                     - ROUND(COALESCE(pl.late_deduction,0))
+                ELSE ROUND(COALESCE(pl.monthly_salary,0)) - ROUND(COALESCE(pl.absent_deduction,0))
+                     + ROUND(COALESCE(pl.ot_amount,0)) + ROUND(COALESCE(pl.petrol,0))
+                     - ROUND(COALESCE(pl.advance_deduction,0)) - ROUND(COALESCE(pl.late_deduction,0))
+              END
+            FROM payroll_runs r
+            WHERE r.id = pl.run_id AND r.status IN ('draft','submitted')`);
           const ACCRUAL = { fixed_admin: 1, fixed_production: 2 };
           const targets = [
             // Owner's targets are the balance REMAINING AFTER this run:
@@ -899,14 +920,17 @@ async function initDB(retries = 20, delayMs = 10000) {
                 const perDay = salary / 31;
                 const otDiv = 8; // admin
                 const charged = Math.max(Math.max(Number(l.absent_days || 0) - holidays, 0) - 1, 0);
-                const absentDed = Math.round(perDay * charged * 100) / 100;
-                const otAmt = Math.round((perDay / otDiv) * Number(l.ot_hours || 0) * 100) / 100;
-                const lateDed = Math.round((Number(l.late_cut_minutes || 0) / 60) * (perDay / otDiv) * 100) / 100;
-                const total = Math.round(salary - absentDed + otAmt + Number(l.petrol || 0) - Number(l.advance_deduction || 0) - lateDed);
+                // Whole rupees throughout, total built from the rounded parts.
+                const absentDed = Math.round(perDay * charged);
+                const otAmt = Math.round((perDay / otDiv) * Number(l.ot_hours || 0));
+                const lateDed = Math.round((Number(l.late_cut_minutes || 0) / 60) * (perDay / otDiv));
+                const pet = Math.round(Number(l.petrol || 0));
+                const adv = Math.round(Number(l.advance_deduction || 0));
+                const total = Math.round(salary) - absentDed + otAmt + pet - adv - lateDed;
                 await pool.query(
                   `UPDATE payroll_lines SET leave_credit_used=1, base_pay=$1, absent_deduction=$2,
-                     ot_amount=$3, late_deduction=$4, total_payable=$5 WHERE id=$6`,
-                  [Math.round((salary - absentDed) * 100) / 100, absentDed, otAmt, lateDed, total, l.id]);
+                     ot_amount=$3, late_deduction=$4, petrol=$5, advance_deduction=$6, total_payable=$7 WHERE id=$8`,
+                  [Math.round(salary) - absentDed, absentDed, otAmt, lateDed, pet, adv, total, l.id]);
               }
             }
           }
