@@ -36,7 +36,11 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
   const category = (req.query.category || '').trim() || null;
   const company = (req.query.company || '').trim() || null;
   const method = ['cash', 'paid_bank', 'unpaid_bank'].includes(req.query.method) ? req.query.method : null;
-  const bankAccount = Number.isInteger(parseInt(req.query.bank_account, 10)) ? parseInt(req.query.bank_account, 10) : null;
+  // ?bank_account=<id> for one account, or 'none' to see what is still untagged
+  // (so an untagged entry can always be found and fixed, not just counted).
+  const bankRaw = String(req.query.bank_account || '').trim();
+  const bankAccount = bankRaw === 'none' ? 'none'
+    : (Number.isInteger(parseInt(bankRaw, 10)) ? parseInt(bankRaw, 10) : null);
   if ((category || company || method || bankAccount) && req.user.role !== 'owner') {
     return res.status(403).json({ error: 'Ledger filters are owner-only' });
   }
@@ -48,7 +52,8 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
   if (company)  { params.push(company);  conds.push(`TRIM(category) = '${MACHINERY}' AND TRIM(paid_to) = $${params.length}`); }
   if (method)   { params.push(method);   conds.push(`payment_method = $${params.length}`); }
   // A bank-account ledger is the paid_bank entries of that one account.
-  if (bankAccount) { params.push(bankAccount); conds.push(`bank_account_id = $${params.length} AND payment_method='paid_bank'`); }
+  if (bankAccount === 'none') { conds.push(`bank_account_id IS NULL AND payment_method='paid_bank'`); }
+  else if (bankAccount) { params.push(bankAccount); conds.push(`bank_account_id = $${params.length} AND payment_method='paid_bank'`); }
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
   const entries = await db.all(`
@@ -79,6 +84,11 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
       if (category) { bp.push(category); bc.push(`TRIM(category) = $${bp.length}`); }
       if (company)  { bp.push(company);  bc.push(`TRIM(category) = '${MACHINERY}' AND TRIM(paid_to) = $${bp.length}`); }
       const o = await db.get(`SELECT COALESCE(SUM(amount),0) AS t FROM petty_cash_entries WHERE ${bc.join(' AND ')}`, bp);
+      opening = Number(o.t);
+    } else if (bankAccount === 'none') {
+      const o = await db.get(
+        `SELECT ${acctSum('paid_bank')} AS t FROM petty_cash_entries
+          WHERE to_char(entry_date,'YYYY-MM') < $1 AND bank_account_id IS NULL`, [month]);
       opening = Number(o.t);
     } else if (bankAccount) {
       // One bank account's own running balance before this month.

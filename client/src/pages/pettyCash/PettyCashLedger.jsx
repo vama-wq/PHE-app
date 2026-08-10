@@ -116,8 +116,9 @@ export default function PettyCashLedger() {
   });
   const monthIn = (data?.entries || []).filter(e => e.entry_type === 'top_up').reduce((a, e) => a + Number(e.amount), 0);
   const monthOut = (data?.entries || []).filter(e => e.entry_type === 'expense').reduce((a, e) => a + Number(e.amount), 0);
-  const bankName = filter?.bank_account
-    ? (banks.find(b => b.id === filter.bank_account)?.name || 'Bank account') : null;
+  const bankName = filter?.bank_account === 'none' ? 'Untagged bank entries'
+    : filter?.bank_account ? (banks.find(b => b.id === filter.bank_account)?.name || 'Bank account')
+    : null;
   const ledgerTitle = filter?.company ? `Machinery — ${filter.company}`
     : bankName ? `${bankName} bank`
     : filter?.method ? ({ paid_bank: 'Bank', unpaid_bank: 'Unpaid Bank', cash: 'Cash' }[filter.method])
@@ -285,10 +286,12 @@ export default function PettyCashLedger() {
                     </button>
                   ))}
                   {data.bank_untagged?.entry_count > 0 && (
-                    <div className="flex items-center justify-between text-xs text-amber-700">
+                    <button type="button" onClick={() => setFilter({ bank_account: 'none' })}
+                      className="w-full flex items-center justify-between text-xs text-amber-700 hover:text-amber-900"
+                      title="Show the entries that still need an account">
                       <span>Untagged ({data.bank_untagged.entry_count})</span>
                       <span className="font-semibold">{inr(data.bank_untagged.balance)}</span>
-                    </div>
+                    </button>
                   )}
                 </div>
               )}

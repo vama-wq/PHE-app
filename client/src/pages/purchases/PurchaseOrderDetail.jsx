@@ -69,10 +69,18 @@ export default function PurchaseOrderDetail() {
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [showAdvanceModal, setShowAdvanceModal] = useState(false);
 
-  const markAdvancePaid = async (p) => {
-    if (!window.confirm(`Mark this ₹${Number(p.amount).toLocaleString('en-IN')} payment as PAID from bank? It will then reduce the Bank balance.`)) return;
-    try { await api.put(`/petty-cash/${p.id}/mark-paid`); load(); }
-    catch (e) { alert(e.response?.data?.error || 'Failed'); }
+  // Bank accounts (Kotak / Kalupur / …) — marking a payment paid has to say
+  // which account it left, or that account can't be reconciled afterwards.
+  const [banks, setBanks] = useState([]);
+  useEffect(() => { api.get('/petty-cash/bank-accounts').then(r => setBanks(r.data || [])).catch(() => setBanks([])); }, []);
+  const [payingAdvance, setPayingAdvance] = useState(null);
+
+  const markAdvancePaid = (p) => setPayingAdvance(p);
+  const confirmAdvancePaid = async (p, bankAccountId) => {
+    try {
+      await api.put(`/petty-cash/${p.id}/mark-paid`, { bank_account_id: bankAccountId });
+      setPayingAdvance(null); load();
+    } catch (e) { alert(e.response?.data?.error || 'Failed'); }
   };
 
   // delivery status update (for purchase manager)
@@ -635,6 +643,29 @@ export default function PurchaseOrderDetail() {
           onClose={() => setShowReceiveModal(false)}
           onDone={() => { setShowReceiveModal(false); load(); }}
         />
+      )}
+      {/* Which bank paid this — asked here so the account's statement matches */}
+      {payingAdvance && (
+        <Modal open title="Mark as paid — from which bank?" onClose={() => setPayingAdvance(null)}>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              ₹{Number(payingAdvance.amount).toLocaleString('en-IN')} — {po.supplier_name}
+            </p>
+            {banks.length === 0 ? (
+              <p className="text-sm text-red-600">No bank accounts set up yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {banks.map(b => (
+                  <button key={b.id} type="button" className="btn-secondary w-full justify-center"
+                    onClick={() => confirmAdvancePaid(payingAdvance, b.id)}>
+                    Paid from {b.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="text-[11px] text-gray-400">This reduces that account's balance.</p>
+          </div>
+        </Modal>
       )}
       {showAdvanceModal && (
         <AdvanceModal
