@@ -6,9 +6,10 @@ import SupplierModal from '../../components/SupplierModal';
 import InventoryItemModal from '../../components/InventoryItemModal';
 import CategorySelect from '../../components/CategorySelect';
 import { fmtDate, downloadExcel } from '../../lib/utils';
-import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets, ChevronDown, ChevronRight } from 'lucide-react';
+import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets, ChevronDown, ChevronRight, Printer } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const MACHINERY = 'Machinery';
 const SAMPLING = 'Sampling';
 const EMPLOYEE_EXPENSE = 'Employee Expense';
@@ -43,7 +44,14 @@ export default function PettyCashLedger() {
     if (filter?.category) params.set('category', filter.category);
     if (filter?.company) params.set('company', filter.company);
     if (filter?.method) params.set('method', filter.method);
-    api.get(`/petty-cash?${params}`).then(r => setData(r.data)).finally(() => setLoading(false));
+    // Stamp the month/method the rows actually came from, and on failure clear
+    // rather than keep the previous month's data — a stale table (or a printed
+    // statement titled with the newly selected month) lies.
+    const forMonth = month;
+    api.get(`/petty-cash?${params}`)
+      .then(r => setData({ ...r.data, loaded_month: forMonth }))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
   };
   const loadLedgers = () => { if (isOwner) api.get('/petty-cash/ledgers').then(r => setLedgers(r.data)).catch(() => {}); };
   const loadSamples = () => api.get('/petty-cash/samples').then(r => setSamples(r.data || [])).catch(() => {});
@@ -96,6 +104,85 @@ export default function PettyCashLedger() {
     : filter?.method ? ({ paid_bank: 'Bank', unpaid_bank: 'Unpaid Bank', cash: 'Cash' }[filter.method])
     : filter?.category;
   const cols = isOwner ? 11 : 9; // accounts has no Bank Bal. column or actions column
+
+  // Print-to-PDF statement for a payment-method ledger — Bank prints as a bank
+  // statement (credit / debit / running balance), Unpaid Bank as a payables
+  // statement (pending amounts + cumulative outstanding). Same window.print
+  // pattern as the Purchase Payments Due export.
+  const printStatement = () => {
+    // Print only what was actually fetched — never label a stale month's rows
+    // with a newly picked month.
+    if (!data || data.loaded_month !== month || data.filter?.method !== filter?.method) {
+      return alert('Still loading this month — try again in a moment.');
+    }
+    const w = window.open('', '_blank');
+    if (!w) return alert('Allow pop-ups to print the statement.');
+    const monthName = new Date(`${month}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    const opening = Number(data?.opening_balance ?? 0);
+    const closing = rows.length ? Number(rows[rows.length - 1].cumRun) : opening;
+    const credits = rows.filter(e => e.entry_type === 'top_up').reduce((a, e) => a + Number(e.amount), 0);
+    const debits = rows.filter(e => e.entry_type === 'expense').reduce((a, e) => a + Number(e.amount), 0);
+    const bodyRows = rows.map(e => `<tr>
+        <td>${fmtDate(e.entry_date)}</td>
+        <td>${e.entry_type === 'top_up' ? 'Top-up' : esc(e.category || '—')}</td>
+        <td>${esc(e.paid_to || '—')}</td>
+        <td>${esc(e.description || '')}</td>
+        ${methodIsBalance
+          ? `<td class="r green">${e.entry_type === 'top_up' ? inr(e.amount) : ''}</td>
+             <td class="r red">${e.entry_type === 'expense' ? inr(e.amount) : ''}</td>`
+          : `<td class="r">${inr(e.amount)}</td>`}
+        <td class="r${Number(e.cumRun) < 0 ? ' red' : ''}">${inr(e.cumRun)}</td>
+      </tr>`).join('');
+    const table = methodIsBalance
+      ? `<table>
+          <thead><tr><th>Date</th><th>Category / Type</th><th>Paid To</th><th>Description</th>
+            <th class="r">Credit (in)</th><th class="r">Debit (out)</th><th class="r">Balance</th></tr></thead>
+          <tbody>
+            <tr class="open"><td colspan="6">Brought forward</td><td class="r${opening < 0 ? ' red' : ''}">${inr(opening)}</td></tr>
+            ${bodyRows}
+          </tbody>
+          <tfoot><tr><td colspan="4">Totals for ${esc(monthName)}</td>
+            <td class="r">${inr(credits)}</td><td class="r">${inr(debits)}</td>
+            <td class="r${closing < 0 ? ' red' : ''}">${inr(closing)}</td></tr></tfoot>
+        </table>`
+      : `<table>
+          <thead><tr><th>Date</th><th>Category</th><th>Paid To</th><th>Description</th>
+            <th class="r">Amount</th><th class="r">Cumulative</th></tr></thead>
+          <tbody>
+            <tr class="open"><td colspan="5">Brought forward (still pending)</td><td class="r">${inr(opening)}</td></tr>
+            ${bodyRows}
+          </tbody>
+          <tfoot><tr><td colspan="4">Total outstanding</td>
+            <td class="r">${inr(debits)}</td><td class="r">${inr(closing)}</td></tr></tfoot>
+        </table>`;
+    const title = methodIsBalance ? 'Bank Statement' : 'Unpaid Bank — Payments Pending';
+    const summary = methodIsBalance
+      ? `Opening <b>${inr(opening)}</b> · Credits <b>${inr(credits)}</b> · Debits <b>${inr(debits)}</b> · Closing <b>${inr(closing)}</b>`
+      : `Brought forward <b>${inr(opening)}</b> · Added in ${esc(monthName)} <b>${inr(debits)}</b> · Total outstanding <b>${inr(closing)}</b>`;
+    const foot = methodIsBalance
+      ? 'Bank account of the PHE Account Statement ledger — credits are deposits / top-ups, debits are payments made from the bank.'
+      : `Amounts recorded but not yet paid from the bank as of ${new Date().toLocaleDateString('en-IN')} — once marked Paid, an entry moves to the Bank statement (under its original date).`;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title} — ${esc(monthName)}</title>
+      <style>
+        body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111;margin:32px;font-size:12px}
+        h1{font-size:18px;margin:0 0 2px} h2{font-size:14px;margin:0 0 2px;color:#333;font-weight:600}
+        .meta{color:#555;font-size:11px;margin-bottom:12px}
+        table{width:100%;border-collapse:collapse;margin-bottom:6px} th,td{border:1px solid #ccc;padding:5px 7px;text-align:left}
+        th{background:#f3f3f3;font-size:11px} .r{text-align:right} tfoot td{font-weight:700;background:#fafafa}
+        .open td{background:#fafafa;color:#555;font-size:11px;font-weight:600}
+        .green{color:#15803d} .red{color:#b91c1c}
+        .foot{margin-top:20px;color:#777;font-size:10px;border-top:1px solid #ccc;padding-top:6px}
+        @media print{body{margin:12mm}}
+      </style></head><body>
+      <h1>Peena Heat Elements</h1>
+      <h2>${title} — ${esc(monthName)}</h2>
+      <div class="meta">Generated ${new Date().toLocaleDateString('en-IN')} · ${summary}</div>
+      ${table}
+      <div class="foot">${foot}</div>
+      </body></html>`;
+    w.document.write(html); w.document.close(); w.focus();
+    setTimeout(() => w.print(), 350);
+  };
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -313,7 +400,15 @@ export default function PettyCashLedger() {
           <button className="btn-ghost btn-sm flex items-center gap-1 text-gray-500" onClick={() => setFilter(null)}>
             <ArrowLeft size={14} /> All entries
           </button>
-          <h2 className="text-sm font-semibold text-gray-800">{ledgerTitle} ledger</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-semibold text-gray-800">{ledgerTitle} ledger</h2>
+            {filter?.method && (
+              <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={printStatement}
+                disabled={loading || !data} title="Print this ledger as a statement (save as PDF from the print dialog)">
+                <Printer size={15} /> Print Statement
+              </button>
+            )}
+          </div>
         </div>
       )}
 
