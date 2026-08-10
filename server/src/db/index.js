@@ -786,6 +786,23 @@ async function initDB(retries = 20, delayMs = 10000) {
            SET description='Main vehicle transport — P PHE 05 (3 items)'
          WHERE category='Purchase Transport' AND amount=480
            AND description LIKE 'Main vehicle transport%P PHE 05%(MS Flange Cap%'`);
+      // One-off: restore the accidentally-deleted 05-Aug Sampling entry (id 66,
+      // SS Plate ₹3,540 paid_bank, SHIVAKSH LASER TECH INDUSTRIES) and its
+      // cascade-deleted pending sample (id 2). Receipt already re-uploaded to
+      // storage. Original ids/timestamps preserved; NOT-EXISTS guards → runs once.
+      await pool.query(`
+        INSERT INTO petty_cash_entries (id, entry_date, entry_type, category, description, paid_to, amount,
+          receipt_file, receipt_original_name, created_by, created_at, affects_cash, payment_method)
+        SELECT 66, '2026-08-05', 'expense', 'Sampling', NULL, 'SHIVAKSH LASER TECH INDUSTRIES', 3540,
+          'petty-cash/1785924014652_SS_PLATE_.jpeg', 'SS PLATE .jpeg', 3, '2026-08-05 10:00:15.874453+00', TRUE, 'paid_bank'
+        WHERE NOT EXISTS (SELECT 1 FROM petty_cash_entries WHERE id = 66)`);
+      await pool.query(`
+        INSERT INTO petty_cash_samples (id, entry_id, supplier_name, item_name, category, unit, sample_qty,
+          sample_cost, status, created_by, created_at)
+        SELECT 2, 66, 'SHIVAKSH LASER TECH INDUSTRIES', 'SS Plate', 'ss Plate', 'Pcs', 6,
+          3540, 'pending', 3, '2026-08-05 10:00:15.874453+00'
+        WHERE EXISTS (SELECT 1 FROM petty_cash_entries WHERE id = 66)
+          AND NOT EXISTS (SELECT 1 FROM petty_cash_samples WHERE id = 2)`);
       // One-off: reverse the 10-Aug ₹3,100 Plating Transportation entry (porter,
       // 1 item sent). Removes the trip + its ledger entry and reverts the item's
       // plating_status to whatever its previous trip left it in — the same
