@@ -2,11 +2,11 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 
-// Only nickel-plating / electropolish items go to an external plating vendor
-// (Buffing / No Plating stay in-house). Matched loosely so legacy free-text
-// values ("nickle plating", "Electro Polish", etc.) qualify too.
-const PLATING_MATCH_SQL = 'nickel|nickle|electro';
-const PLATING_MATCH_RE = /nickel|nickle|electro/i;
+// Only nickel-plating / electropolish / teflon-coating items go to an external
+// vendor (Buffing / No Plating stay in-house). Matched loosely so legacy
+// free-text values ("nickle plating", "Electro Polish", "PTFE", etc.) qualify.
+const PLATING_MATCH_SQL = 'nickel|nickle|electro|teflon|ptfe';
+const PLATING_MATCH_RE = /nickel|nickle|electro|teflon|ptfe/i;
 // Terminal / not-yet-started orders are excluded; everything else is "active".
 const INACTIVE_ORDER_STATES = ['dispatched', 'resolved_dispatched', 'rejected'];
 
@@ -67,7 +67,7 @@ router.post('/trips', authenticate, authorize('accounts', 'owner', 'admin'), asy
     if (items.length !== itemIds.length) return res.status(400).json({ error: 'Some selected items no longer exist' });
     for (const it of items) {
       if (!PLATING_MATCH_RE.test(it.plating_instructions || '')) {
-        return res.status(400).json({ error: 'Only Nickel Plating / Electropolish items can be sent for plating' });
+        return res.status(400).json({ error: 'Only Nickel Plating / Electropolish / Teflon Coating items can be sent for plating' });
       }
       if (direction === 'sent' && it.plating_status === 'out_for_plating') {
         return res.status(400).json({ error: 'One of the items is already out for plating' });

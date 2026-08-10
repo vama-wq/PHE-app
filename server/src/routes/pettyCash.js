@@ -127,16 +127,19 @@ router.get('/ledgers', authenticate, authorize('owner'), async (req, res) => {
       COALESCE((SELECT COUNT(*) FROM petty_cash_entries e WHERE TRIM(e.category)='${MACHINERY}' AND TRIM(e.paid_to)=co.name AND e.entry_type='expense'), 0) AS entry_count,
       (lower(co.name) = '${NO_CASH_COMPANY}') AS no_cash
     FROM petty_cash_companies co ORDER BY co.id`);
-  // Payment-method ledgers: Bank shows its live balance (top-up − expense);
-  // Unpaid Bank shows the pending total awaiting payment.
+  // Payment-method ledgers: Cash and Bank show their live balance
+  // (top-up − expense); Unpaid Bank shows the pending total awaiting payment.
   const m = await db.get(`
     SELECT
+      COALESCE(SUM(CASE WHEN payment_method='cash' THEN (CASE WHEN entry_type='top_up' THEN amount ELSE -amount END) ELSE 0 END), 0) AS cash_balance,
+      COALESCE(COUNT(*) FILTER (WHERE payment_method='cash'), 0) AS cash_count,
       COALESCE(SUM(CASE WHEN payment_method='paid_bank' THEN (CASE WHEN entry_type='top_up' THEN amount ELSE -amount END) ELSE 0 END), 0) AS bank_balance,
       COALESCE(COUNT(*) FILTER (WHERE payment_method='paid_bank'), 0) AS bank_count,
       COALESCE(SUM(CASE WHEN payment_method='unpaid_bank' AND entry_type='expense' THEN amount ELSE 0 END), 0) AS unpaid_total,
       COALESCE(COUNT(*) FILTER (WHERE payment_method='unpaid_bank'), 0) AS unpaid_count
     FROM petty_cash_entries`);
   const methods = [
+    { key: 'cash',        label: 'Cash in Hand', total: Number(m.cash_balance), count: Number(m.cash_count),  balance: true },
     { key: 'paid_bank',   label: 'Bank',        total: Number(m.bank_balance),  count: Number(m.bank_count),   balance: true },
     { key: 'unpaid_bank', label: 'Unpaid Bank', total: Number(m.unpaid_total),  count: Number(m.unpaid_count) },
   ];

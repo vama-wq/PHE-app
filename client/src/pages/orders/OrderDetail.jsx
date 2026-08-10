@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 
 // Fixed plating-instruction choices for order items.
-const PLATING_OPTIONS = ['Nickel Plating', 'Electropolish', 'Buffing', 'No Plating'];
+const PLATING_OPTIONS = ['Nickel Plating', 'Electropolish', 'Teflon Coating', 'Buffing', 'No Plating'];
 
 // ── Required-field validation (mirrors OrderList) ────────────────────────────
 function validateItem(f) {

@@ -105,8 +105,8 @@ export default function PettyCashLedger() {
     : filter?.category;
   const cols = isOwner ? 11 : 9; // accounts has no Bank Bal. column or actions column
 
-  // Print-to-PDF statement for a payment-method ledger — Bank prints as a bank
-  // statement (credit / debit / running balance), Unpaid Bank as a payables
+  // Print-to-PDF statement for a payment-method ledger — Cash and Bank print as
+  // account statements (in / out / running balance), Unpaid Bank as a payables
   // statement (pending amounts + cumulative outstanding). Same window.print
   // pattern as the Purchase Payments Due export.
   const printStatement = () => {
@@ -117,6 +117,7 @@ export default function PettyCashLedger() {
     }
     const w = window.open('', '_blank');
     if (!w) return alert('Allow pop-ups to print the statement.');
+    const isCash = filter?.method === 'cash'; // cash is a balance ledger too, but not a "bank" one
     const monthName = new Date(`${month}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
     const opening = Number(data?.opening_balance ?? 0);
     const closing = rows.length ? Number(rows[rows.length - 1].cumRun) : opening;
@@ -136,7 +137,8 @@ export default function PettyCashLedger() {
     const table = methodIsBalance
       ? `<table>
           <thead><tr><th>Date</th><th>Category / Type</th><th>Paid To</th><th>Description</th>
-            <th class="r">Credit (in)</th><th class="r">Debit (out)</th><th class="r">Balance</th></tr></thead>
+            <th class="r">${isCash ? 'In (received)' : 'Credit (in)'}</th>
+            <th class="r">${isCash ? 'Out (spent)' : 'Debit (out)'}</th><th class="r">Balance</th></tr></thead>
           <tbody>
             <tr class="open"><td colspan="6">Brought forward</td><td class="r${opening < 0 ? ' red' : ''}">${inr(opening)}</td></tr>
             ${bodyRows}
@@ -155,11 +157,14 @@ export default function PettyCashLedger() {
           <tfoot><tr><td colspan="4">Total outstanding</td>
             <td class="r">${inr(debits)}</td><td class="r">${inr(closing)}</td></tr></tfoot>
         </table>`;
-    const title = methodIsBalance ? 'Bank Statement' : 'Unpaid Bank — Payments Pending';
+    const title = isCash ? 'Cash in Hand Statement'
+      : methodIsBalance ? 'Bank Statement' : 'Unpaid Bank — Payments Pending';
     const summary = methodIsBalance
-      ? `Opening <b>${inr(opening)}</b> · Credits <b>${inr(credits)}</b> · Debits <b>${inr(debits)}</b> · Closing <b>${inr(closing)}</b>`
+      ? `Opening <b>${inr(opening)}</b> · ${isCash ? 'Received' : 'Credits'} <b>${inr(credits)}</b> · ${isCash ? 'Spent' : 'Debits'} <b>${inr(debits)}</b> · Closing <b>${inr(closing)}</b>`
       : `Brought forward <b>${inr(opening)}</b> · Added in ${esc(monthName)} <b>${inr(debits)}</b> · Total outstanding <b>${inr(closing)}</b>`;
-    const foot = methodIsBalance
+    const foot = isCash
+      ? 'Cash-in-hand account of the PHE Account Statement ledger — in = cash top-ups (including bank withdrawals), out = cash paid out. Closing balance should match the physical cash box.'
+      : methodIsBalance
       ? 'Bank account of the PHE Account Statement ledger — credits are deposits / top-ups, debits are payments made from the bank.'
       : `Amounts recorded but not yet paid from the bank as of ${new Date().toLocaleDateString('en-IN')} — once marked Paid, an entry moves to the Bank statement (under its original date).`;
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title} — ${esc(monthName)}</title>
@@ -739,7 +744,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
   const [showInvModal, setShowInvModal] = useState(false);
   const [partsAdded, setPartsAdded] = useState(0);   // how many parts stocked so far
   const [betweenParts, setBetweenParts] = useState(false); // "add another?" step
-  // Plating Transportation: pick which Nickel/Electropolish items this trip
+  // Plating Transportation: pick which Nickel/Electropolish/Teflon items this trip
   // carries (send out or bring back) — one cash bill shared across them.
   const [platingDir, setPlatingDir] = useState('sent');   // 'sent' | 'returned'
   const [platingItems, setPlatingItems] = useState([]);   // eligible order items
@@ -1071,7 +1076,7 @@ function EntryModal({ type, isOwner, receiptLimit, onClose, onSaved }) {
                   <label className="label">Items ({platingDir === 'sent' ? 'ready to send' : 'currently out for plating'}) <span className="text-red-500">*</span></label>
                   {platingItems.length === 0 ? (
                     <p className="text-xs text-gray-400 bg-white border border-gray-100 rounded-lg px-3 py-2">
-                      {platingDir === 'sent' ? 'No Nickel-Plating / Electropolish items are ready to send.' : 'Nothing is currently out for plating.'}
+                      {platingDir === 'sent' ? 'No Nickel-Plating / Electropolish / Teflon-Coating items are ready to send.' : 'Nothing is currently out for plating.'}
                     </p>
                   ) : (
                     <div className="max-h-44 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50 bg-white">

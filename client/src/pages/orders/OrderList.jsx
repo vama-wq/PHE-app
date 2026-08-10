@@ -10,7 +10,7 @@ import { fmtDate, downloadExcel } from '../../lib/utils';
 import { Plus, Search, Trash2, Edit2, Package, Image as ImageIcon, X, Download, RotateCcw } from 'lucide-react';
 
 // Fixed plating-instruction choices for order items.
-const PLATING_OPTIONS = ['Nickel Plating', 'Electropolish', 'Buffing', 'No Plating'];
+const PLATING_OPTIONS = ['Nickel Plating', 'Electropolish', 'Teflon Coating', 'Buffing', 'No Plating'];
 
 // ── Validation helper ────────────────────────────────────────────────────────
 function validateItem(f) {
