@@ -30,6 +30,7 @@ export default function JobCardDetail() {
   const [editAssembly, setEditAssembly] = useState(null);
   const [splitRequests, setSplitRequests] = useState([]);
   const [showSplitModal, setShowSplitModal] = useState(false);
+  const [showRejectQC, setShowRejectQC] = useState(false);
 
   const loadSplits = () => api.get(`/job-cards/${id}/split-requests`).then(r => setSplitRequests(r.data)).catch(() => {});
   const load = () => { loadSplits(); return api.get(`/job-cards/${id}`).then(r => setJc(r.data)).finally(() => setLoading(false)); };
@@ -116,6 +117,13 @@ export default function JobCardDetail() {
           <button className="btn-ghost btn-sm" onClick={() => window.print()}>
             <Printer size={14} /> Print
           </button>
+          {/* Owner can undo a QC approval and put the work back on the floor at
+              a chosen stage (e.g. Brazing) — everything from there is redone. */}
+          {user.role === 'owner' && (jc.status === 'qc_approved' || jc.status === 'qc_pending') && (
+            <button className="btn-secondary btn-sm" onClick={() => setShowRejectQC(true)}>
+              <XCircle size={14} /> Reject QC
+            </button>
+          )}
           {user.role === 'owner' && (
             <button
               className="btn-danger btn-sm"
@@ -495,7 +503,71 @@ export default function JobCardDetail() {
         <DailyReportModal jcId={id} assemblies={jc.assemblies}
           onClose={() => setShowReportModal(false)} onSave={() => { setShowReportModal(false); load(); }} />
       )}
+      {showRejectQC && (
+        <RejectQCModal jc={jc}
+          onClose={() => setShowRejectQC(false)} onSave={() => { setShowRejectQC(false); load(); }} />
+      )}
     </div>
+  );
+}
+
+// Owner-only: undo a QC decision and put the work back on the floor, optionally
+// at an earlier stage so everything from there is redone.
+function RejectQCModal({ jc, onClose, onSave }) {
+  const stages = stagesFor(jc);
+  const readyStage = jc.is_fg ? 4 : 29;
+  const [stageNo, setStageNo] = useState(readyStage);
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const redone = stages.filter(s => s.no >= stageNo && s.no < 30);
+
+  const submit = async () => {
+    if (!notes.trim()) return setError('Say why it is being rejected — production needs the reason.');
+    setSaving(true); setError('');
+    try {
+      await api.put(`/qc/${jc.id}/reject`, { notes: notes.trim(), return_to_stage: stageNo });
+      onSave();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to reject');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title="Reject QC" onClose={onClose} size="md">
+      <div className="space-y-3">
+        {jc.status === 'qc_approved' && (
+          <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            This card is already <b>QC Approved</b>. Rejecting it undoes that approval and puts the work back into production.
+          </p>
+        )}
+        <div>
+          <label className="label">Send the work back to</label>
+          <select className="input" value={stageNo} onChange={e => setStageNo(parseInt(e.target.value, 10))}>
+            {stages.filter(s => s.no < 30).map(s => (
+              <option key={s.no} value={s.no}>Stage {s.no}: {s.name}</option>
+            ))}
+          </select>
+          <p className="text-[11px] text-gray-500 mt-1">
+            {redone.length} stage{redone.length === 1 ? '' : 's'} will re-open and must be done again
+            {stageNo !== readyStage && <> — starting from <b>{stages.find(s => s.no === stageNo)?.name}</b></>}.
+          </p>
+        </div>
+        <div>
+          <label className="label">Reason <span className="text-red-500">*</span></label>
+          <textarea className="input" rows={3} value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="What was wrong — production sees this on the card" />
+        </div>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn-danger" onClick={submit} disabled={saving}>
+            {saving ? 'Rejecting…' : 'Reject QC'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
