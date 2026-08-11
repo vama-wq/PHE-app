@@ -85,6 +85,9 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), ...uploa
   const approvalStatus = req.user.role === 'owner' ? 'approved' : 'pending_approval';
   // Gujarati name auto-generates from the English name when left blank
   const guName = (name_gu || '').trim() || gujaratiName(name);
+  // Trim the category: "Pocket " and "Pocket" are the same category to a human
+  // but two separate entries in every filter and grouping.
+  const cat = (category || '').trim() || null;
 
   try {
     const r = await db.insert(
@@ -92,7 +95,7 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), ...uploa
          (item_code, name, name_gu, category, unit, current_stock, reorder_level, unit_cost, min_order_qty, notes, drawing_file, drawing_original_name, created_by, approval_status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
-        item_code.toUpperCase(), name, guName||null, category||null, unit,
+        item_code.toUpperCase(), name, guName||null, cat, unit,
         Number(current_stock)||0, Number(reorder_level)||0, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null,
         drawingFile, drawingOriginalName, req.user.id, approvalStatus
       ]
@@ -178,6 +181,8 @@ router.put('/:id', authenticate, authorize('owner', 'admin'), ...uploadItemDrawi
 
   // Gujarati name auto-generates from the English name when left blank
   const guName = (name_gu || '').trim() || gujaratiName(name);
+  // Same trim as on create — a stray space would split the category in two.
+  const cat = (category || '').trim() || null;
 
   try {
     if (req.file) {
@@ -186,13 +191,13 @@ router.put('/:id', authenticate, authorize('owner', 'admin'), ...uploadItemDrawi
          SET item_code=$1, name=$2, name_gu=$3, category=$4, unit=$5, reorder_level=$6, unit_cost=$7, min_order_qty=$8, notes=$9,
              drawing_file=$10, drawing_original_name=$11
          WHERE id=$12`,
-        [item_code?.toUpperCase(), name, guName||null, category||null, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null,
+        [item_code?.toUpperCase(), name, guName||null, cat, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null,
          req.file.storagePath, req.file.originalname, req.params.id]
       );
     } else {
       await db.run(
         `UPDATE inventory_items SET item_code=$1, name=$2, name_gu=$3, category=$4, unit=$5, reorder_level=$6, unit_cost=$7, min_order_qty=$8, notes=$9 WHERE id=$10`,
-        [item_code?.toUpperCase(), name, guName||null, category||null, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null, req.params.id]
+        [item_code?.toUpperCase(), name, guName||null, cat, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null, req.params.id]
       );
     }
     res.json({ message: 'Updated' });

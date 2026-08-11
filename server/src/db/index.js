@@ -881,6 +881,12 @@ async function initDB(retries = 20, delayMs = 10000) {
          WHERE entry_date='2026-08-05' AND category='Office Expense'
            AND entry_type='expense' AND payment_method='cash'
            AND ((paid_to ILIKE 'tds' AND amount=7917) OR (paid_to ILIKE 'umiya%zerox' AND amount=10966))`);
+      // Inventory categories are free text, and a stray trailing space made
+      // "Pocket " a second category that looks identical to "Pocket" in every
+      // filter and grouping. Trim them all so same-named categories merge into
+      // one. Idempotent — after the first run nothing matches.
+      await pool.query(`UPDATE inventory_items SET category = TRIM(category)
+                         WHERE category IS NOT NULL AND category <> TRIM(category)`);
       // Purchase orders round the payable to the nearest rupee like a supplier
       // bill does, keeping the difference so the printed PO still adds up.
       // Existing POs are deliberately NOT rounded: they have already been
