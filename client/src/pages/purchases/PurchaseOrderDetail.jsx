@@ -471,6 +471,16 @@ export default function PurchaseOrderDetail() {
               <td style={{ border: '1px solid #ccc' }}></td>
               <td style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right' }}>{fmt(po.igst_amount)}</td>
             </tr>
+            {/* Round Off — only shown when there was actually a fraction to
+                drop, so a PO that lands on a whole rupee stays clean. */}
+            {Number(po.round_off) !== 0 && (
+              <tr>
+                <td colSpan={5} style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right', fontWeight: 700 }}>Round Off</td>
+                <td style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right' }}>
+                  {Number(po.round_off) > 0 ? '+' : '−'}{fmt(Math.abs(Number(po.round_off)))}
+                </td>
+              </tr>
+            )}
             <tr style={{ background: '#f0f0f0' }}>
               <td colSpan={5} style={{ border: '1px solid #ccc', padding: '5px 8px', textAlign: 'right', fontWeight: 800, fontSize: '13px' }}>Grand Total</td>
               <td style={{ border: '1px solid #ccc', padding: '5px 8px', textAlign: 'right', fontWeight: 800, fontSize: '13px' }}>{fmt(po.grand_total)}</td>

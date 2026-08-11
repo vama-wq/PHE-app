@@ -114,7 +114,11 @@ export default function PurchaseOrderForm() {
   const itemsSubtotal = items.reduce((s, i) => s + (i.amount || 0), 0);
   const subtotal = itemsSubtotal + tc;
   const igstAmount = Math.round(subtotal * (igst / 100) * 100) / 100;
-  const grandTotal = Math.round((subtotal + igstAmount) * 100) / 100;
+  // Mirrors calcTotals on the server: the payable rounds to the nearest rupee
+  // and the dropped fraction is shown as Round Off.
+  const beforeRounding = Math.round((subtotal + igstAmount) * 100) / 100;
+  const grandTotal = Math.round(beforeRounding);
+  const roundOff = Math.round((grandTotal - beforeRounding) * 100) / 100;
   const fmt = n => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 
   // Strict where the supplier has linked items; fall back to all inventory when
@@ -350,6 +354,12 @@ export default function PurchaseOrderForm() {
                 <span>IGST ({igstPercent}%)</span>
                 <span className="font-medium">₹{fmt(igstAmount)}</span>
               </div>
+              {roundOff !== 0 && (
+                <div className="flex justify-between w-full text-gray-600">
+                  <span>Round Off</span>
+                  <span className="font-medium">{roundOff > 0 ? '+' : '−'}₹{fmt(Math.abs(roundOff))}</span>
+                </div>
+              )}
               <div className="flex justify-between w-full text-gray-900 font-bold text-base border-t border-gray-200 pt-2 mt-1">
                 <span>Grand Total</span>
                 <span>₹{fmt(grandTotal)}</span>

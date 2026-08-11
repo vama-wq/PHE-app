@@ -881,6 +881,13 @@ async function initDB(retries = 20, delayMs = 10000) {
          WHERE entry_date='2026-08-05' AND category='Office Expense'
            AND entry_type='expense' AND payment_method='cash'
            AND ((paid_to ILIKE 'tds' AND amount=7917) OR (paid_to ILIKE 'umiya%zerox' AND amount=10966))`);
+      // Purchase orders round the payable to the nearest rupee like a supplier
+      // bill does, keeping the difference so the printed PO still adds up.
+      // Existing POs are deliberately NOT rounded: they have already been
+      // printed and sent, and rewriting a total someone holds on paper is worse
+      // than a stray 40 paise. They keep round_off 0 and render exactly as
+      // before (the Round Off line only appears when it is non-zero).
+      await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS round_off DOUBLE PRECISION DEFAULT 0`);
       // Bank accounts: the company runs two (Kotak + Kalupur), but the ledger
       // kept ONE combined Bank balance, so neither could be reconciled against
       // its own statement. Every bank entry now carries the account it moved

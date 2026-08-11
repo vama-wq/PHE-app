@@ -97,11 +97,16 @@ const VALID_DELIVERY_STATUSES = [
   'purchase_accepted', 'order_cancelled', 'qc_pending'
 ];
 
+// Totals carry paise up to the tax line, then the payable is rounded to the
+// nearest rupee the way a supplier bill does — the difference is kept as
+// round_off so the arithmetic on the printed PO still adds up.
 function calcTotals(items, transportCharges, igstPercent) {
   const subtotal = items.reduce((s, i) => s + i.amount, 0) + Number(transportCharges || 0);
   const igstAmount = Math.round(subtotal * (igstPercent / 100) * 100) / 100;
-  const grandTotal = Math.round((subtotal + igstAmount) * 100) / 100;
-  return { subtotal, igstAmount, grandTotal };
+  const beforeRounding = Math.round((subtotal + igstAmount) * 100) / 100;
+  const grandTotal = Math.round(beforeRounding);
+  const roundOff = Math.round((grandTotal - beforeRounding) * 100) / 100;
+  return { subtotal, igstAmount, grandTotal, roundOff };
 }
 
 async function nextPoNumber(db) {
@@ -352,15 +357,15 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (r
   const db = getDB();
   const igst = igst_percent !== undefined ? Number(igst_percent) : 18;
   const tc = Number(transport_charges || 0);
-  const { subtotal, igstAmount, grandTotal } = calcTotals(items, tc, igst);
+  const { subtotal, igstAmount, grandTotal, roundOff } = calcTotals(items, tc, igst);
   const poNumber = await nextPoNumber(db);
 
   const r = await db.insert(
     `INSERT INTO purchase_orders
-       (po_number, supplier_id, transport_charges, igst_percent, subtotal, igst_amount, grand_total,
+       (po_number, supplier_id, transport_charges, igst_percent, subtotal, igst_amount, round_off, grand_total,
         notes, expected_delivery_date, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [poNumber, supplier_id, tc, igst, subtotal, igstAmount, grandTotal,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [poNumber, supplier_id, tc, igst, subtotal, igstAmount, roundOff, grandTotal,
      notes||null, expected_delivery_date||null, req.user.id]
   );
 
@@ -393,14 +398,14 @@ router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async 
 
   const igst = igst_percent !== undefined ? Number(igst_percent) : po.igst_percent;
   const tc = Number(transport_charges !== undefined ? transport_charges : po.transport_charges);
-  const { subtotal, igstAmount, grandTotal } = calcTotals(items, tc, igst);
+  const { subtotal, igstAmount, grandTotal, roundOff } = calcTotals(items, tc, igst);
 
   await db.run(
     `UPDATE purchase_orders SET
        supplier_id=$1, transport_charges=$2, igst_percent=$3, subtotal=$4,
-       igst_amount=$5, grand_total=$6, notes=$7, expected_delivery_date=$8, status='draft'
-     WHERE id=$9`,
-    [supplier_id||po.supplier_id, tc, igst, subtotal, igstAmount, grandTotal,
+       igst_amount=$5, round_off=$6, grand_total=$7, notes=$8, expected_delivery_date=$9, status='draft'
+     WHERE id=$10`,
+    [supplier_id||po.supplier_id, tc, igst, subtotal, igstAmount, roundOff, grandTotal,
      notes||null, expected_delivery_date||po.expected_delivery_date||null, po.id]
   );
 
