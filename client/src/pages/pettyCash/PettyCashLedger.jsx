@@ -20,6 +20,7 @@ const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise', 
 const ONE_WAY_VENDORS = ['Peena Traders'];
 const PLATING_TRANSPORT = 'Plating Transportation';
 const BANK_WITHDRAWAL = 'Bank Withdrawal'; // bank down → cash in hand up (linked top-up)
+const BANK_TRANSFER = 'Bank Transfer';     // one bank account down → another up (linked pair)
 const EMP_TYPES = ['Advance Paid', 'Employee Welfare', 'Employee Care', 'Miscellaneous'];
 const EMP_TYPES_WORKER = ['Advance Paid', 'Employee Care']; // pick a worker from payroll
 const METHOD_BADGES = {
@@ -860,7 +861,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
     entry_date: new Date().toISOString().slice(0, 10),
     category: '', description: '', paid_to: '', amount: '',
     payment_method: isTopUp ? 'cash' : '',
-    bank_account_id: '',
+    bank_account_id: '', to_bank_account_id: '',
     item_name: '', item_category: '', unit: '', sample_qty: '',
     emp_expense_type: '', employee_id: '',
   });
@@ -900,8 +901,9 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
   const isPlating = f.category === PLATING;
   const isPlatingTransport = f.category === PLATING_TRANSPORT;
   const isBankWithdrawal = f.category === BANK_WITHDRAWAL;
+  const isBankTransfer = f.category === BANK_TRANSFER;
   const empNeedsWorker = isEmpExpense && EMP_TYPES_WORKER.includes(f.emp_expense_type);
-  const needsReceipt = !isTopUp && !isPlatingTransport && !isBankWithdrawal && parseFloat(f.amount) > receiptLimit;
+  const needsReceipt = !isTopUp && !isPlatingTransport && !isBankWithdrawal && !isBankTransfer && parseFloat(f.amount) > receiptLimit;
 
   // Load the eligible plating items whenever the trip direction changes
   useEffect(() => {
@@ -932,13 +934,14 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
     if (!(parseFloat(f.amount) > 0)) return setError('Enter a valid amount.');
     if (!f.payment_method) return setError(isTopUp ? 'Select Cash or Bank.' : 'Select a payment method.');
     if (f.payment_method === 'paid_bank' && !f.bank_account_id) return setError('Select which bank account this is.');
+    if (isBankTransfer && !f.to_bank_account_id) return setError('Select the account the money went to.');
     if (!isTopUp) {
       if (!f.category) return setError('Category is required.');
       if (isEmpExpense) {
         if (!f.emp_expense_type) return setError('Pick the expense type.');
         if (empNeedsWorker && !f.employee_id) return setError('Select the employee.');
         if (!empNeedsWorker && !f.paid_to.trim()) return setError('Paid To is required.');
-      } else if (!isBankWithdrawal && !f.paid_to.trim()) {
+      } else if (!isBankWithdrawal && !isBankTransfer && !f.paid_to.trim()) {
         return setError('Paid To is required.');
       }
       if (isMachinery && !f.description.trim()) return setError('Description is required for Machinery.');
@@ -973,6 +976,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
       fd.append('amount', f.amount);
       fd.append('payment_method', isPlating ? 'unpaid_bank' : f.payment_method);
       if (f.bank_account_id) fd.append('bank_account_id', f.bank_account_id);
+      if (f.to_bank_account_id) fd.append('to_bank_account_id', f.to_bank_account_id);
       if (!isTopUp) {
         fd.append('category', f.category);
         // For worker-linked employee expenses the payee is the selected worker
@@ -1062,7 +1066,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
 
         <div>
           <label className="label">{isTopUp ? 'Top-up Into' : 'Payment Method'} <span className="text-red-500">*</span></label>
-          <select className="input" value={f.payment_method} onChange={set('payment_method')} disabled={isPlating || isPlatingTransport || isBankWithdrawal}>
+          <select className="input" value={f.payment_method} onChange={set('payment_method')} disabled={isPlating || isPlatingTransport || isBankWithdrawal || isBankTransfer}>
             {!isTopUp && <option value="">— select —</option>}
             <option value="cash">Cash{isTopUp ? ' in Hand' : ''}</option>
             <option value="paid_bank">{isTopUp ? 'Bank' : 'Paid Bank'}</option>
@@ -1094,6 +1098,26 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
             {isBankWithdrawal && (
               <p className="text-[11px] text-emerald-700 mt-1">The cash is withdrawn from this account.</p>
             )}
+            {isBankTransfer && (
+              <p className="text-[11px] text-emerald-700 mt-1">The money leaves this account.</p>
+            )}
+          </div>
+        )}
+
+        {/* Bank Transfer: where the money lands. Both sides are recorded, so
+            each account still reconciles against its own statement. */}
+        {isBankTransfer && (
+          <div>
+            <label className="label">Transferred to <span className="text-red-500">*</span></label>
+            <select className="input" value={f.to_bank_account_id} onChange={set('to_bank_account_id')}>
+              <option value="">— select —</option>
+              {banks.filter(b => String(b.id) !== String(f.bank_account_id)).map(b => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+            <p className="text-[11px] text-emerald-700 mt-1">
+              Records both sides at once — one account down, the other up. No receipt needed.
+            </p>
           </div>
         )}
 
@@ -1112,8 +1136,8 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
                   // silently keeping the forced value — the user must re-pick.
                   payment_method: e.target.value === PLATING ? 'unpaid_bank'
                     : e.target.value === PLATING_TRANSPORT ? 'cash'
-                    : e.target.value === BANK_WITHDRAWAL ? 'paid_bank'
-                    : [PLATING, PLATING_TRANSPORT, BANK_WITHDRAWAL].includes(p.category) ? '' : p.payment_method,
+                    : e.target.value === BANK_WITHDRAWAL || e.target.value === BANK_TRANSFER ? 'paid_bank'
+                    : [PLATING, PLATING_TRANSPORT, BANK_WITHDRAWAL, BANK_TRANSFER].includes(p.category) ? '' : p.payment_method,
                   // A category that moves off the bank must not keep a stale account.
                   bank_account_id: (e.target.value === PLATING || e.target.value === PLATING_TRANSPORT)
                     ? '' : p.bank_account_id }))}>
@@ -1153,6 +1177,10 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
             ) : isBankWithdrawal ? (
               <div className="text-sm rounded-xl px-3 py-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800">
                 Bank → Cash in Hand transfer: no payee needed. The Bank balance drops and Cash in Hand rises by the amount above, as two linked entries.
+              </div>
+            ) : isBankTransfer ? (
+              <div className="text-sm rounded-xl px-3 py-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800">
+                Bank → Bank transfer: no payee needed. The account above drops and the one below rises by the same amount, as two linked entries — so each account still ties to its own statement.
               </div>
             ) : (
               <div>

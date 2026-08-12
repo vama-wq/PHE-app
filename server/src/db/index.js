@@ -240,7 +240,7 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_pc_company ON petty_cash_companies(lower(name))`);
       // Jay Bhramani (Machinery) entries are recorded but don't reduce cash-in-hand.
       await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS affects_cash BOOLEAN NOT NULL DEFAULT TRUE`);
-      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling', 'Employee Expense', 'Salary', 'Purchase Payment', 'Plating', 'Purchase Transport', 'Bank Withdrawal']) {
+      for (const c of ['Office Expense', 'Plating Transportation', 'Machinery', 'Sampling', 'Employee Expense', 'Salary', 'Purchase Payment', 'Plating', 'Purchase Transport', 'Bank Withdrawal', 'Bank Transfer']) {
         await pool.query(`INSERT INTO petty_cash_categories (name) VALUES ($1) ON CONFLICT DO NOTHING`, [c]);
       }
       await pool.query(`INSERT INTO petty_cash_companies (name) VALUES ($1) ON CONFLICT DO NOTHING`, ['Jay Bhramani']);
@@ -881,6 +881,59 @@ async function initDB(retries = 20, delayMs = 10000) {
          WHERE entry_date='2026-08-05' AND category='Office Expense'
            AND entry_type='expense' AND payment_method='cash'
            AND ((paid_to ILIKE 'tds' AND amount=7917) OR (paid_to ILIKE 'umiya%zerox' AND amount=10966))`);
+      // ── Kotak reconciliation, 23 Jul – 12 Aug 2026 ────────────────────────
+      // Tallied line by line against the Kotak statement (a/c XX5595). Each
+      // fix below is guarded on the wrong value still being present, so it
+      // applies once and never re-runs.
+      {
+        const bank = await pool.query("SELECT id, name FROM bank_accounts WHERE lower(name) IN ('kotak','kalupur')");
+        const idOf = (n) => (bank.rows.find(b => b.name.toLowerCase() === n) || {}).id || null;
+        const kotak = idOf('kotak'), kalupur = idOf('kalupur');
+        if (kotak && kalupur) {
+          // 1. Four payments were entered as round rupees; the bank took paise.
+          const paise = [
+            ['%zoho%', 7858, 7858.80], ['%ugvcl%', 8184, 8184.18],
+            ['%indeed%', 6659, 6659.26], ['%google%workspace%', 5628, 5628.79],
+          ];
+          for (const [payee, was, is] of paise) {
+            await pool.query(
+              `UPDATE petty_cash_entries SET amount=$1
+                WHERE payment_method='paid_bank' AND amount=$2 AND paid_to ILIKE $3`, [is, was, payee]);
+          }
+          // 2. The ₹4,860 tea expense went out of Kalupur, not Kotak.
+          await pool.query(
+            `UPDATE petty_cash_entries SET bank_account_id=$1
+              WHERE payment_method='paid_bank' AND amount=4860 AND paid_to ILIKE 'bharat bhai tea'
+                AND bank_account_id IS DISTINCT FROM $1`, [kalupur]);
+          // 3. The ₹150 purchase transport was added into an invoice, never
+          //    paid separately — it is not on any bank statement.
+          await pool.query(
+            `DELETE FROM petty_cash_entries
+              WHERE payment_method='paid_bank' AND amount=150 AND category='Purchase Transport'
+                AND paid_to ILIKE 'added in invoice'`);
+          // 4. Two Kotak → Kalupur transfers were never recorded. Each posts as
+          //    a linked pair (Kotak down, Kalupur up) — the same shape the new
+          //    Bank Transfer category creates.
+          for (const [date, amt] of [['2026-08-03', 150000], ['2026-08-10', 2500]]) {
+            const seen = await pool.query(
+              `SELECT 1 FROM petty_cash_entries WHERE category='Bank Transfer'
+                AND entry_date=$1 AND amount=$2 AND entry_type='expense'`, [date, amt]);
+            if (seen.rows.length) continue;
+            const out = await pool.query(
+              `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount,
+                 payment_method, affects_cash, bank_account_id, created_by)
+               VALUES ($1,'expense','Bank Transfer','Transferred to Kalupur','Kalupur',$2,'paid_bank',TRUE,$3,
+                 (SELECT id FROM users WHERE role='owner' ORDER BY id LIMIT 1)) RETURNING id`,
+              [date, amt, kotak]);
+            await pool.query(
+              `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount,
+                 payment_method, affects_cash, transfer_entry_id, bank_account_id, created_by)
+               VALUES ($1,'top_up',NULL,'Transferred from Kotak',NULL,$2,'paid_bank',TRUE,$3,$4,
+                 (SELECT id FROM users WHERE role='owner' ORDER BY id LIMIT 1))`,
+              [date, amt, out.rows[0].id, kalupur]);
+          }
+        }
+      }
       // Samples gained a step: the owner approves (sign-off only), then
       // Accounts add the item + supplier to inventory. Widen the status check
       // for 'awaiting_inventory'. Drop-then-add keeps this idempotent.

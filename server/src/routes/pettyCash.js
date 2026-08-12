@@ -21,6 +21,7 @@ const PLATING = 'Plating';
 // Bank → Cash transfer: a paid_bank expense (bank down) + auto-created linked
 // cash top-up (cash up), committed together.
 const BANK_WITHDRAWAL = 'Bank Withdrawal';
+const BANK_TRANSFER = 'Bank Transfer'; // money moved between the company's own bank accounts
 const NO_CASH_COMPANY = 'jay bhramani'; // lower-cased for comparison
 // Employee Expense sub-types (stored in `description`). Advance Paid & Employee
 // Care pick a worker from the payroll list; the others need a free-text Paid To.
@@ -309,6 +310,7 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
     let empExpense = null;       // { type, employee_id, isAdvance } for Employee Expense
     let finalPaidTo = (paid_to || '').trim();
     let finalDescription = (description || '').trim() || null;
+    let transferToBank = null;   // Bank Transfer: the account receiving the money
     if (entry_type === 'expense') {
       const to = (paid_to || '').trim();
       if (!(req.body.category || '').trim()) return fail(400, 'Category is required for expenses');
@@ -327,6 +329,17 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
         method = 'paid_bank';
         finalPaidTo = 'Cash in Hand';
         if (!finalDescription) finalDescription = 'Cash withdrawn from bank';
+      } else if (cat === BANK_TRANSFER) {
+        // Money moved between the company's own bank accounts — one account
+        // down, the other up. Both sides are created below as a linked pair, so
+        // each account still reconciles against its own statement.
+        method = 'paid_bank';
+        const toId = parseInt(req.body.to_bank_account_id, 10);
+        if (!Number.isInteger(toId)) return fail(400, 'Select the account the money went TO');
+        transferToBank = await db.get('SELECT id, name FROM bank_accounts WHERE id=$1 AND active', [toId]);
+        if (!transferToBank) return fail(400, 'Select a valid destination account');
+        finalPaidTo = transferToBank.name;
+        if (!finalDescription) finalDescription = `Transferred to ${transferToBank.name}`;
       } else if (cat === EMPLOYEE_EXPENSE) {
         const type = (req.body.emp_expense_type || '').trim();
         if (!EMP_TYPES.includes(type)) return fail(400, 'Pick an expense type (Advance Paid / Employee Welfare / Employee Care / Miscellaneous)');
@@ -370,7 +383,8 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
         if (!(qty > 0)) return fail(400, 'Enter a valid sample quantity');
         sample = { item_name: itemName, category: (req.body.item_category || '').trim() || null, unit, qty };
       }
-      if (amt > RECEIPT_REQUIRED_ABOVE && !req.file && cat !== BANK_WITHDRAWAL) {
+      // Internal money movements have no bill to attach.
+      if (amt > RECEIPT_REQUIRED_ABOVE && !req.file && cat !== BANK_WITHDRAWAL && cat !== BANK_TRANSFER) {
         return fail(400, `A receipt/bill photo is required for expenses above ₹${RECEIPT_REQUIRED_ABOVE}`);
       }
     }
@@ -421,6 +435,15 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
           `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, transfer_entry_id, created_by)
            VALUES ($1,'top_up',NULL,$2,NULL,$3,'cash',TRUE,$4,$5)`,
           [entry_date, 'Cash withdrawn from bank', amt, rows[0].id, req.user.id]);
+      }
+      // Bank Transfer: the receiving account's top-up, tagged to that account so
+      // both statements show their own side of the move.
+      if (cat === BANK_TRANSFER && transferToBank) {
+        const fromName = (await client.query('SELECT name FROM bank_accounts WHERE id=$1', [bankAccountId])).rows[0]?.name || 'bank';
+        await client.query(
+          `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, transfer_entry_id, bank_account_id, created_by)
+           VALUES ($1,'top_up',NULL,$2,NULL,$3,'paid_bank',TRUE,$4,$5,$6)`,
+          [entry_date, `Transferred from ${fromName}`, amt, rows[0].id, transferToBank.id, req.user.id]);
       }
       return rows[0].id;
     });
