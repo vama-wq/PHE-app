@@ -479,23 +479,30 @@ router.get('/samples', authenticate, authorize('accounts', 'owner'), async (req,
   }
 });
 
-// Fetch a pending sample by id, validating :id — shared by the review routes
-const getPendingSample = async (db, rawId, res) => {
+// Fetch a sample by id in one of the allowed states — shared by the review
+// routes. The flow is: pending → (owner approves) awaiting_inventory →
+// (accounts adds it to inventory) approved.
+const getSampleIn = async (db, rawId, res, statuses = ['pending']) => {
   const id = parseInt(rawId, 10);
   if (!Number.isInteger(id)) { res.status(400).json({ error: 'Invalid sample id' }); return null; }
   const s = await db.get('SELECT * FROM petty_cash_samples WHERE id=$1', [id]);
   if (!s) { res.status(404).json({ error: 'Sample not found' }); return null; }
-  if (s.status !== 'pending') { res.status(400).json({ error: 'Sample is not pending' }); return null; }
+  if (!statuses.includes(s.status)) {
+    const label = { pending: 'awaiting the owner', awaiting_inventory: 'ready to add to inventory' }[s.status] || s.status;
+    res.status(400).json({ error: `Sample is ${label}` }); return null;
+  }
   return s;
 };
+const getPendingSample = (db, rawId, res) => getSampleIn(db, rawId, res, ['pending']);
 
 // Mid-approval checkpoints: the item is created first (the Supplier form needs
 // an item to link), then the supplier. Storing each id as it's created lets a
 // cancelled or failed flow resume without creating duplicates next time.
-router.put('/samples/:id/link-item', authenticate, authorize('owner'), async (req, res) => {
+router.put('/samples/:id/link-item', authenticate, authorize('accounts', 'owner'), async (req, res) => {
   try {
     const db = getDB();
-    const s = await getPendingSample(db, req.params.id, res);
+    // Accounts runs these checkpoints once the owner has approved the sample.
+    const s = await getSampleIn(db, req.params.id, res, ['pending', 'awaiting_inventory']);
     if (!s) return;
     const hasInv = req.body.inventory_item_id != null;
     const hasSup = req.body.supplier_id != null;
@@ -521,10 +528,43 @@ router.put('/samples/:id/link-item', authenticate, authorize('owner'), async (re
   }
 });
 
+// Owner sign-off — one click, no data entry. The sample then goes to Accounts,
+// who create the inventory item and the supplier from the sample's details.
 router.put('/samples/:id/approve', authenticate, authorize('owner'), async (req, res) => {
   try {
     const db = getDB();
     const s = await getPendingSample(db, req.params.id, res);
+    if (!s) return;
+    await db.run(
+      `UPDATE petty_cash_samples SET status='awaiting_inventory',
+         rejection_reason=NULL, reviewed_by=$1, reviewed_at=NOW() WHERE id=$2`,
+      [req.user.id, s.id]);
+    await logActivity(null, null, 'sample_approved',
+      `Sample approved: ${s.item_name} (${s.supplier_name}) — sent to Accounts to add to inventory`, req.user.id);
+    // Tell Accounts there is something waiting for them.
+    try {
+      const accounts = await db.all("SELECT id FROM users WHERE role='accounts'");
+      for (const a of accounts) {
+        await createNotification(db, {
+          userId: a.id, type: 'sample_to_inventory', title: 'Sample approved — add it to inventory',
+          body: `${s.item_name} from ${s.supplier_name} (${s.sample_qty} ${s.unit || ''}) was approved. Add it to inventory from the Account Statement page.`,
+          link: '/petty-cash', sourceUserId: req.user.id,
+        });
+      }
+    } catch (_) { /* notifications are best-effort */ }
+    res.json({ message: 'Sample approved — sent to Accounts to add to inventory' });
+  } catch (e) {
+    console.error('sample approve error:', e);
+    res.status(500).json({ error: 'Failed to approve sample' });
+  }
+});
+
+// Accounts (or the owner) finish the job: the item and supplier now exist, so
+// the sample is fully settled.
+router.put('/samples/:id/complete', authenticate, authorize('accounts', 'owner'), async (req, res) => {
+  try {
+    const db = getDB();
+    const s = await getSampleIn(db, req.params.id, res, ['awaiting_inventory']);
     if (!s) return;
     const supId = parseInt(req.body.supplier_id, 10);
     const invId = parseInt(req.body.inventory_item_id, 10);
@@ -536,14 +576,14 @@ router.put('/samples/:id/approve', authenticate, authorize('owner'), async (req,
     if (!inv) return res.status(404).json({ error: 'Inventory item not found' });
     await db.run(
       `UPDATE petty_cash_samples SET status='approved', supplier_id=$1, inventory_item_id=$2,
-         rejection_reason=NULL, reviewed_by=$3, reviewed_at=NOW() WHERE id=$4`,
-      [supId, invId, req.user.id, s.id]);
-    await logActivity(null, null, 'sample_approved',
-      `Sample approved: ${s.item_name} (${s.supplier_name}) → supplier "${sup.name}", item ${inv.item_code}`, req.user.id);
-    res.json({ message: 'Sample approved' });
+         rejection_reason=NULL WHERE id=$3`,
+      [supId, invId, s.id]);
+    await logActivity(null, null, 'sample_added_to_inventory',
+      `Sample added to inventory: ${s.item_name} (${s.supplier_name}) → supplier "${sup.name}", item ${inv.item_code}`, req.user.id);
+    res.json({ message: 'Sample added to inventory' });
   } catch (e) {
-    console.error('sample approve error:', e);
-    res.status(500).json({ error: 'Failed to approve sample' });
+    console.error('sample complete error:', e);
+    res.status(500).json({ error: 'Failed to complete the sample' });
   }
 });
 

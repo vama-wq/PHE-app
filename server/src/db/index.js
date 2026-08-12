@@ -881,6 +881,20 @@ async function initDB(retries = 20, delayMs = 10000) {
          WHERE entry_date='2026-08-05' AND category='Office Expense'
            AND entry_type='expense' AND payment_method='cash'
            AND ((paid_to ILIKE 'tds' AND amount=7917) OR (paid_to ILIKE 'umiya%zerox' AND amount=10966))`);
+      // Samples gained a step: the owner approves (sign-off only), then
+      // Accounts add the item + supplier to inventory. Widen the status check
+      // for 'awaiting_inventory'. Drop-then-add keeps this idempotent.
+      await pool.query(`
+        DO $$
+        DECLARE c text;
+        BEGIN
+          SELECT conname INTO c FROM pg_constraint
+           WHERE conrelid='petty_cash_samples'::regclass AND contype='c'
+             AND pg_get_constraintdef(oid) ILIKE '%status%' LIMIT 1;
+          IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE petty_cash_samples DROP CONSTRAINT %I', c); END IF;
+          ALTER TABLE petty_cash_samples ADD CONSTRAINT petty_cash_samples_status_check
+            CHECK (status IN ('pending','awaiting_inventory','approved','rejected'));
+        END $$;`);
       // Inventory categories are free text, and a stray trailing space made
       // "Pocket " a second category that looks identical to "Pocket" in every
       // filter and grouping. Trim them all so same-named categories merge into

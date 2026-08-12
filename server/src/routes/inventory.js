@@ -81,8 +81,18 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), ...uploa
   const db = getDB();
   const drawingFile = req.file?.storagePath || null;
   const drawingOriginalName = req.file?.originalname || null;
-  // Non-owner additions need the owner's sign-off before the item becomes usable
-  const approvalStatus = req.user.role === 'owner' ? 'approved' : 'pending_approval';
+  // Non-owner additions need the owner's sign-off before the item becomes
+  // usable — EXCEPT an item being created from a sample the owner has already
+  // approved, which would otherwise ask the owner to approve the same thing
+  // twice. The sample must genuinely be sitting in 'awaiting_inventory', so
+  // this cannot be used to slip an unapproved item through.
+  let approvalStatus = req.user.role === 'owner' ? 'approved' : 'pending_approval';
+  const fromSampleId = parseInt(req.body.from_sample_id, 10);
+  if (approvalStatus === 'pending_approval' && Number.isInteger(fromSampleId)) {
+    const sample = await db.get(
+      "SELECT id FROM petty_cash_samples WHERE id=$1 AND status='awaiting_inventory'", [fromSampleId]);
+    if (sample) approvalStatus = 'approved';
+  }
   // Gujarati name auto-generates from the English name when left blank
   const guName = (name_gu || '').trim() || gujaratiName(name);
   // Trim the category: "Pocket " and "Pocket" are the same category to a human

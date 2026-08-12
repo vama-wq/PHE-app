@@ -65,6 +65,13 @@ export default function PettyCashLedger() {
   useEffect(() => { loadLedgers(); loadSamples(); }, [showEntry]);
   useEffect(() => { loadBanks(); }, []);
 
+  // Owner sign-off only — Accounts do the inventory data entry afterwards.
+  const handleApproveSample = async (s) => {
+    if (!window.confirm(`Approve "${s.item_name}" from ${s.supplier_name}?\n\nIt goes to Accounts to be added to inventory with these details.`)) return;
+    try { await api.put(`/petty-cash/samples/${s.id}/approve`); loadSamples(); }
+    catch (err) { alert(err.response?.data?.error || 'Failed'); }
+  };
+
   const handleRejectSample = async (s) => {
     const reason = window.prompt(`Reject sample "${s.item_name}" from ${s.supplier_name}?\n\nRejection reason (required):`);
     if (reason === null) return;
@@ -400,6 +407,11 @@ export default function PettyCashLedger() {
                 {samples.filter(s => s.status === 'pending').length} pending
               </span>
             )}
+            {samples.some(s => s.status === 'awaiting_inventory') && (
+              <span className="text-[10px] font-bold bg-blue-100 text-blue-700 rounded-full px-2 py-0.5">
+                {samples.filter(s => s.status === 'awaiting_inventory').length} to add to inventory
+              </span>
+            )}
           </h2>
           <div className="card overflow-x-auto">
             <table className="w-full">
@@ -411,7 +423,7 @@ export default function PettyCashLedger() {
                   <th className="table-header text-right">Qty</th>
                   <th className="table-header text-right">Cost</th>
                   <th className="table-header text-left">Status</th>
-                  {isOwner && <th className="table-header text-center">Review</th>}
+                  <th className="table-header text-center">Review</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -427,6 +439,12 @@ export default function PettyCashLedger() {
                     <td className="table-cell text-sm text-right font-semibold">{inr(s.sample_cost)}</td>
                     <td className="table-cell">
                       {s.status === 'pending' && <span className="text-[10px] font-bold bg-amber-100 text-amber-700 rounded-full px-2 py-0.5">PENDING</span>}
+                      {s.status === 'awaiting_inventory' && (
+                        <div>
+                          <span className="text-[10px] font-bold bg-blue-100 text-blue-700 rounded-full px-2 py-0.5">WITH ACCOUNTS</span>
+                          <div className="text-[11px] text-gray-400 mt-0.5">Approved — to be added to inventory</div>
+                        </div>
+                      )}
                       {s.status === 'approved' && (
                         <div>
                           <span className="text-[10px] font-bold bg-green-100 text-green-700 rounded-full px-2 py-0.5">APPROVED</span>
@@ -440,20 +458,25 @@ export default function PettyCashLedger() {
                         </div>
                       )}
                     </td>
-                    {isOwner && (
-                      <td className="table-cell text-center whitespace-nowrap">
-                        {s.status === 'pending' && (
-                          <>
-                            <button className="btn-primary btn-sm text-xs mr-1.5" onClick={() => setApproving(s)}>
-                              <CheckCircle size={12} className="inline mr-0.5" /> Approve
-                            </button>
-                            <button className="p-1 text-gray-400 hover:text-red-600" onClick={() => handleRejectSample(s)} title="Reject with reason">
-                              <XCircle size={15} />
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    )}
+                    <td className="table-cell text-center whitespace-nowrap">
+                      {/* Owner signs off (one click) — Accounts then add it to
+                          inventory using the sample's own details. */}
+                      {isOwner && s.status === 'pending' && (
+                        <>
+                          <button className="btn-primary btn-sm text-xs mr-1.5" onClick={() => handleApproveSample(s)}>
+                            <CheckCircle size={12} className="inline mr-0.5" /> Approve
+                          </button>
+                          <button className="p-1 text-gray-400 hover:text-red-600" onClick={() => handleRejectSample(s)} title="Reject with reason">
+                            <XCircle size={15} />
+                          </button>
+                        </>
+                      )}
+                      {s.status === 'awaiting_inventory' && (
+                        <button className="btn-primary btn-sm text-xs" onClick={() => setApproving(s)}>
+                          <Boxes size={12} className="inline mr-0.5" /> Add to Inventory
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -696,7 +719,7 @@ function SampleApproveFlow({ sample, onClose, onDone }) {
 
   const finalize = async (supplierId, invId) => {
     try {
-      await api.put(`/petty-cash/samples/${sample.id}/approve`, { supplier_id: supplierId, inventory_item_id: invId });
+      await api.put(`/petty-cash/samples/${sample.id}/complete`, { supplier_id: supplierId, inventory_item_id: invId });
       onDone();
     } catch (err) {
       alert(err.response?.data?.error || 'Approving the sample failed — open Approve again to finish (nothing needs re-creating).');
@@ -707,7 +730,9 @@ function SampleApproveFlow({ sample, onClose, onDone }) {
   if (step === 'item-new') {
     return (
       <InventoryItemModal
-        initial={{ name: sample.item_name, category: sample.category || '', unit: sample.unit || '', unit_cost: unitCost, notes: `From sample — ${sample.supplier_name}` }}
+        // from_sample_id rides along on the create so the server can skip the
+        // second owner approval — the owner already approved this sample.
+        initial={{ name: sample.item_name, category: sample.category || '', unit: sample.unit || '', unit_cost: unitCost, notes: `From sample — ${sample.supplier_name}`, from_sample_id: sample.id }}
         onClose={onClose}
         onSave={async (r) => {
           setItemId(r.id);
