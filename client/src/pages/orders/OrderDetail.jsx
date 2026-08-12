@@ -595,11 +595,17 @@ export default function OrderDetail() {
                         {itemPending  && <span className="text-xs text-blue-700 font-semibold flex items-center gap-1"><Clock size={12} /> Awaiting Review</span>}
                         {itemRejected && <span className="text-xs text-red-700 font-semibold flex items-center gap-1"><AlertTriangle size={12} /> Rejected</span>}
                         {!hasItemDrawing && <span className="text-xs text-amber-600 font-medium">Missing</span>}
-                        {/* Owner approve/reject per drawing */}
-                        {user.role === 'owner' && itemPending && itemDrawings.length > 0 && itemDrawings.map(d => (
+                        {/* Owner approve/reject per drawing. Reject stays
+                            available on an already-APPROVED drawing so an
+                            approval can be revoked when a fault turns up later
+                            — the server handles that case and credits the
+                            item's inventory back. Approve only shows while the
+                            drawing is still pending. */}
+                        {user.role === 'owner' && (itemPending || itemApproved) && itemDrawings.length > 0 && itemDrawings.map(d => (
                           <div key={d.id} className="flex gap-1">
                             <button className="btn-danger btn-sm py-0.5 px-2 text-xs"
                               onClick={async () => {
+                                if (itemApproved && !window.confirm('This drawing is already approved. Rejecting it sends the drawing back to Design and returns this item’s material to stock. Continue?')) return;
                                 const reason = window.prompt('Rejection reason:');
                                 if (!reason?.trim()) return;
                                 await api.put(`/orders/${id}/drawings/${d.id}/reject`, { reason });
@@ -607,10 +613,12 @@ export default function OrderDetail() {
                               }}>
                               <XCircle size={11} /> Reject
                             </button>
-                            <button className="btn-primary btn-sm py-0.5 px-2 text-xs"
-                              onClick={async () => { await api.put(`/orders/${id}/drawings/${d.id}/approve`); load(); }}>
-                              <CheckCircle size={11} /> Approve
-                            </button>
+                            {itemPending && (
+                              <button className="btn-primary btn-sm py-0.5 px-2 text-xs"
+                                onClick={async () => { await api.put(`/orders/${id}/drawings/${d.id}/approve`); load(); }}>
+                                <CheckCircle size={11} /> Approve
+                              </button>
+                            )}
                           </div>
                         ))}
                         {canUploadDrawing && (!itemApproved) && (
