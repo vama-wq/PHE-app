@@ -243,6 +243,15 @@ router.get('/:id', authenticate, async (req, res) => {
     WHERE d.job_card_id = $1 ORDER BY d.created_at DESC
   `, [req.params.id]);
 
+  // The drawing this card is built to. It lives on the ORDER ITEM
+  // (order_drawings), not on the job card — the card only carries the drawing
+  // NUMBER. Approved copy first, newest otherwise.
+  jc.item_drawing = jc.order_item_id ? await db.get(`
+    SELECT id, file_path, original_name, drawing_status
+      FROM order_drawings WHERE item_id = $1
+     ORDER BY (drawing_status = 'approved') DESC, id DESC LIMIT 1
+  `, [jc.order_item_id]) : null;
+
   jc.dispatch_docs = await db.all(`
     SELECT d.*, u.name as created_by_name
     FROM dispatch_documents d LEFT JOIN users u ON d.created_by = u.id

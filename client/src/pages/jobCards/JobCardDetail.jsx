@@ -942,8 +942,12 @@ function OverviewTab({ jc, userRole }) {
               </div>
             </a>
           )}
-          {jc.drawing_no && (
-            <a href={`/uploads/drawings/${jc.drawing_no}.pdf`} target="_blank" rel="noopener noreferrer"
+          {/* The drawing file lives on the order item, not the job card — the
+              card only carries the drawing NUMBER, so it cannot be turned into
+              a file path. Link the real file, and show the number as plain
+              text when no file exists rather than a link that 404s. */}
+          {jc.drawing_no && jc.item_drawing?.file_path && (
+            <a href={`/uploads/${jc.item_drawing.file_path}`} target="_blank" rel="noopener noreferrer"
               className="p-4 border-2 border-orange-200 rounded-lg hover:bg-orange-50 transition-colors flex items-center gap-3">
               <Image size={24} className="text-orange-600" />
               <div>
@@ -951,6 +955,15 @@ function OverviewTab({ jc, userRole }) {
                 <p className="text-xs text-gray-500">{jc.drawing_no}</p>
               </div>
             </a>
+          )}
+          {jc.drawing_no && !jc.item_drawing?.file_path && (
+            <div className="p-4 border-2 border-gray-200 rounded-lg flex items-center gap-3 bg-gray-50">
+              <Image size={24} className="text-gray-400" />
+              <div>
+                <p className="text-sm font-semibold text-gray-500">Drawing</p>
+                <p className="text-xs text-gray-400">{jc.drawing_no} · no file on the order item</p>
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -1255,7 +1268,9 @@ function DrawingsTab({ jc, canUpload, onUpload }) {
                 <FileText size={20} className="text-red-500" />
               </div>
               <div className="flex-1 min-w-0">
-                <a href={`/uploads/drawings/${d.file_name}`} target="_blank" rel="noopener noreferrer"
+                {/* file_path is the stored location; file_name alone has no
+                    folder, so the old `drawings/` prefix always 404'd. */}
+                <a href={`/uploads/${d.file_path || d.file_name}`} target="_blank" rel="noopener noreferrer"
                   className="text-sm font-medium text-brand-600 hover:underline truncate block">
                   {d.original_name || d.file_name}
                 </a>
