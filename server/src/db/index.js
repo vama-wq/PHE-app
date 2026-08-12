@@ -905,6 +905,14 @@ async function initDB(retries = 20, delayMs = 10000) {
             `UPDATE petty_cash_entries SET bank_account_id=$1
               WHERE payment_method='paid_bank' AND amount=4860 AND paid_to ILIKE 'bharat bhai tea'
                 AND bank_account_id IS DISTINCT FROM $1`, [kalupur]);
+          // 2b. The 23-Jul "Bank KCC" opening of ₹5,762.45 was never money in
+          //     Kalupur — it was a loan-recovery figure entered as a credit.
+          //     Kalupur genuinely opened at ₹0.00; deleting this lands the
+          //     account on ₹6,043.45, its real balance (owner-confirmed).
+          await pool.query(
+            `DELETE FROM petty_cash_entries
+              WHERE payment_method='paid_bank' AND entry_type='top_up' AND amount=5762.45
+                AND TRIM(COALESCE(description,'')) ILIKE 'bank kcc'`);
           // 3. The ₹150 purchase transport was added into an invoice, never
           //    paid separately — it is not on any bank statement.
           await pool.query(
