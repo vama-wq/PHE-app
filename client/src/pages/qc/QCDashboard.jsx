@@ -803,6 +803,22 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
                 onClick={() => setShowInvEdit(true)}>Edit inventory</button>
             )}
           </div>
+          {/* Finished-goods cards fit parts onto a heater that already exists.
+              A build-only part on this BOM means the full build BOM was likely
+              attached, and approving would take that stock out a second time. */}
+          {bom?.fg_build_only?.length > 0 && (
+            <div className="text-xs rounded-lg px-3 py-2 mb-2 bg-amber-50 border border-amber-300 text-amber-800">
+              <b>Check this BOM before approving.</b> This is a Finished-Goods card — the heater is already
+              built, so its parts were consumed on the inventory order. These lines look like build parts and
+              would come out of stock a second time:
+              <ul className="mt-1 ml-4 list-disc">
+                {bom.fg_build_only.map(i => (
+                  <li key={i.item_code}>{i.item_code} · {i.category} · qty {i.qty}</li>
+                ))}
+              </ul>
+              <span className="block mt-1">Keep only what is actually fitted during finished-goods prep (nuts, washers, nipple fittings, sealing bushes).</span>
+            </div>
+          )}
           {!bom ? (
             <p className="text-xs text-gray-400">Loading inventory…</p>
           ) : bom.inventory_items.length === 0 ? (

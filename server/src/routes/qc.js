@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQC, uploadChecklistPhoto } = require('../middleware/upload');
-const { settleItemInventory, resolveJobCardItemId, applyRemakeExtras, deductPartialAtQC, deductFinsByLength } = require('../lib/inventoryDeduction');
+const { settleItemInventory, resolveJobCardItemId, applyRemakeExtras, deductPartialAtQC, deductFinsByLength, buildOnlyOnFg } = require('../lib/inventoryDeduction');
 
 // Stage names, for readable activity-log lines when work is sent back to a
 // particular stage. Mirrors PRODUCTION_STAGES in client/src/lib/utils.js.
@@ -468,6 +468,14 @@ router.get('/:id/bom', authenticate, authorize('design', 'owner', 'admin'), asyn
     [itemId]
   );
   const cardCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE order_item_id=$1', [itemId]);
+  // A finished-goods card fits parts onto a heater that already exists, so its
+  // BOM should only carry what is genuinely put on during prep. If a build-only
+  // part (tube, coil, flange, fins…) is on there, the full build BOM has likely
+  // been attached and approving would take that stock out a SECOND time.
+  const card = await db.get('SELECT is_fg FROM job_cards WHERE id=$1', [req.params.id]);
+  const fgBuildOnly = card?.is_fg
+    ? inventory_items.filter(i => buildOnlyOnFg(i.category)).map(i => ({ item_code: i.item_code, category: i.category, qty: i.qty }))
+    : [];
   res.json({
     order_id: jc.order_id,
     item_id: itemId,
@@ -475,6 +483,8 @@ router.get('/:id/bom', authenticate, authorize('design', 'owner', 'admin'), asyn
     inventory_items,
     deducted: !!item?.inventory_deducted,
     is_split: parseInt(cardCount.n, 10) > 1,
+    is_fg: !!card?.is_fg,
+    fg_build_only: fgBuildOnly, // non-empty → warn before approving
   });
 });
 

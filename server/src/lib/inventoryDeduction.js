@@ -15,6 +15,20 @@ const STAGE_CATEGORY_MAP = {
 };
 const STAGE_LABEL = { 15: 'Stage 15 Brazing', 21: 'Stage 21 Nipple Press' };
 
+// A finished-goods order fits parts onto a heater that ALREADY EXISTS, so its
+// BOM should only list what is genuinely put on during prep (nuts, washers,
+// nipple fittings, sealing bushes…). These categories are consumed while the
+// heater is BUILT — if one appears on an FG item's BOM, the full build BOM has
+// probably been attached by mistake and the stock would come off twice.
+// Deliberately a WARNING, not a block: the BOM is curated by design, and
+// silently refusing to deduct a part that really was used would overstate stock.
+const BUILD_ONLY_CATEGORIES = [
+  'Tube', 'Spring Guage', 'Finns', 'Flange', 'Flange Cap', 'Flange Spare',
+  'Brazing EQ', 'Powder', 'Chemical Oil', 'Sealing Liquid', 'Wire', 'Lugs',
+];
+const buildOnlyOnFg = (category) =>
+  BUILD_ONLY_CATEGORIES.some(c => c.toLowerCase() === String(category || '').trim().toLowerCase());
+
 // Fins consume by tube length, not by BOM qty: each code has a known weight per
 // 50.8 mm. At QC approval the card's stage-8 (Draw) Total Length gives the
 // PER-PIECE weight — length_mm × (weight / 50.8) — which is multiplied by the
@@ -172,11 +186,17 @@ async function deductFinsByLength(db, jc, userId) {
 
 // QC-time deduction: everything not already consumed by a stage trigger.
 // Fins lines are excluded — they deduct by tube length (deductFinsByLength).
+//
+// FINISHED-GOODS cards are different: the heater already exists and its parts
+// were consumed when it was BUILT (on the inventory order). Only the fittings
+// genuinely put on again while preparing it for dispatch may be consumed a
+// second time — nuts and washers. Anything else on an FG item's BOM is already
+// in the heater, so deducting it would take the same part out of stock twice.
 async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = 'Consumed for production') {
   const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
   if (!item || item.inventory_deducted) return; // never double-deduct
   const sels = await db.all(
-    `SELECT oii.*, ii.item_code FROM order_item_inventory oii
+    `SELECT oii.*, ii.item_code, TRIM(ii.category) AS category FROM order_item_inventory oii
      JOIN inventory_items ii ON ii.id = oii.inventory_item_id
      WHERE oii.order_item_id=$1`, [itemId]
   );
@@ -277,4 +297,4 @@ async function settleItemInventory(db, orderItemId, userId, orderCode) {
   if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)');
 }
 
-module.exports = { deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, deductPartialAtQC, deductFinsByLength };
+module.exports = { buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, deductPartialAtQC, deductFinsByLength };
