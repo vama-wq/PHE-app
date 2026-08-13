@@ -637,7 +637,7 @@ export default function PettyCashLedger() {
 
       {showEntry && (
         <EntryModal type={showEntry} isOwner={isOwner} receiptLimit={data?.receipt_required_above ?? 500}
-          banks={banks}
+          banks={banks} existingSamples={samples}
           onClose={() => setShowEntry(null)} onSaved={() => { setShowEntry(null); load(); }} />
       )}
 
@@ -855,13 +855,13 @@ function SampleApproveFlow({ sample, onClose, onDone }) {
   );
 }
 
-function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved }) {
+function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples = [], onClose, onSaved }) {
   const isTopUp = type === 'top_up';
   const [f, setF] = useState({
     entry_date: new Date().toISOString().slice(0, 10),
     category: '', description: '', paid_to: '', amount: '',
     payment_method: isTopUp ? 'cash' : '',
-    bank_account_id: '', to_bank_account_id: '',
+    bank_account_id: '', to_bank_account_id: '', repeat_sample_id: '',
     item_name: '', item_category: '', unit: '', sample_qty: '',
     emp_expense_type: '', employee_id: '',
   });
@@ -950,7 +950,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
       // The vendor decides whether the goods are expected back — leaving it
       // blank would silently put a one-way transfer on the return list.
       if (isPlatingTransport && platingDir === 'sent' && !platingVendor) return setError('Select the plating vendor.');
-      if (isSampling) {
+      if (isSampling && !f.repeat_sample_id) {
         if (!f.item_name.trim()) return setError('Item name is required for Sampling.');
         if (!f.unit.trim()) return setError('Unit is required for Sampling.');
         if (!(parseFloat(f.sample_qty) > 0)) return setError('Enter a valid sample quantity.');
@@ -987,10 +987,14 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
         if (empNeedsWorker) fd.append('employee_id', f.employee_id);
       }
       if (!isTopUp && isSampling) {
-        fd.append('item_name', f.item_name.trim());
-        fd.append('item_category', f.item_category);
-        fd.append('unit', f.unit.trim());
-        fd.append('sample_qty', f.sample_qty);
+        if (f.repeat_sample_id) {
+          fd.append('repeat_sample_id', f.repeat_sample_id);
+        } else {
+          fd.append('item_name', f.item_name.trim());
+          fd.append('item_category', f.item_category);
+          fd.append('unit', f.unit.trim());
+          fd.append('sample_qty', f.sample_qty);
+        }
       }
       if (f.description && !isEmpExpense) fd.append('description', f.description);
       if (receipt) fd.append('receipt', receipt);
@@ -1207,27 +1211,49 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], onClose, onSaved 
 
             {isSampling && (
               <div className="border border-purple-200 bg-purple-50/50 rounded-xl p-3 space-y-3">
+                {/* Paying again for a sample already on the books (a failed
+                    payment that was refunded, or a second lot) must not open a
+                    second draft for the owner to review. */}
+                <div>
+                  <label className="label">Paying for</label>
+                  <select className="input" value={f.repeat_sample_id} onChange={set('repeat_sample_id')}>
+                    <option value="">A new sample — create the draft</option>
+                    {existingSamples.map(s => (
+                      <option key={s.id} value={s.id}>
+                        Repeat payment — {s.item_name} ({s.supplier_name})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {f.repeat_sample_id ? (
+                  <p className="text-xs text-purple-700 font-medium flex items-center gap-1">
+                    <FlaskConical size={13} /> Records the payment only — no new sample to review.
+                  </p>
+                ) : (
                 <p className="text-xs text-purple-700 font-medium flex items-center gap-1">
                   <FlaskConical size={13} /> Sample details — creates a draft supplier + item for owner approval
                 </p>
-                <div>
-                  <label className="label">Item Name <span className="text-red-500">*</span></label>
-                  <input className="input" value={f.item_name} onChange={set('item_name')} placeholder="e.g. Brass Nipple 1/2 inch" />
-                </div>
-                <div className="grid grid-cols-3 gap-3">
+                )}
+                {!f.repeat_sample_id && (<>
                   <div>
-                    <label className="label">Item Category</label>
-                    <CategorySelect value={f.item_category} onChange={v => setF(p => ({ ...p, item_category: v }))} />
+                    <label className="label">Item Name <span className="text-red-500">*</span></label>
+                    <input className="input" value={f.item_name} onChange={set('item_name')} placeholder="e.g. Brass Nipple 1/2 inch" />
                   </div>
-                  <div>
-                    <label className="label">Unit <span className="text-red-500">*</span></label>
-                    <input className="input" value={f.unit} onChange={set('unit')} placeholder="kg / mtr / nos" />
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="label">Item Category</label>
+                      <CategorySelect value={f.item_category} onChange={v => setF(p => ({ ...p, item_category: v }))} />
+                    </div>
+                    <div>
+                      <label className="label">Unit <span className="text-red-500">*</span></label>
+                      <input className="input" value={f.unit} onChange={set('unit')} placeholder="kg / mtr / nos" />
+                    </div>
+                    <div>
+                      <label className="label">Sample Qty <span className="text-red-500">*</span></label>
+                      <input className="input" type="number" step="any" min="0" value={f.sample_qty} onChange={set('sample_qty')} />
+                    </div>
                   </div>
-                  <div>
-                    <label className="label">Sample Qty <span className="text-red-500">*</span></label>
-                    <input className="input" type="number" step="any" min="0" value={f.sample_qty} onChange={set('sample_qty')} />
-                  </div>
-                </div>
+                </>)}
               </div>
             )}
 

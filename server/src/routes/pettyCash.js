@@ -311,6 +311,7 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
     let finalPaidTo = (paid_to || '').trim();
     let finalDescription = (description || '').trim() || null;
     let transferToBank = null;   // Bank Transfer: the account receiving the money
+    let repeatSampleId = null;   // Sampling: re-paying an existing sample, no new draft
     if (entry_type === 'expense') {
       const to = (paid_to || '').trim();
       if (!(req.body.category || '').trim()) return fail(400, 'Category is required for expenses');
@@ -375,13 +376,24 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
         method = 'unpaid_bank';
       }
       if (cat === SAMPLING) {
-        const itemName = (req.body.item_name || '').trim();
-        const unit = (req.body.unit || '').trim();
-        const qty = parseFloat(req.body.sample_qty);
-        if (!itemName) return fail(400, 'Item name is required for Sampling expenses');
-        if (!unit) return fail(400, 'Unit is required for Sampling expenses');
-        if (!(qty > 0)) return fail(400, 'Enter a valid sample quantity');
-        sample = { item_name: itemName, category: (req.body.item_category || '').trim() || null, unit, qty };
+        // A repeat payment for a sample that already exists (e.g. the first
+        // attempt failed and the bank refunded it) must NOT open a second draft
+        // for the owner to review — the sample has already been dealt with.
+        const repeatOf = parseInt(req.body.repeat_sample_id, 10);
+        if (Number.isInteger(repeatOf)) {
+          const prior = await db.get('SELECT id, item_name FROM petty_cash_samples WHERE id=$1', [repeatOf]);
+          if (!prior) return fail(400, 'That sample no longer exists');
+          repeatSampleId = prior.id;
+          if (!finalDescription) finalDescription = `Repeat payment — ${prior.item_name}`;
+        } else {
+          const itemName = (req.body.item_name || '').trim();
+          const unit = (req.body.unit || '').trim();
+          const qty = parseFloat(req.body.sample_qty);
+          if (!itemName) return fail(400, 'Item name is required for Sampling expenses');
+          if (!unit) return fail(400, 'Unit is required for Sampling expenses');
+          if (!(qty > 0)) return fail(400, 'Enter a valid sample quantity');
+          sample = { item_name: itemName, category: (req.body.item_category || '').trim() || null, unit, qty };
+        }
       }
       // Internal money movements have no bill to attach.
       if (amt > RECEIPT_REQUIRED_ABOVE && !req.file && cat !== BANK_WITHDRAWAL && cat !== BANK_TRANSFER) {
