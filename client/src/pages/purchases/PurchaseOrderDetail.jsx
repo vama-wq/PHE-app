@@ -745,7 +745,10 @@ function AdvanceModal({ poId, poNumber, supplier, onClose, onSaved }) {
 // Receive a single item: pick it from the dropdown of not-yet-received items and
 // attach that item's invoice (mandatory). The item then goes to QC.
 function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
-  const [itemId, setItemId] = useState(items[0]?.id ? String(items[0].id) : '');
+  // Several items usually arrive on one vehicle with one invoice, so the
+  // delivery is ticked off as a whole. Whatever is selected is received, and
+  // the transport bill splits across exactly those items by material value.
+  const [selected, setSelected] = useState(() => (items[0] ? { [items[0].id]: true } : {}));
   const [file, setFile] = useState(null);
   const [transportCost, setTransportCost] = useState('');
   const [transportPaidTo, setTransportPaidTo] = useState('');
@@ -753,50 +756,71 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
   const [localPaidTo, setLocalPaidTo] = useState('');
   const [otherCost, setOtherCost] = useState('');
   const [otherReason, setOtherReason] = useState('');
-  // Which OTHER items of this PO came in the same vehicle (one shared bill).
-  // Defaults to all — one truck bringing the whole PO is the common case.
-  const [covered, setCovered] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [progress, setProgress] = useState('');
 
-  const otherItems = allItems.filter(i => String(i.id) !== String(itemId));
-  useEffect(() => {
-    setCovered(Object.fromEntries(allItems.filter(i => String(i.id) !== String(itemId)).map(i => [i.id, true])));
-  }, [itemId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const coveredList = [
-    ...allItems.filter(i => String(i.id) === String(itemId)),
-    ...otherItems.filter(i => covered[i.id]),
-  ];
-  // Freight already recorded on this PO (an earlier item's receive) — remind
-  // accounts so the same bill isn't entered twice.
+  // The transport bill splits across exactly what was received in this delivery.
+  const coveredList = items.filter(i => selected[i.id]);
+  const toggle = (id) => setSelected(p => ({ ...p, [id]: !p[id] }));
+  const allOn = items.length > 0 && items.every(i => selected[i.id]);
+  // Freight already recorded on this PO (an earlier receive) — remind accounts
+  // so the same bill isn't entered twice.
   const priorFreight = allItems.filter(i => Number(i.receive_transport_cost) > 0);
   const hasTransportInput = Number(transportCost) > 0 || Number(localCost) > 0;
-  // Live share preview: split by material value (item.amount), like the server.
-  const shareBase = coveredList.reduce((s, c) => s + (Number(c.amount) || 0), 0);
-  const shareFor = (it, total) => shareBase > 0
-    ? Math.round(total * (Number(it.amount) || 0) / shareBase * 100) / 100
-    : Math.round(total / (coveredList.length || 1) * 100) / 100;
+  // Live share preview — mirrors the server exactly, including giving the LAST
+  // item the remainder so the shares add up to the bill to the paisa.
+  const sharesOf = (total) => {
+    const base = coveredList.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+    let acc = 0;
+    return coveredList.map((c, i) => {
+      if (i === coveredList.length - 1) return Math.round((total - acc) * 100) / 100;
+      const sh = Math.round((base > 0 ? total * (Number(c.amount) || 0) / base : total / coveredList.length) * 100) / 100;
+      acc += sh;
+      return sh;
+    });
+  };
+  const tShares = Number(transportCost) > 0 ? sharesOf(Number(transportCost)) : [];
+  const lShares = Number(localCost) > 0 ? sharesOf(Number(localCost)) : [];
 
   const submit = async () => {
-    if (!itemId) return setError('Select the item that was received');
-    if (!file) return setError('Attach the invoice received with this item');
+    if (!coveredList.length) return setError('Tick the item(s) that were received');
+    if (!file) return setError('Attach the invoice received with this delivery');
     if (Number(otherCost) > 0 && !otherReason.trim()) return setError('Please add a reason for the other cost');
     if (Number(transportCost) > 0 && !transportPaidTo.trim()) return setError('Enter the main-vehicle transporter name');
     if (Number(localCost) > 0 && !localPaidTo.trim()) return setError('Enter the local transporter name');
     setSaving(true); setError('');
+    // Each item is received in turn. The transport and other costs ride on the
+    // FIRST call only — the server posts that bill once to the Account
+    // Statement and splits it by value across every item listed as covered, so
+    // sending it again would double-charge.
+    const done = [];
     try {
-      const fd = new FormData();
-      fd.append('invoice', file);
-      if (transportCost) fd.append('transport_cost', transportCost);
-      if (transportPaidTo) fd.append('transport_paid_to', transportPaidTo);
-      if (localCost) fd.append('local_transport_cost', localCost);
-      if (localPaidTo) fd.append('local_transport_paid_to', localPaidTo);
-      if (hasTransportInput) fd.append('transport_covered_item_ids', JSON.stringify(coveredList.map(i => i.id)));
-      if (otherCost) fd.append('other_cost', otherCost);
-      if (otherReason) fd.append('other_cost_reason', otherReason);
-      await uploadApi.post(`/purchase-orders/${poId}/items/${itemId}/receive`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      for (const [idx, it] of coveredList.entries()) {
+        setProgress(`Receiving ${idx + 1} of ${coveredList.length} — ${it.description}…`);
+        const fd = new FormData();
+        fd.append('invoice', file);
+        if (idx === 0) {
+          if (transportCost) fd.append('transport_cost', transportCost);
+          if (transportPaidTo) fd.append('transport_paid_to', transportPaidTo);
+          if (localCost) fd.append('local_transport_cost', localCost);
+          if (localPaidTo) fd.append('local_transport_paid_to', localPaidTo);
+          if (hasTransportInput) fd.append('transport_covered_item_ids', JSON.stringify(coveredList.map(i => i.id)));
+          if (otherCost) fd.append('other_cost', otherCost);
+          if (otherReason) fd.append('other_cost_reason', otherReason);
+        }
+        await uploadApi.post(`/purchase-orders/${poId}/items/${it.id}/receive`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        done.push(it.description);
+      }
       onDone();
-    } catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
+    } catch (e) {
+      // Say plainly what did land, so nothing is entered twice on a retry.
+      const failed = e.response?.data?.error || 'Failed';
+      setError(done.length
+        ? `${failed}. Already received: ${done.join(', ')} — the transport bill was posted with them, so leave the transport fields blank when you retry the rest.`
+        : failed);
+      setSaving(false); setProgress('');
+    }
   };
   return (
     <Modal open title="Receive an Item" onClose={onClose} size="md">
@@ -806,13 +830,30 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
         ) : (
           <>
             <div>
-              <label className="label">Item received <span className="text-red-500">*</span></label>
-              <select className="input" value={itemId} onChange={e => setItemId(e.target.value)}>
-                {items.map(i => <option key={i.id} value={i.id}>{i.description} · qty {i.qty}</option>)}
-              </select>
+              <label className="label flex items-center justify-between">
+                <span>Items received <span className="text-red-500">*</span></span>
+                {items.length > 1 && (
+                  <button type="button" className="text-xs text-brand-600 hover:underline"
+                    onClick={() => setSelected(allOn ? {} : Object.fromEntries(items.map(i => [i.id, true])))}>
+                    {allOn ? 'Clear all' : 'Select all'}
+                  </button>
+                )}
+              </label>
+              <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 bg-white max-h-48 overflow-y-auto">
+                {items.map(i => (
+                  <label key={i.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
+                    <input type="checkbox" checked={!!selected[i.id]} onChange={() => toggle(i.id)} />
+                    <span className="flex-1">{i.description} <span className="text-gray-400">· qty {i.qty}</span></span>
+                    <span className="text-xs text-gray-500">₹{Number(i.amount || 0).toLocaleString('en-IN')}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-[11px] text-gray-500 mt-1">
+                Tick everything that came in this delivery — {coveredList.length || 'no'} of {items.length} selected.
+              </p>
             </div>
             <div>
-              <label className="label">Invoice received with this item <span className="text-red-500">*</span></label>
+              <label className="label">Invoice received with this delivery <span className="text-red-500">*</span></label>
               <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select invoice (PDF or image)" />
             </div>
             <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-3">
@@ -844,27 +885,21 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
                   <input className="input" value={localPaidTo} onChange={e => setLocalPaidTo(e.target.value)} placeholder="Local tempo / porter" />
                 </div>
               </div>
-              {hasTransportInput && otherItems.length > 0 && (
-                <div>
-                  <label className="label">This bill also covered <span className="text-gray-400 font-normal">(same vehicle)</span></label>
-                  <div className="border border-gray-100 rounded-lg divide-y divide-gray-50 bg-white">
-                    {otherItems.map(oi => (
-                      <label key={oi.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50">
-                        <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600"
-                          checked={!!covered[oi.id]}
-                          onChange={() => setCovered(p => ({ ...p, [oi.id]: !p[oi.id] }))} />
-                        <span className="text-sm text-gray-800 truncate">{oi.description}</span>
-                        {covered[oi.id] && Number(transportCost) > 0 && (
-                          <span className="text-xs text-gray-400 ml-auto flex-shrink-0">₹{shareFor(oi, Number(transportCost)).toLocaleString('en-IN')} share</span>
-                        )}
-                      </label>
-                    ))}
-                  </div>
-                  {Number(transportCost) > 0 && coveredList.length > 1 && (
-                    <p className="text-[11px] text-gray-500 mt-1">
-                      ₹{Number(transportCost).toLocaleString('en-IN')} splits across {coveredList.length} items by value — this item's share ₹{shareFor(coveredList[0], Number(transportCost)).toLocaleString('en-IN')}.
-                    </p>
-                  )}
+              {/* The bill splits across whatever was ticked as received above,
+                  by material value — same rule the server applies. */}
+              {hasTransportInput && coveredList.length > 0 && (
+                <div className="border border-gray-100 rounded-lg bg-white p-2">
+                  <p className="text-[11px] text-gray-500 mb-1">
+                    Splits across the {coveredList.length} item{coveredList.length > 1 ? 's' : ''} ticked above, by value:
+                  </p>
+                  {coveredList.map((ci, i) => (
+                    <div key={ci.id} className="flex items-center justify-between text-xs px-1 py-0.5">
+                      <span className="text-gray-700 truncate">{ci.description}</span>
+                      <span className="text-gray-500 flex-shrink-0 ml-2">
+                        ₹{((tShares[i] || 0) + (lShares[i] || 0)).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
