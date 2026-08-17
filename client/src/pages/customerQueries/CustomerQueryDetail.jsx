@@ -4,7 +4,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
-import { fmtDate, fmtDateTime, ROLE_LABELS } from '../../lib/utils';
+import { fmtDate, fmtDateTime, ROLE_LABELS, PRODUCTION_STAGES } from '../../lib/utils';
 import { compressImages } from '../../lib/compressImage';
 import {
   ArrowLeft, Send, Camera, Upload, CheckCircle, XCircle, AlertTriangle,
@@ -68,6 +68,7 @@ export default function CustomerQueryDetail() {
   const [showResolve, setShowResolve] = useState(false);
   const [showReturnType, setShowReturnType] = useState(false);
   const [showDebitNote, setShowDebitNote] = useState(false);
+  const [showRepairStage, setShowRepairStage] = useState(false);
   const [showQCResult, setShowQCResult] = useState(false);
   const [showRepairComplete, setShowRepairComplete] = useState(false);
   const [showPhotoUpload, setShowPhotoUpload] = useState(false);
@@ -326,8 +327,11 @@ export default function CustomerQueryDetail() {
                     </div>
                     <button className="btn-primary w-full text-sm flex items-center justify-center gap-1.5"
                       onClick={async () => {
-                        if (!confirm('Confirm material has been received? This will send the product to ' +
-                          (query.return_type === 'repair' ? 'production for repair.' : 'QC for inspection.'))) return;
+                        // A repair rarely starts from scratch — ask which stage
+                        // the work resumes from so the good work already done
+                        // is not thrown away.
+                        if (query.return_type === 'repair') return setShowRepairStage(true);
+                        if (!confirm('Confirm material has been received? This will send the product to QC for inspection.')) return;
                         try {
                           await api.put(`/customer-queries/${id}/material-received`);
                           load();
@@ -575,6 +579,7 @@ export default function CustomerQueryDetail() {
       {showResolve && <ResolveModal query={query} onClose={() => setShowResolve(false)} onDone={() => { setShowResolve(false); load(); }} />}
       {showReturnType && <ReturnTypeModal query={query} onClose={() => setShowReturnType(false)} onDone={() => { setShowReturnType(false); load(); }} />}
       {showDebitNote && <DebitNoteModal query={query} onClose={() => setShowDebitNote(false)} onDone={() => { setShowDebitNote(false); load(); }} />}
+      {showRepairStage && <RepairStageModal queryId={id} onClose={() => setShowRepairStage(false)} onDone={() => { setShowRepairStage(false); load(); }} />}
       {showQCResult && <QCResultModal query={query} onClose={() => setShowQCResult(false)} onDone={() => { setShowQCResult(false); load(); }} />}
       {showRepairComplete && <RepairCompleteModal query={query} onClose={() => setShowRepairComplete(false)} onDone={() => { setShowRepairComplete(false); load(); }} />}
       {showPhotoUpload && <PhotoUploadModal queryId={query.id} onClose={() => setShowPhotoUpload(false)} onDone={() => { setShowPhotoUpload(false); load(); }} />}
@@ -756,6 +761,59 @@ function ReturnTypeModal({ query, onClose, onDone }) {
 }
 
 // ── Debit Note Modal ───────────────────────────────────────────────────────
+// A repair rarely means redoing the whole heater. Pick the stage the work
+// restarts from: everything before it stays ticked, and from there on the ticks
+// clear so the work is done again — the readings already recorded stay on the
+// card so production can see what was there last time.
+function RepairStageModal({ queryId, onClose, onDone }) {
+  const [stageNo, setStageNo] = useState(1);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const stages = PRODUCTION_STAGES.filter(s => s.no < 30);
+  const reopened = stages.filter(s => s.no >= stageNo);
+
+  const submit = async () => {
+    setSaving(true); setError('');
+    try {
+      await api.put(`/customer-queries/${queryId}/material-received`, { repair_from_stage: stageNo });
+      onDone();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to mark as received');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title="Material received — where does the repair start?" onClose={onClose} size="md">
+      <div className="space-y-3">
+        <div>
+          <label className="label">Restart production from</label>
+          <select className="input" value={stageNo} onChange={e => setStageNo(parseInt(e.target.value, 10))}>
+            {stages.map(s => <option key={s.no} value={s.no}>Stage {s.no}: {s.name}</option>)}
+          </select>
+        </div>
+        <p className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+          {stageNo === 1 ? (
+            <>The <b>whole checklist</b> reopens — all {reopened.length} stages are done again.</>
+          ) : (
+            <>Stages <b>1&ndash;{stages.filter(s => s.no < stageNo).slice(-1)[0]?.no ?? (stageNo - 1)}</b> stay
+            completed. <b>{reopened.length}</b> stage{reopened.length === 1 ? '' : 's'} reopen from{' '}
+            <b>{stages.find(s => s.no === stageNo)?.name}</b> onward.</>
+          )}
+          {' '}Previously entered readings stay on the card for reference.
+        </p>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn-primary" onClick={submit} disabled={saving}>
+            {saving ? 'Sending…' : 'Send to Production'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function DebitNoteModal({ query, onClose, onDone }) {
   const [no, setNo] = useState('');
   const [saving, setSaving] = useState(false);

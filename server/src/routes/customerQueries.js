@@ -463,15 +463,35 @@ router.put('/:id/material-received', authenticate, authorize('accounts', 'owner'
   }
 
   if (q.return_type === 'repair') {
-    // Send to production for repair
+    // Send to production for repair, restarting at the stage the repair
+    // actually begins from. Everything BEFORE that stage stays done — the work
+    // is still good and must not be redone. From that stage on the ticks are
+    // cleared so the work is done again, but the recorded values (readings,
+    // weights, worker) are left in place so production can see what was there
+    // last time. Default 1 = redo the whole card, the old behaviour.
+    const raw = parseInt(req.body?.repair_from_stage, 10);
+    const fromStage = Number.isInteger(raw) && raw >= 1 ? raw : 1;
     if (q.job_card_id) {
-      await db.run("UPDATE production_checklist SET done=0, done_at=NULL WHERE job_card_id=$1", [q.job_card_id]);
-      await db.run("UPDATE job_cards SET status='repair_in_progress' WHERE id=$1", [q.job_card_id]);
+      // Stage 30 (Kharoch) is numbered out of band but runs between Bending
+      // (14) and Brazing (15), so it must follow its POSITION, not its number:
+      // reopen it only when the repair restarts at or before Bending.
+      await db.run(
+        `UPDATE production_checklist SET done=0, done_at=NULL
+          WHERE job_card_id=$1 AND ((stage_no >= $2 AND stage_no < 30) OR (stage_no = 30 AND $2 <= 14))`,
+        [q.job_card_id, fromStage]);
+      // current_stage is the LAST COMPLETED stage, so recompute it from what
+      // is still ticked rather than assuming.
+      const maxDone = await db.get(
+        'SELECT MAX(stage_no) AS m FROM production_checklist WHERE job_card_id=$1 AND done=1 AND stage_no < 30',
+        [q.job_card_id]);
+      await db.run("UPDATE job_cards SET status='repair_in_progress', current_stage=$2 WHERE id=$1",
+        [q.job_card_id, maxDone?.m || 0]);
     }
     await db.run(`UPDATE customer_queries SET return_status='in_repair', updated_at=NOW() WHERE id=$1`, [req.params.id]);
+    const stageLabel = fromStage > 1 ? ` Repair restarts at stage ${fromStage}.` : ' Full checklist reopened.';
     await logActivity(q.order_id, q.job_card_id, 'material_received',
-      `Material received for ${q.query_no}. Sent to production for repair.`, req.user.id);
-    return res.json({ message: 'Material received — sent to production for repair' });
+      `Material received for ${q.query_no}. Sent to production for repair.${stageLabel}`, req.user.id);
+    return res.json({ message: `Material received — sent to production for repair${fromStage > 1 ? ` from stage ${fromStage}` : ''}` });
   }
 
   // Debit note path — send to QC
