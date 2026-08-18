@@ -962,6 +962,42 @@ async function initDB(retries = 20, delayMs = 10000) {
       // one. Idempotent — after the first run nothing matches.
       await pool.query(`UPDATE inventory_items SET category = TRIM(category)
                          WHERE category IS NOT NULL AND category <> TRIM(category)`);
+      // Over-receipt: more arriving than was ordered needs the owner's sign-off
+      // before it can pass QC into stock, since it increases what is payable.
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS over_qty_pending NUMERIC`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS over_qty_approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS over_qty_approved_at TIMESTAMPTZ`);
+      {
+        // Owner-confirmed correction: four items were QC-accepted ABOVE the
+        // ordered quantity before the gate existed, so their PO lines still
+        // read the ordered figure while stock and the payable followed the
+        // larger accepted one. Bring the lines up to what was actually
+        // received and recompute those POs' totals so each document agrees
+        // with what is owed. Guarded — after this nothing matches.
+        const { rows: over } = await pool.query(`
+          SELECT id, po_id, rate::float AS rate, qc_received_qty::float AS accepted
+            FROM purchase_order_items
+           WHERE qc_received_qty IS NOT NULL AND qc_received_qty > qty`);
+        const touched = new Set();
+        for (const it of over) {
+          await pool.query('UPDATE purchase_order_items SET qty=$1, amount=$2 WHERE id=$3',
+            [it.accepted, Math.round(it.accepted * (it.rate || 0) * 100) / 100, it.id]);
+          touched.add(it.po_id);
+        }
+        for (const poId of touched) {
+          const { rows: [po] } = await pool.query(
+            'SELECT transport_charges::float AS tc, igst_percent::float AS igst FROM purchase_orders WHERE id=$1', [poId]);
+          const { rows: [sum] } = await pool.query(
+            'SELECT COALESCE(SUM(amount),0)::float AS s FROM purchase_order_items WHERE po_id=$1', [poId]);
+          const subtotal = sum.s + (po.tc || 0);
+          const igstAmount = Math.round(subtotal * ((po.igst || 0) / 100) * 100) / 100;
+          const before = Math.round((subtotal + igstAmount) * 100) / 100;
+          const grand = Math.round(before);
+          await pool.query(
+            'UPDATE purchase_orders SET subtotal=$1, igst_amount=$2, round_off=$3, grand_total=$4 WHERE id=$5',
+            [subtotal, igstAmount, Math.round((grand - before) * 100) / 100, grand, poId]);
+        }
+      }
       // Partial receipts: a delivery short of the ordered quantity splits the PO
       // line — the arrived qty is received now, the balance stays open as a
       // sibling line. split_from_item_id links a balance line back to the line

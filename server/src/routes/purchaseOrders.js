@@ -524,6 +524,49 @@ router.put('/:id/delivery-status', authenticate, authorize('owner', 'admin', 'ac
   res.json({ message: 'Delivery status updated' });
 });
 
+// Owner decides on an over-receipt. Approving raises the PO line to what
+// actually arrived and recomputes the PO's totals, so the document, the stock
+// and the payable all agree. Rejecting keeps the line at the ordered quantity —
+// only that much is treated as received.
+router.put('/:id/items/:itemId/over-qty', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const db = getDB();
+    const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+    if (!po) return res.status(404).json({ error: 'Not found' });
+    const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    if (item.over_qty_pending == null) return res.status(400).json({ error: 'Nothing pending on this item' });
+    const approve = req.body?.approve !== false;
+
+    if (approve) {
+      const qty = Number(item.over_qty_pending);
+      await db.run(
+        `UPDATE purchase_order_items
+            SET qty=$1, amount=$2, over_qty_pending=NULL, over_qty_approved_by=$3, over_qty_approved_at=NOW()
+          WHERE id=$4`,
+        [qty, Math.round(qty * (Number(item.rate) || 0) * 100) / 100, req.user.id, item.id]);
+      // The PO is worth more now — recompute its totals from the lines.
+      const lines = await db.all('SELECT amount FROM purchase_order_items WHERE po_id=$1', [po.id]);
+      const { subtotal, igstAmount, grandTotal, roundOff } =
+        calcTotals(lines.map(l => ({ amount: Number(l.amount) || 0 })), po.transport_charges, po.igst_percent);
+      await db.run(
+        'UPDATE purchase_orders SET subtotal=$1, igst_amount=$2, round_off=$3, grand_total=$4 WHERE id=$5',
+        [subtotal, igstAmount, roundOff, grandTotal, po.id]);
+      await logActivity(null, null, 'po_over_qty_approved',
+        `${po.po_number}: "${item.description}" over-receipt approved — ${item.qty} ordered, ${qty} accepted. PO now ₹${grandTotal}`, req.user.id);
+      return res.json({ message: `Extra accepted — PO updated to ₹${grandTotal}` });
+    }
+
+    await db.run('UPDATE purchase_order_items SET over_qty_pending=NULL WHERE id=$1', [item.id]);
+    await logActivity(null, null, 'po_over_qty_rejected',
+      `${po.po_number}: "${item.description}" over-receipt declined — only the ordered ${item.qty} treated as received`, req.user.id);
+    res.json({ message: 'Extra declined — only the ordered quantity stands' });
+  } catch (e) {
+    console.error('over-qty error:', e);
+    res.status(500).json({ error: 'Failed to record the decision' });
+  }
+});
+
 // Short-close an open balance the supplier never delivered. Owner only. The
 // line stops asking to be received and drops out of the receiving list; it was
 // never received, so it never reaches QC and is never payable.
@@ -638,10 +681,11 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     const recvQty = rawQty === undefined || rawQty === null || String(rawQty).trim() === ''
       ? orderedQty : Number(rawQty);
     if (!(recvQty > 0)) return res.status(400).json({ error: 'Enter how much of this item actually arrived' });
-    if (recvQty > orderedQty + 1e-9) {
-      return res.status(400).json({ error: `Received quantity (${recvQty}) is more than the ${orderedQty} ordered` });
-    }
-    const balanceQty = Math.round((orderedQty - recvQty) * 1e6) / 1e6;
+    // More can arrive than was ordered. That raises what is payable, so the
+    // line is NOT updated here — the excess is parked for the owner to approve
+    // and QC cannot take it into stock until they do.
+    const overQty = recvQty > orderedQty + 1e-9 ? recvQty : null;
+    const balanceQty = overQty ? 0 : Math.round((orderedQty - recvQty) * 1e6) / 1e6;
 
     const transportCost = Number(req.body.transport_cost) || 0;             // main vehicle freight (the whole bill)
     const transportPaidTo = (req.body.transport_paid_to || '').trim() || null;
@@ -690,9 +734,12 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     await db.withTransaction(async (client) => {
       await client.query(
         `UPDATE purchase_order_items SET received=TRUE, received_at=NOW(), invoice_file=$1, invoice_original_name=$2,
-           receive_other_cost=$3, receive_other_cost_reason=$4, qty=$5, amount=$6 WHERE id=$7`,
+           receive_other_cost=$3, receive_other_cost_reason=$4, qty=$5, amount=$6,
+           over_qty_pending=$7 WHERE id=$8`,
         [req.file.storagePath, req.file.originalname, otherCost, otherReason,
-         recvQty, Math.round(recvQty * (Number(item.rate) || 0) * 100) / 100, item.id]
+         overQty ? orderedQty : recvQty,
+         Math.round((overQty ? orderedQty : recvQty) * (Number(item.rate) || 0) * 100) / 100,
+         overQty, item.id]
       );
       // Short delivery: the balance carries on as its own open line so it can
       // be received when it arrives. Ordered qty is preserved across the pair
@@ -749,6 +796,20 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
       } catch (e) { console.error('transport notify failed:', e.message); }
     }
     // Move the PO into QC (if not already) so it surfaces in the QC section.
+    // An over-receipt needs the owner's decision before QC can take it to stock.
+    if (overQty) {
+      try {
+        const owners = await db.all("SELECT id FROM users WHERE role='owner'");
+        for (const o of owners) {
+          await createNotification(db, {
+            userId: o.id, type: 'po_over_receipt',
+            title: `More arrived than ordered on ${po.po_number}`,
+            body: `${item.description}: ${overQty} received against ${orderedQty} ordered. Approve the extra before it can pass QC.`,
+            link: `/purchases/${po.id}`, sourceUserId: req.user.id,
+          });
+        }
+      } catch (_) { /* notifications are best-effort */ }
+    }
     if (po.delivery_status !== 'qc_pending') {
       await db.run("UPDATE purchase_orders SET delivery_status='qc_pending' WHERE id=$1", [po.id]);
     }
@@ -787,6 +848,11 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
     const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
     if (!item) return res.status(404).json({ error: 'Item not found' });
     if (!item.received) return res.status(400).json({ error: 'This item must be marked received before QC' });
+    if (item.over_qty_pending != null) {
+      return res.status(400).json({
+        error: `More arrived than was ordered (${item.over_qty_pending} vs ${item.qty}). The owner must approve the extra before this can go into stock.`,
+      });
+    }
     if (['approved', 'rejected', 'partial'].includes(item.qc_status)) {
       return res.status(400).json({ error: 'This item\'s QC is already recorded' });
     }

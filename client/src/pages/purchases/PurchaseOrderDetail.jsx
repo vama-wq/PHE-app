@@ -791,7 +791,7 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
     for (const it of coveredList) {
       const got = qtyIn[it.id] === undefined || qtyIn[it.id] === '' ? Number(it.qty) : Number(qtyIn[it.id]);
       if (!(got > 0)) return setError(`Enter how much of "${it.description}" arrived`);
-      if (got > Number(it.qty)) return setError(`"${it.description}": ${got} is more than the ${it.qty} ordered`);
+      // Over-receipt is allowed — it parks for the owner's approval.
     }
     if (!file) return setError('Attach the invoice received with this delivery');
     if (Number(otherCost) > 0 && !otherReason.trim()) return setError('Please add a reason for the other cost');
@@ -871,7 +871,9 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
                             </span>
                           )}
                           {got > Number(i.qty) && (
-                            <span className="text-[11px] text-red-600">more than the {i.qty} ordered</span>
+                            <span className="text-[11px] text-amber-700">
+                              {Math.round((got - Number(i.qty)) * 1e6) / 1e6} more than ordered — needs owner approval before QC
+                            </span>
                           )}
                         </div>
                       )}
@@ -1106,13 +1108,42 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner }) {
               Un-receive
             </button>
           )}
-          {canQC ? (
+          {item.over_qty_pending != null ? (
+            <span className="text-xs text-amber-700 font-medium">Extra qty awaiting owner</span>
+          ) : canQC ? (
             !open ? <button className="btn-secondary btn-sm text-xs" onClick={() => setOpen(true)}>Do QC</button>
                   : <span className="text-xs text-purple-600">QC…</span>
           ) : <span className="text-xs text-gray-400">Awaiting QC</span>}
         </span>
       </div>
       {costLine}
+      {/* More arrived than was ordered — it raises the payable, so QC is held
+          until the owner decides. */}
+      {item.over_qty_pending != null && (
+        <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          <p className="text-xs text-amber-800">
+            <b>{item.over_qty_pending}</b> received against <b>{item.qty}</b> ordered
+            — {Math.round((Number(item.over_qty_pending) - Number(item.qty)) * 1e6) / 1e6} extra
+            (about ₹{Math.round((Number(item.over_qty_pending) - Number(item.qty)) * (Number(item.rate) || 0)).toLocaleString('en-IN')} more on this PO).
+          </p>
+          {isOwner && (
+            <div className="flex gap-2 mt-1.5">
+              <button className="btn-primary btn-sm text-xs"
+                onClick={async () => {
+                  if (!window.confirm(`Accept ${item.over_qty_pending}? This PO line and its total go up accordingly.`)) return;
+                  try { await api.put(`/purchase-orders/${poId}/items/${item.id}/over-qty`, { approve: true }); onDone(); }
+                  catch (e) { alert(e.response?.data?.error || 'Failed'); }
+                }}>Accept the extra</button>
+              <button className="btn-secondary btn-sm text-xs"
+                onClick={async () => {
+                  if (!window.confirm(`Decline the extra? Only the ordered ${item.qty} will count as received.`)) return;
+                  try { await api.put(`/purchase-orders/${poId}/items/${item.id}/over-qty`, { approve: false }); onDone(); }
+                  catch (e) { alert(e.response?.data?.error || 'Failed'); }
+                }}>Only the ordered qty</button>
+            </div>
+          )}
+        </div>
+      )}
       {open && canQC && (
         <div className="mt-3 space-y-2.5 border-t border-gray-200 pt-3">
           <div className="flex gap-2">
