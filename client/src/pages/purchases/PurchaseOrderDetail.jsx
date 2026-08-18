@@ -312,7 +312,7 @@ export default function PurchaseOrderDetail() {
           </p>
           <div className="space-y-2.5">
             {po.items.map(item => (
-              <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} showCosts isOwner={user.role === 'owner'} />
+              <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} showCosts isOwner={user.role === 'owner'} igstPercent={po.igst_percent} />
             ))}
           </div>
         </div>
@@ -961,7 +961,7 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
 }
 
 // One PO item's QC: material image + weight of 10 pcs (both mandatory to approve).
-function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner }) {
+function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, igstPercent = 0 }) {
   const transport = Number(item.receive_transport_cost) || 0;
   const localTransport = Number(item.receive_local_transport_cost) || 0;
   const other = Number(item.receive_other_cost) || 0;
@@ -1124,7 +1124,13 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner }) {
           <p className="text-xs text-amber-800">
             <b>{item.over_qty_pending}</b> received against <b>{item.qty}</b> ordered
             — {Math.round((Number(item.over_qty_pending) - Number(item.qty)) * 1e6) / 1e6} extra
-            (about ₹{Math.round((Number(item.over_qty_pending) - Number(item.qty)) * (Number(item.rate) || 0)).toLocaleString('en-IN')} more on this PO).
+            {(() => {
+              const extra = Number(item.over_qty_pending) - Number(item.qty);
+              const mat = extra * (Number(item.rate) || 0);
+              const withGst = mat * (1 + (Number(igstPercent) || 0) / 100);
+              return <> — ₹{Math.round(mat).toLocaleString('en-IN')} of material,
+                {' '}<b>₹{Math.round(withGst).toLocaleString('en-IN')} more payable</b> with {igstPercent}% GST.</>;
+            })()}
           </p>
           {isOwner && (
             <div className="flex gap-2 mt-1.5">
