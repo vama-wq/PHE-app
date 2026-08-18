@@ -524,6 +524,30 @@ router.put('/:id/delivery-status', authenticate, authorize('owner', 'admin', 'ac
   res.json({ message: 'Delivery status updated' });
 });
 
+// Short-close an open balance the supplier never delivered. Owner only. The
+// line stops asking to be received and drops out of the receiving list; it was
+// never received, so it never reaches QC and is never payable.
+router.put('/:id/items/:itemId/short-close', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const db = getDB();
+    const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+    if (!po) return res.status(404).json({ error: 'Not found' });
+    const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    if (item.received) return res.status(400).json({ error: 'This item was received — it cannot be short-closed' });
+    if (item.short_closed) return res.status(400).json({ error: 'This balance is already short-closed' });
+    const reason = (req.body?.reason || '').trim();
+    if (!reason) return res.status(400).json({ error: 'Give a reason — it goes on the PO record' });
+    await db.run('UPDATE purchase_order_items SET short_closed=TRUE, short_close_reason=$1 WHERE id=$2', [reason, item.id]);
+    await logActivity(null, null, 'po_short_closed',
+      `${po.po_number}: "${item.description}" balance of ${item.qty} short-closed — ${reason}`, req.user.id);
+    res.json({ message: 'Balance short-closed' });
+  } catch (e) {
+    console.error('short-close error:', e);
+    res.status(500).json({ error: 'Failed to short-close the balance' });
+  }
+});
+
 // Undo a receive — for a mistake caught before QC (e.g. the transport bill was
 // forgotten). Owner only. Stock is added at QC, not at receive, so nothing has
 // moved yet; this just puts the item back to "not received" so it can be
@@ -588,7 +612,22 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
     if (!item) return res.status(404).json({ error: 'Item not found' });
     if (item.received) return res.status(400).json({ error: 'This item is already received' });
+    if (item.short_closed) return res.status(400).json({ error: 'This balance was short-closed' });
     if (!req.file) return res.status(400).json({ error: 'The invoice received with this item is required' });
+
+    // A delivery can be short of what was ordered (2000 ordered, 1780 arrived).
+    // The arrived quantity is received on THIS line and the balance splits off
+    // as a sibling line that stays open — so the supplier still owes it, rather
+    // than it looking like rejected material. Blank means the full quantity.
+    const orderedQty = Number(item.qty) || 0;
+    const rawQty = req.body.received_qty;
+    const recvQty = rawQty === undefined || rawQty === null || String(rawQty).trim() === ''
+      ? orderedQty : Number(rawQty);
+    if (!(recvQty > 0)) return res.status(400).json({ error: 'Enter how much of this item actually arrived' });
+    if (recvQty > orderedQty + 1e-9) {
+      return res.status(400).json({ error: `Received quantity (${recvQty}) is more than the ${orderedQty} ordered` });
+    }
+    const balanceQty = Math.round((orderedQty - recvQty) * 1e6) / 1e6;
 
     const transportCost = Number(req.body.transport_cost) || 0;             // main vehicle freight (the whole bill)
     const transportPaidTo = (req.body.transport_paid_to || '').trim() || null;
@@ -637,9 +676,21 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     await db.withTransaction(async (client) => {
       await client.query(
         `UPDATE purchase_order_items SET received=TRUE, received_at=NOW(), invoice_file=$1, invoice_original_name=$2,
-           receive_other_cost=$3, receive_other_cost_reason=$4 WHERE id=$5`,
-        [req.file.storagePath, req.file.originalname, otherCost, otherReason, item.id]
+           receive_other_cost=$3, receive_other_cost_reason=$4, qty=$5, amount=$6 WHERE id=$7`,
+        [req.file.storagePath, req.file.originalname, otherCost, otherReason,
+         recvQty, Math.round(recvQty * (Number(item.rate) || 0) * 100) / 100, item.id]
       );
+      // Short delivery: the balance carries on as its own open line so it can
+      // be received when it arrives. Ordered qty is preserved across the pair
+      // (received + balance), so the PO's own totals do not move.
+      if (balanceQty > 0) {
+        await client.query(
+          `INSERT INTO purchase_order_items
+             (po_id, inventory_item_id, description, unit, qty, rate, amount, split_from_item_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [po.id, item.inventory_item_id, item.description, item.unit, balanceQty,
+           item.rate, Math.round(balanceQty * (Number(item.rate) || 0) * 100) / 100, item.id]);
+      }
       for (let i = 0; i < covered.length; i++) {
         if (transportCost > 0) {
           await client.query(

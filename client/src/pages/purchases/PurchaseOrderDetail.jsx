@@ -749,6 +749,9 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
   // delivery is ticked off as a whole. Whatever is selected is received, and
   // the transport bill splits across exactly those items by material value.
   const [selected, setSelected] = useState(() => (items[0] ? { [items[0].id]: true } : {}));
+  // How much of each ticked item actually arrived — blank means the full
+  // ordered quantity. A short quantity leaves the balance open on the PO.
+  const [qtyIn, setQtyIn] = useState({});
   const [file, setFile] = useState(null);
   const [transportCost, setTransportCost] = useState('');
   const [transportPaidTo, setTransportPaidTo] = useState('');
@@ -785,6 +788,11 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
 
   const submit = async () => {
     if (!coveredList.length) return setError('Tick the item(s) that were received');
+    for (const it of coveredList) {
+      const got = qtyIn[it.id] === undefined || qtyIn[it.id] === '' ? Number(it.qty) : Number(qtyIn[it.id]);
+      if (!(got > 0)) return setError(`Enter how much of "${it.description}" arrived`);
+      if (got > Number(it.qty)) return setError(`"${it.description}": ${got} is more than the ${it.qty} ordered`);
+    }
     if (!file) return setError('Attach the invoice received with this delivery');
     if (Number(otherCost) > 0 && !otherReason.trim()) return setError('Please add a reason for the other cost');
     if (Number(transportCost) > 0 && !transportPaidTo.trim()) return setError('Enter the main-vehicle transporter name');
@@ -800,6 +808,7 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
         setProgress(`Receiving ${idx + 1} of ${coveredList.length} — ${it.description}…`);
         const fd = new FormData();
         fd.append('invoice', file);
+        if (qtyIn[it.id] !== undefined && qtyIn[it.id] !== '') fd.append('received_qty', qtyIn[it.id]);
         if (idx === 0) {
           if (transportCost) fd.append('transport_cost', transportCost);
           if (transportPaidTo) fd.append('transport_paid_to', transportPaidTo);
@@ -840,13 +849,35 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
                 )}
               </label>
               <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 bg-white max-h-48 overflow-y-auto">
-                {items.map(i => (
-                  <label key={i.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
-                    <input type="checkbox" checked={!!selected[i.id]} onChange={() => toggle(i.id)} />
-                    <span className="flex-1">{i.description} <span className="text-gray-400">· qty {i.qty}</span></span>
-                    <span className="text-xs text-gray-500">₹{Number(i.amount || 0).toLocaleString('en-IN')}</span>
-                  </label>
-                ))}
+                {items.map(i => {
+                  const got = qtyIn[i.id] === undefined || qtyIn[i.id] === '' ? Number(i.qty) : Number(qtyIn[i.id]);
+                  const short = selected[i.id] && got > 0 && got < Number(i.qty);
+                  return (
+                    <div key={i.id} className="px-3 py-2 text-sm hover:bg-gray-50">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={!!selected[i.id]} onChange={() => toggle(i.id)} />
+                        <span className="flex-1">{i.description} <span className="text-gray-400">· ordered {i.qty}</span></span>
+                        <span className="text-xs text-gray-500">₹{Number(i.amount || 0).toLocaleString('en-IN')}</span>
+                      </label>
+                      {selected[i.id] && (
+                        <div className="flex items-center gap-2 mt-1.5 ml-6">
+                          <span className="text-xs text-gray-500">Qty received</span>
+                          <input className="input py-1 text-xs w-28" type="number" step="any" min="0" max={i.qty}
+                            value={qtyIn[i.id] ?? ''} placeholder={String(i.qty)}
+                            onChange={e => setQtyIn(p => ({ ...p, [i.id]: e.target.value }))} />
+                          {short && (
+                            <span className="text-[11px] text-amber-700">
+                              {Math.round((Number(i.qty) - got) * 1e6) / 1e6} stays open as a balance line
+                            </span>
+                          )}
+                          {got > Number(i.qty) && (
+                            <span className="text-[11px] text-red-600">more than the {i.qty} ordered</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
               <p className="text-[11px] text-gray-500 mt-1">
                 Tick everything that came in this delivery — {coveredList.length || 'no'} of {items.length} selected.
@@ -989,12 +1020,39 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner }) {
     <a className="text-xs text-brand-600 hover:underline ml-2" href={`/uploads/${item.drawing_file}`} target="_blank" rel="noopener noreferrer">drawing</a>
   );
 
-  // Not yet received — receiving is done from the "Receive an Item" dropdown.
+  // Not yet received — receiving is done from the "Receive an Item" form.
   if (!item.received) {
+    if (item.short_closed) {
+      return (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 flex items-center justify-between">
+          <span className="text-sm text-gray-500">{item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span></span>
+          <span className="text-xs text-gray-500">Short-closed{item.short_close_reason ? ` — ${item.short_close_reason}` : ''}</span>
+        </div>
+      );
+    }
     return (
       <div className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-800">{item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span>{drawingLink}</span>
-        <span className="text-xs text-gray-400">Awaiting receipt</span>
+        <span className="text-sm font-medium text-gray-800">
+          {item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span>{drawingLink}
+          {item.split_from_item_id && <span className="text-[11px] text-amber-700 ml-2">balance of a part delivery</span>}
+        </span>
+        <span className="flex items-center gap-2">
+          {/* A balance the supplier never sent can be closed off so it stops
+              sitting on the receiving list. It was never received, so it never
+              reaches QC and is never payable. */}
+          {isOwner && (
+            <button className="btn-ghost btn-sm text-xs text-gray-500 hover:text-red-600"
+              onClick={async () => {
+                const reason = window.prompt(`Short-close the outstanding ${item.qty} of "${item.description}"?\n\nReason (goes on the PO record):`);
+                if (!reason?.trim()) return;
+                try { await api.put(`/purchase-orders/${poId}/items/${item.id}/short-close`, { reason: reason.trim() }); onDone(); }
+                catch (e) { alert(e.response?.data?.error || 'Failed'); }
+              }}>
+              Short-close
+            </button>
+          )}
+          <span className="text-xs text-gray-400">Awaiting receipt</span>
+        </span>
       </div>
     );
   }

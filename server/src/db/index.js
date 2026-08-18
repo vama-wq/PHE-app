@@ -962,6 +962,13 @@ async function initDB(retries = 20, delayMs = 10000) {
       // one. Idempotent — after the first run nothing matches.
       await pool.query(`UPDATE inventory_items SET category = TRIM(category)
                          WHERE category IS NOT NULL AND category <> TRIM(category)`);
+      // Partial receipts: a delivery short of the ordered quantity splits the PO
+      // line — the arrived qty is received now, the balance stays open as a
+      // sibling line. split_from_item_id links a balance line back to the line
+      // it came off; short_closed marks a balance the supplier never delivered.
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS split_from_item_id INTEGER REFERENCES purchase_order_items(id) ON DELETE SET NULL`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS short_closed BOOLEAN NOT NULL DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS short_close_reason TEXT`);
       // Purchase orders round the payable to the nearest rupee like a supplier
       // bill does, keeping the difference so the printed PO still adds up.
       // Existing POs are deliberately NOT rounded: they have already been
