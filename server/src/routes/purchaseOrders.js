@@ -569,17 +569,31 @@ router.put('/:id/items/:itemId/unreceive', authenticate, authorize('owner'), asy
     const lots = await db.get('SELECT COUNT(*)::int AS n FROM inventory_fifo_lots WHERE po_id=$1 AND item_id=$2',
       [po.id, item.inventory_item_id || 0]);
     if (lots?.n > 0) return res.status(400).json({ error: 'Stock from this item is already in inventory — it cannot be un-received' });
+    // A transport bill posted at receive is a real Account-Statement entry paid
+    // to a transporter, and it is not linked to the PO — so the block has to be
+    // on whether that ENTRY still exists, not on the cost recorded here.
+    // Deleting the entry is what clears the way; the figure on the item is then
+    // just a leftover and gets wiped below.
     const t = Number(item.receive_transport_cost) || 0, l = Number(item.receive_local_transport_cost) || 0;
     if (t > 0 || l > 0) {
-      return res.status(400).json({
-        error: 'A transport bill was already posted for this item. Delete that Purchase Transport entry from the Account Statement first, then un-receive.',
-      });
+      const live = await db.all(
+        `SELECT id, description, amount FROM petty_cash_entries
+          WHERE category='Purchase Transport' AND description LIKE '%' || $1 || ' (%'`,
+        [po.po_number]);
+      if (live.length) {
+        return res.status(400).json({
+          error: `Delete the transport entr${live.length > 1 ? 'ies' : 'y'} for ${po.po_number} from the Account Statement first `
+            + `(${live.map(e => `₹${Number(e.amount).toLocaleString('en-IN')}`).join(', ')}), then un-receive.`,
+        });
+      }
     }
 
     await db.run(
       `UPDATE purchase_order_items
           SET received=FALSE, received_at=NULL, invoice_file=NULL, invoice_original_name=NULL,
-              receive_other_cost=NULL, receive_other_cost_reason=NULL
+              receive_other_cost=NULL, receive_other_cost_reason=NULL,
+              receive_transport_cost=NULL, receive_transport_paid_to=NULL,
+              receive_local_transport_cost=NULL, receive_local_transport_paid_to=NULL
         WHERE id=$1`, [item.id]);
     // Nothing received on the PO any more → back to the state it was in before.
     const stillReceived = await db.get(
