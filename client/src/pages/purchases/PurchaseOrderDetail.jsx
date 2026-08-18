@@ -312,7 +312,7 @@ export default function PurchaseOrderDetail() {
           </p>
           <div className="space-y-2.5">
             {po.items.map(item => (
-              <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} showCosts />
+              <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} showCosts isOwner={user.role === 'owner'} />
             ))}
           </div>
         </div>
@@ -928,7 +928,7 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
 }
 
 // One PO item's QC: material image + weight of 10 pcs (both mandatory to approve).
-function ItemQCRow({ poId, item, canQC, onDone, showCosts }) {
+function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner }) {
   const transport = Number(item.receive_transport_cost) || 0;
   const localTransport = Number(item.receive_local_transport_cost) || 0;
   const other = Number(item.receive_other_cost) || 0;
@@ -1035,10 +1035,24 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts }) {
           <span className="text-xs text-teal-600 ml-2">✓ received</span>
           {item.invoice_file && <> · <a className="text-xs text-brand-600 hover:underline" href={`/uploads/${item.invoice_file}`} target="_blank" rel="noopener noreferrer">invoice</a></>}
         </span>
-        {canQC ? (
-          !open ? <button className="btn-secondary btn-sm text-xs" onClick={() => setOpen(true)}>Do QC</button>
-                : <span className="text-xs text-purple-600">QC…</span>
-        ) : <span className="text-xs text-gray-400">Awaiting QC</span>}
+        <span className="flex items-center gap-2">
+          {/* Owner can undo a receive booked with the wrong details — only
+              before QC, and only while no transport bill has been posted. */}
+          {isOwner && (
+            <button className="btn-ghost btn-sm text-xs text-gray-500 hover:text-red-600"
+              onClick={async () => {
+                if (!confirm(`Un-receive "${item.description}"? It goes back to Awaiting receipt so you can receive it again with the correct details. The invoice attached will be cleared.`)) return;
+                try { await api.put(`/purchase-orders/${poId}/items/${item.id}/unreceive`); onDone(); }
+                catch (e) { alert(e.response?.data?.error || 'Failed'); }
+              }}>
+              Un-receive
+            </button>
+          )}
+          {canQC ? (
+            !open ? <button className="btn-secondary btn-sm text-xs" onClick={() => setOpen(true)}>Do QC</button>
+                  : <span className="text-xs text-purple-600">QC…</span>
+          ) : <span className="text-xs text-gray-400">Awaiting QC</span>}
+        </span>
       </div>
       {costLine}
       {open && canQC && (

@@ -524,6 +524,54 @@ router.put('/:id/delivery-status', authenticate, authorize('owner', 'admin', 'ac
   res.json({ message: 'Delivery status updated' });
 });
 
+// Undo a receive — for a mistake caught before QC (e.g. the transport bill was
+// forgotten). Owner only. Stock is added at QC, not at receive, so nothing has
+// moved yet; this just puts the item back to "not received" so it can be
+// received again properly.
+//
+// It refuses once QC has looked at the item, or once a transport bill has been
+// posted: that bill is a real Account-Statement entry paid to a transporter and
+// is not linked to the PO, so silently unwinding it here would leave the bank
+// reconciliation wrong. Delete that entry from the Account Statement first.
+router.put('/:id/items/:itemId/unreceive', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const db = getDB();
+    const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+    if (!po) return res.status(404).json({ error: 'Not found' });
+    const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    if (!item.received) return res.status(400).json({ error: 'This item is not received' });
+    if (item.qc_status) return res.status(400).json({ error: 'QC has already inspected this item — it cannot be un-received' });
+    const lots = await db.get('SELECT COUNT(*)::int AS n FROM inventory_fifo_lots WHERE po_id=$1 AND item_id=$2',
+      [po.id, item.inventory_item_id || 0]);
+    if (lots?.n > 0) return res.status(400).json({ error: 'Stock from this item is already in inventory — it cannot be un-received' });
+    const t = Number(item.receive_transport_cost) || 0, l = Number(item.receive_local_transport_cost) || 0;
+    if (t > 0 || l > 0) {
+      return res.status(400).json({
+        error: 'A transport bill was already posted for this item. Delete that Purchase Transport entry from the Account Statement first, then un-receive.',
+      });
+    }
+
+    await db.run(
+      `UPDATE purchase_order_items
+          SET received=FALSE, received_at=NULL, invoice_file=NULL, invoice_original_name=NULL,
+              receive_other_cost=NULL, receive_other_cost_reason=NULL
+        WHERE id=$1`, [item.id]);
+    // Nothing received on the PO any more → back to the state it was in before.
+    const stillReceived = await db.get(
+      'SELECT COUNT(*)::int AS n FROM purchase_order_items WHERE po_id=$1 AND received=TRUE', [po.id]);
+    if (stillReceived.n === 0 && po.delivery_status === 'qc_pending') {
+      await db.run("UPDATE purchase_orders SET delivery_status='purchase_accepted', received_at=NULL WHERE id=$1", [po.id]);
+    }
+    await logActivity(null, null, 'purchase_unreceived',
+      `${po.po_number}: "${item.description}" un-received — to be received again`, req.user.id);
+    res.json({ message: 'Item un-received — receive it again with the correct details' });
+  } catch (e) {
+    console.error('unreceive error:', e);
+    res.status(500).json({ error: 'Failed to un-receive the item' });
+  }
+});
+
 // Mark a SINGLE item received: its own invoice is mandatory. The item then
 // awaits QC. Items can be received one at a time as they arrive. Stock is added
 // per item when it passes QC.
