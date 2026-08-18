@@ -962,6 +962,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       // one. Idempotent — after the first run nothing matches.
       await pool.query(`UPDATE inventory_items SET category = TRIM(category)
                          WHERE category IS NOT NULL AND category <> TRIM(category)`);
+      // Receiving takes two documents: the supplier's invoice (already stored)
+      // and the PO copy that came with the goods.
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS po_doc_file TEXT`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS po_doc_original_name TEXT`);
       // Over-receipt: more arriving than was ordered needs the owner's sign-off
       // before it can pass QC into stock, since it increases what is payable.
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS over_qty_pending NUMERIC`);

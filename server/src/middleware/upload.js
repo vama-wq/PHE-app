@@ -161,6 +161,27 @@ async function pushPurchaseItemQCFields(req, res, next) {
   next();
 }
 
+// Receiving a PO item takes TWO documents: the supplier's invoice and the PO
+// copy that came with the goods. .fields() puts them in req.files as an object.
+const purchaseReceiveFields = uploaders.purchaseInvoice.upload.fields([
+  { name: 'invoice', maxCount: 1 },
+  { name: 'po_document', maxCount: 1 },
+]);
+async function pushPurchaseReceiveFields(req, res, next) {
+  const groups = req.files || {};
+  const all = [...(groups.invoice || []), ...(groups.po_document || [])];
+  try {
+    for (const f of all) {
+      const ts = Date.now();
+      const safe = f.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+      f.filename = `${ts}_${safe}`;
+      f.storagePath = await uploadToStorage('purchase-invoices', f.filename, f.buffer, f.mimetype);
+      f.path = f.storagePath;
+    }
+  } catch (err) { return next(err); }
+  next();
+}
+
 // Export multer + push middleware pairs, matching the old named-export API
 module.exports = {
   uploadQuotation:       [uploaders.quotation.upload.single('file'),       uploaders.quotation.pushToStorage],
@@ -179,6 +200,7 @@ module.exports = {
   uploadPettyCashReceipt: [uploaders.pettyCashReceipt.upload.single('receipt'), uploaders.pettyCashReceipt.pushToStorage],
   uploadEsslReport:      [uploaders.esslReport.upload.single('essl'),           uploaders.esslReport.pushToStorage],
   uploadPurchaseInvoice: [uploaders.purchaseInvoice.upload.single('invoice'), uploaders.purchaseInvoice.pushToStorage],
+  uploadPurchaseReceive: [purchaseReceiveFields, pushPurchaseReceiveFields],
   uploadPurchaseItemQC:  [uploaders.purchaseItemQC.upload.single('image'),   uploaders.purchaseItemQC.pushToStorage],
   uploadPurchaseItemQCFields: [purchaseItemQCFields, pushPurchaseItemQCFields],
   uploadDebitNote:       [uploaders.debitNote.upload.single('file'),         uploaders.debitNote.pushToStorage],

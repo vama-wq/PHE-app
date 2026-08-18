@@ -753,6 +753,7 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
   // ordered quantity. A short quantity leaves the balance open on the PO.
   const [qtyIn, setQtyIn] = useState({});
   const [file, setFile] = useState(null);
+  const [poDoc, setPoDoc] = useState(null);
   const [transportCost, setTransportCost] = useState('');
   const [transportPaidTo, setTransportPaidTo] = useState('');
   const [localCost, setLocalCost] = useState('');
@@ -794,6 +795,16 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
       // Over-receipt is allowed — it parks for the owner's approval.
     }
     if (!file) return setError('Attach the invoice received with this delivery');
+    if (!poDoc) return setError('Attach the PO copy (image or PDF) that came with the goods');
+    for (const it of coveredList) {
+      // Compulsory: a blank used to mean "all of it", which quietly recorded a
+      // full delivery for a short one. Over-receipt parks for owner approval.
+      const raw = qtyIn[it.id];
+      if (raw === undefined || String(raw).trim() === '') {
+        return setError(`Enter the quantity received for "${it.description}" — type ${it.qty} if all of it came`);
+      }
+      if (!(Number(raw) > 0)) return setError(`Quantity received for "${it.description}" must be more than 0`);
+    }
     if (Number(otherCost) > 0 && !otherReason.trim()) return setError('Please add a reason for the other cost');
     if (Number(transportCost) > 0 && !transportPaidTo.trim()) return setError('Enter the main-vehicle transporter name');
     if (Number(localCost) > 0 && !localPaidTo.trim()) return setError('Enter the local transporter name');
@@ -808,7 +819,8 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
         setProgress(`Receiving ${idx + 1} of ${coveredList.length} — ${it.description}…`);
         const fd = new FormData();
         fd.append('invoice', file);
-        if (qtyIn[it.id] !== undefined && qtyIn[it.id] !== '') fd.append('received_qty', qtyIn[it.id]);
+        fd.append('received_qty', qtyIn[it.id]);
+        fd.append('po_document', poDoc);
         if (idx === 0) {
           if (transportCost) fd.append('transport_cost', transportCost);
           if (transportPaidTo) fd.append('transport_paid_to', transportPaidTo);
@@ -861,7 +873,7 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
                       </label>
                       {selected[i.id] && (
                         <div className="flex items-center gap-2 mt-1.5 ml-6">
-                          <span className="text-xs text-gray-500">Qty received</span>
+                          <span className="text-xs text-gray-500">Qty received <span className="text-red-500">*</span></span>
                           <input className="input py-1 text-xs w-28" type="number" step="any" min="0" max={i.qty}
                             value={qtyIn[i.id] ?? ''} placeholder={String(i.qty)}
                             onChange={e => setQtyIn(p => ({ ...p, [i.id]: e.target.value }))} />
@@ -888,6 +900,10 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
             <div>
               <label className="label">Invoice received with this delivery <span className="text-red-500">*</span></label>
               <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select invoice (PDF or image)" />
+            </div>
+            <div>
+              <label className="label">PO copy received with the goods <span className="text-red-500">*</span></label>
+              <FileUpload onFile={setPoDoc} accept=".pdf,.jpg,.jpeg,.png" label="Select PO document (PDF or image)" />
             </div>
             <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-3">
               <p className="text-xs text-gray-500">
@@ -1094,6 +1110,7 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, igstPercent 
           {drawingLink}
           <span className="text-xs text-teal-600 ml-2">✓ received</span>
           {item.invoice_file && <> · <a className="text-xs text-brand-600 hover:underline" href={`/uploads/${item.invoice_file}`} target="_blank" rel="noopener noreferrer">invoice</a></>}
+          {item.po_doc_file && <> · <a className="text-xs text-brand-600 hover:underline" href={`/uploads/${item.po_doc_file}`} target="_blank" rel="noopener noreferrer">PO copy</a></>}
         </span>
         <span className="flex items-center gap-2">
           {/* Owner can undo a receive booked with the wrong details — only

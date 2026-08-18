@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseItemQC, uploadPurchaseItemQCFields, uploadDebitNote, uploadChatAttachments } = require('../middleware/upload');
+const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseReceive, uploadPurchaseItemQC, uploadPurchaseItemQCFields, uploadDebitNote, uploadChatAttachments } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 
 // Add a single received PO item's stock to inventory (FIFO lot + moving-average
@@ -636,7 +636,8 @@ router.put('/:id/items/:itemId/unreceive', authenticate, authorize('owner'), asy
           SET received=FALSE, received_at=NULL, invoice_file=NULL, invoice_original_name=NULL,
               receive_other_cost=NULL, receive_other_cost_reason=NULL,
               receive_transport_cost=NULL, receive_transport_paid_to=NULL,
-              receive_local_transport_cost=NULL, receive_local_transport_paid_to=NULL
+              receive_local_transport_cost=NULL, receive_local_transport_paid_to=NULL,
+              po_doc_file=NULL, po_doc_original_name=NULL
         WHERE id=$1`, [item.id]);
     // Nothing received on the PO any more → back to the state it was in before.
     const stillReceived = await db.get(
@@ -657,7 +658,7 @@ router.put('/:id/items/:itemId/unreceive', authenticate, authorize('owner'), asy
 // awaits QC. Items can be received one at a time as they arrive. Stock is added
 // per item when it passes QC.
 router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admin', 'accounts'),
-  ...uploadPurchaseInvoice, async (req, res) => {
+  ...uploadPurchaseReceive, async (req, res) => {
    try {
     const db = getDB();
     const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
@@ -670,7 +671,12 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     if (!item) return res.status(404).json({ error: 'Item not found' });
     if (item.received) return res.status(400).json({ error: 'This item is already received' });
     if (item.short_closed) return res.status(400).json({ error: 'This balance was short-closed' });
-    if (!req.file) return res.status(400).json({ error: 'The invoice received with this item is required' });
+    // Two documents are compulsory on every receipt: the supplier's invoice and
+    // the PO copy that came with the goods — image or PDF either way.
+    const invoiceFile = req.files?.invoice?.[0] || null;
+    const poDocFile = req.files?.po_document?.[0] || null;
+    if (!invoiceFile) return res.status(400).json({ error: 'The invoice received with this delivery is required' });
+    if (!poDocFile) return res.status(400).json({ error: 'The PO copy (image or PDF) received with the goods is required' });
 
     // A delivery can be short of what was ordered (2000 ordered, 1780 arrived).
     // The arrived quantity is received on THIS line and the balance splits off
@@ -678,9 +684,11 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     // than it looking like rejected material. Blank means the full quantity.
     const orderedQty = Number(item.qty) || 0;
     const rawQty = req.body.received_qty;
-    const recvQty = rawQty === undefined || rawQty === null || String(rawQty).trim() === ''
-      ? orderedQty : Number(rawQty);
-    if (!(recvQty > 0)) return res.status(400).json({ error: 'Enter how much of this item actually arrived' });
+    if (rawQty === undefined || rawQty === null || String(rawQty).trim() === '') {
+      return res.status(400).json({ error: 'Enter the quantity received — it is not assumed to be the full order' });
+    }
+    const recvQty = Number(rawQty);
+    if (!(recvQty > 0)) return res.status(400).json({ error: 'Quantity received must be more than 0' });
     // More can arrive than was ordered. That raises what is payable, so the
     // line is NOT updated here — the excess is parked for the owner to approve
     // and QC cannot take it into stock until they do.
@@ -735,11 +743,11 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
       await client.query(
         `UPDATE purchase_order_items SET received=TRUE, received_at=NOW(), invoice_file=$1, invoice_original_name=$2,
            receive_other_cost=$3, receive_other_cost_reason=$4, qty=$5, amount=$6,
-           over_qty_pending=$7 WHERE id=$8`,
-        [req.file.storagePath, req.file.originalname, otherCost, otherReason,
+           over_qty_pending=$7, po_doc_file=$8, po_doc_original_name=$9 WHERE id=$10`,
+        [invoiceFile.storagePath, invoiceFile.originalname, otherCost, otherReason,
          overQty ? orderedQty : recvQty,
          Math.round((overQty ? orderedQty : recvQty) * (Number(item.rate) || 0) * 100) / 100,
-         overQty, item.id]
+         overQty, poDocFile.storagePath, poDocFile.originalname, item.id]
       );
       // Short delivery: the balance carries on as its own open line so it can
       // be received when it arrives. Ordered qty is preserved across the pair
