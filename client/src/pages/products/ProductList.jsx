@@ -116,6 +116,9 @@ function ProductModal({ product, onClose, onSave }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    // New products must carry a reference photo. Editing an existing one does
+    // not force a re-upload — it already has whatever was set.
+    if (!product && !photoFile) return setError('A reference photo is required for a new product');
     setSaving(true);
     setError('');
     try {
@@ -157,7 +160,7 @@ function ProductModal({ product, onClose, onSave }) {
 
         {/* Reference photo */}
         <div>
-          <label className="label">Reference Photo</label>
+          <label className="label">Reference Photo {!product && <span className="text-red-500">*</span>}</label>
           {product?.photo_file && !photoFile && (
             <div className="mb-2">
               <a href={`/uploads/${product.photo_file}`} target="_blank" rel="noopener noreferrer">

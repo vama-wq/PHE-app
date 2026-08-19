@@ -16,12 +16,15 @@ router.get('/:id', authenticate, async (req, res) => {
 router.post('/', authenticate, authorize('admin', 'owner'), ...uploadProductPhoto, async (req, res) => {
   const { product_code, name, description, category } = req.body;
   if (!product_code || !name) return res.status(400).json({ error: 'Code and name required' });
+  // A new product must carry its reference photo — it is what production and
+  // QC identify the part by. Edits are not forced to re-upload.
+  if (!req.file) return res.status(400).json({ error: 'A reference photo is required for a new product' });
   try {
     const r = await getDB().insert(
       `INSERT INTO products (product_code, name, description, category, photo_file, photo_original_name, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [product_code, name, description||null, category||null,
-       req.file?.storagePath || null, req.file?.originalname || null, req.user.id]
+       req.file.storagePath, req.file.originalname, req.user.id]
     );
     res.status(201).json({ id: r.lastInsertRowid });
   } catch (e) {
