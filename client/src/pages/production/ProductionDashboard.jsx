@@ -1225,8 +1225,12 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const photoAlwaysRequired = !!stageDef.photo;
   // photoRequiredForStage: stages that always need a photo before marking done (e.g. stage 29)
   const photoRequiredForStage = !!stageDef.photoRequired;
-  // photoRequiredAfter6pm: after 6pm, photo needed but form stays open so rejection can be entered
-  const photoRequiredAfter6pm = isAfter6pm && !stageDef.photo && !stageDef.photoRequired;
+  // photoRequiredAfter6pm: after 6pm, photo needed but form stays open so rejection can be entered.
+  // The owner is exempt — the rule exists to evidence late shop-floor work, not
+  // to gate the owner. Stages that ALWAYS need a photo (Cleaning, Dispatch,
+  // stage 29) still do, for everyone.
+  const photoRequiredAfter6pm = isAfter6pm && user.role !== 'owner'
+    && !stageDef.photo && !stageDef.photoRequired;
   // legacy alias used by UI below
   const requiresPhoto = photoAlwaysRequired || photoRequiredAfter6pm || photoRequiredForStage;
   const rejQtyInt = parseInt(rejQty, 10) || 0;
