@@ -962,6 +962,13 @@ async function initDB(retries = 20, delayMs = 10000) {
       // one. Idempotent — after the first run nothing matches.
       await pool.query(`UPDATE inventory_items SET category = TRIM(category)
                          WHERE category IS NOT NULL AND category <> TRIM(category)`);
+      // Brazing rings are bought by weight but consumed one ring at a time, so
+      // they must be STOCKED in pieces for BOMs and job cards to work. 11mm was
+      // defined in kgs while 8mm was already in pcs — owner confirmed both
+      // should be pieces. Guarded on the wrong unit still being there.
+      await pool.query(`
+        UPDATE inventory_items SET unit='pcs'
+         WHERE item_code='BRZ-11' AND lower(trim(unit)) IN ('kg','kgs')`);
       // An Account-Statement entry can carry more than one document — the
       // payment proof AND the supplier's tax invoice, say. The original
       // receipt_file stays as the primary; these are additional.

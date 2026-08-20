@@ -1191,8 +1191,22 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, igstPercent 
                 <p className="text-xs text-gray-400 mt-0.5">Only this quantity is added to inventory.</p>
               </div>
               <div>
-                <label className="label text-xs">Weight of 10 pcs <span className="text-red-500">*</span></label>
+                <label className="label text-xs">Weight of 10 pcs (kg) <span className="text-red-500">*</span></label>
                 <input className="input text-sm" type="number" step="any" min="0" value={weight10} onChange={e => setWeight10(e.target.value)} placeholder="e.g. 1.25" />
+                {/* Bought by weight, stocked by the piece: show what will
+                    actually go into inventory before QC is submitted. */}
+                {(() => {
+                  const wu = ['kg', 'kgs', 'kilo', 'kilos', 'kilogram', 'kilograms'];
+                  if (!wu.includes(String(item.unit || '').trim().toLowerCase())) return null;
+                  const w10 = Number(weight10), acc = Number(receivedQty);
+                  if (!(w10 > 0) || !(acc > 0)) return null;
+                  const pcs = Math.round((acc / (w10 / 10)) * 100) / 100;
+                  return (
+                    <p className="text-[11px] text-teal-700 mt-1">
+                      {acc} {item.unit} ÷ {w10}kg per 10 → <b>{pcs} pcs</b> into stock
+                    </p>
+                  );
+                })()}
               </div>
               <div>
                 <label className="label text-xs">Observations <span className="text-gray-400 font-normal">(optional)</span></label>

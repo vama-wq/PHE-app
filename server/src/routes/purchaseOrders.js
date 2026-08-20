@@ -7,6 +7,21 @@ const { createNotification } = require('./notifications');
 // Add a single received PO item's stock to inventory (FIFO lot + moving-average
 // cost + transaction). `qty` is the ACTUAL quantity received (entered at QC),
 // which may differ from the ordered quantity.
+// Some material is BOUGHT by weight but STOCKED and consumed by the piece —
+// brazing rings, for instance, come in kilograms and go into a heater one ring
+// at a time. QC already records the weight of 10 pieces (in kg), which is
+// exactly what converts one to the other.
+const WEIGHT_UNITS = ['kg', 'kgs', 'kilo', 'kilos', 'kilogram', 'kilograms'];
+const PIECE_UNITS = ['pcs', 'pc', 'nos', 'no', 'piece', 'pieces', 'each'];
+const norm = (u) => String(u || '').trim().toLowerCase();
+function weightToPieces(poUnit, stockUnit, weight10) {
+  const w10 = Number(weight10);
+  if (!(w10 > 0)) return null;
+  if (!WEIGHT_UNITS.includes(norm(poUnit))) return null;
+  if (!PIECE_UNITS.includes(norm(stockUnit))) return null;
+  return { perPieceKg: w10 / 10 };   // weight of 10 pieces, in kg
+}
+
 async function receiveItemStock(db, po, item, userId, qty) {
   if (!item.inventory_item_id) return;
   const q = Number(qty);
@@ -22,28 +37,49 @@ async function receiveItemStock(db, po, item, userId, qty) {
   const transport = Number(item.receive_transport_cost) || 0;
   const localTransport = Number(item.receive_local_transport_cost) || 0;
   const other = Number(item.receive_other_cost) || 0;
-  const extraPerUnit = (transport + localTransport + other) / q;
-  const landedUnitCost = Math.round((baseRate + extraPerUnit) * 100) / 100;
+
+  // Bought by weight, stocked by the piece? Convert here, so stock and the BOM
+  // both speak in pieces while the PO and the supplier's bill stay in kg.
+  const invRow = await db.get('SELECT unit FROM inventory_items WHERE id=$1', [item.inventory_item_id]);
+  const conv = weightToPieces(item.unit, invRow?.unit, item.qc_weight_10);
+  // Bought by weight, stocked by the piece, but no weight recorded: adding the
+  // kilogram figure as a piece count would be badly wrong (0.7 kg becoming
+  // "0.7 pcs"). Refuse rather than corrupt the stock.
+  if (!conv && WEIGHT_UNITS.includes(norm(item.unit)) && PIECE_UNITS.includes(norm(invRow?.unit))) {
+    console.error(`[receiveItemStock] ${po.po_number} "${item.description}": bought in ${item.unit}, stocked in ${invRow?.unit}, but no weight of 10 — stock NOT added`);
+    return;
+  }
+  let stockQty = q, convNote = '';
+  if (conv) {
+    stockQty = Math.round((q / conv.perPieceKg) * 100) / 100;   // kg ÷ kg-per-piece
+    convNote = ` — ${q} ${item.unit} @ ${item.qc_weight_10}kg/10pcs = ${stockQty} pcs`;
+  }
+  if (!(stockQty > 0)) return;
+
+  // Cost is spread over what actually goes into stock: the whole material value
+  // plus receipt costs, divided by the pieces (or kg) being added.
+  const totalMaterial = baseRate * q;
+  const landedUnitCost = Math.round(((totalMaterial + transport + localTransport + other) / stockQty) * 100) / 100;
 
   await db.run(
     `INSERT INTO inventory_fifo_lots (item_id, po_id, qty_original, qty_remaining, unit_cost, received_at)
      VALUES ($1,$2,$3,$4,$5,$6)`,
-    [item.inventory_item_id, po.id, q, q, landedUnitCost, now]
+    [item.inventory_item_id, po.id, stockQty, stockQty, landedUnitCost, now]
   );
   const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [item.inventory_item_id]);
-  const newStock = (Number(inv.current_stock) || 0) + q;
+  const newStock = (Number(inv.current_stock) || 0) + stockQty;
   const lots = await db.all('SELECT qty_remaining, unit_cost FROM inventory_fifo_lots WHERE item_id=$1 AND qty_remaining > 0', [item.inventory_item_id]);
   const totalQty = lots.reduce((s, l) => s + Number(l.qty_remaining), 0);
   const totalCost = lots.reduce((s, l) => s + Number(l.qty_remaining) * Number(l.unit_cost), 0);
   const avgCost = totalQty > 0 ? totalCost / totalQty : landedUnitCost;
   await db.run('UPDATE inventory_items SET current_stock=$1, unit_cost=$2 WHERE id=$3',
     [newStock, Math.round(avgCost * 100) / 100, item.inventory_item_id]);
-  const landedNote = (transport + other) > 0 ? ` @ landed ₹${landedUnitCost}/u (rate ₹${baseRate} + ₹${Math.round(extraPerUnit * 100) / 100} costs)` : '';
+  const landedNote = ` @ landed ₹${landedUnitCost}/${conv ? 'pc' : 'u'}`;
   await db.run(
     `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, po_number, supplier_name, notes, created_by)
      VALUES ($1,'purchase_in',$2,$3,$4,$5,$6,$7)`,
-    [item.inventory_item_id, q, newStock, po.po_number, supplier?.name || '',
-     `PO received (QC approved): ${po.po_number} — qty ${q}${Number(item.qty) !== q ? ` of ${item.qty} ordered` : ''}${landedNote}`, userId]
+    [item.inventory_item_id, stockQty, newStock, po.po_number, supplier?.name || '',
+     `PO received (QC approved): ${po.po_number} — qty ${stockQty}${convNote || (Number(item.qty) !== q ? ` of ${item.qty} ordered` : '')}${landedNote}`, userId]
   );
 }
 
