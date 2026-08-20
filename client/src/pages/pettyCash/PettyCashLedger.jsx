@@ -6,7 +6,7 @@ import SupplierModal from '../../components/SupplierModal';
 import InventoryItemModal from '../../components/InventoryItemModal';
 import CategorySelect from '../../components/CategorySelect';
 import { fmtDate, downloadExcel } from '../../lib/utils';
-import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets, ChevronDown, ChevronRight, Printer } from 'lucide-react';
+import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets, ChevronDown, ChevronRight, Printer, Paperclip } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -41,7 +41,8 @@ export default function PettyCashLedger() {
   const [samples, setSamples] = useState([]);
   const [approving, setApproving] = useState(null); // sample being approved
   const [banks, setBanks] = useState([]); // bank accounts (Kotak / Kalupur / …)
-  const [payingEntry, setPayingEntry] = useState(null); // unpaid entry awaiting "paid from which bank?"
+  const [payingEntry, setPayingEntry] = useState(null);
+  const [attachTo, setAttachTo] = useState(null); // entry gaining an extra document // unpaid entry awaiting "paid from which bank?"
   const [loading, setLoading] = useState(true);
 
   const load = () => {
@@ -606,12 +607,28 @@ export default function PettyCashLedger() {
                         </>
                       )}
                       <td className="table-cell text-center">
-                        {e.receipt_file ? (
-                          <a href={`/uploads/${e.receipt_file}`} target="_blank" rel="noopener noreferrer"
-                            className="text-brand-600 hover:text-brand-700 inline-flex" title={e.receipt_original_name || 'View receipt'}>
-                            <ExternalLink size={14} />
-                          </a>
-                        ) : <span className="text-gray-300">—</span>}
+                        {/* The entry's own receipt, plus any documents added
+                            afterwards — a tax invoice alongside a payment
+                            proof, say. Adding never replaces what is there. */}
+                        <span className="inline-flex items-center gap-1.5">
+                          {e.receipt_file ? (
+                            <a href={`/uploads/${e.receipt_file}`} target="_blank" rel="noopener noreferrer"
+                              className="text-brand-600 hover:text-brand-700 inline-flex" title={e.receipt_original_name || 'View receipt'}>
+                              <ExternalLink size={14} />
+                            </a>
+                          ) : (!e.attachments?.length && <span className="text-gray-300">—</span>)}
+                          {(e.attachments || []).map((a, i) => (
+                            <a key={a.id} href={`/uploads/${a.file_path}`} target="_blank" rel="noopener noreferrer"
+                              className="text-purple-600 hover:text-purple-700 inline-flex"
+                              title={a.label || a.original_name || `Document ${i + 1}`}>
+                              <Paperclip size={13} />
+                            </a>
+                          ))}
+                          <button type="button" onClick={() => setAttachTo(e)}
+                            className="text-gray-300 hover:text-brand-600" title="Attach a document">
+                            <Plus size={13} />
+                          </button>
+                        </span>
                       </td>
                       <td className="table-cell text-xs text-gray-400">{e.created_by_name || ''}</td>
                       {isOwner && (
@@ -666,6 +683,11 @@ export default function PettyCashLedger() {
         </Modal>
       )}
 
+      {attachTo && (
+        <AttachDocModal entry={attachTo} onClose={() => setAttachTo(null)}
+          onSaved={() => { setAttachTo(null); load(); }} />
+      )}
+
       {approving && (
         <SampleApproveFlow sample={approving}
           onClose={() => { setApproving(null); loadSamples(); }}
@@ -686,6 +708,57 @@ export default function PettyCashLedger() {
 // Checkpoint failures ABORT the flow (the sample may have been deleted) — they
 // are never silently skipped, so no orphan records get created past a dead
 // sample.
+// Attach an extra document to an entry that already exists — the tax invoice
+// for a payment whose proof is already on file, for instance.
+function AttachDocModal({ entry, onClose, onSaved }) {
+  const [file, setFile] = useState(null);
+  const [label, setLabel] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    if (!file) return setError('Choose the file to attach');
+    setSaving(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('receipt', file);
+      if (label.trim()) fd.append('label', label.trim());
+      await api.post(`/petty-cash/${entry.id}/attachments`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      onSaved();
+    } catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
+  };
+
+  return (
+    <Modal open title="Attach a document" onClose={onClose} size="md">
+      <div className="space-y-3">
+        <p className="text-sm text-gray-600">
+          {entry.category || 'Entry'} · {entry.paid_to || ''} · {inr(entry.amount)}
+        </p>
+        <div>
+          <label className="label">File <span className="text-red-500">*</span></label>
+          <label className="flex items-center gap-2 border border-gray-200 rounded-xl px-3 py-2.5 cursor-pointer hover:bg-gray-50">
+            <Upload size={15} className="text-gray-400" />
+            <span className="text-sm text-gray-600 flex-1 truncate">{file ? file.name : 'Image or PDF…'}</span>
+            <input type="file" accept="image/*,.pdf" className="hidden"
+              onChange={ev => setFile(ev.target.files?.[0] || null)} />
+          </label>
+        </div>
+        <div>
+          <label className="label">What is it? <span className="text-gray-400 font-normal">(optional)</span></label>
+          <input className="input" value={label} onChange={ev => setLabel(ev.target.value)}
+            placeholder="e.g. Tax invoice, Delivery challan" />
+        </div>
+        <p className="text-[11px] text-gray-500">Added alongside anything already attached — nothing is replaced.</p>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn-primary" onClick={submit} disabled={saving}>{saving ? 'Attaching…' : 'Attach'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function SampleApproveFlow({ sample, onClose, onDone }) {
   const qty = Number(sample.sample_qty);
   const unitCost = qty > 0 ? Math.round((Number(sample.sample_cost) / qty) * 100) / 100 : '';

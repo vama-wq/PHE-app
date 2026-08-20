@@ -962,6 +962,20 @@ async function initDB(retries = 20, delayMs = 10000) {
       // one. Idempotent — after the first run nothing matches.
       await pool.query(`UPDATE inventory_items SET category = TRIM(category)
                          WHERE category IS NOT NULL AND category <> TRIM(category)`);
+      // An Account-Statement entry can carry more than one document — the
+      // payment proof AND the supplier's tax invoice, say. The original
+      // receipt_file stays as the primary; these are additional.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS petty_cash_attachments (
+          id SERIAL PRIMARY KEY,
+          entry_id INTEGER NOT NULL REFERENCES petty_cash_entries(id) ON DELETE CASCADE,
+          file_path TEXT NOT NULL,
+          original_name TEXT,
+          label TEXT,
+          uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pc_attach_entry ON petty_cash_attachments(entry_id)`);
       // Receiving takes two documents: the supplier's invoice (already stored)
       // and the PO copy that came with the goods.
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS po_doc_file TEXT`);

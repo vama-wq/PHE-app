@@ -58,7 +58,10 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
   const entries = await db.all(`
-    SELECT e.*, u.name AS created_by_name, ba.name AS bank_account_name
+    SELECT e.*, u.name AS created_by_name, ba.name AS bank_account_name,
+           COALESCE((SELECT json_agg(json_build_object('id', a.id, 'file_path', a.file_path,
+                       'original_name', a.original_name, 'label', a.label) ORDER BY a.id)
+                       FROM petty_cash_attachments a WHERE a.entry_id = e.id), '[]'::json) AS attachments
     FROM petty_cash_entries e
     LEFT JOIN users u ON u.id = e.created_by
     LEFT JOIN bank_accounts ba ON ba.id = e.bank_account_id
@@ -192,6 +195,42 @@ router.get('/ledgers', authenticate, authorize('owner'), async (req, res) => {
     { key: 'unpaid_bank', label: 'Unpaid Bank', total: Number(m.unpaid_total),  count: Number(m.unpaid_count) },
   ];
   res.json({ categories, companies, methods });
+});
+
+// Extra documents on an entry — a tax invoice alongside the payment proof, for
+// instance. The entry's own receipt_file stays as the primary; these are added
+// to it, so nothing already attached is replaced or lost.
+router.post('/:id/attachments', authenticate, authorize('accounts', 'owner'),
+  ...uploadPettyCashReceipt, async (req, res) => {
+  try {
+    const db = getDB();
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid entry id' });
+    const e = await db.get('SELECT id FROM petty_cash_entries WHERE id=$1', [id]);
+    if (!e) return res.status(404).json({ error: 'Entry not found' });
+    if (!req.file) return res.status(400).json({ error: 'Attach a file (image or PDF)' });
+    const label = (req.body?.label || '').trim() || null;
+    const row = await db.get(
+      `INSERT INTO petty_cash_attachments (entry_id, file_path, original_name, label, uploaded_by)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id, file_path, original_name, label`,
+      [id, req.file.storagePath, req.file.originalname, label, req.user.id]);
+    await logActivity(null, null, 'petty_cash_attachment',
+      `Document attached to entry #${id}: ${req.file.originalname}${label ? ` (${label})` : ''}`, req.user.id);
+    res.status(201).json(row);
+  } catch (e) {
+    console.error('attachment error:', e);
+    res.status(500).json({ error: 'Failed to attach the document' });
+  }
+});
+
+router.delete('/:id/attachments/:attId', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const a = await db.get('SELECT * FROM petty_cash_attachments WHERE id=$1 AND entry_id=$2',
+    [req.params.attId, req.params.id]);
+  if (!a) return res.status(404).json({ error: 'Attachment not found' });
+  await db.run('DELETE FROM petty_cash_attachments WHERE id=$1', [a.id]);
+  await deleteFromStorage(a.file_path).catch(() => {});
+  res.json({ message: 'Attachment removed' });
 });
 
 // Re-tag a bank entry to a different account. Entries are otherwise not
