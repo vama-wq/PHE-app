@@ -46,9 +46,21 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
     return res.status(403).json({ error: 'Ledger filters are owner-only' });
   }
 
+  // A search looks across ALL months — an entry you are hunting for is rarely
+  // in the month that happens to be on screen. It matches payee, description,
+  // category and the amount.
+  const q = (req.query.q || '').trim();
+  const isSearch = q.length > 0;
+
   const conds = [];
   const params = [];
-  if (month)    { params.push(month);    conds.push(`to_char(entry_date, 'YYYY-MM') = $${params.length}`); }
+  if (month && !isSearch) { params.push(month); conds.push(`to_char(entry_date, 'YYYY-MM') = $${params.length}`); }
+  if (isSearch) {
+    params.push(`%${q}%`);
+    const n = params.length;
+    conds.push(`(COALESCE(paid_to,'') ILIKE $${n} OR COALESCE(description,'') ILIKE $${n}
+                 OR COALESCE(category,'') ILIKE $${n} OR CAST(amount AS TEXT) ILIKE $${n})`);
+  }
   if (category) { params.push(category); conds.push(`TRIM(category) = $${params.length}`); }
   if (company)  { params.push(company);  conds.push(`TRIM(category) = '${MACHINERY}' AND TRIM(paid_to) = $${params.length}`); }
   if (method)   { params.push(method);   conds.push(`payment_method = $${params.length}`); }
@@ -66,7 +78,8 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
     LEFT JOIN users u ON u.id = e.created_by
     LEFT JOIN bank_accounts ba ON ba.id = e.bank_account_id
     ${where}
-    ORDER BY e.entry_date ASC, e.id ASC`, params);
+    ORDER BY e.entry_date ${isSearch ? 'DESC' : 'ASC'}, e.id ${isSearch ? 'DESC' : 'ASC'}
+    ${isSearch ? 'LIMIT 300' : ''}`, params);
 
   // Two live balances (all entries, not filtered) driven by payment_method:
   //  cash → Cash balance, paid_bank → Bank balance, unpaid_bank → neither.
@@ -160,6 +173,8 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
     opening_balance: opening, // cumulative spend / running balance for filtered views
     category_totals,
     filter: { category, company, method, bank_account: bankAccount },
+    is_search: isSearch,
+    search_q: isSearch ? q : null,
     receipt_required_above: RECEIPT_REQUIRED_ABOVE,
   });
 });

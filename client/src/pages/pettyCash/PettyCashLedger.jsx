@@ -6,7 +6,7 @@ import SupplierModal from '../../components/SupplierModal';
 import InventoryItemModal from '../../components/InventoryItemModal';
 import CategorySelect from '../../components/CategorySelect';
 import { fmtDate, downloadExcel } from '../../lib/utils';
-import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets, ChevronDown, ChevronRight, Printer, Paperclip } from 'lucide-react';
+import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets, ChevronDown, ChevronRight, Printer, Paperclip, Search } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -43,6 +43,9 @@ export default function PettyCashLedger() {
   const [banks, setBanks] = useState([]); // bank accounts (Kotak / Kalupur / …)
   const [payingEntry, setPayingEntry] = useState(null);
   const [attachTo, setAttachTo] = useState(null); // entry gaining an extra document // unpaid entry awaiting "paid from which bank?"
+  const [search, setSearch] = useState('');       // what was typed
+  const [query, setQuery] = useState('');         // what was actually sent
+  const [catFilter, setCatFilter] = useState(''); // expense type filter
   const [loading, setLoading] = useState(true);
 
   const load = () => {
@@ -51,6 +54,7 @@ export default function PettyCashLedger() {
     if (filter?.category) params.set('category', filter.category);
     if (filter?.company) params.set('company', filter.company);
     if (filter?.method) params.set('method', filter.method);
+    if (query.trim()) params.set('q', query.trim());
     // Stamp the month/method the rows actually came from, and on failure clear
     // rather than keep the previous month's data — a stale table (or a printed
     // statement titled with the newly selected month) lies.
@@ -63,9 +67,14 @@ export default function PettyCashLedger() {
   const loadLedgers = () => { if (isOwner) api.get('/petty-cash/ledgers').then(r => setLedgers(r.data)).catch(() => {}); };
   const loadSamples = () => api.get('/petty-cash/samples').then(r => setSamples(r.data || [])).catch(() => {});
   const loadBanks = () => api.get('/petty-cash/bank-accounts').then(r => setBanks(r.data || [])).catch(() => {});
-  useEffect(() => { load(); }, [month, filter]);
+  useEffect(() => { load(); }, [month, filter, query]);
   useEffect(() => { loadLedgers(); loadSamples(); }, [showEntry]);
   useEffect(() => { loadBanks(); }, []);
+  // Debounced so it does not fire a request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(search), 350);
+    return () => clearTimeout(t);
+  }, [search]);
 
   // Owner sign-off only — Accounts do the inventory data entry afterwards.
   const handleApproveSample = async (s) => {
@@ -114,7 +123,8 @@ export default function PettyCashLedger() {
   let cashRun = data?.opening_cash ?? 0;
   let bankRun = data?.opening_bank ?? 0;
   let cumRun = data?.opening_balance ?? 0;
-  const rows = (data?.entries || []).map(e => {
+  const isSearch = !!data?.is_search;
+  const rows = (data?.entries || []).filter(e => !catFilter || (e.category || '') === catFilter).map(e => {
     const amt = Number(e.amount);
     const delta = e.entry_type === 'top_up' ? amt : -amt;
     if (e.payment_method === 'cash') cashRun += delta;
@@ -232,6 +242,25 @@ export default function PettyCashLedger() {
           <p className="text-gray-500 text-sm mt-0.5">Cash &amp; bank expense ledger — receipts required above ₹{data?.receipt_required_above ?? 500}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Find an entry anywhere in the ledger — searching looks across every
+              month, since what you are hunting for is rarely in the one on
+              screen. The type filter narrows whatever is currently listed. */}
+          <div className="relative">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input className="input w-52 text-sm pl-8" value={search} placeholder="Search payee, note, amount…"
+              onChange={e => setSearch(e.target.value)} />
+            {search && (
+              <button type="button" onClick={() => setSearch('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" title="Clear search">
+                <XCircle size={14} />
+              </button>
+            )}
+          </div>
+          <select className="input w-auto text-sm" value={catFilter} onChange={e => setCatFilter(e.target.value)}>
+            <option value="">All types</option>
+            {[...new Set((data?.entries || []).map(e => e.category).filter(Boolean))].sort()
+              .map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
           {/* Month + Year dropdowns — pick any past month to see its entries
               (the table shows that month with its brought-forward balances). */}
           <select className="input w-auto text-sm" value={month.split('-')[1]}
@@ -516,6 +545,19 @@ export default function PettyCashLedger() {
         </div>
       )}
 
+      {isSearch && (
+        <div className="mb-3 text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 flex items-center justify-between">
+          <span>
+            Showing <b>{rows.length}</b> match{rows.length === 1 ? '' : 'es'} for “{data.search_q}”
+            {catFilter && <> in <b>{catFilter}</b></>} — across all months, newest first.
+            {data.entries.length >= 300 && ' Showing the latest 300.'}
+          </span>
+          <button className="text-blue-700 hover:underline text-xs" onClick={() => { setSearch(''); setCatFilter(''); }}>
+            Back to {month}
+          </button>
+        </div>
+      )}
+
       {/* Ledger table */}
       <div className="card overflow-x-auto">
         <table className="w-full">
@@ -548,6 +590,7 @@ export default function PettyCashLedger() {
               <tr><td colSpan={cols + 1} className="table-cell text-center text-gray-400 py-10">No entries this month</td></tr>
             ) : (
               <>
+                {!isSearch && (
                 <tr className="bg-gray-50/60">
                   <td colSpan={7} className="table-cell text-xs text-gray-500">{isLedgerView ? 'Brought forward' : 'Opening balances'}</td>
                   {isLedgerView ? (
@@ -560,6 +603,7 @@ export default function PettyCashLedger() {
                   )}
                   <td colSpan={isOwner ? 3 : 2}></td>
                 </tr>
+                )}
                 {rows.map(e => {
                   const badge = METHOD_BADGES[e.payment_method] || METHOD_BADGES.cash;
                   return (
