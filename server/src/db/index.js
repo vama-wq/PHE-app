@@ -1307,7 +1307,7 @@ async function initDB(retries = 20, delayMs = 10000) {
       // makes this run once; shares never equal exactly 480 with multiple items).
       await pool.query(`
         UPDATE purchase_order_items poi
-           SET receive_transport_cost = ROUND(480.0 * poi.amount / NULLIF(t.total, 0), 2)
+           SET receive_transport_cost = ROUND((480.0 * poi.amount / NULLIF(t.total, 0))::numeric, 2)
           FROM purchase_orders po,
                (SELECT SUM(poi2.amount) AS total
                   FROM purchase_order_items poi2 JOIN purchase_orders po2 ON po2.id = poi2.po_id
