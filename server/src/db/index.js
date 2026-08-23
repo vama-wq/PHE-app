@@ -1440,6 +1440,109 @@ async function initDB(retries = 20, delayMs = 10000) {
         'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'
       ))`);
 
+      // ── Kotak reconciliation, 13 – 24 Aug 2026 ───────────────────────────────
+      // Tallied line by line against the Kotak statement (a/c XX5595, 13–24 Aug:
+      // opens 1,70,253.68, closes 10,126.87, 39 transactions). The app read
+      // 40,464.77 — 30,337.90 high. Every fix is guarded on the wrong state still
+      // being present, so the block applies once and never re-runs.
+      {
+        const { rows: accts } = await pool.query(`SELECT id, name FROM bank_accounts`);
+        const idOf = (n) => (accts.find(a => a.name.toLowerCase() === n) || {}).id || null;
+        const kotak = idOf('kotak'), kalupur = idOf('kalupur');
+        if (kotak && kalupur) {
+          // 1. Eight entries carry the date they were recorded, not the date the
+          //    bank moved the money. Ashapura matters most: sitting a week early
+          //    made the 12-Aug balance look 24,426 short AND the 19-Aug UPI look
+          //    missing — one mistake surfacing as two. The rest are day-accuracy
+          //    only. Each guard names the wrong date, so each runs exactly once.
+          const redate = [
+            ['2026-08-12', '2026-08-19', 24426,     `TRIM(COALESCE(paid_to,'')) ILIKE 'ASHAPURA AIR SOLUTION'`],
+            ['2026-08-18', '2026-08-17', 32630,     `COALESCE(description,'') ILIKE '%therolab%'`],
+            ['2026-08-17', '2026-08-18', 2650,      `TRIM(COALESCE(paid_to,'')) ILIKE 'ARUN & SONS'`],
+            ['2026-08-17', '2026-08-14', 450,       `COALESCE(paid_to,'') ILIKE 'nayan bhai%'`],
+            ['2026-08-17', '2026-08-16', 102897,    `TRIM(COALESCE(paid_to,'')) ILIKE 'Khimishia Associates'`],
+            ['2026-08-18', '2026-08-19', 4042,      `COALESCE(paid_to,'') ILIKE '%OMEGA DIA WORK%'`],
+            ['2026-08-14', '2026-08-13', 4500,      `COALESCE(paid_to,'') ILIKE 'hamal'`],
+            ['2026-08-14', '2026-08-13', 1080,      `COALESCE(description,'') ILIKE '%dhaval industries%'`],
+          ];
+          for (const [from, to, amt, match] of redate) {
+            await pool.query(
+              `UPDATE petty_cash_entries SET entry_date=$1
+                WHERE entry_date=$2 AND amount=$3 AND payment_method='paid_bank'
+                  AND bank_account_id=$4 AND ${match}`, [to, from, amt, kotak]);
+          }
+
+          // 2. ₹300 of the 14-Aug Lalji Mulji transport was booked into the 17-Aug
+          //    "MIscellenious" lump instead. The bank shows 4,050 and 1,04,190;
+          //    the app had 3,750 and 1,04,490. Offsetting, so the closing balance
+          //    was never wrong — but both days were.
+          await pool.query(
+            `UPDATE petty_cash_entries SET amount=4050
+              WHERE entry_date='2026-08-14' AND amount=3750 AND payment_method='paid_bank'
+                AND COALESCE(paid_to,'') ILIKE '%lalji mulji%'`);
+          await pool.query(
+            `UPDATE petty_cash_entries SET amount=104190
+              WHERE entry_date='2026-08-17' AND amount=104490 AND payment_method='paid_bank'`);
+          // 3. Sabarmati Gas: bank took 17,070.01, entered as 17,064.11.
+          await pool.query(
+            `UPDATE petty_cash_entries SET amount=17070.01
+              WHERE amount=17064.11 AND payment_method='paid_bank'
+                AND COALESCE(paid_to,'') ILIKE '%sabarmati gas%'`);
+
+          // 4. Eleven statement lines had never been entered. Categories are the
+          //    owner's own (Aug 2026); Lalji Mulji's 21-Aug ₹4,720 is deliberately
+          //    left uncategorised pending confirmation from their accountant.
+          //    Guard matches date+amount+type+payee+description, so re-dated rows
+          //    (e.g. Omega's 4,042 now also on 19-Aug) can never suppress a row.
+          const add = [
+            ['2026-08-18', 'expense', 46020,    'MIscellenious',  'AUSTENITE TUBE INDUSTRIES PRIVATE LIMITED', 'NEFT — tube purchase (P PHE 24)'],
+            ['2026-08-19', 'expense', 6050,     'MIscellenious',  'RAMESHKUMAR RAT',        'UPI — payment details to be updated'],
+            ['2026-08-19', 'expense', 50557.50, 'Office Expense', 'bhikhabhai Patel',       'Rent'],
+            ['2026-08-19', 'expense', 32602.50, 'Office Expense', 'SANJAYKUMAR HEMA',       'Rent'],
+            ['2026-08-20', 'expense', 108,      'Office Expense', 'GOODS AND SERVICES TAX', 'GST payment'],
+            ['2026-08-20', 'expense', 4000,     'Office Expense', 'TIN 2 O',                'TDS payment'],
+            ['2026-08-21', 'expense', 4720,     null,             'LALJI MULJI TRANSPORT',  'UPI — category to be confirmed with accounts'],
+            ['2026-08-19', 'top_up',  100000,   null,             null,                     'Peena Mitesh Shah'],
+            ['2026-08-20', 'top_up',  3000,     null,             null,                     'Vama Mitesh Shah'],
+            ['2026-08-21', 'top_up',  14768,    null,             null,                     'Steel Med Pharma — INV NO 86 cleared'],
+          ];
+          for (const [date, type, amt, cat, payee, desc] of add) {
+            await pool.query(
+              `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to,
+                 amount, payment_method, affects_cash, bank_account_id, created_by)
+               SELECT $1,$2,$3,$4,$5,$6,'paid_bank',TRUE,$7,3
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM petty_cash_entries
+                   WHERE entry_date=$1 AND entry_type=$2 AND amount=$6
+                     AND payment_method='paid_bank' AND bank_account_id=$7
+                     AND COALESCE(paid_to,'')=COALESCE($5,'')
+                     AND COALESCE(description,'')=COALESCE($4,''))`,
+              [date, type, cat, desc, payee, amt, kotak]);
+          }
+
+          // 5. The 19-Aug ₹4,042 NEFT to "M/S PEENA HEAT E / THE KAL" is a move
+          //    between their own accounts, so it posts as a linked pair exactly
+          //    like the Bank Transfer endpoint builds it: Kotak down, Kalupur up,
+          //    joined by transfer_entry_id so deleting one removes both.
+          const { rows: xfer } = await pool.query(
+            `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to,
+               amount, payment_method, affects_cash, bank_account_id, created_by)
+             SELECT '2026-08-19','expense','Bank Transfer','Transferred to Kalupur','Kalupur',
+               4042,'paid_bank',TRUE,$1,3
+              WHERE NOT EXISTS (
+                SELECT 1 FROM petty_cash_entries
+                 WHERE entry_date='2026-08-19' AND amount=4042 AND category='Bank Transfer')
+             RETURNING id`, [kotak]);
+          if (xfer.length) {
+            await pool.query(
+              `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to,
+                 amount, payment_method, affects_cash, transfer_entry_id, bank_account_id, created_by)
+               VALUES ('2026-08-19','top_up',NULL,'Transferred from Kotak',NULL,
+                 4042,'paid_bank',TRUE,$1,$2,3)`, [xfer[0].id, kalupur]);
+          }
+        }
+      }
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
