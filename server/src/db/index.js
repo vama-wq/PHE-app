@@ -1543,6 +1543,19 @@ async function initDB(retries = 20, delayMs = 10000) {
         }
       }
 
+      // Owner-confirmed: the 20-Aug ₹3,540 "Repeat payment — SS Plate" to Shivaksh
+      // Laser (Unpaid Bank) duplicates the 13-Aug payment that already sits in the
+      // ledger as paid. Shivaksh was paid 05-Aug, refunded 07-Aug, then paid again
+      // 13-Aug — and the 13–24 Aug statement carries exactly one ₹3,540 debit, on
+      // 13-Aug, which that entry already claims. Nothing matches it in cash or
+      // Kalupur either, so the repeat is a second recording, not a second payment.
+      // Narrow guard → runs once, and cannot touch the real 13-Aug entry.
+      await pool.query(`
+        DELETE FROM petty_cash_entries
+         WHERE entry_date='2026-08-20' AND amount=3540 AND payment_method='unpaid_bank'
+           AND COALESCE(paid_to,'') ILIKE '%shivaksh%'
+           AND COALESCE(description,'') ILIKE '%repeat payment%'`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
