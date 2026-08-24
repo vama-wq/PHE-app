@@ -1123,21 +1123,26 @@ router.put('/split-requests/:reqId/approve', authenticate, authorize('owner'), a
   if (!jc) return res.status(404).json({ error: 'Job card not found' });
   if (sr.qty >= jc.qty) return res.status(400).json({ error: `Job card qty is now ${jc.qty}; cannot split off ${sr.qty}` });
 
-  // Has the parent finished production (stage 29 done)? A finished split has
-  // nothing left to produce and goes straight to QC as before. A mid-production
-  // split instead gets its OWN checklist: it inherits the parent's completed
-  // stages and continues from the current stage to Ready-for-Dispatch (29),
-  // which then triggers QC exactly like any card. Inventory timing unchanged.
-  const s29done = await db.get(
-    'SELECT id FROM production_checklist WHERE job_card_id=$1 AND stage_no=29 AND done=1', [jc.id]);
-  const childStatus = s29done ? 'qc_pending' : 'in_progress';
+  // Has the parent finished production? A finished split has nothing left to
+  // produce and goes straight to QC as before. A mid-production split instead
+  // gets its OWN checklist: it inherits the parent's completed stages and
+  // continues from the current stage to Ready-for-Dispatch, which then triggers
+  // QC exactly like any card. Inventory timing unchanged.
+  // Ready-for-Dispatch is stage 29 on a production card but stage 4 on an FG
+  // inventory card, which runs the short 4-stage checklist — asking about 29 on
+  // an FG card can only ever answer "not finished".
+  const readyStageNo = jc.is_fg ? 4 : 29;
+  const readyDone = await db.get(
+    'SELECT id FROM production_checklist WHERE job_card_id=$1 AND stage_no=$2 AND done=1',
+    [jc.id, readyStageNo]);
+  const childStatus = readyDone ? 'qc_pending' : 'in_progress';
 
   const childCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE parent_job_card_id=$1', [jc.id]);
   const childNo = `${jc.job_card_no}-P${parseInt(childCount.n, 10) + 1}`;
   const childId = await db.withTransaction(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name, replacement_query_id, tube_deducted, coil_deducted, fill_deducted)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+      `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name, replacement_query_id, tube_deducted, coil_deducted, fill_deducted, is_fg, fg_source_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
       [childNo, jc.order_id, sr.qty, jc.dispatch_date, jc.current_stage || 0, jc.punching, jc.drawing_no, jc.product_name,
        childStatus,
        `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id, jc.order_item_id,
@@ -1148,18 +1153,24 @@ router.put('/split-requests/:reqId/approve', authenticate, authorize('owner'), a
        // Inherit the material-deduction flags: the parent's stage 3/5/6 draws
        // covered the whole batch (child pieces included), so re-ticking those
        // stages on the child must NOT deduct tube/coil/filling a second time.
-       jc.tube_deducted || false, jc.coil_deducted || false, jc.fill_deducted || false]);
+       jc.tube_deducted || false, jc.coil_deducted || false, jc.fill_deducted || false,
+       // A split of a Finished Goods inventory card is still a Finished Goods
+       // card. Without these the child falls back to the full 29-stage
+       // production checklist for material it never produced — it was drawn
+       // from FG stock. fg_source_id keeps it pointing at the same FG row.
+       jc.is_fg || false, jc.fg_source_id || null]);
     const newId = rows[0].id;
     // The split pieces went through the parent's completed stages as part of the
     // batch — copy those rows (values, worker, time, notes) so their records
-    // travel with them and the stage-29 mandatory gate sees them as done.
+    // travel with them and the mandatory-stage gate sees them as done.
     // Rejection/remade/dispatched/scrap quantities stay with the parent (its
-    // accounting); stage 29 is never copied so the child's dispatch is its own.
+    // accounting); the Ready-for-Dispatch stage is never copied so the child's
+    // dispatch is its own — 29 on a production card, 4 on an FG card.
     await client.query(
       `INSERT INTO production_checklist (job_card_id, stage_no, done, value1, value2, worker_name, done_at, notes, coil_weight)
        SELECT $1, stage_no, done, value1, value2, worker_name, done_at, notes, coil_weight
-       FROM production_checklist WHERE job_card_id=$2 AND done=1 AND stage_no <> 29`,
-      [newId, jc.id]);
+       FROM production_checklist WHERE job_card_id=$2 AND done=1 AND stage_no <> $3`,
+      [newId, jc.id, readyStageNo]);
     await client.query('UPDATE job_cards SET qty = qty - $1 WHERE id=$2', [sr.qty, jc.id]);
     await client.query('UPDATE job_card_split_requests SET status=$1, child_job_card_id=$2, approved_by=$3, approved_at=NOW() WHERE id=$4',
       ['approved', newId, req.user.id, sr.id]);
@@ -1170,11 +1181,11 @@ router.put('/split-requests/:reqId/approve', authenticate, authorize('owner'), a
     await createNotification(db, {
       userId: sr.created_by, type: 'split_approved',
       title: `Partial dispatch approved — ${childNo}`,
-      body: `${sr.qty} units split off as ${childNo} (${s29done ? 'now in QC' : 'continue its checklist to Ready for Dispatch'}). ${jc.job_card_no} continues with ${jc.qty - sr.qty}.`,
+      body: `${sr.qty} units split off as ${childNo} (${readyDone ? 'now in QC' : 'continue its checklist to Ready for Dispatch'}). ${jc.job_card_no} continues with ${jc.qty - sr.qty}.`,
       link: `/job-cards/${childId}`, sourceUserId: req.user.id,
     });
   }
-  await logActivity(jc.order_id, jc.id, 'split_approved', `Partial dispatch approved: ${sr.qty} → ${childNo}${s29done ? ' (to QC)' : ' (continues production)'}; ${jc.job_card_no} now ${jc.qty - sr.qty}`, req.user.id);
+  await logActivity(jc.order_id, jc.id, 'split_approved', `Partial dispatch approved: ${sr.qty} → ${childNo}${readyDone ? ' (to QC)' : ' (continues production)'}; ${jc.job_card_no} now ${jc.qty - sr.qty}`, req.user.id);
   res.json({ message: 'Approved', child_job_card_id: childId, child_job_card_no: childNo });
 });
 

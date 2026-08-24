@@ -1556,6 +1556,22 @@ async function initDB(retries = 20, delayMs = 10000) {
            AND COALESCE(paid_to,'') ILIKE '%shivaksh%'
            AND COALESCE(description,'') ILIKE '%repeat payment%'`);
 
+      // A partial-dispatch split of a Finished Goods inventory card used to lose
+      // is_fg / fg_source_id, because the child INSERT never carried them. The
+      // child then rendered the full 29-stage production checklist for material
+      // it never produced — it came out of FG stock — so the shopfloor saw
+      // "Coil + Tube Cutting" on a card whose real next step was Megger. The
+      // split endpoint now inherits both; this repairs cards already split.
+      // Matches on the parent's flag, so it fixes only genuine mismatches and
+      // is a no-op once clean.
+      await pool.query(`
+        UPDATE job_cards c
+           SET is_fg = TRUE, fg_source_id = COALESCE(c.fg_source_id, pa.fg_source_id)
+          FROM job_cards pa
+         WHERE pa.id = c.parent_job_card_id
+           AND pa.is_fg = TRUE
+           AND COALESCE(c.is_fg, FALSE) = FALSE`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
