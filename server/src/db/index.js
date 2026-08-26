@@ -1580,6 +1580,105 @@ async function initDB(retries = 20, delayMs = 10000) {
          WHERE entry_date='2026-08-19' AND amount=32602.50
            AND payment_method='paid_bank' AND paid_to='SANJAYKUMAR HEMA'`);
 
+      // ── Kotak/Kalupur corrections, 24–26 Aug 2026 (owner-verified live) ─────
+      // Real Kotak balance 69,534.99 on 26 Aug. Three things were off:
+      // the 19-Aug rent NEFT bounced back on 24 Aug and was re-sent the same
+      // day (the owner re-entered the re-send but dated it 19 Aug, and the
+      // return credit was never recorded); the two ICICI Lombard debits were
+      // entered ₹9.44 short of what the bank took and a day late; and the
+      // three 25-Aug receipts were dated 26 Aug. All guarded → run once.
+      {
+        const { rows: accts } = await pool.query(`SELECT id, name FROM bank_accounts`);
+        const idOf = (n) => (accts.find(a => a.name.toLowerCase() === n) || {}).id || null;
+        const kotak = idOf('kotak'), kalupur = idOf('kalupur');
+        if (kotak && kalupur) {
+          // 1. Two identical rent debits sit on 19 Aug; the bank shows one on
+          //    19 Aug and one (the re-send) on 24 Aug. The owner was entering
+          //    the 24-Aug re-send live while this first ran, so handle both
+          //    states: if a 24-Aug debit already exists, the newer 19-Aug row
+          //    is redundant — delete it; otherwise move it to 24 Aug. Either
+          //    way one row remains on each date and neither branch re-runs.
+          const rentDup = `
+            SELECT MAX(id) FROM petty_cash_entries
+             WHERE entry_date='2026-08-19' AND amount=32602.50
+               AND entry_type='expense' AND payment_method='paid_bank'
+               AND COALESCE(paid_to,'')='Rajesh Jayantilal Patel'
+             GROUP BY entry_date HAVING COUNT(*) > 1`;
+          const resent = `
+            SELECT 1 FROM petty_cash_entries
+             WHERE entry_date='2026-08-24' AND amount=32602.50
+               AND entry_type='expense' AND payment_method='paid_bank'`;
+          await pool.query(
+            `DELETE FROM petty_cash_entries WHERE id = (${rentDup}) AND EXISTS (${resent})`);
+          await pool.query(`
+            UPDATE petty_cash_entries
+               SET entry_date='2026-08-24',
+                   description='Rent — re-sent after the 19 Aug NEFT bounced'
+             WHERE id = (${rentDup})`);
+          // If the owner entered the re-send while an earlier pass had already
+          // moved the duplicate here (both raced on 26 Aug), 24 Aug ends up
+          // with two identical debits — drop the auto-described one, keeping
+          // the owner's own entry. Guarded on both still being present.
+          await pool.query(`
+            DELETE FROM petty_cash_entries
+             WHERE entry_date='2026-08-24' AND amount=32602.50
+               AND entry_type='expense' AND payment_method='paid_bank'
+               AND description='Rent — re-sent after the 19 Aug NEFT bounced'
+               AND (SELECT COUNT(*) FROM petty_cash_entries
+                     WHERE entry_date='2026-08-24' AND amount=32602.50
+                       AND entry_type='expense' AND payment_method='paid_bank') > 1`);
+          // And if the racing deletes left NO 24-Aug re-send at all, restore
+          // it. With the dedup above running first, every possible interleaving
+          // converges on exactly one 24-Aug debit.
+          await pool.query(`
+            INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to,
+              amount, payment_method, affects_cash, bank_account_id, created_by)
+            SELECT '2026-08-24','expense','Office Expense','Rent — re-sent after the 19 Aug NEFT bounced','Rajesh Jayantilal Patel',
+              32602.50,'paid_bank',TRUE,$1,3
+             WHERE NOT EXISTS (${resent})`, [kotak]);
+          // 2. The bounce itself: 24-Aug return credit of the 19-Aug payment.
+          await pool.query(`
+            INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to,
+              amount, payment_method, affects_cash, bank_account_id, created_by)
+            SELECT '2026-08-24','top_up',NULL,'Returned — 19 Aug rent NEFT to Sanjaykumar Hema bounced',NULL,
+              32602.50,'paid_bank',TRUE,$1,3
+             WHERE NOT EXISTS (
+               SELECT 1 FROM petty_cash_entries
+                WHERE entry_date='2026-08-24' AND entry_type='top_up' AND amount=32602.50
+                  AND payment_method='paid_bank' AND bank_account_id=$1)`, [kotak]);
+          // 3. ICICI Lombard: bank took 57,336.44 and 20,026.44 on 25 Aug;
+          //    entered as 57,327 / 20,017 dated 26 Aug. Amount guards.
+          await pool.query(`
+            UPDATE petty_cash_entries SET amount=57336.44, entry_date='2026-08-25'
+             WHERE amount=57327 AND entry_type='expense' AND payment_method='paid_bank'
+               AND bank_account_id=$1`, [kotak]);
+          await pool.query(`
+            UPDATE petty_cash_entries SET amount=20026.44, entry_date='2026-08-25'
+             WHERE amount=20017 AND entry_type='expense' AND payment_method='paid_bank'
+               AND bank_account_id=$1`, [kotak]);
+          // 4. The three receipts the bank credited on 25 Aug, entered as 26 Aug.
+          const redate25 = [[32936, '%thermolab%'], [23835, '%s v enterprises%'], [80000, '%peena mitesh shah%']];
+          for (const [amt, match] of redate25) {
+            await pool.query(`
+              UPDATE petty_cash_entries SET entry_date='2026-08-25'
+               WHERE entry_date='2026-08-26' AND entry_type='top_up' AND amount=$1
+                 AND payment_method='paid_bank' AND bank_account_id=$2
+                 AND COALESCE(description,'') ILIKE $3`, [amt, kotak, match]);
+          }
+          // 5. Kalupur: ₹295 NESL (information-utility) charge on 21 Aug —
+          //    owner chose a new "Bank Charges" category for it.
+          await pool.query(`
+            INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to,
+              amount, payment_method, affects_cash, bank_account_id, created_by)
+            SELECT '2026-08-21','expense','Bank Charges','NESL charge','NESL',
+              295,'paid_bank',TRUE,$1,3
+             WHERE NOT EXISTS (
+               SELECT 1 FROM petty_cash_entries
+                WHERE entry_date='2026-08-21' AND amount=295 AND payment_method='paid_bank'
+                  AND bank_account_id=$1 AND COALESCE(paid_to,'')='NESL')`, [kalupur]);
+        }
+      }
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
