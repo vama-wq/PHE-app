@@ -17,14 +17,27 @@ function getSupabase() {
 }
 
 // Upload a buffer to Supabase Storage. Returns the storage path.
+// Supabase storage occasionally throws a transient 5xx (its API reports these
+// with message "<none>"), which used to fail the user's whole form on the
+// first try. Retry a couple of times before giving up — upsert:true makes a
+// repeat of a half-landed attempt safe.
 async function uploadToStorage(folder, filename, buffer, mimetype) {
   const storagePath = `${folder}/${filename}`;
   const supabase = getSupabase();
-  const { error } = await supabase.storage
-    .from(BUCKET)
-    .upload(storagePath, buffer, { contentType: mimetype || 'application/octet-stream', upsert: true });
-  if (error) throw new Error(`Storage upload failed: ${error.message}`);
-  return storagePath;
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const { error } = await supabase.storage
+      .from(BUCKET)
+      .upload(storagePath, buffer, { contentType: mimetype || 'application/octet-stream', upsert: true });
+    if (!error) return storagePath;
+    lastError = error;
+    console.error(`Storage upload attempt ${attempt}/3 failed for ${storagePath}: ${error.message}` +
+      (error.status || error.statusCode ? ` (status ${error.status || error.statusCode})` : ''));
+    if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 700));
+  }
+  throw new Error(`Storage upload failed: ${lastError.message}` +
+    (lastError.status || lastError.statusCode ? ` (status ${lastError.status || lastError.statusCode})` : '') +
+    ' — please try again');
 }
 
 // Delete a file from Supabase Storage by its storage path.
