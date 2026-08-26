@@ -1730,6 +1730,36 @@ async function initDB(retries = 20, delayMs = 10000) {
       `);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_capa_job_card ON capa_reports(job_card_id, status)`);
 
+      // The per-stage quick-approve rejection hold (3+ at one stage) is retired —
+      // owner's decision: every serious rejection now gates through the CAPA
+      // (3 or more pieces total). Convert cards caught mid-transition: on hold
+      // with a pending stage hold and 3+ rejections but no CAPA yet → open a
+      // CAPA and retire the pending hold. Guarded: once a CAPA is active the
+      // insert skips, and no new pending holds can be created.
+      await pool.query(`
+        INSERT INTO capa_reports (job_card_id, order_id, trigger_type, trigger_total, created_by)
+        SELECT jc.id, jc.order_id, 'rejections', t.total, jc.uploaded_by
+          FROM job_cards jc
+          JOIN LATERAL (SELECT COALESCE(SUM(rejection_qty),0)::int AS total
+                          FROM production_checklist WHERE job_card_id=jc.id) t ON TRUE
+         WHERE jc.status IN ('on_hold','pending','in_progress','repair_in_progress')
+           AND t.total >= 3
+           AND NOT EXISTS (SELECT 1 FROM capa_reports c
+                            WHERE c.job_card_id=jc.id AND c.status IN ('open','awaiting_approval'))
+           AND t.total > COALESCE((SELECT MAX(trigger_total) FROM capa_reports c2
+                                    WHERE c2.job_card_id=jc.id AND c2.trigger_type='rejections'
+                                      AND c2.status='approved'), 0)`);
+      await pool.query(`
+        UPDATE job_cards SET status='on_hold'
+         WHERE status IN ('pending','in_progress','repair_in_progress')
+           AND id IN (SELECT job_card_id FROM capa_reports
+                       WHERE status IN ('open','awaiting_approval'))`);
+      await pool.query(`
+        UPDATE job_card_holds SET status='approved', approved_at=NOW()
+         WHERE status='pending'
+           AND job_card_id IN (SELECT job_card_id FROM capa_reports
+                                WHERE status IN ('open','awaiting_approval'))`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.

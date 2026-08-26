@@ -833,8 +833,33 @@ function ChecklistModal({ card, onClose, onSave }) {
             </div>
           )}
 
-          {/* Hold banner */}
-          {isOnHold && (
+          {/* CAPA banner — the card is locked until the report is completed
+              and owner-approved; everyone gets a button into the chat. */}
+          {isOnHold && data?.capa && (
+            <div className="mb-4 rounded-xl bg-red-50 border border-red-200 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="font-semibold text-red-700 flex items-center gap-2">
+                    <AlertTriangle size={16} /> CAPA Required — Work Locked
+                  </div>
+                  <div className="text-sm text-red-600 mt-1">
+                    {data.capa.status === 'awaiting_approval'
+                      ? 'The CAPA report is complete and awaiting owner approval.'
+                      : 'Rejections crossed the limit. Complete the CAPA report with the AI facilitator to continue.'}
+                  </div>
+                </div>
+                <button
+                  className="btn-primary bg-red-600 hover:bg-red-700 border-red-600 whitespace-nowrap flex-shrink-0"
+                  onClick={() => { window.location.href = `/capa/${data.capa.id}`; }}
+                >
+                  Open CAPA
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Hold banner (legacy pending holds only) */}
+          {isOnHold && !data?.capa && (
             <div className="mb-4 rounded-xl bg-red-50 border border-red-200 p-4">
               <div className="flex items-start justify-between gap-4">
                 <div>

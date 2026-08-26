@@ -555,7 +555,7 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
 }
 
 // ── Helper: check cumulative rejections across all stages ─────────────────────
-// More than 3 pieces rejected in total → the card needs a CAPA report: it goes
+// 3 or more pieces rejected in total → the card needs a CAPA report: it goes
 // on hold and a capa_reports row is opened. Work resumes only when the OWNER
 // approves the completed CAPA (routes/capa.js — approval flips the card back to
 // in_progress). This supersedes the old stage_no=0 cumulative hold, whose
@@ -570,7 +570,7 @@ async function checkCumulativeRejections(db, jobCardId, userId) {
     [jobCardId]
   );
   const total = parseInt(totRow?.total || 0, 10);
-  if (total <= 3) return;
+  if (total < 3) return; // owner's rule: 3 or more rejected pieces → CAPA
 
   const { ensureCapa } = require('./capa');
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
@@ -587,26 +587,6 @@ async function checkCumulativeRejections(db, jobCardId, userId) {
 }
 
 // ── Helper: trigger hold when rejection > 2 ──────────────────────────────────
-async function triggerHold(db, jobCardId, stageNo, rejQty, userId) {
-  const row = await db.get(
-    'SELECT rejection_photo_file, rejection_photo_original_name FROM production_checklist WHERE job_card_id=$1 AND stage_no=$2',
-    [jobCardId, stageNo]
-  );
-
-  await db.insert(`
-    INSERT INTO job_card_holds (job_card_id, stage_no, rejection_qty, hold_photo_file, hold_photo_original_name, created_by)
-    VALUES ($1,$2,$3,$4,$5,$6)
-  `, [jobCardId, stageNo, rejQty, row?.rejection_photo_file || null, row?.rejection_photo_original_name || null, userId]);
-
-  await db.run("UPDATE job_cards SET status='on_hold' WHERE id=$1", [jobCardId]);
-
-  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
-  if (jc) {
-    await logActivity(jc.order_id, jobCardId, 'status_changed',
-      `Job card ${jc.job_card_no} ON HOLD — ${rejQty} rejections at Stage ${stageNo}`, userId);
-    await syncOrderStatus(db, jc.order_id, userId);
-  }
-}
 
 // ── GET checklist for a job card ──────────────────────────────────────────────
 router.get('/:id/checklist', authenticate, async (req, res) => {
@@ -620,6 +600,11 @@ router.get('/:id/checklist', authenticate, async (req, res) => {
     "SELECT * FROM job_card_holds WHERE job_card_id=$1 AND status='pending' ORDER BY created_at DESC LIMIT 1",
     [req.params.id]
   );
+
+  // A CAPA (open or awaiting owner approval) is what holds the card since the
+  // per-stage quick-approve hold was retired — the client shows its banner.
+  const { activeCapaFor } = require('./capa');
+  const activeCapa = await activeCapaFor(db, req.params.id);
 
   // Stage numbers in display order. 30 = Kharoch Process — an optional stage shown
   // right after Bending (14); it keeps a high id so existing data is never renumbered.
@@ -646,7 +631,7 @@ router.get('/:id/checklist', authenticate, async (req, res) => {
     qcRejected = jcInfo?.qc_rejected || false;
     qcRejectionNotes = jcInfo?.qc_rejection_notes || null;
   } catch (_) { /* columns may not exist yet */ }
-  res.json({ stages, hold: activeHold || null, qc_rejected: qcRejected, qc_rejection_notes: qcRejectionNotes });
+  res.json({ stages, hold: activeHold, capa: activeCapa || null, qc_rejected: qcRejected, qc_rejection_notes: qcRejectionNotes });
 });
 
 // ── PUT update a checklist stage ──────────────────────────────────────────────
@@ -877,12 +862,8 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     }
   }
 
-  if (done && rejQty > 2) {
-    await triggerHold(db, jobCardId, stageNo, rejQty, req.user.id);
-    return res.json({ message: 'Stage updated. Job card placed on hold.', on_hold: true });
-  }
-
-  // Check cumulative rejection limit (>4 across all stages)
+  // Rejections now gate through the CAPA (3+ total, which covers 3+ at a
+  // single stage too) — the old per-stage quick-approve hold is retired.
   if (done) {
     await checkCumulativeRejections(db, jobCardId, req.user.id);
     const jcCheck = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);
@@ -1009,11 +990,7 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
     }
 
     if (markDone) {
-      if (rejQty > 2) {
-        await triggerHold(db, jobCardId, stageNo, rejQty, req.user.id);
-        return res.json({ file_name: req.file.filename, on_hold: true });
-      }
-      // Check cumulative rejection limit (>4 across all stages)
+      // Rejections gate through the CAPA (3+ total) — per-stage hold retired.
       await checkCumulativeRejections(db, jobCardId, req.user.id);
       const jcCheck = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);
       if (jcCheck?.status === 'on_hold') {
