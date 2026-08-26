@@ -1572,6 +1572,14 @@ async function initDB(retries = 20, delayMs = 10000) {
            AND pa.is_fg = TRUE
            AND COALESCE(c.is_fg, FALSE) = FALSE`);
 
+      // Owner correction: the 19-Aug ₹32,602.50 rent NEFT was reconciled under
+      // the bank's beneficiary-account name "SANJAYKUMAR HEMA"; the landlord's
+      // actual name is Rajesh Jayantilal Patel. Guarded on the old name.
+      await pool.query(`
+        UPDATE petty_cash_entries SET paid_to='Rajesh Jayantilal Patel'
+         WHERE entry_date='2026-08-19' AND amount=32602.50
+           AND payment_method='paid_bank' AND paid_to='SANJAYKUMAR HEMA'`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
