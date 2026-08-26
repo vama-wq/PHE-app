@@ -555,8 +555,12 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
 }
 
 // ── Helper: check cumulative rejections across all stages ─────────────────────
-// If total > 4 and card is not already on hold, put it on hold (stage_no=0 sentinel).
-// If a cumulative hold was previously approved at some total N, only re-flag when total > N.
+// More than 3 pieces rejected in total → the card needs a CAPA report: it goes
+// on hold and a capa_reports row is opened. Work resumes only when the OWNER
+// approves the completed CAPA (routes/capa.js — approval flips the card back to
+// in_progress). This supersedes the old stage_no=0 cumulative hold, whose
+// watermark semantics carry over: an approved CAPA at total N only re-triggers
+// when the total exceeds N.
 async function checkCumulativeRejections(db, jobCardId, userId) {
   const jcRow = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);
   if (!jcRow || jcRow.status === 'on_hold') return; // already on hold, skip
@@ -566,35 +570,19 @@ async function checkCumulativeRejections(db, jobCardId, userId) {
     [jobCardId]
   );
   const total = parseInt(totRow?.total || 0, 10);
-  if (total <= 4) return;
+  if (total <= 3) return;
 
-  // Don't re-flag if a pending cumulative hold already exists
-  const pending = await db.get(
-    "SELECT id FROM job_card_holds WHERE job_card_id=$1 AND stage_no=0 AND status='pending'",
-    [jobCardId]
-  );
-  if (pending) return;
-
-  // Find the highest rejection_qty from previously approved cumulative holds.
-  // Only re-flag if current total exceeds that approved watermark.
-  const approvedRow = await db.get(
-    "SELECT COALESCE(MAX(rejection_qty), 0) AS max_approved FROM job_card_holds WHERE job_card_id=$1 AND stage_no=0 AND status='approved'",
-    [jobCardId]
-  );
-  const approvedWatermark = parseInt(approvedRow?.max_approved || 0, 10);
-  if (total <= approvedWatermark) return; // no new rejections beyond what was already approved
-
-  await db.insert(`
-    INSERT INTO job_card_holds (job_card_id, stage_no, rejection_qty, notes, created_by)
-    VALUES ($1, 0, $2, $3, $4)
-  `, [jobCardId, total, `Cumulative rejection total: ${total} pieces across all stages`, userId]);
+  const { ensureCapa } = require('./capa');
+  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
+  const capaId = await ensureCapa(db, {
+    jobCardId, orderId: jc?.order_id, triggerType: 'rejections', triggerTotal: total, userId,
+  });
+  if (!capaId) return; // active CAPA already covers it, or approved watermark not exceeded
 
   await db.run("UPDATE job_cards SET status='on_hold' WHERE id=$1", [jobCardId]);
-
-  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
   if (jc) {
     await logActivity(jc.order_id, jobCardId, 'status_changed',
-      `Job card ${jc.job_card_no} ON HOLD — cumulative rejections total ${total} pieces across all stages`, userId);
+      `Job card ${jc.job_card_no} ON HOLD — ${total} pieces rejected across stages; CAPA report required`, userId);
   }
 }
 
@@ -677,8 +665,19 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   const isFg = !!jcCard.is_fg;
   if (isFg && stageNo > 4) return res.status(400).json({ error: 'Finished-goods cards only have stages 1-4' });
 
-  // Block if card is on hold and trying to mark done
+  // Block if card is on hold and trying to mark done. If a CAPA is what holds
+  // it, say so and hand the client the id so it can link straight to the chat.
   if (done && jcCard.status === 'on_hold') {
+    const { activeCapaFor } = require('./capa');
+    const capa = await activeCapaFor(db, jobCardId);
+    if (capa) {
+      return res.status(400).json({
+        error: capa.status === 'awaiting_approval'
+          ? 'CAPA report is awaiting owner approval — work resumes once approved.'
+          : 'A CAPA report must be completed before work continues.',
+        code: 'CAPA_REQUIRED', capa_id: capa.id,
+      });
+    }
     return res.status(400).json({
       error: 'Work is on hold. Owner must approve before continuing.',
       code: 'ON_HOLD'

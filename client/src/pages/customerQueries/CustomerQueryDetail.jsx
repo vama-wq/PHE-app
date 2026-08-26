@@ -52,6 +52,7 @@ export default function CustomerQueryDetail() {
   const [messages, setMessages] = useState([]);
   const [photos, setPhotos] = useState([]);
   const [users, setUsers] = useState([]);
+  const [capa, setCapa] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('chat');
 
@@ -84,6 +85,9 @@ export default function CustomerQueryDetail() {
       setMessages(mR.data);
       setPhotos(pR.data);
       setUsers(uR.data);
+      if (qR.data?.job_card_id) {
+        api.get(`/capa/job-card/${qR.data.job_card_id}`).then(r => setCapa(r.data)).catch(() => {});
+      }
     }).finally(() => setLoading(false));
   }, [id]);
 
@@ -307,6 +311,17 @@ export default function CustomerQueryDetail() {
 
               {/* Action buttons for return flow */}
               <div className="pt-2 space-y-2">
+                {capa && capa.status !== 'approved' && (
+                  <Link to={`/capa/${capa.id}`}
+                    className="block bg-red-50 border border-red-200 rounded-lg p-2.5 text-red-800 hover:bg-red-100">
+                    <div className="text-xs font-semibold mb-0.5">CAPA required before repair</div>
+                    <div className="text-xs">
+                      {capa.status === 'awaiting_approval'
+                        ? 'Report complete — awaiting owner approval.'
+                        : 'Production must complete the CAPA report with the AI facilitator.'} Open CAPA →
+                    </div>
+                  </Link>
+                )}
                 {/* If pending_return and no return_type yet → Set Return Type */}
                 {isOwner && query.return_status === 'pending_return' && !query.return_type && (
                   <button className="btn-primary w-full text-sm" onClick={() => setShowReturnType(true)}>

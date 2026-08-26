@@ -72,6 +72,7 @@ app.use('/api/prospects',        require('./routes/prospects'));
 app.use('/api/petty-cash',       require('./routes/pettyCash'));
 app.use('/api/payroll',          require('./routes/payroll'));
 app.use('/api/plating',          require('./routes/plating'));
+app.use('/api/capa',             require('./routes/capa'));
 
 // Serve React client in production
 if (process.env.NODE_ENV === 'production') {

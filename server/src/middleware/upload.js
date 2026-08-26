@@ -159,6 +159,7 @@ const uploaders = {
   pettyCashReceipt: makeUploader('petty-cash',        fileFilter),
   esslReport:      makeUploader('essl-reports',       fileFilter, 25),
   debitNote:       makeUploader('debit-notes',        fileFilter),
+  capaPhoto:       makeUploader('capa-photos',        imageOnlyFilter, 10),
 };
 
 // Purchase-item QC takes TWO groups in one request: the material image plus
@@ -223,6 +224,7 @@ module.exports = {
   uploadPurchaseItemQCFields: [purchaseItemQCFields, pushPurchaseItemQCFields],
   uploadDebitNote:       [uploaders.debitNote.upload.single('file'),         uploaders.debitNote.pushToStorage],
   uploadChatAttachments: [uploaders.chatAttachment.upload.array('attachments', 5), uploaders.chatAttachment.pushToStorage],
+  uploadCapaPhotos:      [uploaders.capaPhoto.upload.array('photos', 6), uploaders.capaPhoto.pushToStorage],
 
   // Utilities for route handlers
   uploadToStorage,

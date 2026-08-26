@@ -150,6 +150,16 @@ router.post('/', authenticate, authorize('accounts', 'owner', 'admin'), async (r
   await logActivity(order_id, job_card_id || null, 'customer_query_raised',
     `Customer query raised: ${queryNo} — ${subject.trim()}`, req.user.id);
 
+  // A production-site failure reached the customer — a CAPA must be completed
+  // (and owner-approved) before any repair work starts on this card.
+  if (job_card_id) {
+    const { ensureCapa } = require('./capa');
+    await ensureCapa(db, {
+      jobCardId: job_card_id, orderId: order_id, triggerType: 'customer_query',
+      customerQueryId: r.lastInsertRowid, userId: req.user.id,
+    });
+  }
+
   res.status(201).json({ id: r.lastInsertRowid, query_no: queryNo });
 });
 
@@ -463,6 +473,20 @@ router.put('/:id/material-received', authenticate, authorize('accounts', 'owner'
   }
 
   if (q.return_type === 'repair') {
+    // The CAPA on this card must be owner-approved before repair work starts —
+    // the cause has to be understood before the rework happens.
+    if (q.job_card_id) {
+      const { activeCapaFor } = require('./capa');
+      const capa = await activeCapaFor(db, q.job_card_id);
+      if (capa) {
+        return res.status(400).json({
+          error: capa.status === 'awaiting_approval'
+            ? 'The CAPA report is awaiting owner approval — approve it before starting the repair.'
+            : 'A CAPA report must be completed and approved before repair work can start.',
+          code: 'CAPA_REQUIRED', capa_id: capa.id,
+        });
+      }
+    }
     // Send to production for repair, restarting at the stage the repair
     // actually begins from. Everything BEFORE that stage stays done — the work
     // is still good and must not be redone. From that stage on the ticks are

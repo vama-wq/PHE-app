@@ -29,11 +29,13 @@ export default function JobCardDetail() {
   const [showReportModal, setShowReportModal] = useState(false);
   const [editAssembly, setEditAssembly] = useState(null);
   const [splitRequests, setSplitRequests] = useState([]);
+  const [capa, setCapa] = useState(null);
   const [showSplitModal, setShowSplitModal] = useState(false);
   const [showRejectQC, setShowRejectQC] = useState(false);
 
   const loadSplits = () => api.get(`/job-cards/${id}/split-requests`).then(r => setSplitRequests(r.data)).catch(() => {});
-  const load = () => { loadSplits(); return api.get(`/job-cards/${id}`).then(r => setJc(r.data)).finally(() => setLoading(false)); };
+  const load = () => { loadSplits(); loadCapa(); return api.get(`/job-cards/${id}`).then(r => setJc(r.data)).finally(() => setLoading(false)); };
+  const loadCapa = () => api.get(`/capa/job-card/${id}`).then(r => setCapa(r.data)).catch(() => {});
   useEffect(() => { load(); }, [id]);
 
   if (loading) return <div className="p-8 text-center text-gray-400">Loading job card...</div>;
@@ -63,6 +65,16 @@ export default function JobCardDetail() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
+      {capa && capa.status !== 'approved' && (
+        <Link to={`/capa/${capa.id}`} className="flex items-center justify-between gap-3 mb-4 px-4 py-3 rounded-xl border bg-red-50 border-red-200 text-red-800 hover:bg-red-100">
+          <span className="text-sm font-medium">
+            {capa.status === 'awaiting_approval'
+              ? 'CAPA report awaiting owner approval — work is locked until approved.'
+              : 'CAPA report required — work is locked until the report is completed and approved.'}
+          </span>
+          <span className="text-sm font-semibold whitespace-nowrap">Open CAPA →</span>
+        </Link>
+      )}
       {/* Header */}
       <div className="flex items-center gap-4 mb-5">
         <button onClick={() => navigate(-1)} className="btn-ghost btn-sm"><ArrowLeft size={16} /> Back</button>

@@ -1690,6 +1690,46 @@ async function initDB(retries = 20, delayMs = 10000) {
            SET file_path='petty-cash/1787204027351_zoho_invoice.pdf'
          WHERE file_path LIKE 'petty-cash/1787204027351\_D5IkRS2q%'`);
 
+      // ── CAPA (Corrective and Preventive Action) reports ─────────────────────
+      // Created when a job card's cumulative rejections cross 3 pieces, or when
+      // a customer query is raised. The production user completes the report in
+      // an AI-facilitated conversation (Claude interrogates for root cause and
+      // reviews photos); the owner's approval unlocks the card. Conversation is
+      // stored as JSONB [{role,text,photos:[{path,name}],by,at}].
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS capa_reports (
+          id SERIAL PRIMARY KEY,
+          job_card_id INTEGER NOT NULL REFERENCES job_cards(id) ON DELETE CASCADE,
+          order_id INTEGER REFERENCES orders(id),
+          customer_query_id INTEGER REFERENCES customer_queries(id),
+          trigger_type TEXT NOT NULL CHECK (trigger_type IN ('rejections','customer_query')),
+          trigger_total INTEGER,
+          status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','awaiting_approval','approved')),
+          problem_statement TEXT,
+          root_cause TEXT,
+          corrective_action TEXT,
+          preventive_action TEXT,
+          conversation JSONB NOT NULL DEFAULT '[]',
+          reopen_note TEXT,
+          created_by INTEGER REFERENCES users(id),
+          approved_by INTEGER REFERENCES users(id),
+          approved_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS capa_photos (
+          id SERIAL PRIMARY KEY,
+          capa_id INTEGER NOT NULL REFERENCES capa_reports(id) ON DELETE CASCADE,
+          file_path TEXT NOT NULL,
+          original_name TEXT,
+          created_by INTEGER REFERENCES users(id),
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_capa_job_card ON capa_reports(job_card_id, status)`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.

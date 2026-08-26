@@ -1389,6 +1389,13 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       });
       await onSaved();
     } catch (e) {
+      // CAPA lock: send the user straight to the CAPA chat to complete it
+      if (e.response?.data?.code === 'CAPA_REQUIRED' && e.response.data.capa_id) {
+        if (window.confirm(e.response.data.error + '\n\nOpen the CAPA report now?')) {
+          window.location.href = `/capa/${e.response.data.capa_id}`;
+          return;
+        }
+      }
       setError(e.response?.data?.error || 'Failed to save');
       setSaving(false);
     }

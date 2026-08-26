@@ -37,6 +37,7 @@ import ProspectingList from './pages/prospecting/ProspectingList';
 import PolicyGuide from './pages/PolicyGuide';
 
 const ManufacturingPlan = lazy(() => import('./pages/manufacturing/ManufacturingPlan'));
+const CapaReport = lazy(() => import('./pages/capa/CapaReport'));
 
 class ErrorBoundary extends Component {
   state = { hasError: false, error: null };
@@ -108,6 +109,7 @@ export default function App() {
           <Route path="customer-queries" element={<ModuleRoute module="dispatch"><CustomerQueryList /></ModuleRoute>} />
           <Route path="customer-queries/:id" element={<ModuleRoute module="dispatch"><CustomerQueryDetail /></ModuleRoute>} />
           <Route path="order-timeline/:orderId" element={<OrderTimeline />} />
+          <Route path="capa/:id" element={<Suspense fallback={null}><CapaReport /></Suspense>} />
           <Route path="products"   element={<ModuleRoute module="products"><ProductList /></ModuleRoute>} />
 
           <Route path="inventory" element={
