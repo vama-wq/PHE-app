@@ -1679,6 +1679,17 @@ async function initDB(retries = 20, delayMs = 10000) {
         }
       }
 
+      // One-off: the Zoho invoice attachment on entry 83 was uploaded with a
+      // ~270-char filename, longer than macOS's 255-byte cap — it broke the
+      // daily local backup mirror on every run from 18 Aug (uploads now cap
+      // filenames; see middleware/upload.js). The object has been copied in
+      // the bucket to a short key; point the attachment at it. Guarded on the
+      // old path still being stored.
+      await pool.query(`
+        UPDATE petty_cash_attachments
+           SET file_path='petty-cash/1787204027351_zoho_invoice.pdf'
+         WHERE file_path LIKE 'petty-cash/1787204027351\_D5IkRS2q%'`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.

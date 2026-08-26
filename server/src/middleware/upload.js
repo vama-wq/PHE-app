@@ -79,6 +79,17 @@ async function copyInStorage(fromPath, toFolder, newFilename) {
   return toPath;
 }
 
+// Storage object keys inherit the uploaded filename. Phone shares can carry
+// ~270-char names, which exceed macOS's 255-byte filename cap and broke the
+// local backup mirror for a week — cap the base name, keep the extension.
+function storageFilename(originalname) {
+  const safe = originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+  const ext = path.extname(safe).slice(0, 20);
+  const base = path.basename(safe, ext);
+  const capped = base.length > 100 ? base.slice(0, 100) : base;
+  return `${Date.now()}_${capped}${ext}`;
+}
+
 // All multer instances use memoryStorage — files are then pushed to Supabase Storage
 // by route handlers (or via the postUpload middleware below).
 const memStorage = multer.memoryStorage();
@@ -112,9 +123,7 @@ function makeUploader(folder, filter, maxSizeMB = 20) {
     const files = req.files?.length ? req.files : [req.file];
     try {
       for (const f of files) {
-        const ts = Date.now();
-        const safe = f.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-        f.filename = `${ts}_${safe}`;
+        f.filename = storageFilename(f.originalname);
         f.storagePath = await uploadToStorage(folder, f.filename, f.buffer, f.mimetype);
         f.path = f.storagePath; // backward compat — routes use req.file.path in some places
       }
@@ -164,9 +173,7 @@ async function pushPurchaseItemQCFields(req, res, next) {
   const all = [...(groups.image || []), ...(groups.rejection_photos || [])];
   try {
     for (const f of all) {
-      const ts = Date.now();
-      const safe = f.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-      f.filename = `${ts}_${safe}`;
+      f.filename = storageFilename(f.originalname);
       f.storagePath = await uploadToStorage('purchase-qc', f.filename, f.buffer, f.mimetype);
       f.path = f.storagePath;
     }
@@ -185,9 +192,7 @@ async function pushPurchaseReceiveFields(req, res, next) {
   const all = [...(groups.invoice || []), ...(groups.po_document || [])];
   try {
     for (const f of all) {
-      const ts = Date.now();
-      const safe = f.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-      f.filename = `${ts}_${safe}`;
+      f.filename = storageFilename(f.originalname);
       f.storagePath = await uploadToStorage('purchase-invoices', f.filename, f.buffer, f.mimetype);
       f.path = f.storagePath;
     }
