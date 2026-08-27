@@ -115,6 +115,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_prospect_company_email ON prospects(lower(company), lower(coalesce(email,'')))`);
       // Application category (e.g. "Boilers & steam") — for region+application filtering & tailored emails
       await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS application TEXT`);
+      // Per-prospect tailored campaign copy (e.g. business cards from an expo) — bespoke email + WhatsApp per company
+      await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS email_subject TEXT`);
+      await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS email_body TEXT`);
+      await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS whatsapp_msg TEXT`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS backup_log (
           id SERIAL PRIMARY KEY,

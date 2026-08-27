@@ -50,19 +50,22 @@ async function main() {
       p.source || 'claude-research', p.notes || null,
       // Application category drives region+application filtering and the tailored email copy
       p.app || p.application || p.seg || null,
+      // Per-prospect bespoke campaign copy (optional) — tailored email + WhatsApp per company
+      p.email_subject || null, p.email_body || null, p.whatsapp_msg || p.whatsapp || null,
     ];
     // Upsert keyed on company+segment so re-runs (e.g. after a verification pass)
     // refresh contact details in place instead of creating duplicates.
     const upd = await db.run(
       `UPDATE prospects SET city=$1, state=$2, country=$3, email=$4, phone=$5,
-         contact_role=$6, product_fit=$7, priority=$8, source=$9, notes=$10, application=$11
-       WHERE lower(company)=lower($12) AND segment=$13`,
+         contact_role=$6, product_fit=$7, priority=$8, source=$9, notes=$10, application=$11,
+         email_subject=$12, email_body=$13, whatsapp_msg=$14
+       WHERE lower(company)=lower($15) AND segment=$16`,
       [...v, company, segment]
     );
     if (upd.rowCount > 0) { updated++; continue; }
     await db.run(
-      `INSERT INTO prospects (city, state, country, email, phone, contact_role, product_fit, priority, source, notes, application, company, segment)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      `INSERT INTO prospects (city, state, country, email, phone, contact_role, product_fit, priority, source, notes, application, email_subject, email_body, whatsapp_msg, company, segment)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [...v, company, segment]
     );
     inserted++;

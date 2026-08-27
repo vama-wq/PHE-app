@@ -84,6 +84,8 @@ export default function ProspectingList() {
   const [impText, setImpText] = useState('');
   const [impBusy, setImpBusy] = useState(false);
   const [impResult, setImpResult] = useState(null);
+  // Per-company tailored campaign copy (e.g. expo cards) — opens in a modal
+  const [campaignRow, setCampaignRow] = useState(null);
 
   const loadSegments = () =>
     api.get('/prospects/segments').then(r => {
@@ -185,6 +187,27 @@ export default function ProspectingList() {
     const a = document.createElement('a');
     a.href = url; a.download = name; a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // --- Per-company tailored campaign (expo cards) ---
+  const hasCampaign = p => !!((p.email_body && p.email_body.trim()) || (p.whatsapp_msg && p.whatsapp_msg.trim()));
+  // wa.me click-to-send: digits-only number + URL-encoded prefilled message
+  const waLink = p => {
+    const num = String(p.phone || '').replace(/[^0-9]/g, '');
+    if (!num) return null;
+    return `https://wa.me/${num}${p.whatsapp_msg ? `?text=${encodeURIComponent(p.whatsapp_msg)}` : ''}`;
+  };
+  const copyRaw = async (text, key) => {
+    try { await navigator.clipboard.writeText(text || ''); setCopied(key); setTimeout(() => setCopied(''), 2000); }
+    catch { /* clipboard unavailable */ }
+  };
+  const downloadCampaignHtml = p => {
+    const html = bodyToHtml(p.email_body || '', p.application);
+    const full = '<!DOCTYPE html>\n<html><head><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+      `<title>${String(p.email_subject || p.company).replace(/</g, '&lt;')}</title></head>\n` +
+      '<body style="margin:0;padding:24px;background:#ffffff;">' + html + '</body></html>';
+    downloadTxt2Html(full, `PHE-${slug(p.company)}.html`);
   };
 
   const selectedVisible = useMemo(() => visible.filter(p => selected.has(p.id)), [visible, selected]);
@@ -359,6 +382,7 @@ export default function ProspectingList() {
                     <th className="px-3 py-2">Contact</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Priority</th>
+                    <th className="px-3 py-2">Campaign</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -388,11 +412,19 @@ export default function ProspectingList() {
                             {PRIORITY_LABEL[p.priority] || p.priority}
                           </span>
                         </td>
+                        <td className="px-3 py-2">
+                          {hasCampaign(p)
+                            ? <button className="text-xs font-medium px-2 py-1 rounded-md border border-brand-200 text-brand-700 hover:bg-brand-50 flex items-center gap-1"
+                                onClick={() => setCampaignRow(p)}>
+                                <Mail size={12} /> View
+                              </button>
+                            : <span className="text-gray-300">—</span>}
+                        </td>
                       </tr>
                     );
                   })}
                   {!loading && visible.length === 0 && (
-                    <tr><td colSpan={10} className="px-3 py-10 text-center text-gray-400">No prospects for this filter</td></tr>
+                    <tr><td colSpan={11} className="px-3 py-10 text-center text-gray-400">No prospects for this filter</td></tr>
                   )}
                 </tbody>
               </table>
@@ -537,6 +569,70 @@ export default function ProspectingList() {
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* Per-company tailored campaign (expo cards): bespoke email + WhatsApp */}
+      <Modal open={!!campaignRow} onClose={() => setCampaignRow(null)}
+        title={campaignRow ? `Tailored campaign — ${campaignRow.company}` : ''} size="lg">
+        {campaignRow && (
+          <div className="space-y-5">
+            <div className="text-xs text-gray-500">
+              {campaignRow.contact_role && <span>{campaignRow.contact_role} · </span>}
+              {campaignRow.email && <span className="font-mono">{campaignRow.email}</span>}
+              {campaignRow.phone && <span className="font-mono"> · {campaignRow.phone}</span>}
+            </div>
+
+            {/* Tailored email */}
+            {campaignRow.email_body ? (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Mail size={15} className="text-brand-700" />
+                  <h4 className="text-sm font-semibold">Tailored email</h4>
+                </div>
+                <input className="input w-full mb-2 font-medium text-sm" readOnly value={campaignRow.email_subject || ''} />
+                <textarea className="input w-full font-sans text-sm leading-relaxed" rows={14} readOnly value={campaignRow.email_body} />
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  <button className="btn-primary flex items-center gap-1.5" onClick={() => downloadCampaignHtml(campaignRow)}>
+                    <Download size={15} /> Download email (.html)
+                  </button>
+                  <button className="btn-secondary text-xs flex items-center gap-1.5"
+                    onClick={() => copyRaw(`${campaignRow.email_subject}\n\n${campaignRow.email_body}`, 'c-email')}>
+                    <Copy size={13} /> {copied === 'c-email' ? 'Copied ✓' : 'Copy email'}
+                  </button>
+                </div>
+              </div>
+            ) : <p className="text-sm text-gray-400">No tailored email for this contact.</p>}
+
+            {/* Tailored WhatsApp */}
+            {campaignRow.whatsapp_msg ? (
+              <div className="pt-2 border-t border-gray-100">
+                <div className="flex items-center gap-2 mb-2">
+                  <MessageSquare size={15} className="text-emerald-600" />
+                  <h4 className="text-sm font-semibold">WhatsApp message</h4>
+                </div>
+                <textarea className="input w-full font-sans text-sm leading-relaxed" rows={6} readOnly value={campaignRow.whatsapp_msg} />
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  {waLink(campaignRow) && (
+                    <a className="btn-primary flex items-center gap-1.5" style={{ backgroundColor: '#25D366', borderColor: '#25D366' }}
+                      href={waLink(campaignRow)} target="_blank" rel="noopener noreferrer">
+                      <MessageSquare size={15} /> Send on WhatsApp
+                    </a>
+                  )}
+                  <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(campaignRow.whatsapp_msg, 'c-wa')}>
+                    <Copy size={13} /> {copied === 'c-wa' ? 'Copied ✓' : 'Copy message'}
+                  </button>
+                  <button className="btn-secondary text-xs flex items-center gap-1.5"
+                    onClick={() => downloadTxt(campaignRow.whatsapp_msg, `PHE-whatsapp-${slug(campaignRow.company)}.txt`)}>
+                    <Download size={13} /> Download (.txt)
+                  </button>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">
+                  “Send on WhatsApp” opens a chat to {campaignRow.phone || 'this contact'} with the message pre-filled — review, then hit send.
+                </p>
+              </div>
+            ) : <p className="text-sm text-gray-400">No WhatsApp message for this contact.</p>}
+          </div>
+        )}
       </Modal>
     </div>
   );
