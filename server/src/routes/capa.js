@@ -6,6 +6,42 @@ const { uploadCapaPhotos } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { runCapaTurn } = require('../lib/capaAI');
 
+// Stage names for the checklist context — keep in sync with qc.js / client utils.
+const STAGE_NAMES = {
+  1: 'Coil', 2: 'Coil + Tube Cutting', 3: 'Ohms', 4: 'Spot', 5: 'Tube Cutting',
+  6: 'Filling', 7: 'HV + Light Check', 8: 'Draw', 9: 'HV + Light Check',
+  10: 'Straightening', 11: 'Trimming', 12: 'Spot Annealing or Furnace Annealing',
+  13: 'Buffing', 14: 'Bending', 15: 'Brazing', 16: 'In Plating',
+  17: 'Plating Completed', 18: 'Heater Cleaning', 19: 'Overnight Oven',
+  20: 'HV + Light Check', 21: 'Nipple Press', 22: '3 Hours Oven', 23: 'Sealing',
+  24: 'HV + Light Check', 25: 'Cleaning', 26: 'Nut Washer', 27: 'HV + Light Check',
+  28: 'Megger', 29: 'Ready in Production', 30: 'Kharoch Process',
+};
+const FG_STAGE_NAMES = { 1: 'Nut Washer', 2: 'HV + Light Check + Ohms', 3: 'Megger', 4: 'Ready for Dispatch' };
+
+// One compact line per checklist stage that has anything recorded, so the AI
+// facilitator opens with the shopfloor record instead of asking for it.
+function checklistLines(rows, isFg) {
+  const names = isFg ? FG_STAGE_NAMES : STAGE_NAMES;
+  const out = [];
+  for (const r of rows) {
+    const hasData = r.done || r.value1 || r.value2 || r.worker_name || r.coil_weight
+      || r.scrap_value || Number(r.rejection_qty) > 0 || Number(r.remade_qty) > 0 || r.notes;
+    if (!hasData) continue;
+    const bits = [`stage ${r.stage_no} ${names[r.stage_no] || ''}`.trim() + ':'];
+    bits.push(r.done ? `DONE${r.d ? ' ' + r.d : ''}` : 'not done');
+    if (r.worker_name) bits.push(`worker ${r.worker_name}`);
+    if (r.value1) bits.push(`reading1 ${r.value1}`);
+    if (r.value2) bits.push(`reading2 ${r.value2}`);
+    if (r.coil_weight) bits.push(`coil wt ${r.coil_weight}`);
+    if (r.scrap_value !== null && r.scrap_value !== undefined && String(r.scrap_value) !== '') bits.push(`scrap ${r.scrap_value}`);
+    if (Number(r.rejection_qty) > 0) bits.push(`REJECTED ${r.rejection_qty}${Number(r.remade_qty) > 0 ? `, remade ${r.remade_qty}` : ''}`);
+    if (r.notes) bits.push(`note: ${r.notes}`);
+    out.push('  ' + bits.join(' | '));
+  }
+  return out;
+}
+
 // ── Shared: create a CAPA if the card doesn't already have an active one ─────
 // Used by the rejection trigger (jobCards.js) and query creation (customerQueries.js).
 // Watermark: a rejections-CAPA is only created when the current total exceeds the
@@ -109,19 +145,28 @@ router.post('/:id/message', authenticate, authorize('production', 'admin', 'owne
   const jc = await db.get(`
     SELECT jc.*, o.order_code FROM job_cards jc LEFT JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1`,
     [capa.job_card_id]);
-  const rejections = await db.all(`
-    SELECT stage_no, rejection_qty, remade_qty, COALESCE(notes,'') AS notes FROM production_checklist
-    WHERE job_card_id=$1 AND rejection_qty > 0 ORDER BY stage_no`, [capa.job_card_id]);
+  const checklist = await db.all(`
+    SELECT stage_no, done, value1, value2, worker_name, coil_weight, scrap_value,
+           rejection_qty, remade_qty, notes, done_at::date AS d
+    FROM production_checklist WHERE job_card_id=$1 ORDER BY stage_no`, [capa.job_card_id]);
+  const bom = jc.order_item_id ? await db.all(`
+    SELECT ii.item_code, TRIM(COALESCE(ii.category,'')) AS cat, oii.qty
+    FROM order_item_inventory oii JOIN inventory_items ii ON ii.id=oii.inventory_item_id
+    WHERE oii.order_item_id = $1 ORDER BY ii.item_code`, [jc.order_item_id]) : [];
   const query = capa.customer_query_id
     ? await db.get('SELECT query_no, subject, description FROM customer_queries WHERE id=$1', [capa.customer_query_id])
     : null;
 
+  const chkLines = checklistLines(checklist, !!jc.is_fg);
   const contextText = [
     `CAPA #${capa.id} — trigger: ${capa.trigger_type === 'rejections' ? `cumulative rejections (${capa.trigger_total} pcs)` : `customer query ${query?.query_no || ''}`}`,
-    `Job card: ${jc.job_card_no} | Order: ${jc.order_code || '-'} | Product: ${jc.product_name || '-'} | Drawing: ${jc.drawing_no || '-'} | Qty: ${jc.qty}`,
-    rejections.length
-      ? `Stage rejections so far:\n${rejections.map(r => `  stage ${r.stage_no}: ${r.rejection_qty} rejected, ${r.remade_qty || 0} remade${r.notes ? ` — ${r.notes}` : ''}`).join('\n')}`
-      : 'No stage rejections recorded on the checklist.',
+    `Job card: ${jc.job_card_no} | Order: ${jc.order_code || '-'} | Product: ${jc.product_name || '-'} | Drawing: ${jc.drawing_no || '-'} | Qty: ${jc.qty}${jc.is_fg ? ' | FG inventory card (4-stage checklist)' : ''}`,
+    chkLines.length
+      ? `CHECKLIST RECORD (authoritative — stage, status/date, worker, recorded readings and gauge/spring codes, coil weight, scrap, rejections, notes):\n${chkLines.join('\n')}`
+      : 'No checklist entries recorded yet.',
+    bom.length
+      ? `Bill of materials for this item: ${bom.map(b => `${b.item_code} (${b.cat}) ×${b.qty}`).join(', ')}`
+      : null,
     query ? `Customer query: ${query.subject}${query.description ? ` — ${query.description}` : ''}` : null,
     `The production user you are talking to is: ${req.user.name}.`,
   ].filter(Boolean).join('\n');
