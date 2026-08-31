@@ -1852,6 +1852,7 @@ function QuotationModal({ orderId, hasPriceRequest, onClose, onSave }) {
 }
 
 function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchDate, defaultItemId = null, items, jobCards, itemDrawingStatus = {}, onClose, onSave }) {
+  const { user } = useAuthStore();
   const [selectedItemId, setSelectedItemId] = useState(defaultItemId ? String(defaultItemId) : '');
   const [form, setForm] = useState({
     qty: '', dispatch_date: defaultDispatchDate || '',
@@ -1898,6 +1899,16 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
       await api.post('/job-cards', fd);
       onSave();
     } catch (err) {
+      // Owner may consciously start a card on an item with no BOM
+      if (err.response?.data?.code === 'NO_BOM' && user?.role === 'owner'
+          && window.confirm(err.response.data.error + '\n\nStart the job card anyway WITHOUT any inventory deduction? (Owner override)')) {
+        try {
+          fd.append('confirm_no_bom', 'true');
+          await api.post('/job-cards', fd);
+          onSave();
+          return;
+        } catch (e2) { setError(e2.response?.data?.error || 'Failed to upload'); setSaving(false); return; }
+      }
       setError(err.response?.data?.error || 'Failed to upload');
       setSaving(false);
     }
@@ -2002,6 +2013,7 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
 // stock deducts immediately (blocked if short) and the card enters production
 // with the short 4-stage checklist.
 function FgJobCardModal({ order, item, onClose, onSaved }) {
+  const { user } = useAuthStore();
   const [fgStock, setFgStock] = useState(null);
   const [sourceId, setSourceId] = useState('');
   const [qty, setQty] = useState(item.quantity || '');
@@ -2046,6 +2058,15 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
       await api.post('/job-cards/fg', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSaved();
     } catch (err) {
+      if (err.response?.data?.code === 'NO_BOM' && user?.role === 'owner'
+          && window.confirm(err.response.data.error + '\n\nCreate the card anyway WITHOUT any parts deduction? (Owner override)')) {
+        try {
+          fd.append('confirm_no_bom', 'true');
+          await api.post('/job-cards/fg', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+          onSaved();
+          return;
+        } catch (e2) { setError(e2.response?.data?.error || 'Failed to create inventory job card'); setSaving(false); return; }
+      }
       setError(err.response?.data?.error || 'Failed to create inventory job card');
       setSaving(false);
     }

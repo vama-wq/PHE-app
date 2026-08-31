@@ -1812,6 +1812,37 @@ async function initDB(retries = 20, delayMs = 10000) {
         }
       }
 
+      // ── ORD-091-26 BOM backfill (owner-requested, 31 Aug 2026) ──────────────
+      // The 99-pc FG order dispatched with NO BOM lines, so its prep parts never
+      // deducted. Copy the BOM from the same drawing's ORD-093-26 item (20 pcs:
+      // pins 50/50, nuts 100, bushes 100 → scaled ×99/20 and rounded to whole
+      // pieces: 248/248/495/495), and — because the card is already dispatched —
+      // deduct in the same stroke: lines land fully consumed, stock drops, one
+      // transaction each, item marked settled. Guarded on the item having no
+      // lines, so it runs exactly once.
+      {
+        const { rows: has } = await pool.query(
+          'SELECT 1 FROM order_item_inventory WHERE order_item_id=176 LIMIT 1');
+        if (!has.length) {
+          const lines = [[59, 248], [60, 248], [170, 495], [178, 495]];
+          for (const [invId, qty] of lines) {
+            await pool.query(
+              `INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty, qty_deducted)
+               VALUES (176, $1, $2, $2)`, [invId, qty]);
+            await pool.query(
+              'UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id=$2',
+              [qty, invId]);
+            await pool.query(`
+              INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+              SELECT $1, 'dispatch_to_production', $2, current_stock,
+                     'Order: ORD-091-26 | Dwg: PT-Utype-24U-1kw | Consumed (BOM backfilled after dispatch — copied from ORD-093-26, scaled 20→99 pcs)',
+                     (SELECT id FROM users WHERE role='owner' LIMIT 1)
+                FROM inventory_items WHERE id=$1`, [invId, qty]);
+          }
+          await pool.query('UPDATE order_items SET inventory_deducted=true WHERE id=176');
+        }
+      }
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.

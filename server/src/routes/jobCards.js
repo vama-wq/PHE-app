@@ -321,6 +321,19 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
     orderItemId = oi?.id || null;
   }
 
+  // No BOM, no job card: every deduction mechanism reads order_item_inventory,
+  // so an item with zero lines builds heaters that never consume stock (11 such
+  // items slipped through by Aug 2026). The owner can consciously bypass.
+  if (orderItemId) {
+    const bom = await db.get('SELECT COUNT(*)::int AS n FROM order_item_inventory WHERE order_item_id=$1', [orderItemId]);
+    if (!bom.n && !(req.user.role === 'owner' && String(req.body.confirm_no_bom) === 'true')) {
+      return res.status(400).json({
+        error: 'This item has no inventory BOM attached — no materials would ever be deducted for it. Ask design to attach the BOM on the order item first.',
+        code: 'NO_BOM',
+      });
+    }
+  }
+
   // One job card per order item — block a duplicate upload onto an item that
   // already has one (partial-dispatch splits use a separate endpoint).
   if (orderItemId) {
@@ -1210,6 +1223,19 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
     if (!fg) return res.status(400).json({ error: 'Select the Finished Goods stock to draw from' });
     if (Number(fg.qty_available) < parsedQty) {
       return res.status(400).json({ error: `Insufficient Finished Goods stock: need ${parsedQty}, only ${fg.qty_available} available` });
+    }
+
+    // Same no-BOM gate as normal cards: FG BOMs carry the add-on parts
+    // (nuts, washers, nipples) consumed during prep — without lines nothing
+    // ever deducts. Owner can consciously bypass.
+    {
+      const bom = await db.get('SELECT COUNT(*)::int AS n FROM order_item_inventory WHERE order_item_id=$1', [order_item_id]);
+      if (!bom.n && !(req.user.role === 'owner' && String(req.body.confirm_no_bom) === 'true')) {
+        return res.status(400).json({
+          error: 'This item has no inventory BOM attached — the prep parts (nuts, washers, nipples…) would never be deducted. Ask design to attach the BOM first.',
+          code: 'NO_BOM',
+        });
+      }
     }
 
     // Unique job card number: DRAWING-FG, -FG2, -FG3 ...
