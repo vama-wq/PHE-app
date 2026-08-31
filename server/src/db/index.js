@@ -1766,6 +1766,52 @@ async function initDB(retries = 20, delayMs = 10000) {
            AND job_card_id IN (SELECT job_card_id FROM capa_reports
                                 WHERE status IN ('open','awaiting_approval'))`);
 
+      // ── P PHE 14 brazing-ring QC repairs (owner-requested, 31 Aug 2026) ─────
+      // A stale-row bug (fixed in routes/purchaseOrders.js) meant both brazing
+      // QC approvals recorded on 31 Aug added NO stock: receiveItemStock saw a
+      // blank qc_weight_10 and refused the kg→pcs conversion.
+      // 1. Item 27 (Brazing Ring 11mm): owner says the QC itself was done
+      //    wrongly (its note describes a part-quantity/PT split but it was
+      //    approved in full) — reset it to pending so QC can be redone. Nothing
+      //    to reverse: no stock, lot, or debit note was created. Guarded on the
+      //    bad 31-Aug approval with no stock transaction behind it.
+      await pool.query(`
+        UPDATE purchase_order_items
+           SET qc_status=NULL, qc_weight_10=NULL, qc_received_qty=NULL, qc_rejected_qty=NULL,
+               qc_image_file=NULL, qc_image_name=NULL, qc_observations=NULL,
+               qc_rejection_reason=NULL, qc_by=NULL, qc_at=NULL
+         WHERE id=27 AND qc_status='approved' AND qc_at::date='2026-08-31'
+           AND NOT EXISTS (SELECT 1 FROM inventory_transactions t
+                            WHERE t.item_id=purchase_order_items.inventory_item_id
+                              AND t.transaction_type='purchase_in' AND t.po_number='P PHE 14')`);
+      // 2. Item 26 (Brazing Ring 8mm): its approval stands ("OK", 0.25 kg at
+      //    0.006 kg/10pcs) — backfill the stock the bug swallowed, exactly as
+      //    receiveItemStock would have: 0.25/0.006×10 = 416.67 pcs, landed
+      //    (20151.75 material + 110.53 freight)/416.67 = ₹48.63/pc. Guarded on
+      //    no purchase_in existing for BRZ-08 against this PO.
+      {
+        const { rows: done } = await pool.query(`
+          SELECT 1 FROM inventory_transactions
+           WHERE item_id=162 AND transaction_type='purchase_in' AND po_number='P PHE 14'`);
+        const { rows: ok } = await pool.query(`
+          SELECT 1 FROM purchase_order_items WHERE id=26 AND qc_status='approved'`);
+        if (!done.length && ok.length) {
+          await pool.query(`
+            INSERT INTO inventory_fifo_lots (item_id, po_id, qty_original, qty_remaining, unit_cost, received_at)
+            VALUES (162, 15, 416.67, 416.67, 48.63, NOW())`);
+          await pool.query(`
+            UPDATE inventory_items SET current_stock = current_stock + 416.67, unit_cost = 48.63
+             WHERE id = 162`);
+          await pool.query(`
+            INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, po_number, supplier_name, notes, created_by)
+            SELECT 162, 'purchase_in', 416.67, current_stock, 'P PHE 14',
+                   COALESCE((SELECT s.name FROM suppliers s JOIN purchase_orders po ON po.supplier_id=s.id WHERE po.id=15), ''),
+                   'PO received (QC approved): P PHE 14 — 0.25 kgs @ 0.006kg/10pcs = 416.67 pcs @ landed ₹48.63/pc (backfilled: stock add was skipped by a bug at QC time)',
+                   (SELECT qc_by FROM purchase_order_items WHERE id=26)
+              FROM inventory_items WHERE id=162`);
+        }
+      }
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.

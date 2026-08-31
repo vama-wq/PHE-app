@@ -949,7 +949,12 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
       }
     });
 
-    if (acceptedQty > 0) await receiveItemStock(db, po, item, req.user.id, acceptedQty);
+    // Re-fetch the item: `item` was read BEFORE the transaction stored
+    // qc_weight_10, so the kg->pcs conversion inside receiveItemStock saw a
+    // blank weight and silently refused to add stock for weight-bought,
+    // piece-stocked material (both brazing-ring QCs on P PHE 14 added nothing).
+    const freshItem = await db.get('SELECT * FROM purchase_order_items WHERE id=$1', [item.id]);
+    if (acceptedQty > 0) await receiveItemStock(db, po, freshItem, req.user.id, acceptedQty);
 
     // Accounts raise the debit note — tell them what, how much, and where.
     if (debitNoteId) {
