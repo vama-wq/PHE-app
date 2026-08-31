@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
 import { renderEmail, copyFor, bodyToHtml, renderSms } from './applicationEmails';
-import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye } from 'lucide-react';
+import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye, Phone } from 'lucide-react';
 
 // Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
 // header row; a "Company" column is mandatory, the rest are optional.
@@ -631,6 +631,23 @@ export default function ProspectingList() {
                 </p>
               </div>
             ) : <p className="text-sm text-gray-400">No WhatsApp message for this contact.</p>}
+
+            {/* Call talking points / pitch */}
+            {campaignRow.call_script && (
+              <div className="pt-2 border-t border-gray-100">
+                <div className="flex items-center gap-2 mb-2">
+                  <Phone size={15} className="text-brand-700" />
+                  <h4 className="text-sm font-semibold">Call talking points</h4>
+                  <span className="text-xs text-gray-400">for when you phone them</span>
+                </div>
+                <textarea className="input w-full font-sans text-sm leading-relaxed bg-amber-50" rows={14} readOnly value={campaignRow.call_script} />
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(campaignRow.call_script, 'c-call')}>
+                    <Copy size={13} /> {copied === 'c-call' ? 'Copied ✓' : 'Copy script'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </Modal>

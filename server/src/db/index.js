@@ -119,6 +119,8 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS email_subject TEXT`);
       await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS email_body TEXT`);
       await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS whatsapp_msg TEXT`);
+      // Call talking points / pitch for phoning the prospect (shown alongside the campaign copy)
+      await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS call_script TEXT`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS backup_log (
           id SERIAL PRIMARY KEY,
