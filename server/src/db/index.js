@@ -1828,7 +1828,7 @@ async function initDB(retries = 20, delayMs = 10000) {
           for (const [invId, qty] of lines) {
             await pool.query(
               `INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty, qty_deducted)
-               VALUES (176, $1, $2, $2)`, [invId, qty]);
+               VALUES (176, $1, $2::numeric, $2::numeric)`, [invId, qty]);
             await pool.query(
               'UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id=$2',
               [qty, invId]);
