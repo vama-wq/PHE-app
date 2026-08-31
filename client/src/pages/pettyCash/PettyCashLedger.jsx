@@ -14,7 +14,7 @@ const MACHINERY = 'Machinery';
 const SAMPLING = 'Sampling';
 const EMPLOYEE_EXPENSE = 'Employee Expense';
 const PLATING = 'Plating';
-const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise', 'Peena Traders'];
+const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise', 'Palsto Coat', 'Peena Traders'];
 // Vendors that keep the goods — sending there is a one-way transfer, no return
 // leg (kept in sync with server/src/lib/plating.js).
 const ONE_WAY_VENDORS = ['Peena Traders'];

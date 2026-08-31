@@ -9,7 +9,7 @@ const PLATING_MATCH_RE = /nickel|nickle|electro|teflon|ptfe/i;
 
 // External coating vendors: the three electroplaters + Peena Traders (Teflon).
 // Kept here so the trip route and the Plating-expense payee check agree.
-const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise', 'Peena Traders'];
+const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise', 'Palsto Coat', 'Peena Traders'];
 
 // Vendors the goods never come back from. Peena Traders is the company's own
 // Mumbai arm — Teflon items sent there are handed over for good, so they are
