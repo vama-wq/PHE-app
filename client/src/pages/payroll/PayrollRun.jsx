@@ -451,16 +451,6 @@ export default function PayrollRun() {
           </table>
         </Section>
       )}
-    </div>
-  );
-}
-
-function Section({ title, subtitle, children }) {
-  return (
-    <div className="mb-6">
-      <h2 className="text-sm font-semibold text-gray-800">{title}</h2>
-      <p className="text-[11px] text-gray-400 mb-2">{subtitle}</p>
-      <div className="card overflow-x-auto">{children}</div>
 
       {canWork && changes.length > 0 && (
         <div className="card p-4 mt-4">
@@ -480,6 +470,16 @@ function Section({ title, subtitle, children }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function Section({ title, subtitle, children }) {
+  return (
+    <div className="mb-6">
+      <h2 className="text-sm font-semibold text-gray-800">{title}</h2>
+      <p className="text-[11px] text-gray-400 mb-2">{subtitle}</p>
+      <div className="card overflow-x-auto">{children}</div>
     </div>
   );
 }
