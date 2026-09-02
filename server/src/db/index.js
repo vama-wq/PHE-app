@@ -1843,6 +1843,27 @@ async function initDB(retries = 20, delayMs = 10000) {
         }
       }
 
+      // One-off (owner, 1 Sep 2026): the 01-Sep ₹260 porter plating-transport
+      // entry (A S Plating return) was recorded as Cash but was actually paid
+      // from the Kotak bank account — a one-time thing; the ₹230 one really
+      // was cash and stays. Guarded on it still being cash.
+      await pool.query(`
+        UPDATE petty_cash_entries
+           SET payment_method='paid_bank',
+               bank_account_id=(SELECT id FROM bank_accounts WHERE lower(name)='kotak')
+         WHERE entry_date='2026-09-01' AND category='Plating Transportation'
+           AND payment_method='cash' AND amount=260
+           AND COALESCE(paid_to,'') ILIKE 'porter'`);
+      // …and revert its ₹230 sibling: a superseded migration variant briefly
+      // shipped locally and flipped it to bank on one boot — the owner confirms
+      // that one really was paid in cash. Guarded on the wrong state.
+      await pool.query(`
+        UPDATE petty_cash_entries
+           SET payment_method='cash', bank_account_id=NULL
+         WHERE entry_date='2026-09-01' AND category='Plating Transportation'
+           AND payment_method='paid_bank' AND amount=230
+           AND COALESCE(paid_to,'') ILIKE 'porter'`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
