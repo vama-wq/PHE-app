@@ -497,7 +497,7 @@ export default function OrderDetail() {
                                 {item.inventory_items?.length ? 'Edit' : 'Add'}
                               </button>
                             )}
-                            {item.inventory_items?.length > 0 && (
+                            {item.inventory_items?.length > 0 && ['design', 'admin', 'owner'].includes(user.role) && (
                               <button className="text-xs text-brand-600 hover:underline ml-1 inline-flex items-center gap-0.5"
                                 title="Print the selected inventory as a shopfloor material slip (Gujarati + Hindi names)"
                                 onClick={() => printMaterialSlip(order, item, order.job_cards)}>

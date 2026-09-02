@@ -250,7 +250,7 @@ router.get('/:id', authenticate, async (req, res) => {
     ...item,
     images: await db.all('SELECT * FROM order_item_images WHERE item_id = $1 ORDER BY created_at ASC', [item.id]),
     inventory_items: await db.all(
-      `SELECT ii.id, ii.item_code, ii.name, ii.unit, oii.qty
+      `SELECT ii.id, ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
        WHERE oii.order_item_id = $1 ORDER BY ii.item_code`, [item.id]),
   })));
