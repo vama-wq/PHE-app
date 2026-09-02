@@ -1874,6 +1874,23 @@ async function initDB(retries = 20, delayMs = 10000) {
            AND COALESCE(paid_to,'') ILIKE 'ugvcl - 23002011134'
            AND bank_account_id=(SELECT id FROM bank_accounts WHERE lower(name)='kalupur')`);
 
+      // Payroll: accounts now works the run fully; the owner reviews changes.
+      // original_snapshot freezes the lines as parsed (for "Print Original");
+      // payroll_change_log records every tracked edit with old/new + remark.
+      await pool.query(`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS original_snapshot JSONB`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS payroll_change_log (
+          id SERIAL PRIMARY KEY,
+          run_id INTEGER NOT NULL REFERENCES payroll_runs(id) ON DELETE CASCADE,
+          line_id INTEGER,
+          employee_name TEXT,
+          changes JSONB NOT NULL DEFAULT '[]',
+          remark TEXT,
+          changed_by INTEGER REFERENCES users(id),
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.

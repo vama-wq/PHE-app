@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
-import { downloadExcel } from '../../lib/utils';
-import { ArrowLeft, Banknote, Download, FileText, Send, CheckCircle, AlertTriangle, Save, Upload, Trash2, Pencil } from 'lucide-react';
+import { downloadExcel, fmtDateTime } from '../../lib/utils';
+import { ArrowLeft, Banknote, Download, FileText, Send, CheckCircle, AlertTriangle, Save, Upload, Trash2, Pencil, Printer } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const STATUS_BADGES = {
@@ -22,13 +22,21 @@ export default function PayrollRun() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const isOwner = user.role === 'owner';
+  // Accounts works the full run (owner decision, Sep 2026): sees pay figures
+  // and edits review fields — every change needs a remark and is logged for
+  // the owner, who alone approves and marks paid.
+  const canWork = isOwner || user.role === 'accounts';
   const [data, setData] = useState(null);
+  const [changes, setChanges] = useState([]);
   const [edits, setEdits] = useState({}); // lineId → field changes
   const [saving, setSaving] = useState(false);
   const [warnings, setWarnings] = useState([]);
   const [error, setError] = useState('');
 
-  const load = () => api.get(`/payroll/runs/${id}`).then(r => { setData(r.data); setEdits({}); }).catch(e => setError(e.response?.data?.error || 'Failed to load'));
+  const load = () => {
+    api.get(`/payroll/runs/${id}/changes`).then(r => setChanges(r.data)).catch(() => {});
+    return api.get(`/payroll/runs/${id}`).then(r => { setData(r.data); setEdits({}); }).catch(e => setError(e.response?.data?.error || 'Failed to load'));
+  };
 
   // Owner sets a worker's carried leave balance directly from the run page —
   // the difference posts as a manual entry in the leave ledger (audited).
@@ -94,8 +102,14 @@ export default function PayrollRun() {
       const att = payload.map(u => Object.fromEntries(Object.entries(u).filter(([k]) => k === 'id' || attFields.includes(k)))).filter(u => Object.keys(u).length > 1);
       const rev = payload.map(u => Object.fromEntries(Object.entries(u).filter(([k]) => k === 'id' || revFields.includes(k)))).filter(u => Object.keys(u).length > 1);
       if (att.length) await api.put(`/payroll/runs/${id}/attendance`, { lines: att });
-      if (isOwner && rev.length) {
-        const r = await api.put(`/payroll/runs/${id}/review`, { lines: rev });
+      if (canWork && rev.length) {
+        let changeRemark = null;
+        if (!isOwner) {
+          changeRemark = (window.prompt('Reason for these changes (required — the owner sees this with each change):') || '').trim();
+          if (!changeRemark) { setSaving(false); return alert('A remark is required to change pay fields.'); }
+        }
+        const r = await api.put(`/payroll/runs/${id}/review`,
+          { lines: rev.map(u => ({ ...u, change_remark: changeRemark })) });
         if (r.data.warnings?.length) setWarnings(r.data.warnings);
       }
       await load();
@@ -118,9 +132,29 @@ export default function PayrollRun() {
     catch (err) { alert(err.response?.data?.error || 'Failed'); }
   };
 
+  // The run as it stood before anyone edited pay fields — frozen server-side
+  // on the first change. Prints in one clean sheet for comparison.
+  const printOriginal = async () => {
+    const { data: orig } = await api.get(`/payroll/runs/${id}/original`);
+    if (!orig.lines) return alert('No changes have been made yet — the grid you see IS the original.');
+    const rows = orig.lines;
+    const cell = (v) => (v === null || v === undefined || v === '' ? '—' : v);
+    const w = window.open('', '_blank');
+    w.document.write(`<!doctype html><html><head><title>Original Payroll — ${orig.month}</title>
+      <style>body{font-family:Arial;margin:28px;color:#111}h1{font-size:18px}p{color:#555;font-size:12px}
+      table{border-collapse:collapse;width:100%;margin-top:10px}th,td{border:1px solid #bbb;padding:4px 6px;font-size:11px;text-align:right}
+      th{background:#f3f4f6}td:first-child,th:first-child{text-align:left}</style></head><body>
+      <h1>Original Payroll (before changes) — ${orig.month}</h1>
+      <p>Peena Heat Elements | Frozen automatically at the first edit. Compare against the current run and its change log.</p>
+      <table><tr><th>Worker</th><th>Group</th><th>Present</th><th>Absent</th><th>OT hrs</th><th>Credit Used</th><th>Petrol</th><th>Advance</th><th>Base</th><th>OT Amt</th><th>Late Cut</th><th>Total</th></tr>
+      ${rows.map(r => `<tr><td>${r.employee_name || ''}</td><td>${r.worker_group || ''}</td><td>${cell(r.present_days)}</td><td>${cell(r.absent_days)}</td><td>${cell(r.ot_hours)}</td><td>${cell(r.leave_credit_used)}</td><td>${cell(r.petrol)}</td><td>${cell(r.advance_deduction)}</td><td>${cell(r.base_pay)}</td><td>${cell(r.ot_amount)}</td><td>${cell(r.late_deduction)}</td><td><b>${cell(r.total_payable)}</b></td></tr>`).join('')}
+      </table></body></html>`);
+    w.document.close(); w.print();
+  };
+
   const labour = lines.filter(l => l.worker_group === 'labour');
   const fixed = lines.filter(l => l.worker_group !== 'labour');
-  const totalPayable = isOwner ? lines.reduce((a, l) => a + Number(l.total_payable || 0), 0) : null;
+  const totalPayable = canWork ? lines.reduce((a, l) => a + Number(l.total_payable || 0), 0) : null;
 
   const numInput = (l, k, { step = 'any', width = 'w-16', disabled = false } = {}) => (
     editable && !disabled ? (
@@ -146,7 +180,7 @@ export default function PayrollRun() {
           <p className="text-gray-500 text-sm mt-0.5">
             {run.working_days} working days
             {holidays > 0 && <> · <span className="text-emerald-700 font-medium">{holidays} paid holiday{holidays > 1 ? 's' : ''}</span></>}
-            {isOwner && totalPayable != null && <> · Total payable: <span className="font-semibold text-gray-800">{inr(totalPayable)}</span></>}
+            {canWork && totalPayable != null && <> · Total payable: <span className="font-semibold text-gray-800">{inr(totalPayable)}</span></>}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -167,10 +201,16 @@ export default function PayrollRun() {
               <Trash2 size={13} /> Delete
             </button>
           )}
-          {isOwner && (
+          {canWork && (
             <button className="btn-secondary btn-sm flex items-center gap-1.5 text-xs"
               onClick={() => downloadExcel(`payroll/${run.month}`, `payroll_${run.month}.xlsx`)}>
               <Download size={13} /> Export
+            </button>
+          )}
+          {canWork && (
+            <button className="btn-secondary btn-sm flex items-center gap-1.5 text-xs" onClick={printOriginal}
+              title="Print the run exactly as it was before any pay fields were changed">
+              <Printer size={13} /> Print Original
             </button>
           )}
           {dirty && (
@@ -211,12 +251,12 @@ export default function PayrollRun() {
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="table-header text-left">Name</th>
-                {isOwner && <th className="table-header text-right">Rate/Day</th>}
+                {canWork && <th className="table-header text-right">Rate/Day</th>}
                 <th className="table-header text-right">Present</th>
                 <th className="table-header text-right">Absent</th>
                 <th className="table-header text-right">OT (hrs)</th>
                 <th className="table-header text-right" title="Days punched in after the grace time (auto from ESSL)">Late Days</th>
-                {isOwner && (
+                {canWork && (
                   <>
                     <th className="table-header text-right">Salary (Present)</th>
                     {holidays > 0 && <th className="table-header text-right">Holiday Pay</th>}
@@ -234,12 +274,12 @@ export default function PayrollRun() {
               {labour.map(l => (
                 <tr key={l.id} className="hover:bg-gray-50">
                   <td className="table-cell text-sm font-medium text-gray-800">{l.name}</td>
-                  {isOwner && <td className="table-cell text-right text-sm">{inr(l.daily_rate || 0)}</td>}
+                  {canWork && <td className="table-cell text-right text-sm">{inr(l.daily_rate || 0)}</td>}
                   <td className="table-cell text-right">{numInput(l, 'present_days')}</td>
                   <td className="table-cell text-right">{numInput(l, 'absent_days')}</td>
                   <td className="table-cell text-right">{numInput(l, 'ot_hours')}</td>
                   <td className="table-cell text-right text-sm" title={l.late_cut_minutes ? `${l.late_cut_minutes} min cut` : ''}>{Number(l.late_days) || 0}</td>
-                  {isOwner && (
+                  {canWork && (
                     <>
                       <td className="table-cell text-right text-sm">{inr(l.base_pay)}</td>
                       {holidays > 0 && <td className="table-cell text-right text-sm text-emerald-700">{inr(l.holiday_pay || 0)}</td>}
@@ -255,7 +295,7 @@ export default function PayrollRun() {
                       <td className="table-cell text-center">
                         {approved ? (
                           l.paid ? <CheckCircle size={15} className="inline text-green-600" />
-                            : <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button>
+                            : (isOwner ? <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button> : '—')
                         ) : '—'}
                       </td>
                     </>
@@ -281,12 +321,12 @@ export default function PayrollRun() {
               <tr>
                 <th className="table-header text-left">Name</th>
                 <th className="table-header text-left">Type</th>
-                {isOwner && <th className="table-header text-right">Salary</th>}
+                {canWork && <th className="table-header text-right">Salary</th>}
                 <th className="table-header text-right">Absent</th>
                 <th className="table-header text-right">OT (hrs)</th>
                 <th className="table-header text-right" title="Days the worker stayed past 6:30pm (admin sick-credit rule)">6:30 Stays</th>
                 <th className="table-header text-right" title="Days punched in after the grace time (auto from ESSL)">Late Days</th>
-                {isOwner && (
+                {canWork && (
                   <>
                     <th className="table-header text-right" title="Paid leaves available to spend this month: carried balance + this month's accrual (+1 admin / +2 production) + 6:30 sick credits. '→ N left' shows what remains after the credits used this run.">Leaves Avail.</th>
                     <th className="table-header text-right" title="Absences to charge against leave credit (no salary cut)">Credit Used</th>
@@ -314,7 +354,7 @@ export default function PayrollRun() {
                       : l.worker_group === 'fixed_production_nl' ? 'Production (10h, no leave)'
                       : 'Production (10h)'}
                   </td>
-                  {isOwner && <td className="table-cell text-right text-sm">{inr(l.monthly_salary || 0)}</td>}
+                  {canWork && <td className="table-cell text-right text-sm">{inr(l.monthly_salary || 0)}</td>}
                   <td className="table-cell text-right">{numInput(l, 'absent_days')}</td>
                   <td className="table-cell text-right">{numInput(l, 'ot_hours')}</td>
                   <td className="table-cell text-right">
@@ -323,7 +363,7 @@ export default function PayrollRun() {
                       : <span className="text-sm text-gray-300">—</span>}
                   </td>
                   <td className="table-cell text-right text-sm" title={l.late_cut_minutes ? `${l.late_cut_minutes} min cut` : ''}>{Number(l.late_days) || 0}</td>
-                  {isOwner && (
+                  {canWork && (
                     <>
                       {/* Leave columns only for groups that have paid leave */}
                       {l.worker_group === 'fixed_production_nl' ? (
@@ -400,7 +440,7 @@ export default function PayrollRun() {
                       <td className="table-cell text-center">
                         {approved ? (
                           l.paid ? <CheckCircle size={15} className="inline text-green-600" />
-                            : <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button>
+                            : (isOwner ? <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button> : '—')
                         ) : '—'}
                       </td>
                     </>
@@ -421,6 +461,25 @@ function Section({ title, subtitle, children }) {
       <h2 className="text-sm font-semibold text-gray-800">{title}</h2>
       <p className="text-[11px] text-gray-400 mb-2">{subtitle}</p>
       <div className="card overflow-x-auto">{children}</div>
+
+      {canWork && changes.length > 0 && (
+        <div className="card p-4 mt-4">
+          <div className="font-semibold text-sm mb-2">Change log — what was edited and why</div>
+          <div className="space-y-2">
+            {changes.map(c => (
+              <div key={c.id} className="text-xs border-l-2 border-amber-300 pl-2.5 py-0.5">
+                <span className="font-medium text-gray-800">{c.employee_name}</span>
+                {' — '}
+                {(Array.isArray(c.changes) ? c.changes : []).map((d, i) => (
+                  <span key={i} className="text-gray-600">{i > 0 && '; '}{d.field}: {String(d.from ?? '—')} → <b>{String(d.to ?? '—')}</b></span>
+                ))}
+                {c.remark && <span className="text-amber-700"> · “{c.remark}”</span>}
+                <span className="text-gray-400"> · {c.changed_by_name || ''} {fmtDateTime(c.created_at)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

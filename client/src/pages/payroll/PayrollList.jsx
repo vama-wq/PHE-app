@@ -22,7 +22,7 @@ const STATUS_BADGES = {
 
 export default function PayrollList() {
   const { user } = useAuthStore();
-  const isOwner = user.role === 'owner';
+  const isOwner = user.role === 'owner' || user.role === 'accounts'; // accounts has full payroll access (owner decision, Sep 2026)
   const [tab, setTab] = useState('runs');
   const [runs, setRuns] = useState([]);
   const [employees, setEmployees] = useState([]);

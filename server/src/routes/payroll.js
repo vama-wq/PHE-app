@@ -307,7 +307,7 @@ router.delete('/employees/:id', authenticate, authorize('owner'), async (req, re
 });
 
 // Leave ledger (owner) — balance + history, plus manual adjustment
-router.get('/employees/:id/leave', authenticate, authorize('owner'), async (req, res) => {
+router.get('/employees/:id/leave', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid employee id' });
@@ -323,7 +323,7 @@ router.get('/employees/:id/leave', authenticate, authorize('owner'), async (req,
   }
 });
 
-router.post('/employees/:id/leave', authenticate, authorize('owner'), async (req, res) => {
+router.post('/employees/:id/leave', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid employee id' });
@@ -344,7 +344,7 @@ router.post('/employees/:id/leave', authenticate, authorize('owner'), async (req
 });
 
 // ── Advances (owner) ──────────────────────────────────────────────────────────
-router.get('/employees/:id/advances', authenticate, authorize('owner'), async (req, res) => {
+router.get('/employees/:id/advances', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid employee id' });
@@ -357,7 +357,7 @@ router.get('/employees/:id/advances', authenticate, authorize('owner'), async (r
   }
 });
 
-router.post('/employees/:id/advances', authenticate, authorize('owner'), async (req, res) => {
+router.post('/employees/:id/advances', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid employee id' });
@@ -398,7 +398,7 @@ router.get('/holidays', authenticate, authorize('owner', 'accounts'), async (req
   }
 });
 
-router.post('/holidays', authenticate, authorize('owner'), async (req, res) => {
+router.post('/holidays', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const date = String(req.body.holiday_date || '').trim();
     const name = String(req.body.name || '').trim();
@@ -416,7 +416,7 @@ router.post('/holidays', authenticate, authorize('owner'), async (req, res) => {
   }
 });
 
-router.delete('/holidays/:id', authenticate, authorize('owner'), async (req, res) => {
+router.delete('/holidays/:id', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid holiday id' });
@@ -661,7 +661,7 @@ router.put('/runs/:id/submit', authenticate, authorize('owner', 'accounts'), asy
 
 // Owner review: decide leave credits used, sick credits earned, petrol and
 // advance deduction per line. Server clamps credits to balance and absences.
-router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res) => {
+router.put('/runs/:id/review', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid run id' });
@@ -675,6 +675,22 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
     if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
     const holidays = await paidHolidaysInMonth(db, run.month);
 
+    // Preserve the untouched run exactly once: the first edit freezes what the
+    // ESSL parse produced, so "Print Original" always shows pre-change numbers.
+    if (!run.original_snapshot) {
+      const orig = await db.all(
+        `SELECT pl.*, e.name AS employee_name, e.worker_group AS eg
+           FROM payroll_lines pl JOIN employees e ON e.id = pl.employee_id
+          WHERE pl.run_id=$1 ORDER BY e.name`, [id]);
+      await db.run('UPDATE payroll_runs SET original_snapshot=$1::jsonb WHERE id=$2',
+        [JSON.stringify(orig), id]);
+    }
+
+    // Accounts edits must say why — each changed line needs a remark, and every
+    // change lands in the log the owner reviews before approving.
+    const isAccounts = req.user.role === 'accounts';
+    const TRACKED = [['leave_credit_used','Leave credit'], ['sick_credit_earned','Sick credit'],
+      ['petrol','Petrol'], ['advance_deduction','Advance deduction'], ['remarks','Line remark']];
     const errors = [];
     await db.withTransaction(async (client) => {
       for (const u of updates) {
@@ -715,6 +731,19 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
           ? Math.max(u.sick_credit_earned != null ? Number(u.sick_credit_earned) : Number(line.sick_credit_earned), 0)
           : 0;
 
+        const finalVals = { leave_credit_used: creditUsed, advance_deduction: advance,
+          sick_credit_earned: line.worker_group === 'fixed_admin'
+            ? Math.max(u.sick_credit_earned != null ? Number(u.sick_credit_earned) : Number(line.sick_credit_earned), 0) : 0,
+          petrol: u.petrol != null ? Number(u.petrol) : Number(line.petrol),
+          remarks: u.remarks !== undefined ? ((u.remarks || '').trim() || null) : line.remarks };
+        const diffs = TRACKED
+          .map(([f, label]) => ({ f, label, from: line[f], to: finalVals[f] }))
+          .filter(d => String(d.from ?? '') !== String(d.to ?? ''));
+        if (diffs.length && isAccounts && !(u.change_remark || '').trim()) {
+          errors.push(`${line.name}: remark required — say why the change was made`);
+          continue; // skip this line entirely; nothing applied without a reason
+        }
+
         const merged = { ...line, leave_credit_used: creditUsed, advance_deduction: advance,
           petrol: u.petrol != null ? Number(u.petrol) : Number(line.petrol) };
         const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
@@ -727,6 +756,14 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
           [creditUsed, sickEarned, pay.petrol, advance,
            u.remarks !== undefined ? ((u.remarks || '').trim() || null) : line.remarks,
            pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.late_deduction, pay.total_payable, lineId]);
+        if (diffs.length) {
+          await client.query(
+            `INSERT INTO payroll_change_log (run_id, line_id, employee_name, changes, remark, changed_by)
+             VALUES ($1,$2,$3,$4::jsonb,$5,$6)`,
+            [id, lineId, line.name,
+             JSON.stringify(diffs.map(d => ({ field: d.label, from: d.from, to: d.to }))),
+             (u.change_remark || '').trim() || null, req.user.id]);
+        }
       }
     });
     res.json({ message: 'Review saved', warnings: errors });
@@ -734,6 +771,22 @@ router.put('/runs/:id/review', authenticate, authorize('owner'), async (req, res
     console.error('run review error:', e);
     res.status(500).json({ error: 'Failed to save review' });
   }
+});
+
+// The frozen pre-change snapshot (for Print Original) and the change log.
+router.get('/runs/:id/original', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+  const db = getDB();
+  const run = await db.get('SELECT id, month, original_snapshot FROM payroll_runs WHERE id=$1', [req.params.id]);
+  if (!run) return res.status(404).json({ error: 'Run not found' });
+  res.json({ month: run.month, lines: run.original_snapshot || null });
+});
+router.get('/runs/:id/changes', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+  const db = getDB();
+  const rows = await db.all(
+    `SELECT cl.*, u.name AS changed_by_name FROM payroll_change_log cl
+     LEFT JOIN users u ON u.id = cl.changed_by
+     WHERE cl.run_id=$1 ORDER BY cl.id DESC`, [req.params.id]);
+  res.json(rows);
 });
 
 // Owner approves: locks the month, posts the leave ledger (+1 monthly accrual
@@ -884,7 +937,7 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
 // Add a worker to an existing draft/submitted run (owner) — for someone hired
 // or reactivated after the run was created. Seeds one line; UNIQUE(run_id,
 // employee_id) guards against duplicates.
-router.post('/runs/:id/add-employee', authenticate, authorize('owner'), async (req, res) => {
+router.post('/runs/:id/add-employee', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const empId = parseInt(req.body.employee_id, 10);
