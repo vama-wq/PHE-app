@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "scopecheck": "node scripts/scopecheck.cjs $(find src -name '*.jsx')"
   },
   "dependencies": {
     "axios": "^1.6.8",

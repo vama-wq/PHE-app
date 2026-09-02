@@ -8,6 +8,11 @@ import { Plus, Trash2, ArrowLeft, Search } from 'lucide-react';
 
 const EMPTY_ITEM = { inventory_item_id: null, description: '', unit: '', qty: '', rate: '', amount: 0 };
 
+// Indian GST slabs. 0/5/12/18/28 are the standard rates; 3% covers gold and
+// precious metals and 0.25% rough precious stones — kept so any supplier bill
+// can be matched exactly. Custom lets a rate outside the list be typed.
+const GST_SLABS = ['0', '0.25', '3', '5', '12', '18', '28'];
+
 export default function PurchaseOrderForm() {
   const navigate = useNavigate();
   const { id } = useParams(); // present when editing
@@ -204,7 +209,18 @@ export default function PurchaseOrderForm() {
             </div>
             <div>
               <label className="label">IGST %</label>
-              <input className="input" type="number" step="0.01" value={igstPercent} onChange={e => setIgstPercent(e.target.value)} />
+              <div className="flex gap-2">
+                <select className="input"
+                  value={GST_SLABS.includes(String(igstPercent)) ? String(igstPercent) : 'custom'}
+                  onChange={e => setIgstPercent(e.target.value === 'custom' ? '' : e.target.value)}>
+                  {GST_SLABS.map(g => <option key={g} value={g}>{g}%</option>)}
+                  <option value="custom">Custom…</option>
+                </select>
+                {!GST_SLABS.includes(String(igstPercent)) && (
+                  <input className="input w-24" type="number" step="0.01" min="0" max="100" autoFocus
+                    placeholder="%" value={igstPercent} onChange={e => setIgstPercent(e.target.value)} />
+                )}
+              </div>
             </div>
             <div>
               <label className="label">Expected Delivery Date</label>

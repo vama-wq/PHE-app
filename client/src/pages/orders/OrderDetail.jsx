@@ -1934,8 +1934,9 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
     if (!form.dispatch_date) return setError('Dispatch date is required');
     if (!form.punching.trim()) return setError('Punching value is required');
     setSaving(true);
+    let fd;
     try {
-      const fd = new FormData();
+      fd = new FormData();
       fd.append('order_id', orderId);
       fd.append('order_item_id', selectedItemId);
       // Drawing number is the job card identity
@@ -2097,8 +2098,9 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
     if (!dispatchDate) return setError('Dispatch date is required.');
     if (!file) return setError('Upload the job card file.');
     setSaving(true);
+    let fd;
     try {
-      const fd = new FormData();
+      fd = new FormData();
       fd.append('file', file);
       fd.append('order_id', order.id);
       fd.append('order_item_id', item.id);
