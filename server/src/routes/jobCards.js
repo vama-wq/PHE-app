@@ -68,7 +68,7 @@ router.get('/', authenticate, async (req, res) => {
     JOIN customers c ON o.customer_id = c.id
     LEFT JOIN users u ON jc.uploaded_by = u.id
     LEFT JOIN customer_queries cq_active
-      ON cq_active.job_card_id = jc.id
+      ON cq_active.job_card_id = COALESCE(jc.parent_job_card_id, jc.id)
       AND cq_active.status IN ('open','in_progress','product_return')
     ORDER BY jc.dispatch_date ASC
   `, [today]);
@@ -153,7 +153,8 @@ router.get('/:id', authenticate, async (req, res) => {
       (SELECT COUNT(*) FROM customer_query_photos WHERE query_id = cq.id) as photo_count
     FROM customer_queries cq
     LEFT JOIN users u_created ON cq.created_by = u_created.id
-    WHERE cq.job_card_id = $1 AND cq.status IN ('open','in_progress','product_return')
+    WHERE cq.job_card_id = (SELECT COALESCE(parent_job_card_id, id) FROM job_cards WHERE id=$1)
+      AND cq.status IN ('open','in_progress','product_return')
     ORDER BY cq.created_at DESC LIMIT 1
   `, [req.params.id]);
   if (activeQuery) {

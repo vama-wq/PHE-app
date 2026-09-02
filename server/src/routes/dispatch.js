@@ -93,12 +93,15 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
 
   // Is this a repaired return being re-dispatched? The original dispatch already had an
   // invoice, so accounts can dispatch without raising a new one.
+  // A partial dispatch splits a child card off the parent; the repair query
+  // stays on the parent, so look there too — otherwise the child is treated as
+  // a fresh dispatch and wrongly demands an invoice.
   const repairQuery = await db.get(
-    `SELECT id, query_no FROM customer_queries
-     WHERE job_card_id=$1 AND status='product_return' AND return_type='repair'
+    `SELECT id, query_no, job_card_id FROM customer_queries
+     WHERE job_card_id = ANY($1) AND status='product_return' AND return_type='repair'
        AND return_status NOT IN ('repaired_dispatched','debit_note_issued')
      ORDER BY id DESC LIMIT 1`,
-    [req.params.jobCardId]
+    [[Number(req.params.jobCardId), jc.parent_job_card_id].filter(Boolean)]
   );
   const isRepairDispatch = !!repairQuery;
 
@@ -126,12 +129,23 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
 
   // Repaired return: close the customer query now that it's re-dispatched.
   if (isRepairDispatch) {
-    await db.run(
-      `UPDATE customer_queries SET status='resolved', return_status='repaired_dispatched', updated_at=NOW() WHERE id=$1`,
-      [repairQuery.id]
-    );
+    // Only close the query once every card in the repair family (the parent
+    // and its splits) has actually gone out — a partial dispatch leaves the
+    // rest still in repair, and closing early would strip the invoice
+    // exemption from the pieces still to come.
+    const pending = await db.get(
+      `SELECT COUNT(*)::int AS n FROM job_cards
+        WHERE (id=$1 OR parent_job_card_id=$1) AND status <> 'dispatched'`,
+      [repairQuery.job_card_id]);
+    if (!pending.n) {
+      await db.run(
+        `UPDATE customer_queries SET status='resolved', return_status='repaired_dispatched', updated_at=NOW() WHERE id=$1`,
+        [repairQuery.id]
+      );
+    }
     await logActivity(jc.order_id, jc.id, 'repair_dispatched',
-      `Repaired product re-dispatched (query ${repairQuery.query_no})${invoiceDoc ? '' : ' — no new invoice required'}`, req.user.id);
+      `Repaired product re-dispatched (query ${repairQuery.query_no})${invoiceDoc ? '' : ' — no new invoice required'}` +
+      (pending.n ? ` — ${pending.n} card(s) of this repair still pending, query stays open` : ''), req.user.id);
   }
 
   // Settle this item's inventory. For a partially-dispatched (split) item this is
