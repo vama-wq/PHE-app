@@ -1864,6 +1864,16 @@ async function initDB(retries = 20, delayMs = 10000) {
            AND payment_method='paid_bank' AND amount=230
            AND COALESCE(paid_to,'') ILIKE 'porter'`);
 
+      // One-off (owner, 2 Sep 2026): the 18-Aug UGVCL electricity bill
+      // (₹6,886.70, consumer 23002011134) was marked paid against Kalupur by
+      // mistake — it went out of Kotak. Guarded on the wrong tag.
+      await pool.query(`
+        UPDATE petty_cash_entries
+           SET bank_account_id=(SELECT id FROM bank_accounts WHERE lower(name)='kotak')
+         WHERE amount=6886.70 AND payment_method='paid_bank'
+           AND COALESCE(paid_to,'') ILIKE 'ugvcl - 23002011134'
+           AND bank_account_id=(SELECT id FROM bank_accounts WHERE lower(name)='kalupur')`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
