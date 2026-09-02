@@ -185,7 +185,7 @@ router.get('/customer/:customerId/previous-items', authenticate, async (req, res
   // Attach inventory selections so the form can pre-fill them too
   for (const it of items) {
     it.inventory_items = await db.all(
-      `SELECT ii.id, ii.item_code, ii.name, ii.unit, oii.qty
+      `SELECT ii.id, ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
        WHERE oii.order_item_id = $1`,
       [it.id]

@@ -7,7 +7,7 @@ import ImportModal from '../../components/ui/ImportModal';
 import CategorySelect from '../../components/CategorySelect';
 import InventoryItemModal from '../../components/InventoryItemModal';
 import { downloadExcel } from '../../lib/utils';
-import { Plus, Search, AlertTriangle, Download, Upload, X, Printer } from 'lucide-react';
+import { Plus, Search, AlertTriangle, Download, Upload, X } from 'lucide-react';
 
 export default function InventoryList() {
   const { user } = useAuthStore();
@@ -60,49 +60,6 @@ export default function InventoryList() {
   const resetFilters = () => { setSearch(''); setCategory('all'); setStockStatus('all'); setSortBy('code'); };
 
 
-  // Printable stock/issue register: stored data pre-filled (name, code, stock),
-  // blank ruled columns filled by hand on the floor (dispatch date, how many,
-  // scrap, overlooker's signature). Prints whatever the current filters show.
-  const printRegister = () => {
-    const rows = filtered;
-    if (!rows.length) return alert('Nothing to print with the current filters.');
-    const byCat = {};
-    rows.forEach(i => { const c = i.category || 'Uncategorised'; (byCat[c] = byCat[c] || []).push(i); });
-    const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-    const w = window.open('', '_blank');
-    w.document.write(`<!doctype html><html><head><title>Inventory Register — ${today}</title>
-      <style>
-        body{font-family:Arial,sans-serif;margin:24px;color:#111}
-        h1{font-size:17px;margin:0 0 2px}
-        p{color:#555;font-size:11px;margin:0 0 10px}
-        h2{font-size:12px;margin:14px 0 4px;text-transform:uppercase;letter-spacing:.05em;color:#444;page-break-after:avoid}
-        table{border-collapse:collapse;width:100%;margin-bottom:6px}
-        th,td{border:1px solid #999;padding:5px 7px;font-size:11px;text-align:left;vertical-align:middle}
-        th{background:#f3f4f6}
-        td.num{text-align:right}
-        td.blank{min-width:70px;height:26px}
-        td.sign{min-width:95px}
-        tr{page-break-inside:avoid}
-        .foot{margin-top:18px;font-size:11px;color:#333;display:flex;gap:60px}
-      </style></head><body>
-      <h1>Inventory Stock &amp; Issue Register</h1>
-      <p>Peena Heat Elements | Printed ${today} | ${rows.length} item(s)${category !== 'all' ? ` | Category: ${category}` : ''}${search ? ` | Filter: “${search}”` : ''}</p>
-      ${Object.keys(byCat).sort().map(cat => `
-        <h2>${cat} (${byCat[cat].length})</h2>
-        <table>
-          <tr><th style="width:26%">Name</th><th style="width:14%">Code</th><th style="width:10%">Stock Qty</th>
-              <th>Dispatch Date</th><th>How Many</th><th>Scrap</th><th>Overlooker Sign</th></tr>
-          ${byCat[cat].map(i => `<tr>
-            <td>${i.name || ''}</td><td>${i.item_code}</td>
-            <td class="num">${Number(i.current_stock).toLocaleString('en-IN')} ${(i.unit || '').trim()}</td>
-            <td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="sign"></td>
-          </tr>`).join('')}
-        </table>`).join('')}
-      <div class="foot"><span>Prepared by: ______________</span><span>Verified by: ______________</span><span>Date: ______________</span></div>
-      </body></html>`);
-    w.document.close(); w.print();
-  };
-
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
@@ -120,10 +77,6 @@ export default function InventoryList() {
               <Download size={15} /> Export Excel
             </button>
           )}
-          <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={printRegister}
-            title="Print the visible items as a register with blank dispatch/scrap/sign columns">
-            <Printer size={15} /> Print Register
-          </button>
           {canManage && (
             <>
               <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => setShowImport(true)}>

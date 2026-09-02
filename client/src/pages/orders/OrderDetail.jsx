@@ -12,8 +12,7 @@ import { compressImages } from '../../lib/compressImage';
 import {
   ArrowLeft, CheckCircle, CheckCircle2, XCircle, FileText, Plus, Upload,
   ExternalLink, Trash2, Edit2, Package, PenLine, MessageSquare,
-  Clock, AlertTriangle, Image as ImageIcon, Send, X, RefreshCw, ClipboardList, Paperclip, Download, File, RotateCcw
-} from 'lucide-react';
+  Clock, AlertTriangle, Image as ImageIcon, Send, X, RefreshCw, ClipboardList, Paperclip, Download, File, RotateCcw, Printer } from 'lucide-react';
 
 // Fixed plating-instruction choices for order items.
 const PLATING_OPTIONS = ['Nickel Plating', 'Electropolish', 'Teflon Coating', 'Buffing', 'No Plating'];
@@ -35,6 +34,51 @@ function validateItem(f) {
 // Drawings still show and follow the normal approval flow.
 // Drawing bypass is a per-order DB flag (orders.drawing_bypassed) toggled by
 // the owner from the Reference Drawings section — no hardcoded list.
+
+// Material slip for the shopfloor: prints once design has selected the item's
+// inventory. Names carried in English + ગુજરાતી (stored, else transliterated)
+// + हिंदी (transliterated); blank Issued/Scrap/Sign columns travel with the
+// job card to the store and floor.
+function printMaterialSlip(order, item, jobCards) {
+  const inv = item.inventory_items || [];
+  if (!inv.length) return;
+  const jc = (jobCards || []).find(j => j.order_item_id === item.id);
+  const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const dwg = item.drawing_number || '';
+  const w = window.open('', '_blank');
+  w.document.write(`<!doctype html><html><head><title>Material Slip — ${dwg || item.product_code || ''}</title>
+    <style>
+      body{font-family:Arial,'Noto Sans Gujarati','Noto Sans Devanagari',sans-serif;margin:26px;color:#111}
+      h1{font-size:17px;margin:0 0 2px}
+      p{color:#444;font-size:12px;margin:2px 0}
+      table{border-collapse:collapse;width:100%;margin-top:12px}
+      th,td{border:1px solid #999;padding:6px 7px;font-size:12px;text-align:left;vertical-align:middle}
+      th{background:#f3f4f6}
+      td.num{text-align:right}
+      td.blank{min-width:64px;height:30px}
+      td.sign{min-width:100px}
+      tr{page-break-inside:avoid}
+      .foot{margin-top:20px;font-size:12px;color:#333;display:flex;gap:50px}
+    </style></head><body>
+    <h1>Material Slip / સામાન સ્લિપ / सामान पर्ची</h1>
+    <p><b>${order.order_code}</b> · ${item.customer_code || order.customer_code || ''} · Printed ${today}</p>
+    <p>Drawing: <b>${dwg}</b>${dwg ? ` · ગુ: ${transliterateGujarati(dwg)} · हि: ${transliterateHindi(dwg)}` : ''}</p>
+    <p>Job Card: <b>${jc ? jc.job_card_no : '____________'}</b> · Order Qty: <b>${item.quantity}</b>${item.remark ? ` · ${item.remark}` : ''}</p>
+    <table>
+      <tr><th>#</th><th>Code</th><th>Name</th><th>ગુજરાતી</th><th>हिंदी</th><th>Qty</th>
+          <th>Issued / આપ્યું</th><th>Scrap / સ્ક્રેપ</th><th>Sign / સહી</th></tr>
+      ${inv.map((r, i) => `<tr>
+        <td>${i + 1}</td><td><b>${r.item_code}</b></td><td>${r.name || ''}</td>
+        <td>${r.name_gu || transliterateGujarati(r.name || '')}</td>
+        <td>${transliterateHindi(r.name || '')}</td>
+        <td class="num">${r.qty} ${(r.unit || '').trim()}</td>
+        <td class="blank"></td><td class="blank"></td><td class="sign"></td>
+      </tr>`).join('')}
+    </table>
+    <div class="foot"><span>Design: ______________</span><span>Store: ______________</span><span>Overlooker / નિરીક્ષક: ______________</span></div>
+    </body></html>`);
+  w.document.close(); w.print();
+}
 
 export default function OrderDetail() {
   const { id } = useParams();
@@ -451,6 +495,13 @@ export default function OrderDetail() {
                               <button className="text-xs text-brand-600 hover:underline ml-1"
                                 onClick={() => setInvEditItem(item)}>
                                 {item.inventory_items?.length ? 'Edit' : 'Add'}
+                              </button>
+                            )}
+                            {item.inventory_items?.length > 0 && (
+                              <button className="text-xs text-brand-600 hover:underline ml-1 inline-flex items-center gap-0.5"
+                                title="Print the selected inventory as a shopfloor material slip (Gujarati + Hindi names)"
+                                onClick={() => printMaterialSlip(order, item, order.job_cards)}>
+                                <Printer size={11} /> Print Slip
                               </button>
                             )}
                           </div>
