@@ -1923,6 +1923,37 @@ async function initDB(retries = 20, delayMs = 10000) {
               WHERE jc.order_id=o.id AND jc.status='qc_approved'
                 AND jc.qc_route='finished_goods' AND COALESCE(jc.qc_dispatch_qty,0)=0)`);
 
+      // Owner correction (3 Sep 2026): ORD-119-26 was built with MS brackets,
+      // not the SS ones design had selected. The owner repointed the BOM to
+      // BKT-FMH-H788 (MS) in the app and the 200 SS pieces came back, but the
+      // MS item was never charged — its BOM lines read qty_deducted 200 while
+      // its stock still showed the full 752. Charge the 200 so stock matches
+      // what the BOM says was consumed. SS stays at 0 (owner-confirmed).
+      // Guarded on the MS lines being marked deducted with no ORD-119-26
+      // transaction behind them, so it applies exactly once.
+      {
+        const { rows: owed } = await pool.query(`
+          SELECT COALESCE(SUM(oii.qty_deducted),0)::float AS qty
+            FROM order_item_inventory oii
+            JOIN order_items oi ON oi.id = oii.order_item_id
+            JOIN orders o ON o.id = oi.order_id
+           WHERE o.order_code='ORD-119-26' AND oii.inventory_item_id=180
+             AND COALESCE(oii.qty_deducted,0) > 0`);
+        const { rows: already } = await pool.query(`
+          SELECT 1 FROM inventory_transactions
+           WHERE item_id=180 AND notes ILIKE '%ORD-119-26%' LIMIT 1`);
+        const qty = Number(owed[0]?.qty || 0);
+        if (qty > 0 && !already.length) {
+          await pool.query('UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id=180', [qty]);
+          await pool.query(`
+            INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+            SELECT 180, 'dispatch_to_production', $1, current_stock,
+                   'Order: ORD-119-26 | Consumed — MS brackets were used, not the SS ones originally selected (stock had not been charged when the BOM was corrected)',
+                   (SELECT id FROM users WHERE role='owner' LIMIT 1)
+              FROM inventory_items WHERE id=180`, [qty]);
+        }
+      }
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
