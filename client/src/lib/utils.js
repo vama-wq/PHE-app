@@ -111,6 +111,7 @@ export const STATUS_LABELS = {
   on_hold:          'On Hold',
   qc_pending:       'QC Pending',
   qc_approved:      'QC Approved',
+  in_finished_goods: 'In Finished Goods',
   packaging:        'Packaging',
   dispatched:       'Dispatched',
   pending:          'Pending',
@@ -132,6 +133,7 @@ export const STATUS_COLORS = {
   on_hold:          'bg-red-100 text-red-800',
   qc_pending:       'bg-purple-100 text-purple-800',
   qc_approved:      'bg-green-100 text-green-800',
+  in_finished_goods: 'bg-teal-100 text-teal-800',
   packaging:        'bg-teal-100 text-teal-800',
   dispatched:       'bg-gray-100 text-gray-700',
   // Job card statuses
@@ -279,7 +281,7 @@ export async function downloadExcel(exportType, filename) {
 // normal path; a resolved customer query ends at 'resolved_dispatched' and a
 // repaired return at 'repaired_dispatched' — all three are done, so none of
 // them belong in "upcoming"/"urgent"/"active" lists.
-export const DISPATCHED_STATUSES = ['dispatched', 'resolved_dispatched', 'repaired_dispatched'];
+export const DISPATCHED_STATUSES = ['dispatched', 'resolved_dispatched', 'repaired_dispatched', 'in_finished_goods'];
 export const isDispatched = (status) => DISPATCHED_STATUSES.includes(status);
 
 // QC can route a card's whole quantity into Finished Goods stock. Those cards

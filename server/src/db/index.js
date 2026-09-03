@@ -1438,7 +1438,7 @@ async function initDB(retries = 20, delayMs = 10000) {
         'pending_approval','approved','rejected','job_card_created','in_progress',
         'qc_pending','qc_approved','packaging','dispatched','on_hold',
         'customer_query','resolved_dispatched','product_return',
-        'fg_qc_pending','fg_qc_approved'
+        'fg_qc_pending','fg_qc_approved','in_finished_goods'
       ))`);
       await pool.query(`ALTER TABLE job_cards DROP CONSTRAINT IF EXISTS job_cards_status_check`);
       await pool.query(`ALTER TABLE job_cards ADD CONSTRAINT job_cards_status_check CHECK(status IN (
@@ -1900,6 +1900,28 @@ async function initDB(retries = 20, delayMs = 10000) {
                bank_account_id=(SELECT id FROM bank_accounts WHERE lower(name)='kotak')
          WHERE id=506 AND entry_date='2026-09-02' AND amount=210
            AND category='Plating Transportation' AND payment_method='cash'`);
+
+      // Orders whose every job card is finished — dispatched, or QC-routed
+      // entirely into Finished Goods stock — were stuck at 'qc_approved'
+      // forever, since nothing ever "dispatches" a card that went to stock.
+      // Owner's decision (Sep 2026): they get their own terminal status,
+      // 'in_finished_goods', kept distinct from real customer dispatches so
+      // reports don't conflate the two. Guarded, so it settles any such order
+      // once and stays a no-op afterwards.
+      await pool.query(`
+        UPDATE orders o SET status='in_finished_goods'
+         WHERE o.status='qc_approved'
+           AND EXISTS (SELECT 1 FROM job_cards jc WHERE jc.order_id=o.id)
+           AND NOT EXISTS (
+             SELECT 1 FROM job_cards jc
+              WHERE jc.order_id=o.id
+                AND jc.status NOT IN ('dispatched','resolved_dispatched','repaired_dispatched')
+                AND NOT (jc.status='qc_approved' AND jc.qc_route='finished_goods'
+                         AND COALESCE(jc.qc_dispatch_qty,0)=0))
+           AND EXISTS (
+             SELECT 1 FROM job_cards jc
+              WHERE jc.order_id=o.id AND jc.status='qc_approved'
+                AND jc.qc_route='finished_goods' AND COALESCE(jc.qc_dispatch_qty,0)=0)`);
 
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's

@@ -497,19 +497,29 @@ router.post('/:id/daily-report', authenticate, authorize('production', 'owner', 
 //   in_progress  → any card in_progress or on_hold
 //   job_card_created → otherwise (cards exist but none started)
 async function syncOrderStatus(db, orderId, userId) {
-  const cards = await db.all('SELECT status FROM job_cards WHERE order_id=$1', [orderId]);
+  const cards = await db.all(
+    'SELECT status, qc_route, qc_dispatch_qty FROM job_cards WHERE order_id=$1', [orderId]);
   if (!cards.length) return;
 
   const statuses = cards.map(c => c.status);
   let newOrderStatus;
 
+  // A card whose whole quantity went into Finished Goods stock is finished —
+  // nothing will ever dispatch it — but it stays 'qc_approved' because the
+  // inventory settle keys off that state. Treat it as done here.
+  const toFg = (c) => c.status === 'qc_approved' && c.qc_route === 'finished_goods'
+    && (Number(c.qc_dispatch_qty) || 0) === 0;
+
   // A resolved query ends at 'resolved_dispatched' and a repaired return at
   // 'repaired_dispatched' — both are out the door, same as 'dispatched'.
   const DISPATCHED = ['dispatched', 'resolved_dispatched', 'repaired_dispatched'];
-  const nonDispatched = statuses.filter(s => !DISPATCHED.includes(s));
+  const done = (c) => DISPATCHED.includes(c.status) || toFg(c);
+  const nonDispatched = cards.filter(c => !done(c)).map(c => c.status);
 
-  if (statuses.every(s => DISPATCHED.includes(s))) {
-    newOrderStatus = 'dispatched';
+  if (cards.every(done)) {
+    // All finished. If any of it went to stock rather than out the door, say
+    // so plainly instead of calling it dispatched.
+    newOrderStatus = cards.some(toFg) ? 'in_finished_goods' : 'dispatched';
   } else if (nonDispatched.length > 0 && nonDispatched.every(s => s === 'qc_approved')) {
     // All remaining (non-dispatched) cards must be qc_approved
     newOrderStatus = 'qc_approved';
@@ -526,6 +536,8 @@ async function syncOrderStatus(db, orderId, userId) {
 
   // Don't overwrite terminal/upstream statuses or active query statuses
   const locked = ['pending_approval', 'approved', 'rejected', 'customer_query', 'product_return', 'resolved_dispatched'];
+  // 'in_finished_goods' is terminal too, but must still yield if a card later
+  // gets dispatched (e.g. stock pulled back out), so it is not locked here.
   if (locked.includes(order.status)) return;
 
   await db.run('UPDATE orders SET status=$1 WHERE id=$2', [newOrderStatus, orderId]);
