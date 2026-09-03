@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import api from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import StatusBadge from '../components/ui/StatusBadge';
-import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, PRODUCTION_STAGES, isDispatched } from '../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, PRODUCTION_STAGES, isDispatched, awaitingDispatch } from '../lib/utils';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle, ClipboardList, CheckCircle, Clock, TrendingUp,
@@ -380,7 +380,7 @@ function OwnerAdminDashboard() {
   const onHold     = jobCards.filter(jc => jc.status === 'on_hold');
   const urgent     = jobCards.filter(jc => {
     const d = daysUntil(jc.dispatch_date);
-    return d !== null && d <= 5 && !isDispatched(jc.status);
+    return d !== null && d <= 5 && awaitingDispatch(jc);
   });
 
   const pendingPOs  = purchaseOrders.filter(po => ['pending','approved'].includes(po.status));
@@ -436,7 +436,7 @@ function OwnerAdminDashboard() {
                           <span className="font-semibold text-sm text-gray-900">{jc.job_card_no}</span>
                           <span className="text-gray-400">·</span>
                           <span className="text-sm text-gray-600">{jc.customer_code}</span>
-                          <StatusBadge status={jc.status} />
+                          <StatusBadge jc={jc} />
                         </Link>
                         {user.role === 'owner' && (
                           <button
@@ -1151,14 +1151,14 @@ function ProductionDashboard() {
   const qcPending  = pool.filter(jc => jc.status === 'qc_pending');
   const urgent     = pool.filter(jc => {
     const d = daysUntil(jc.dispatch_date);
-    return d !== null && d <= 5 && !isDispatched(jc.status);
+    return d !== null && d <= 5 && awaitingDispatch(jc);
   });
   const overdue    = pool.filter(jc => {
     const d = daysUntil(jc.dispatch_date);
-    return d !== null && d < 0 && !isDispatched(jc.status);
+    return d !== null && d < 0 && awaitingDispatch(jc);
   });
 
-  const activeCards = pool.filter(jc => !isDispatched(jc.status));
+  const activeCards = pool.filter(jc => awaitingDispatch(jc));
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -1195,7 +1195,7 @@ function ProductionDashboard() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-sm text-gray-900">{jc.job_card_no}</span>
-                          <StatusBadge status={jc.status} />
+                          <StatusBadge jc={jc} />
                         </div>
                         <div className="text-xs text-gray-500 mt-0.5">{jc.customer_code}{jc.product_name && ` · ${jc.product_name}`}</div>
                       </div>
@@ -1225,7 +1225,7 @@ function ProductionDashboard() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-sm text-gray-900">{jc.job_card_no}</span>
-                        <StatusBadge status={jc.status} />
+                        <StatusBadge jc={jc} />
                       </div>
                       <div className="text-xs text-gray-500 mt-0.5">
                         {jc.customer_code}{jc.product_name && ` · ${jc.product_name}`}

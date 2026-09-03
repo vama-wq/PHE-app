@@ -281,3 +281,14 @@ export async function downloadExcel(exportType, filename) {
 // them belong in "upcoming"/"urgent"/"active" lists.
 export const DISPATCHED_STATUSES = ['dispatched', 'resolved_dispatched', 'repaired_dispatched'];
 export const isDispatched = (status) => DISPATCHED_STATUSES.includes(status);
+
+// QC can route a card's whole quantity into Finished Goods stock. Those cards
+// stay 'qc_approved' (the inventory settle keys off exactly that state), but
+// there is nothing left to send — the dispatch endpoint refuses them too. So
+// they are finished work and must not appear in upcoming/urgent dispatch lists.
+export const isAllToFinishedGoods = (jc) =>
+  jc?.status === 'qc_approved' && jc?.qc_route === 'finished_goods'
+  && (Number(jc?.qc_dispatch_qty) || 0) === 0;
+
+// One question the whole UI should ask: is this card still waiting to go out?
+export const awaitingDispatch = (jc) => !isDispatched(jc?.status) && !isAllToFinishedGoods(jc);

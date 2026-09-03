@@ -158,7 +158,7 @@ export default function JobCardList() {
                     )}
                   </td>
                   <td className="table-cell">
-                    <StatusBadge status={jc.status} />
+                    <StatusBadge jc={jc} />
                     {jc.status === 'in_progress' && jc.current_stage > 0 && (
                       <div className="text-xs text-gray-400 mt-0.5">{getStageLabel(jc.current_stage)}</div>
                     )}
