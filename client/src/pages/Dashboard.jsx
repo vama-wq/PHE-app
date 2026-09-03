@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import api from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import StatusBadge from '../components/ui/StatusBadge';
-import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, PRODUCTION_STAGES } from '../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, ACTIVITY_ICONS, PRODUCTION_STAGES, isDispatched } from '../lib/utils';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle, ClipboardList, CheckCircle, Clock, TrendingUp,
@@ -380,7 +380,7 @@ function OwnerAdminDashboard() {
   const onHold     = jobCards.filter(jc => jc.status === 'on_hold');
   const urgent     = jobCards.filter(jc => {
     const d = daysUntil(jc.dispatch_date);
-    return d !== null && d <= 5 && !['dispatched'].includes(jc.status);
+    return d !== null && d <= 5 && !isDispatched(jc.status);
   });
 
   const pendingPOs  = purchaseOrders.filter(po => ['pending','approved'].includes(po.status));
@@ -747,7 +747,7 @@ function AccountsDashboard() {
   // This month's recorded expenses (Account Statement) — cash box view
   const thisMonthExpense = (statement?.category_totals || []).reduce((s, c) => s + Number(c.total || 0), 0);
 
-  const active        = orders.filter(o => o.status !== 'dispatched');
+  const active        = orders.filter(o => !isDispatched(o.status));
   const totalValue    = active.reduce((s, o) => s + (o.total_amount || 0), 0);
   const totalAdv      = active.reduce((s, o) => s + (o.advance_paid || 0), 0);
   const totalBalance  = active.reduce((s, o) => s + (o.balance_due  || 0), 0);
@@ -1151,14 +1151,14 @@ function ProductionDashboard() {
   const qcPending  = pool.filter(jc => jc.status === 'qc_pending');
   const urgent     = pool.filter(jc => {
     const d = daysUntil(jc.dispatch_date);
-    return d !== null && d <= 5 && !['dispatched'].includes(jc.status);
+    return d !== null && d <= 5 && !isDispatched(jc.status);
   });
   const overdue    = pool.filter(jc => {
     const d = daysUntil(jc.dispatch_date);
-    return d !== null && d < 0 && !['dispatched'].includes(jc.status);
+    return d !== null && d < 0 && !isDispatched(jc.status);
   });
 
-  const activeCards = pool.filter(jc => !['dispatched'].includes(jc.status));
+  const activeCards = pool.filter(jc => !isDispatched(jc.status));
 
   return (
     <div className="p-6 max-w-7xl mx-auto">

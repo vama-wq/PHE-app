@@ -503,9 +503,12 @@ async function syncOrderStatus(db, orderId, userId) {
   const statuses = cards.map(c => c.status);
   let newOrderStatus;
 
-  const nonDispatched = statuses.filter(s => s !== 'dispatched');
+  // A resolved query ends at 'resolved_dispatched' and a repaired return at
+  // 'repaired_dispatched' — both are out the door, same as 'dispatched'.
+  const DISPATCHED = ['dispatched', 'resolved_dispatched', 'repaired_dispatched'];
+  const nonDispatched = statuses.filter(s => !DISPATCHED.includes(s));
 
-  if (statuses.every(s => s === 'dispatched')) {
+  if (statuses.every(s => DISPATCHED.includes(s))) {
     newOrderStatus = 'dispatched';
   } else if (nonDispatched.length > 0 && nonDispatched.every(s => s === 'qc_approved')) {
     // All remaining (non-dispatched) cards must be qc_approved

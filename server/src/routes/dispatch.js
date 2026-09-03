@@ -135,7 +135,8 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
     // exemption from the pieces still to come.
     const pending = await db.get(
       `SELECT COUNT(*)::int AS n FROM job_cards
-        WHERE (id=$1 OR parent_job_card_id=$1) AND status <> 'dispatched'`,
+        WHERE (id=$1 OR parent_job_card_id=$1)
+          AND status NOT IN ('dispatched','resolved_dispatched','repaired_dispatched')`,
       [repairQuery.job_card_id]);
     if (!pending.n) {
       await db.run(

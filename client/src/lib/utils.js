@@ -274,3 +274,10 @@ export async function downloadExcel(exportType, filename) {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+// Job cards / orders that have already left the building. 'dispatched' is the
+// normal path; a resolved customer query ends at 'resolved_dispatched' and a
+// repaired return at 'repaired_dispatched' — all three are done, so none of
+// them belong in "upcoming"/"urgent"/"active" lists.
+export const DISPATCHED_STATUSES = ['dispatched', 'resolved_dispatched', 'repaired_dispatched'];
+export const isDispatched = (status) => DISPATCHED_STATUSES.includes(status);
