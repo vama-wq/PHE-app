@@ -38,6 +38,69 @@ router.get('/categories', authenticate, async (req, res) => {
   res.json(rows.map(r => r.category));
 });
 
+// ── Drawing versions ────────────────────────────────────────────────────────
+// A new drawing never overwrites: it becomes the next version, the previous
+// current one is marked superseded (file kept), and the item's drawing_file
+// is repointed so job cards, POs and slips pick up the new one automatically.
+async function addDrawingVersion(db, itemId, { file_path, original_name, notes, userId, restoredFrom = null }) {
+  const last = await db.get('SELECT COALESCE(MAX(version),0)::int AS v FROM inventory_item_drawings WHERE item_id=$1', [itemId]);
+  const version = (last?.v || 0) + 1;
+  await db.run('UPDATE inventory_item_drawings SET superseded_at=NOW() WHERE item_id=$1 AND superseded_at IS NULL', [itemId]);
+  const r = await db.insert(
+    `INSERT INTO inventory_item_drawings (item_id, version, file_path, original_name, notes, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [itemId, version, file_path, original_name || null,
+     restoredFrom ? `Restored from version ${restoredFrom}${notes ? ` — ${notes}` : ''}` : (notes || null), userId]);
+  await db.run('UPDATE inventory_items SET drawing_file=$1, drawing_original_name=$2 WHERE id=$3',
+    [file_path, original_name || null, itemId]);
+  return { id: r.lastInsertRowid, version };
+}
+
+async function drawingTimeline(db, itemId) {
+  return db.all(
+    `SELECT d.*, u.name AS uploaded_by_name
+       FROM inventory_item_drawings d LEFT JOIN users u ON u.id = d.uploaded_by
+      WHERE d.item_id=$1 ORDER BY d.version DESC`, [itemId]);
+}
+
+// Owner + design see the full history (admin too — they can also upload).
+router.get('/:id/drawings', authenticate, authorize('owner', 'design', 'admin'), async (req, res) => {
+  const db = getDB();
+  res.json(await drawingTimeline(db, req.params.id));
+});
+
+// Design attaches a newly approved drawing: it replaces the one in use and the
+// old one drops out of sight but stays in the timeline.
+router.post('/:id/drawings', authenticate, authorize('owner', 'admin', 'design'), ...uploadItemDrawing, async (req, res) => {
+  const db = getDB();
+  const item = await db.get('SELECT id, item_code FROM inventory_items WHERE id=$1', [req.params.id]);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  if (!req.file) return res.status(400).json({ error: 'Attach the drawing file' });
+  const { version } = await addDrawingVersion(db, item.id, {
+    file_path: req.file.storagePath, original_name: req.file.originalname,
+    notes: (req.body.notes || '').trim() || null, userId: req.user.id,
+  });
+  await logActivity(null, null, 'inventory_drawing',
+    `${item.item_code}: drawing version ${version} attached${req.body.notes ? ` — ${String(req.body.notes).trim()}` : ''}`, req.user.id);
+  res.status(201).json({ message: `Drawing version ${version} is now in use`, version, drawings: await drawingTimeline(db, item.id) });
+});
+
+// Owner can bring an older version back into use. It is recorded as a new
+// version (pointing at the old file) so the timeline stays a straight line.
+router.put('/:id/drawings/:did/restore', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const d = await db.get('SELECT * FROM inventory_item_drawings WHERE id=$1 AND item_id=$2', [req.params.did, req.params.id]);
+  if (!d) return res.status(404).json({ error: 'Drawing version not found' });
+  if (!d.superseded_at) return res.status(400).json({ error: 'That version is already the one in use' });
+  const item = await db.get('SELECT item_code FROM inventory_items WHERE id=$1', [req.params.id]);
+  const { version } = await addDrawingVersion(db, req.params.id, {
+    file_path: d.file_path, original_name: d.original_name, userId: req.user.id, restoredFrom: d.version,
+  });
+  await logActivity(null, null, 'inventory_drawing',
+    `${item?.item_code || 'Item'}: drawing version ${d.version} restored as version ${version}`, req.user.id);
+  res.json({ message: `Version ${d.version} restored as version ${version}`, drawings: await drawingTimeline(db, req.params.id) });
+});
+
 router.get('/:id', authenticate, async (req, res) => {
   const db = getDB();
   const item = await db.get('SELECT * FROM inventory_items WHERE id=$1', [req.params.id]);
@@ -110,6 +173,13 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), ...uploa
         drawingFile, drawingOriginalName, req.user.id, approvalStatus
       ]
     );
+    // Record the attached drawing as version 1 so the timeline starts here.
+    if (drawingFile) {
+      await db.run(
+        `INSERT INTO inventory_item_drawings (item_id, version, file_path, original_name, notes, uploaded_by)
+         VALUES ($1, 1, $2, $3, 'Original drawing', $4)`,
+        [r.lastInsertRowid, drawingFile, drawingOriginalName || null, req.user.id]);
+    }
 
     if (Number(current_stock) > 0) {
       await db.run(
@@ -195,20 +265,17 @@ router.put('/:id', authenticate, authorize('owner', 'admin'), ...uploadItemDrawi
   const cat = (category || '').trim() || null;
 
   try {
+    await db.run(
+      `UPDATE inventory_items SET item_code=$1, name=$2, name_gu=$3, category=$4, unit=$5, reorder_level=$6, unit_cost=$7, min_order_qty=$8, notes=$9 WHERE id=$10`,
+      [item_code?.toUpperCase(), name, guName||null, cat, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null, req.params.id]
+    );
+    // A drawing on the edit form is a new version, not an overwrite — the
+    // previous one stays in the timeline.
     if (req.file) {
-      await db.run(
-        `UPDATE inventory_items
-         SET item_code=$1, name=$2, name_gu=$3, category=$4, unit=$5, reorder_level=$6, unit_cost=$7, min_order_qty=$8, notes=$9,
-             drawing_file=$10, drawing_original_name=$11
-         WHERE id=$12`,
-        [item_code?.toUpperCase(), name, guName||null, cat, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null,
-         req.file.storagePath, req.file.originalname, req.params.id]
-      );
-    } else {
-      await db.run(
-        `UPDATE inventory_items SET item_code=$1, name=$2, name_gu=$3, category=$4, unit=$5, reorder_level=$6, unit_cost=$7, min_order_qty=$8, notes=$9 WHERE id=$10`,
-        [item_code?.toUpperCase(), name, guName||null, cat, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null, req.params.id]
-      );
+      await addDrawingVersion(db, req.params.id, {
+        file_path: req.file.storagePath, original_name: req.file.originalname,
+        notes: 'Replaced from the item edit form', userId: req.user.id,
+      });
     }
     res.json({ message: 'Updated' });
   } catch (e) {

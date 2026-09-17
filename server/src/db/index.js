@@ -1954,6 +1954,35 @@ async function initDB(retries = 20, delayMs = 10000) {
         }
       }
 
+      // ── Inventory drawing versions ─────────────────────────────────────────
+      // Design can now attach a newly approved drawing to an inventory item.
+      // Each upload is a new version; the item's drawing_file keeps pointing at
+      // the current one (so every existing consumer keeps working), older
+      // versions are hidden from use but never deleted — the owner and design
+      // see the full timeline. Backfill: every item that already has a drawing
+      // gets it recorded as version 1 (dated to the item's creation).
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS inventory_item_drawings (
+          id SERIAL PRIMARY KEY,
+          item_id INTEGER NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
+          version INTEGER NOT NULL,
+          file_path TEXT NOT NULL,
+          original_name TEXT,
+          notes TEXT,
+          uploaded_by INTEGER REFERENCES users(id),
+          uploaded_at TIMESTAMPTZ DEFAULT NOW(),
+          superseded_at TIMESTAMPTZ,
+          UNIQUE(item_id, version)
+        )
+      `);
+      await pool.query(`
+        INSERT INTO inventory_item_drawings (item_id, version, file_path, original_name, notes, uploaded_by, uploaded_at)
+        SELECT ii.id, 1, ii.drawing_file, ii.drawing_original_name, 'Existing drawing (recorded when versioning was introduced)',
+               ii.created_by, COALESCE(ii.created_at, NOW())
+          FROM inventory_items ii
+         WHERE ii.drawing_file IS NOT NULL AND ii.drawing_file <> ''
+           AND NOT EXISTS (SELECT 1 FROM inventory_item_drawings d WHERE d.item_id = ii.id)`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.

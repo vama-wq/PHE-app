@@ -5,7 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import CategorySelect from '../../components/CategorySelect';
 import { fmtDateTime, fmtDate } from '../../lib/utils';
-import { ArrowLeft, Plus, TrendingUp, TrendingDown, Upload, ExternalLink, FileText, Trash2 } from 'lucide-react';
+import { ArrowLeft, Plus, TrendingUp, TrendingDown, Upload, ExternalLink, FileText, Trash2, History, RotateCcw, CheckCircle } from 'lucide-react';
 
 export default function InventoryDetail() {
   const { id } = useParams();
@@ -16,8 +16,23 @@ export default function InventoryDetail() {
   const [showTransaction, setShowTransaction] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
 
-  const load = () => api.get(`/inventory/${id}`).then(r => setItem(r.data)).finally(() => setLoading(false));
+  const [drawings, setDrawings] = useState([]);
+  const [showDrawingModal, setShowDrawingModal] = useState(false);
+  const loadDrawings = () => api.get(`/inventory/${id}/drawings`).then(r => setDrawings(r.data)).catch(() => {});
+  const load = () => {
+    if (canSeeTimeline) loadDrawings();
+    return api.get(`/inventory/${id}`).then(r => setItem(r.data)).finally(() => setLoading(false));
+  };
   useEffect(() => { load(); }, [id]);
+
+  const restoreDrawing = async (d) => {
+    if (!window.confirm(`Bring version ${d.version} back into use?\n\nIt is recorded as a new version, so the timeline stays intact.`)) return;
+    try {
+      const r = await api.put(`/inventory/${id}/drawings/${d.id}/restore`);
+      setDrawings(r.data.drawings);
+      load();
+    } catch (e) { alert(e.response?.data?.error || 'Failed to restore'); }
+  };
 
   if (loading) return <div className="p-8 text-center text-gray-400">Loading...</div>;
   if (!item) return <div className="p-8 text-center text-red-500">Item not found</div>;
@@ -25,6 +40,10 @@ export default function InventoryDetail() {
   // Reorder level 0 = order-driven item (bought only when an order needs it) — never "low".
   const isLow = Number(item.reorder_level) > 0 && item.current_stock <= item.reorder_level;
   const canManage = ['owner', 'admin'].includes(user.role);
+  // Design keeps the drawings current: they attach newly approved ones, which
+  // supersede the old (hidden from use, kept in the timeline).
+  const canDraw = ['owner', 'admin', 'design'].includes(user.role);
+  const canSeeTimeline = ['owner', 'admin', 'design'].includes(user.role);
   const canTransact = ['owner', 'admin', 'design'].includes(user.role); // QC can add stock transactions (no cost shown)
   const canDelete = ['owner', 'admin'].includes(user.role);
   const showCost = user.role !== 'design'; // hide all landed-cost figures from QC
@@ -97,22 +116,65 @@ export default function InventoryDetail() {
               {item.category && <div className="text-xs text-gray-500 mt-1">Category: <span className="font-medium text-gray-700">{item.category}</span></div>}
             </div>
           </div>
-          {item.drawing_file && (
-            <div className="border-t border-gray-100 pt-3">
-              <div className="text-xs text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1">
-                <FileText size={11} /> Drawing
-              </div>
-              <a
-                href={`/uploads/${item.drawing_file}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 text-brand-600 text-sm hover:underline"
-              >
+          <div className="border-t border-gray-100 pt-3">
+            <div className="text-xs text-gray-500 uppercase tracking-wide mb-2 flex items-center justify-between gap-1">
+              <span className="flex items-center gap-1"><FileText size={11} /> Drawing in use</span>
+              {canDraw && (
+                <button className="text-brand-600 hover:underline normal-case tracking-normal text-xs font-medium"
+                  onClick={() => setShowDrawingModal(true)}>
+                  {item.drawing_file ? 'Add new version' : 'Attach drawing'}
+                </button>
+              )}
+            </div>
+            {item.drawing_file ? (
+              <a href={`/uploads/${item.drawing_file}`} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-2 text-brand-600 text-sm hover:underline">
                 <ExternalLink size={13} />
                 <span className="truncate">{item.drawing_original_name || 'View Drawing'}</span>
               </a>
-            </div>
-          )}
+            ) : (
+              <span className="text-xs text-gray-400 italic">No drawing attached yet.</span>
+            )}
+
+            {/* Timeline — owner + design. Superseded versions stay readable but
+                are clearly out of use, so nothing is lost when a drawing changes. */}
+            {canSeeTimeline && drawings.length > 0 && (
+              <div className="mt-4">
+                <div className="text-xs text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1">
+                  <History size={11} /> Drawing history ({drawings.length})
+                </div>
+                <ol className="space-y-2">
+                  {drawings.map(d => {
+                    const current = !d.superseded_at;
+                    return (
+                      <li key={d.id} className={`text-xs border-l-2 pl-2.5 py-0.5 ${current ? 'border-green-400' : 'border-gray-200'}`}>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`font-semibold ${current ? 'text-green-700' : 'text-gray-500'}`}>v{d.version}</span>
+                          {current
+                            ? <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-green-700 bg-green-50 rounded px-1 py-0.5"><CheckCircle size={9} /> In use</span>
+                            : <span className="text-[10px] text-gray-400 bg-gray-50 rounded px-1 py-0.5">Superseded {fmtDate(d.superseded_at)}</span>}
+                          <a href={`/uploads/${d.file_path}`} target="_blank" rel="noopener noreferrer"
+                            className={`truncate hover:underline ${current ? 'text-brand-600' : 'text-gray-500'}`}>
+                            {d.original_name || 'drawing'}
+                          </a>
+                          {!current && user.role === 'owner' && (
+                            <button className="ml-auto text-[10px] text-brand-600 hover:underline inline-flex items-center gap-0.5"
+                              onClick={() => restoreDrawing(d)} title="Bring this version back into use">
+                              <RotateCcw size={9} /> Restore
+                            </button>
+                          )}
+                        </div>
+                        <div className="text-gray-400 mt-0.5">
+                          {fmtDateTime(d.uploaded_at)}{d.uploaded_by_name ? ` · ${d.uploaded_by_name}` : ''}
+                        </div>
+                        {d.notes && <div className="text-gray-500 mt-0.5">{d.notes}</div>}
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="card overflow-hidden lg:col-span-3">
@@ -219,6 +281,7 @@ export default function InventoryDetail() {
 
       {showTransaction && <TransactionModal itemId={id} item={item} onClose={() => setShowTransaction(false)} onSave={() => { setShowTransaction(false); load(); }} />}
       {showEdit && <EditItemModal item={item} onClose={() => setShowEdit(false)} onSave={() => { setShowEdit(false); load(); }} />}
+      {showDrawingModal && <NewDrawingModal itemId={id} item={item} hasCurrent={!!item.drawing_file} onClose={() => setShowDrawingModal(false)} onSaved={() => { setShowDrawingModal(false); load(); }} />}
     </div>
   );
 }
@@ -345,6 +408,65 @@ function EditItemModal({ item, onClose, onSave }) {
         <div className="flex gap-3">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary flex-1" disabled={saving}>{saving ? 'Saving...' : 'Update'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// Design attaches a newly approved drawing. It becomes the version in use; the
+// previous one is superseded — hidden from the people who consume drawings,
+// but kept in the item's timeline for the owner and design.
+function NewDrawingModal({ itemId, item, hasCurrent, onClose, onSaved }) {
+  const [file, setFile] = useState(null);
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!file) return setError('Choose the approved drawing file.');
+    setSaving(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('drawing', file);
+      if (notes.trim()) fd.append('notes', notes.trim());
+      await api.post(`/inventory/${itemId}/drawings`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      onSaved();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to attach drawing');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title={`New approved drawing — ${item.item_code}`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <p className="text-xs text-gray-500">
+          {hasCurrent
+            ? 'This becomes the drawing in use everywhere. The current one is kept in the history and stops being used.'
+            : 'This becomes the drawing in use everywhere for this item.'}
+        </p>
+        <div>
+          <label className="label">Drawing file *</label>
+          <label className="flex items-center gap-2 border border-dashed border-gray-300 rounded-lg px-3 py-2.5 cursor-pointer hover:border-brand-400">
+            <Upload size={15} className="text-gray-400" />
+            <span className="text-sm text-gray-600 truncate">{file ? file.name : 'Click to choose the approved drawing...'}</span>
+            <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp"
+              onChange={e => setFile(e.target.files[0] || null)} />
+          </label>
+        </div>
+        <div>
+          <label className="label">What changed? (optional)</label>
+          <input className="input" value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="e.g. PCD corrected to 56.3, approved 17 Sep" />
+        </div>
+        {error && <div className="text-sm text-red-600">{error}</div>}
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={saving}>
+            {saving ? 'Attaching...' : 'Attach as new version'}
+          </button>
         </div>
       </form>
     </Modal>
