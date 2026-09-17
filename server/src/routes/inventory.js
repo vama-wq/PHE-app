@@ -140,6 +140,15 @@ router.get('/:id', authenticate, async (req, res) => {
 router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), ...uploadItemDrawing, async (req, res) => {
   const { item_code, name, name_gu, category, unit, current_stock, reorder_level, unit_cost, min_order_qty, notes } = req.body;
   if (!item_code || !name || !unit) return res.status(400).json({ error: 'Code, name and unit required' });
+  // Owner's rule (Sep 2026): an inventory item may not exist without its
+  // drawing — no item can be bought, QC'd or built against a blank spec. This
+  // covers every UI path, since they all post here.
+  if (!req.file) {
+    return res.status(400).json({
+      error: 'A drawing is required — attach the drawing PDF or a photo of it before adding this item.',
+      code: 'DRAWING_REQUIRED',
+    });
+  }
 
   const db = getDB();
   const drawingFile = req.file?.storagePath || null;

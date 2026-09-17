@@ -20,6 +20,7 @@ export default function NewItemModal({ onClose, onSave, initial, note, submitLab
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!drawing) return setError('Attach the item drawing (PDF or a photo of it) — it is required.');
     setSaving(true);
     try {
       // Use FormData to support optional drawing upload
@@ -54,11 +55,11 @@ export default function NewItemModal({ onClose, onSave, initial, note, submitLab
           <div><label className="label">Unit Price (₹)</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 12.50" value={f.unit_cost} onChange={set('unit_cost')} /></div>
           <div><label className="label">Notes</label><input className="input" value={f.notes} onChange={set('notes')} /></div>
           <div className="col-span-2">
-            <label className="label">Item Drawing <span className="font-normal normal-case text-gray-400">(PDF or image, optional)</span></label>
-            <label className="flex items-center gap-2 cursor-pointer border border-gray-200 rounded-lg px-3 py-2 hover:border-brand-400 transition-colors bg-gray-50">
+            <label className="label">Item Drawing * <span className="font-normal normal-case text-gray-400">(PDF or a photo of the drawing)</span></label>
+            <label className={`flex items-center gap-2 cursor-pointer border rounded-lg px-3 py-2 transition-colors ${drawing ? 'border-gray-200 bg-gray-50 hover:border-brand-400' : 'border-red-200 bg-red-50/40 hover:border-red-400'}`}>
               <Upload size={15} className="text-gray-400 flex-shrink-0" />
               <span className="text-sm text-gray-600 flex-1 truncate">
-                {drawing ? drawing.name : 'Click to attach drawing...'}
+                {drawing ? drawing.name : 'Required — click to attach the drawing or a photo of it'}
               </span>
               <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden"
                 onChange={e => setDrawing(e.target.files[0] || null)} />

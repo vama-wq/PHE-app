@@ -504,6 +504,18 @@ router.post('/inventory', authenticate, authorize('owner', 'admin'), upload.sing
 
       const { storagePath = null, filename: drawingFilename = null } = uploadedDrawings.get(i) || {};
 
+      // Owner's rule: a NEW inventory item must arrive with its drawing. An
+      // existing item being updated keeps whatever drawing it already has, so
+      // routine bulk updates are unaffected.
+      if (!storagePath) {
+        const known = await db.get('SELECT drawing_file FROM inventory_items WHERE item_code=$1',
+          [str(row.item_code).toUpperCase()]);
+        if (!known) {
+          errors.push(`Row ${rowNum}: ${str(row.item_code)} is new and has no drawing — attach the drawing (embedded image or Drive link) and re-import`);
+          skipped++; continue;
+        }
+      }
+
       try {
         await db.run(`
           INSERT INTO inventory_items (item_code, name, name_gu, category, unit, reorder_level, min_order_qty, unit_cost, notes, drawing_file, drawing_original_name, created_by, approval_status)
