@@ -89,6 +89,15 @@ async function activeCapaFor(db, jobCardId) {
     [jobCardId]);
 }
 
+// Every CAPA currently blocking work — the dashboard uses this so a locked
+// card offers the CAPA rather than the legacy "approve hold" shortcut.
+router.get('/active', authenticate, async (req, res) => {
+  const db = getDB();
+  res.json(await db.all(
+    `SELECT c.id, c.job_card_id, c.status, c.trigger_type, c.trigger_total
+       FROM capa_reports c WHERE c.status IN ('open','awaiting_approval') ORDER BY c.id DESC`));
+});
+
 // ── GET the CAPA for a job card (active first, else latest) ──────────────────
 router.get('/job-card/:jobCardId', authenticate, async (req, res) => {
   const db = getDB();

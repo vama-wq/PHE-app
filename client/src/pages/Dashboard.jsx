@@ -7,8 +7,7 @@ import { Link } from 'react-router-dom';
 import {
   AlertTriangle, ClipboardList, CheckCircle, Clock, TrendingUp,
   Package, XCircle, ShoppingCart, FlaskConical, Wrench,
-  Truck, IndianRupee, Bell, DatabaseBackup, Banknote, Wallet, Boxes, Landmark,
-} from 'lucide-react';
+  Truck, IndianRupee, Bell, DatabaseBackup, Banknote, Wallet, Boxes, Landmark, ShieldAlert } from 'lucide-react';
 
 // ── Backup status badge (owner dashboard, top-right) ────────────────────────
 function BackupBadge({ backup }) {
@@ -326,6 +325,7 @@ function OwnerAdminDashboard() {
   const [statement, setStatement]         = useState(null);
   const [loading, setLoading]             = useState(true);
   const [approvingHold, setApprovingHold] = useState(null);
+  const [capas, setCapas] = useState([]); // open/awaiting CAPAs — these govern the lock, not the legacy hold
   const [backup, setBackup]               = useState(undefined);
 
   const hasOrders    = canSee(user, 'orders');
@@ -343,6 +343,7 @@ function OwnerAdminDashboard() {
     if (hasInventory) reqs.push(api.get('/inventory/low-stock').then(r => setLowStock(r.data)));
     if (hasPurchases) reqs.push(api.get('/purchase-orders').then(r => setPurchaseOrders(r.data)));
     if (hasJobCards)  reqs.push(api.get('/job-cards/rejections/all').then(r => setRejections(r.data)));
+    if (hasJobCards)  reqs.push(api.get('/capa/active').then(r => setCapas(r.data)).catch(() => {}));
     if (hasJobCards)  reqs.push(api.get('/job-cards/holds/active').then(r => setActiveHolds(r.data)));
     if (hasFinishedGoods) reqs.push(api.get('/finished-goods').then(r => setFinishedGoods(r.data)).catch(() => {}));
     if (hasPayroll)   reqs.push(api.get('/payroll/runs').then(r => setPayrollRuns(r.data)).catch(() => {}));
@@ -428,6 +429,7 @@ function OwnerAdminDashboard() {
                   // Fallback: find from rejections list for single-stage holds
                   const rej = !hold ? rejections.find(r => r.job_card_no === jc.job_card_no) : null;
                   const rejStageName = rej ? (PRODUCTION_STAGES.find(s => s.no === rej.stage_no)?.name || '') : '';
+                  const capa = capas.find(c => c.job_card_id === jc.id);
                   return (
                     <div key={jc.id} className="px-5 py-4 bg-red-50/30 hover:bg-red-50/50 transition-colors">
                       {/* Top row: card id + approve button */}
@@ -438,7 +440,16 @@ function OwnerAdminDashboard() {
                           <span className="text-sm text-gray-600">{jc.customer_code}</span>
                           <StatusBadge jc={jc} />
                         </Link>
-                        {user.role === 'owner' && (
+                        {/* A card locked by a CAPA is unlocked by approving the
+                            CAPA, never by the legacy hold button — that would
+                            leave the report open and the cause unrecorded. */}
+                        {capa ? (
+                          <Link to={`/capa/${capa.id}`}
+                            className="btn-primary btn-sm flex items-center gap-1 text-xs py-1 px-2.5 flex-shrink-0 whitespace-nowrap">
+                            <ShieldAlert size={12} />
+                            {capa.status === 'awaiting_approval' ? 'Review CAPA' : 'Open CAPA'}
+                          </Link>
+                        ) : user.role === 'owner' && (
                           <button
                             className="btn-primary btn-sm flex items-center gap-1 text-xs py-1 px-2.5 flex-shrink-0"
                             onClick={(e) => handleApproveHold(jc, e)}
@@ -449,6 +460,14 @@ function OwnerAdminDashboard() {
                           </button>
                         )}
                       </div>
+
+                      {capa && (
+                        <div className="text-xs text-red-700 mt-1 ml-0.5">
+                          {capa.status === 'awaiting_approval'
+                            ? 'CAPA report complete — awaiting your approval to unlock.'
+                            : 'CAPA report required — production must record the root cause before work resumes.'}
+                        </div>
+                      )}
 
                       {/* Hold detail row */}
                       {hold && isCumulative && (
