@@ -1983,6 +1983,29 @@ async function initDB(retries = 20, delayMs = 10000) {
          WHERE ii.drawing_file IS NOT NULL AND ii.drawing_file <> ''
            AND NOT EXISTS (SELECT 1 FROM inventory_item_drawings d WHERE d.item_id = ii.id)`);
 
+      // Owner override (17 Sep 2026): PT_RPH-7.5KW-3IN1-2 was locked by CAPA #3
+      // (3 pcs rejected at stage 8 Draw). The owner chose to resume work without
+      // completing the report, so the CAPA is closed as waived — recorded rather
+      // than deleted, so the history shows a CAPA was raised and consciously
+      // set aside — and the card returns to in_progress. Guarded on the CAPA
+      // still being open with no root cause, so it applies once.
+      await pool.query(`
+        UPDATE capa_reports
+           SET status='approved', approved_by=(SELECT id FROM users WHERE role='owner' LIMIT 1),
+               approved_at=NOW(), updated_at=NOW(),
+               problem_statement=COALESCE(problem_statement,
+                 '3 pieces rejected at stage 8 (Draw) — after draw the light test passed but a creak showed on the bend.'),
+               root_cause=COALESCE(root_cause,
+                 'Not investigated — the owner waived the CAPA and released the job card to resume production.'),
+               corrective_action=COALESCE(corrective_action, 'None recorded (CAPA waived by owner).'),
+               preventive_action=COALESCE(preventive_action, 'None recorded (CAPA waived by owner).')
+         WHERE id=3 AND status='open' AND root_cause IS NULL`);
+      await pool.query(`
+        UPDATE job_cards SET status='in_progress'
+         WHERE job_card_no='PT_RPH-7.5KW-3IN1-2' AND status='on_hold'
+           AND EXISTS (SELECT 1 FROM capa_reports c
+                        WHERE c.job_card_id=job_cards.id AND c.id=3 AND c.status='approved')`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
