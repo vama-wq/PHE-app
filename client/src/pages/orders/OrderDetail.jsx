@@ -1706,9 +1706,6 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
           <select className="input" value={f.plating_instructions ?? ''} onChange={set('plating_instructions')}>
             <option value="">— select —</option>
             {PLATING_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-            {f.plating_instructions && !PLATING_OPTIONS.includes(f.plating_instructions) && (
-              <option value={f.plating_instructions}>{f.plating_instructions} (existing)</option>
-            )}
           </select>
         </div>
         <div>

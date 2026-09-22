@@ -2006,6 +2006,32 @@ async function initDB(retries = 20, delayMs = 10000) {
            AND EXISTS (SELECT 1 FROM capa_reports c
                         WHERE c.job_card_id=job_cards.id AND c.id=3 AND c.status='approved')`);
 
+      // Plating instructions must come from the dropdown (owner, Sep 2026), but
+      // years of free text left 152 of 237 items on spellings like "NICKLE
+      // PLATING", "NONE", "ELECTRPOLISH" — the same five instructions written
+      // 19 different ways, which no filter or report could group. Normalise them
+      // onto the canonical five so existing orders stay editable and the new
+      // rule can be enforced. Case/spelling variants only; nothing ambiguous is
+      // touched, and rows already canonical are left alone.
+      await pool.query(`
+        UPDATE order_items SET plating_instructions =
+          CASE
+            WHEN TRIM(plating_instructions) ~* '^(none|no[[:space:]]*plating)$'   THEN 'No Plating'
+            WHEN TRIM(plating_instructions) ~* '(nickel|nickle)'                  THEN 'Nickel Plating'
+            WHEN TRIM(plating_instructions) ~* '(electro|electr)[[:space:]]*polish' THEN 'Electropolish'
+            WHEN TRIM(plating_instructions) ~* '(teflon|ptfe)'                    THEN 'Teflon Coating'
+            WHEN TRIM(plating_instructions) ~* 'buffing'                          THEN 'Buffing'
+            ELSE plating_instructions
+          END
+         WHERE plating_instructions IS NOT NULL
+           AND TRIM(plating_instructions) NOT IN
+               ('Nickel Plating','Electropolish','Teflon Coating','Buffing','No Plating')`);
+      // …and trim the stray whitespace ("No Plating " etc.) so the stored value
+      // matches the dropdown option exactly, not just after trimming.
+      await pool.query(`
+        UPDATE order_items SET plating_instructions = TRIM(plating_instructions)
+         WHERE plating_instructions IS NOT NULL AND plating_instructions <> TRIM(plating_instructions)`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.

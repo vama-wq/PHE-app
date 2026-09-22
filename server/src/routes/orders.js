@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
+const { PLATING_INSTRUCTIONS, isValidPlating } = require('../lib/plating');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, uploadQC, deleteFromStorage, copyInStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
@@ -387,6 +388,13 @@ router.get('/:id/items', authenticate, async (req, res) => {
 
 router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req, res) => {
   const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark, inventory_item_ids, copy_from_item_id } = req.body;
+  if (!isValidPlating(plating_instructions)) {
+    return res.status(400).json({
+      error: `Plating must be chosen from the list: ${PLATING_INSTRUCTIONS.join(', ')}.`,
+      code: 'PLATING_INVALID',
+    });
+  }
+
   if (!quantity) return res.status(400).json({ error: 'Quantity is required' });
 
   const db = getDB();
@@ -474,6 +482,12 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
 
 router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), async (req, res) => {
   const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark } = req.body;
+  if (!isValidPlating(plating_instructions)) {
+    return res.status(400).json({
+      error: `Plating must be chosen from the list: ${PLATING_INSTRUCTIONS.join(', ')}.`,
+      code: 'PLATING_INVALID',
+    });
+  }
   const db = getDB();
   await db.run(
     `UPDATE order_items SET product_code=$1, drawing_number=$2, tube_material=$3, tube_diameter=$4, wattage=$5,
@@ -808,6 +822,18 @@ router.put('/:id/resubmit', authenticate, authorize('admin', 'owner', 'accounts'
   const order = await db.get('SELECT id, status, order_code FROM orders WHERE id=$1', [req.params.id]);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.status !== 'rejected') return res.status(400).json({ error: 'Only rejected orders can be resubmitted' });
+  const badPlating = await db.all(
+    `SELECT drawing_number, plating_instructions FROM order_items
+      WHERE order_id=$1 AND COALESCE(TRIM(plating_instructions),'') <> ALL($2)`,
+    [req.params.id, PLATING_INSTRUCTIONS]);
+  if (badPlating.length) {
+    return res.status(400).json({
+      error: `Cannot send for approval — ${badPlating.length} item(s) have a plating instruction that is not on the list: `
+        + badPlating.map(b => `${b.drawing_number || 'item'} ("${b.plating_instructions || 'blank'}")`).join(', ')
+        + `. Pick one of: ${PLATING_INSTRUCTIONS.join(', ')}.`,
+      code: 'PLATING_INVALID',
+    });
+  }
   await db.run("UPDATE orders SET status='pending_approval', rejection_reason=NULL WHERE id=$1", [req.params.id]);
   await logActivity(req.params.id, null, 'order_resubmitted', `Order resubmitted for approval`, req.user.id);
   const owners = await db.all("SELECT id FROM users WHERE role='owner' AND id != $1", [req.user.id]);

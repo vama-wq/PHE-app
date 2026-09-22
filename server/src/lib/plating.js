@@ -1,3 +1,10 @@
+// The only plating instructions an order item may carry. Free text is refused:
+// years of "NICKLE PLATING" / "NONE" / "ELECTRPOLISH" variants made the same
+// instruction unsearchable and unreportable, so the dropdown is now the only
+// source. Legacy spellings were normalised onto these five.
+const PLATING_INSTRUCTIONS = ['Nickel Plating', 'Electropolish', 'Teflon Coating', 'Buffing', 'No Plating'];
+const isValidPlating = (v) => PLATING_INSTRUCTIONS.includes(String(v || '').trim());
+
 // Shared rules for the external-coating flow, used by the plating routes (which
 // record trips) and by the Account-Statement delete path (which unwinds them).
 // Keeping them in one place stops the two sides drifting apart.
@@ -30,6 +37,7 @@ const statusAfterTrip = (direction, vendor) =>
   direction === 'sent' ? sentStatus(vendor) : 'returned';
 
 module.exports = {
+  PLATING_INSTRUCTIONS, isValidPlating,
   PLATING_MATCH_SQL, PLATING_MATCH_RE, PLATING_COMPANIES,
   ONE_WAY_VENDORS, isOneWayVendor,
   sentStatus, statusAfterTrip,
