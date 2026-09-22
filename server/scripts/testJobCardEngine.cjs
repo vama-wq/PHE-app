@@ -25,7 +25,7 @@ const CARDS = [
       gauge: 23, wireDrawPct: 0.23, ohmsRangeMid: 21.689,
       ohmsRangeMin: 21.47211, ohmsRangeMax: 21.90589,
       terminalPinStuds: 4, spoolOhmsPerM: 4.97,
-      row19LengthsMm: [1176.02, 1166.02, 1161.02],
+      row19LengthsMm: [1176.02, 1166.02, 1161.02], h26: 4.938272,
     },
   },
   {
@@ -41,7 +41,7 @@ const CARDS = [
       gauge: 28, wireDrawPct: 0.31, ohmsRangeMid: 92.39866667,
       ohmsRangeMin: 91.47468, ohmsRangeMax: 93.32265333,
       terminalPinStuds: 4, spoolOhmsPerM: 12.79,
-      row19LengthsMm: [1424.432, 1414.432, 1409.432],
+      row19LengthsMm: [1424.432, 1414.432, 1409.432], h26: 4.938272,
     },
   },
   {
@@ -59,7 +59,7 @@ const CARDS = [
       terminalPinStuds: 3, spoolOhmsPerM: 31.2,
       // That card printed 538.48 / 520.48 / 515.48 — it used -18 where the rule is
       // -10. Owner confirmed 22 Sep 2026 the rule is fixed, so the card was wrong.
-      row19LengthsMm: [538.48, 528.48, 523.48],
+      row19LengthsMm: [538.48, 528.48, 523.48], h26: 3.292181,
     },
     // SUPERSEDED, not a defect. This card was built 23.07.26 on a 24% wire draw;
     // the owner confirmed on 22 Sep 2026 that the current policy's 29% is correct
@@ -71,6 +71,13 @@ const CARDS = [
       fields: ['gauge', 'wireDrawPct', 'ohmsRangeMid', 'ohmsRangeMin', 'ohmsRangeMax'],
       why: 'card predates the current policy (built on 24% wire draw; policy says 29% for copper at 30 SWG and above). Owner confirmed 22 Sep 2026 that 29% is correct',
       rerunWithOverride: 0.24,
+      // Exempting these fields would mean a regression in copper could never fail
+      // the suite. So they are not exempt — they are checked against what the
+      // policy says they must be, which is the whole point of the divergence.
+      expected: {
+        gauge: 36, wireDrawPct: 0.29, ohmsRangeMid: 170.6025,
+        ohmsRangeMin: 168.8965, ohmsRangeMax: 172.3085,
+      },
     },
   },
 ];
@@ -105,12 +112,17 @@ for (const card of CARDS) {
   for (const [key, label, tol] of FIELDS) {
     const got = out[key], want = card.actual[key];
     const ok = got != null && want != null && Math.abs(got - want) <= tol;
-    const expected = card.knownDivergence && card.knownDivergence.fields.includes(key);
+    const kd = card.knownDivergence;
+    const expected = kd && kd.fields.includes(key);
+    // A divergent field still has a right answer — the policy's — so check that.
+    const policyWant = expected ? kd.expected[key] : null;
+    const policyOk = expected && got != null && Math.abs(got - policyWant) <= (tol || 0.0005);
     if (!ok && !expected) failures++;
+    if (expected && !policyOk) failures++;
     if (!ok && expected) divergences++;
     const line = `  ${label.padEnd(30)}${fmt(got).padStart(16)}${fmt(want).padStart(18)}   `;
     console.log(line + (ok ? G('match')
-      : expected ? Y(`differs by design  (Δ ${(got - want).toPrecision(3)})`)
+      : expected ? (policyOk ? Y(`per policy, card was ${fmt(want)}`) : R(`WRONG: policy says ${fmt(policyWant)}`))
       : R(`DIFF  (${got == null ? 'nothing computed' : 'Δ ' + (got - want).toPrecision(3)})`)));
   }
 
@@ -122,7 +134,11 @@ for (const card of CARDS) {
   const studs = out.terminalPinBig.studs;
   const sOk = studs === card.actual.terminalPinStuds;
   if (!sOk) failures++;
-  console.log(`  ${'Terminal pin studs'.padEnd(30)}${String(studs).padStart(16)}${String(card.actual.terminalPinStuds).padStart(18)}   ` + (sOk ? G('match') : R('DIFF')));
+  console.log(`  ${'Terminal pin studs (F26)'.padEnd(30)}${String(studs).padStart(16)}${String(card.actual.terminalPinStuds).padStart(18)}   ` + (sOk ? G('match') : R('DIFF')));
+
+  const h26ok = Math.abs(out.terminalPinBig.h26 - card.actual.h26) <= 0.000005;
+  if (!h26ok) failures++;
+  console.log(`  ${'Terminal pin H26'.padEnd(30)}${fmt(out.terminalPinBig.h26).padStart(16)}${fmt(card.actual.h26).padStart(18)}   ` + (h26ok ? G('match') : R('DIFF')));
 
   // The spool is live stock: the engine only has to offer the right gauge and
   // put the card's actual spool among the choices when it is still on the sheet.
@@ -151,6 +167,102 @@ for (const card of CARDS) {
             : R('— still does not match the card; the arithmetic needs another look.')));
     if (!same) failures++;
   }
+}
+
+// ── Regressions ─────────────────────────────────────────────────────────────
+// Every case below is a defect an independent audit found and confirmed on
+// 22 Sep 2026. They are all in the region the three real cards do not cover,
+// which is exactly why they survived the first pass.
+console.log(`\n${'═'.repeat(88)}\nRegressions — defects found by the 22 Sep 2026 audit\n${'═'.repeat(88)}`);
+
+const REGRESSIONS = [
+  // The fixed-point search used to test only the globally shortest in-window
+  // wire per band, then veto the whole band if that one wire belonged to a
+  // different band — losing valid gauges, and sometimes every gauge.
+  ['band filter: 1 kW SS 35.7" resolves at all',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1000, voltage: 230, drawingTotalLengthIn: 35.0 }),
+    o => o.gauge != null && o.gaugeResolution !== 'none'],
+  ['band filter: 3 kW SS 25.4" is not "no wire fits"',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 3000, voltage: 230, drawingTotalLengthIn: 24.7 }),
+    o => o.gauge === 26 && o.wireDrawPct === 0.31],
+  ['band filter: 1.2 kW SS 58.2" is not "no wire fits"',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1200, voltage: 230, drawingTotalLengthIn: 57.5 }),
+    o => o.gauge === 26],
+  ['band filter: 1.5 kW SS 46.7" is not "no wire fits"',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1500, voltage: 230, drawingTotalLengthIn: 46 }),
+    o => o.gauge === 26],
+
+  // A missed n-in-1 split winds the element at the full assembly wattage.
+  ['hyphenated 3-in-1 still splits the wattage',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 9000, voltage: 230, drawingTotalLengthIn: 45.6,
+      drawingNumber: 'PT-FlameProof-550U-9Kw-3-in-1', coldZoneBigIn: 3, coldZoneSmallIn: 3 }),
+    o => o.elements === 3 && o.wattage === 3000 && o.gauge === 23],
+  ['an inch dimension is not read as an n-in-1',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 9000, voltage: 230, drawingTotalLengthIn: 45.6, drawingNumber: 'PT-U-12IN12MM' }),
+    o => o.elements === 1 && o.wattage === 9000],
+  ['an explicit element count beats the drawing name',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 9000, voltage: 230, drawingTotalLengthIn: 45.6,
+      drawingNumber: 'PT-Utype-10U-400W', elementsPerAssembly: 3 }),
+    o => o.elements === 3 && o.wattage === 3000],
+  ['a split assembly always says so in the warnings',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 9000, voltage: 230, drawingTotalLengthIn: 45.6,
+      drawingNumber: 'PT-FlameProof-550U-9Kw-3in1', coldZoneBigIn: 3, coldZoneSmallIn: 3 }),
+    o => o.warnings.some(w => /3-in-1/.test(w))],
+
+  // A blank optional form box arrives as '', which Number() turns into 0.
+  ['blank cold zone means absent, not 0"',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 55.38, coldZoneBigIn: '' }),
+    o => o.coldZoneBigIn === 3 && o.gauge === 28],
+  ['blank wire draw override means absent, not 0%',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 55.38, wireDrawPctOverride: '' }),
+    o => o.wireDrawPct === 0.31 && o.gauge === 28],
+  ['a non-numeric cold zone is refused, not coerced',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 55.38, coldZoneBigIn: '2.5in' }),
+    o => o.ok === false],
+  ['a whole-number percent override (31 for 31%) is refused',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 55.38, wireDrawPctOverride: 31 }),
+    o => o.ok === false],
+  ['mismatched cold zone ends are flagged',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 55.38, coldZoneBigIn: 4 }),
+    o => o.warnings.some(w => /Ends differ/.test(w))],
+
+  // "Brass" contains "ss"; "Zinc" contains "inc".
+  ['Brass is not classified as steel', () => E.buildJobCard({ tubeMaterial: 'Brass', wattage: 400, voltage: 230, drawingTotalLengthIn: 20.5 }), o => o.ok === false],
+  ['Zinc plated MS is not classified as steel', () => E.buildJobCard({ tubeMaterial: 'Zinc plated MS', wattage: 400, voltage: 230, drawingTotalLengthIn: 20.5 }), o => o.ok === false],
+  ['Incoloy 800 still classifies as steel', () => E.buildJobCard({ tubeMaterial: 'Incoloy 800', wattage: 400, voltage: 230, drawingTotalLengthIn: 20.5 }), o => o.ok === true && o.material === 'steel'],
+
+  // The workbook's H26 is unrounded; rounding it invented a number.
+  ['H26 mirrors the workbook unrounded', () => E.terminalPin(3), t => Math.abs(t.h26 - 4.938272) < 1e-6 && t.studs === 4],
+
+  // The derived handbook block is 0.13-0.025 mm wire that cannot be wound.
+  ['no card selects a 39-50 SWG handbook row',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 150, voltage: 230, drawingTotalLengthIn: 18.8 }),
+    o => o.gauge == null || o.gauge < 39],
+
+  // A length in a policy gap must not move the cut silently.
+  ['a length in the 50-51" policy gap is flagged',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1500, voltage: 230, drawingTotalLengthIn: 49.31 }),
+    o => o.warnings.some(w => /does not cover/.test(w))],
+
+  // A tie must never hide the alternative the written policy would pick.
+  ['a tie reports the least-coil alternative',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 4000, voltage: 230, drawingTotalLengthIn: 16.8 }),
+    o => o.gaugeResolution !== 'multiple' || o.leastCoilOption == null || o.warnings.some(w => /Step 8/.test(w))],
+
+  // The returned wire must not be a live row of the shared table.
+  ['the returned wire is a copy, not the shared row', () => {
+    const o = E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 55.38 });
+    o.wire.ohms_per_m = -1;
+    return E.WIRE_TABLE.rows.some(r => r.ohms_per_m === -1);
+  }, poisoned => poisoned === false],
+];
+
+for (const [name, run, check] of REGRESSIONS) {
+  let pass = false, detail = '';
+  try { const out = run(); pass = check(out); if (!pass) detail = ` -> ${JSON.stringify(out).slice(0, 150)}`; }
+  catch (e) { detail = ` -> threw ${e.message}`; }
+  if (!pass) failures++;
+  console.log(`  ${pass ? G('pass') : R('FAIL')}  ${name}${detail}`);
 }
 
 console.log(`\n${'═'.repeat(88)}`);

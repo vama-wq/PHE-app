@@ -1224,89 +1224,114 @@
    "gauge": 39,
    "dia_mm": 0.132,
    "ohms_per_m": 78.92,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 179,
    "gauge": 40,
    "dia_mm": 0.122,
    "ohms_per_m": 92.38,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 180,
    "gauge": 41,
    "dia_mm": 0.112,
    "ohms_per_m": 109.6,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 181,
    "gauge": 42,
    "dia_mm": 0.102,
    "ohms_per_m": 132.2,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 182,
    "gauge": 43,
    "dia_mm": 0.0914,
    "ohms_per_m": 164.6,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 183,
    "gauge": 44,
    "dia_mm": 0.0813,
    "ohms_per_m": 208.1,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 184,
    "gauge": 45,
    "dia_mm": 0.0711,
    "ohms_per_m": 272,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 185,
    "gauge": 46,
    "dia_mm": 0.061,
    "ohms_per_m": 369.6,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 186,
    "gauge": 47,
    "dia_mm": 0.0508,
    "ohms_per_m": 532.8,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 187,
    "gauge": 48,
    "dia_mm": 0.0406,
    "ohms_per_m": 834.2,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 188,
    "gauge": 49,
    "dia_mm": 0.0305,
    "ohms_per_m": 1478,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   },
   {
    "row": 189,
    "gauge": 50,
    "dia_mm": 0.0254,
    "ohms_per_m": 2131,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "derived": true,
+   "excluded": "handbook reference, not a spool — rows 178-189 are one row per gauge at a single computed resistivity (1.0800 vs 1.02-2.66 measured elsewhere); 39-50 SWG is 0.132-0.025 mm, unwindable on an 8 mm element. Excluded pending owner confirmation."
   }
  ],
  "notes": [
   "24 SWG 0.56 mm rows confirmed real stock by the owner on 22 Sep 2026 and kept selectable.",
   "80/20 alloy rows are kept for the record but excluded from gauge selection.",
-  "Rows carrying an \"excluded\" reason are never offered by the selector."
+  "Rows carrying an \"excluded\" reason are never offered by the selector.",
+  "Rows 178-189 (39-50 SWG) are a derived handbook block, not stock — excluded pending the owner's confirmation. Delete their \"excluded\" key to re-admit them."
  ]
 }
