@@ -301,6 +301,11 @@ export default function PurchaseOrderDetail() {
         </div>
       )}
 
+      {/* ── Packaging & forwarding (editable until goods start arriving) ── */}
+      {canManagePO && po.status !== 'received' && !po.items.some(i => i.received) && (
+        <PackagingForwarding po={po} onSaved={load} />
+      )}
+
       {/* ── Item Receiving & QC panel (approved POs, screen only) ── */}
       {((po.status === 'approved' && po.delivery_status !== 'order_cancelled') || po.status === 'received') && (
         <div className="card p-5 mb-5 no-print">
@@ -458,7 +463,7 @@ export default function PurchaseOrderDetail() {
               </tr>
             ))}
             <tr>
-              <td colSpan={5} style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right', fontWeight: 600 }}>Transport Charges</td>
+              <td colSpan={5} style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right', fontWeight: 600 }}>Packaging &amp; Forwarding</td>
               <td style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right' }}>{fmt(po.transport_charges)}</td>
             </tr>
             <tr style={{ background: '#fafafa' }}>
@@ -977,6 +982,61 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
 }
 
 // One PO item's QC: material image + weight of 10 pcs (both mandatory to approve).
+
+// Suppliers routinely revise packaging & forwarding between order and delivery.
+// Purchase can correct it here without reopening the whole PO — but only while
+// nothing has been received; after that the PO's value is settled.
+function PackagingForwarding({ po, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(Number(po.transport_charges) || 0));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = async () => {
+    setSaving(true); setError('');
+    try {
+      await api.put(`/purchase-orders/${po.id}/packaging-forwarding`, { transport_charges: Number(value) });
+      setEditing(false);
+      await onSaved();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to update');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="card p-4 mb-5 no-print">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-sm font-semibold text-gray-900">Packaging &amp; Forwarding</div>
+          <div className="text-xs text-gray-400">
+            Editable until the first item is received. Changing it updates the PO total.
+          </div>
+        </div>
+        {editing ? (
+          <div className="flex items-center gap-2">
+            <input className="input w-32 text-right" type="number" step="0.01" min="0" autoFocus
+              value={value} onChange={e => setValue(e.target.value)} />
+            <button className="btn-primary btn-sm" onClick={save} disabled={saving}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button className="btn-secondary btn-sm" onClick={() => { setEditing(false); setValue(String(Number(po.transport_charges) || 0)); setError(''); }}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            <span className="text-lg font-semibold text-gray-900">
+              ₹{Number(po.transport_charges || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+            <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>Edit</button>
+          </div>
+        )}
+      </div>
+      {error && <p className="text-red-600 text-xs mt-2">{error}</p>}
+    </div>
+  );
+}
+
 function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, igstPercent = 0 }) {
   const transport = Number(item.receive_transport_cost) || 0;
   const localTransport = Number(item.receive_local_transport_cost) || 0;

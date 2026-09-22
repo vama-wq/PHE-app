@@ -356,7 +356,7 @@ export default function PurchaseOrderForm() {
                 <span className="font-medium">₹{fmt(itemsSubtotal)}</span>
               </div>
               <div className="flex justify-between w-full text-gray-600 items-center">
-                <span>Transport Charges</span>
+                <span>Packaging &amp; Forwarding</span>
                 <div className="flex items-center gap-2">
                   <span>₹</span>
                   <input className="input text-xs py-1 text-right w-24" type="number" step="0.01" value={transportCharges} onChange={e => setTransportCharges(e.target.value)} />

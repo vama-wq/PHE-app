@@ -467,6 +467,48 @@ router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async 
   res.json({ message: 'Updated', rateIncreasePending: increases.length > 0 });
 });
 
+// Packaging & forwarding is the one PO figure the supplier routinely revises
+// between order and delivery, so purchase can correct it on its own — but only
+// until goods start arriving. Once anything is received the PO's value is
+// settled against what was actually delivered, and the landed-cost and
+// payments figures are derived from it, so the amount freezes.
+router.put('/:id/packaging-forwarding', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const db = getDB();
+  const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+  if (!po) return res.status(404).json({ error: 'Not found' });
+
+  const amount = Number(req.body.transport_charges);
+  if (!Number.isFinite(amount) || amount < 0) {
+    return res.status(400).json({ error: 'Enter a valid packaging & forwarding amount (0 or more)' });
+  }
+  if (po.status === 'received') {
+    return res.status(400).json({ error: 'This PO is fully received — packaging & forwarding can no longer be changed.' });
+  }
+  const anyReceived = await db.get(
+    'SELECT COUNT(*)::int AS n FROM purchase_order_items WHERE po_id=$1 AND received = TRUE', [po.id]);
+  if (anyReceived.n) {
+    return res.status(400).json({
+      error: `Cannot change packaging & forwarding — ${anyReceived.n} item(s) on this PO have already been received.`,
+      code: 'ALREADY_RECEIVING',
+    });
+  }
+
+  // Recompute exactly as the PO form does, from the items as they stand.
+  const items = await db.all('SELECT amount FROM purchase_order_items WHERE po_id=$1', [po.id]);
+  const { subtotal, igstAmount, grandTotal, roundOff } =
+    calcTotals(items.map(i => ({ amount: Number(i.amount) || 0 })), amount, Number(po.igst_percent) || 0);
+
+  await db.run(
+    `UPDATE purchase_orders SET transport_charges=$1, subtotal=$2, igst_amount=$3, round_off=$4, grand_total=$5
+      WHERE id=$6`,
+    [amount, subtotal, igstAmount, roundOff, grandTotal, po.id]);
+
+  await logActivity(null, null, 'po_updated',
+    `PO ${po.po_number}: packaging & forwarding changed ₹${Number(po.transport_charges) || 0} → ₹${amount} (total now ₹${grandTotal})`,
+    req.user.id);
+  res.json({ message: 'Packaging & forwarding updated', subtotal, igst_amount: igstAmount, round_off: roundOff, grand_total: grandTotal });
+});
+
 router.put('/:id/send', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const db = getDB();
   const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
