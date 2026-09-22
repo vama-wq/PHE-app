@@ -1478,6 +1478,12 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
   // "Reuse a previous item" picker (only when adding a new item)
   const [prevItems, setPrevItems] = useState([]);
   const [copyFromItemId, setCopyFromItemId] = useState(null);
+  // Reusing a previous item means reusing its proven specification. Only the
+  // per-order choices stay open — plating, remark and quantity. Everything
+  // else is locked to what was copied, so a reused item cannot silently drift
+  // from the drawing that was already approved for it. Choosing "Start fresh"
+  // clears the lock.
+  const reusing = !!copyFromItemId;
 
   useEffect(() => {
     api.get('/products').then(r => setProducts(r.data)).catch(() => {});
@@ -1499,7 +1505,11 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
     if (!p) return;
     setF({
       product_code: p.product_code || '', drawing_number: p.drawing_number || '',
-      tube_material: '', // not carried forward — must be re-selected from the Tube list
+      // Carry the tube forward when the source holds a real inventory code.
+      // Legacy items store free text ("Copper", "SS 304") which is not a
+      // selectable option, so those are left blank for a proper pick.
+      tube_material: inventoryItems.some(i => (i.category || '').toLowerCase().trim() === 'tube' && i.item_code === p.tube_material)
+        ? p.tube_material : '',
       tube_diameter: p.tube_diameter || '',
       wattage: p.wattage || '', voltage: p.voltage || '',
       plating_instructions: p.plating_instructions || '',
@@ -1608,7 +1618,8 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
                     {prevItems.find(p => String(p.id) === String(copyFromItemId))?.has_drawing
                       ? 'Details pre-filled. Its reference drawing will be copied in for re-approval.'
                       : 'Details pre-filled. This item had no drawing on file.'}
-                    {' '}Enter this order's quantity (left blank since it varies).
+                    {' '}The specification is locked to the previous item — only plating, remark
+                    and quantity can be set. Choose "Start fresh" to enter a different item.
                   </p>
                 )}
               </>
@@ -1620,11 +1631,12 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
         <div className="col-span-2 relative">
           <label className="label">Product Code <span className="text-red-500">*</span></label>
           <input
-            className="input"
+            className="input disabled:bg-gray-100 disabled:text-gray-500"
+            disabled={reusing}
             placeholder="Search by product code or name..."
             value={productSearch}
             onChange={e => { setProductSearch(e.target.value); setShowProductDropdown(true); setF(p => ({ ...p, product_code: e.target.value })); }}
-            onFocus={() => setShowProductDropdown(true)}
+            onFocus={() => !reusing && setShowProductDropdown(true)}
             onBlur={() => setTimeout(() => setShowProductDropdown(false), 150)}
             autoComplete="off"
           />
@@ -1650,13 +1662,15 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
         {/* Drawing Number */}
         <div className="col-span-2">
           <label className="label">Drawing Number <span className="text-red-500">*</span></label>
-          <input className="input" placeholder="e.g. PT-FlangeHe-QU-2Kw-Cop" value={f.drawing_number} onChange={set('drawing_number')} />
+          <input className="input disabled:bg-gray-100 disabled:text-gray-500" disabled={reusing}
+            placeholder="e.g. PT-FlangeHe-QU-2Kw-Cop" value={f.drawing_number} onChange={set('drawing_number')} />
         </div>
 
         {/* Tube */}
         <div>
           <label className="label">Tube Material <span className="text-red-500">*</span></label>
-          <select className="input" value={f.tube_material} onChange={set('tube_material')}>
+          <select className="input disabled:bg-gray-100 disabled:text-gray-500"
+            disabled={reusing && !!f.tube_material} value={f.tube_material} onChange={set('tube_material')}>
             <option value="">— Select tube —</option>
             {f.tube_material && !tubeItems.some(i => i.item_code === f.tube_material) && (
               <option value={f.tube_material}>{f.tube_material} (existing)</option>
@@ -1668,7 +1682,8 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
         </div>
         <div>
           <label className="label">Tube Diameter (mm) <span className="text-red-500">*</span></label>
-          <select className="input" value={f.tube_diameter ?? ''} onChange={set('tube_diameter')}>
+          <select className="input disabled:bg-gray-100 disabled:text-gray-500" disabled={reusing}
+            value={f.tube_diameter ?? ''} onChange={set('tube_diameter')}>
             <option value="">— Select diameter —</option>
             <option value="8">8mm</option>
             <option value="11">11mm</option>
@@ -1678,11 +1693,13 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
         {/* Electrical */}
         <div>
           <label className="label">Wattage (W) <span className="text-red-500">*</span></label>
-          <input className="input" type="number" step="any" placeholder="e.g. 2000" value={f.wattage ?? ''} onChange={set('wattage')} />
+          <input className="input disabled:bg-gray-100 disabled:text-gray-500" disabled={reusing}
+            type="number" step="any" placeholder="e.g. 2000" value={f.wattage ?? ''} onChange={set('wattage')} />
         </div>
         <div>
           <label className="label">Voltage (V) <span className="text-red-500">*</span></label>
-          <input className="input" type="number" step="any" placeholder="e.g. 230" value={f.voltage ?? ''} onChange={set('voltage')} />
+          <input className="input disabled:bg-gray-100 disabled:text-gray-500" disabled={reusing}
+            type="number" step="any" placeholder="e.g. 230" value={f.voltage ?? ''} onChange={set('voltage')} />
         </div>
         <div className="col-span-2">
           <label className="label">Plating Instructions <span className="text-red-500">*</span></label>
