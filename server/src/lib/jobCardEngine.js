@@ -59,6 +59,11 @@ const SPRING_DIVISORS = {
 // Policy Step 5: the job-card length is always the drawing length plus this.
 const TOTAL_LENGTH_ALLOWANCE_IN = 0.7;
 
+// Row 19 of the card prints three lengths in mm, right to left: the total, then
+// 10 less, then 5 less again. Owner confirmed 22 Sep 2026 that these deductions
+// are fixed — the −18 on one old copper card was a one-off, not a rule.
+const ROW19_STEP_DOWN_MM = [10, 5];
+
 // Policy Step 6 — cold zone and terminal pin, by total length. Standard only;
 // the planner may override (a 46.3" flameproof card shipped with a 3" zone).
 const COLD_ZONE_STANDARD = [
@@ -122,10 +127,12 @@ function springLengthIn(requiredOhms, wire) {
 function chooseWire(opts) {
   const {
     material, ohmsAfterDraw, wattage, springWindow,
-    wireTable = WIRE_TABLE.rows, includeSuspect = false,
+    wireTable = WIRE_TABLE.rows, includeExcluded = false,
   } = opts;
 
-  const candidates = wireTable.filter(w => includeSuspect || !w.suspect);
+  // A row carrying an `excluded` reason is on the rack but not eligible — today
+  // that means the 80/20 alloy spools, which the owner ruled out of selection.
+  const candidates = wireTable.filter(w => includeExcluded || !w.excluded);
   const excluded = wireTable.length - candidates.length;
 
   const bands = WIRE_DRAW_8MM[material] || [];
@@ -164,7 +171,7 @@ function chooseWire(opts) {
     chosen: fixedPoints[0] || null,
     alternatives: fixedPoints.slice(1),
     resolution: fixedPoints.length === 0 ? 'none' : fixedPoints.length === 1 ? 'unique' : 'multiple',
-    excludedSuspectRows: excluded,
+    excludedRows: excluded,
   };
 }
 
@@ -194,6 +201,11 @@ function buildJobCard(input) {
   // Step 5 — the card's length is the drawing's plus the standard allowance.
   const totalLengthIn = round(Number(drawingTotalLengthIn) + TOTAL_LENGTH_ALLOWANCE_IN, 4);
   const tubeDraw = tubeDrawPct(material, totalLengthIn);
+
+  // Row 19, as printed: total in mm, then each step-down applied in turn.
+  const totalLengthMm = round(totalLengthIn * INCH_MM, 2);
+  const row19LengthsMm = ROW19_STEP_DOWN_MM.reduce(
+    (acc, step) => [...acc, round(acc[acc.length - 1] - step, 2)], [totalLengthMm]);
   const cuttingLengthIn = totalLengthIn / (1 + tubeDraw);
 
   // Step 6 — cold zone: policy standard unless the planner overrides.
@@ -217,7 +229,7 @@ function buildJobCard(input) {
   let selection;
   if (wireDrawPctOverride != null) {
     const requiredOhms = ohmsAfterDraw * (1 + Number(wireDrawPctOverride));
-    const inWindow = WIRE_TABLE.rows.filter(w => !w.suspect)
+    const inWindow = WIRE_TABLE.rows.filter(w => !w.excluded)
       .map(w => ({ wire: w, springIn: springLengthIn(requiredOhms, w) }))
       .filter(c => c.springIn >= springWindow.lowIn && c.springIn <= springWindow.highIn)
       .sort((a, b) => a.springIn - b.springIn);
@@ -230,7 +242,7 @@ function buildJobCard(input) {
           .map(c => ({ ...c.wire, springLengthIn: round(c.springIn, 4) })),
         alternativeGauges: [],
       } : null,
-      alternatives: [], resolution: inWindow.length ? 'override' : 'none', excludedSuspectRows: 0,
+      alternatives: [], resolution: inWindow.length ? 'override' : 'none', excludedRows: 0,
     };
     warnings.push(`Wire draw ${(Number(wireDrawPctOverride) * 100).toFixed(1)}% set by hand, overriding the policy band.`);
   } else {
@@ -254,7 +266,10 @@ function buildJobCard(input) {
 
     drawingTotalLengthIn: Number(drawingTotalLengthIn),
     totalLengthIn,
-    totalLengthMm: round(totalLengthIn * INCH_MM, 2),
+    totalLengthMm,
+    // [total, total−10, total−5 more] in mm — the card prints these right to left.
+    row19LengthsMm,
+    tubeLengthAfterDrawMm: row19LengthsMm[2],
 
     tubeDrawPct: tubeDraw,
     cuttingLengthIn: round(cuttingLengthIn, 4),
@@ -303,5 +318,5 @@ function round(n, dp) { const f = 10 ** dp; return Math.round(n * f) / f; }
 module.exports = {
   buildJobCard, chooseWire, springLengthIn,
   materialClass, tubeDrawPct, wireDrawPct, standardColdZone, perElementWattage, terminalPin,
-  TUBE_DRAW_8MM, WIRE_DRAW_8MM, SPRING_DIVISORS, TOTAL_LENGTH_ALLOWANCE_IN, WIRE_TABLE,
+  TUBE_DRAW_8MM, WIRE_DRAW_8MM, SPRING_DIVISORS, TOTAL_LENGTH_ALLOWANCE_IN, ROW19_STEP_DOWN_MM, WIRE_TABLE,
 };

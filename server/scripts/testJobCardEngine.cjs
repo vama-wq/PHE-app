@@ -25,6 +25,7 @@ const CARDS = [
       gauge: 23, wireDrawPct: 0.23, ohmsRangeMid: 21.689,
       ohmsRangeMin: 21.47211, ohmsRangeMax: 21.90589,
       terminalPinStuds: 4, spoolOhmsPerM: 4.97,
+      row19LengthsMm: [1176.02, 1166.02, 1161.02],
     },
   },
   {
@@ -40,6 +41,7 @@ const CARDS = [
       gauge: 28, wireDrawPct: 0.31, ohmsRangeMid: 92.39866667,
       ohmsRangeMin: 91.47468, ohmsRangeMax: 93.32265333,
       terminalPinStuds: 4, spoolOhmsPerM: 12.79,
+      row19LengthsMm: [1424.432, 1414.432, 1409.432],
     },
   },
   {
@@ -55,17 +57,19 @@ const CARDS = [
       gauge: 34, wireDrawPct: 0.24, ohmsRangeMid: 163.99,
       ohmsRangeMin: 162.3501, ohmsRangeMax: 165.6299,
       terminalPinStuds: 3, spoolOhmsPerM: 31.2,
+      // That card printed 538.48 / 520.48 / 515.48 — it used -18 where the rule is
+      // -10. Owner confirmed 22 Sep 2026 the rule is fixed, so the card was wrong.
+      row19LengthsMm: [538.48, 528.48, 523.48],
     },
-    // The card was built 23.07.26 with a 24% wire draw. 24% appears nowhere in
-    // the current copper policy (15 / 26 / 29), and that policy is headed
-    // "DRAW PERCENTAGE AS PER NEW" — so the card predates it. The engine
-    // follows the written policy and lands on 36 SWG @ 29%. Flagged here, not
-    // fudged: which of the two is right is the owner's call, and the override
-    // run below proves the arithmetic reproduces the card exactly once 24% is
-    // supplied, so only the percentage is in question.
+    // SUPERSEDED, not a defect. This card was built 23.07.26 on a 24% wire draw;
+    // the owner confirmed on 22 Sep 2026 that the current policy's 29% is correct
+    // and this card is simply old. The engine follows the policy and lands on
+    // 36 SWG @ 29%. The card stays in the suite because forcing its own 24% still
+    // reproduces it exactly — which is what proves the divergence is the input
+    // percentage alone and not the arithmetic underneath it.
     knownDivergence: {
       fields: ['gauge', 'wireDrawPct', 'ohmsRangeMid', 'ohmsRangeMin', 'ohmsRangeMax'],
-      why: 'card used 24% wire draw; written copper policy says 29% for 30 SWG and above',
+      why: 'card predates the current policy (built on 24% wire draw; policy says 29% for copper at 30 SWG and above). Owner confirmed 22 Sep 2026 that 29% is correct',
       rerunWithOverride: 0.24,
     },
   },
@@ -109,6 +113,11 @@ for (const card of CARDS) {
       : expected ? Y(`differs by design  (Δ ${(got - want).toPrecision(3)})`)
       : R(`DIFF  (${got == null ? 'nothing computed' : 'Δ ' + (got - want).toPrecision(3)})`)));
   }
+
+  const r19 = out.row19LengthsMm, w19 = card.actual.row19LengthsMm;
+  const r19ok = w19.every((v, i) => Math.abs(r19[i] - v) <= 0.005);
+  if (!r19ok) failures++;
+  console.log(`  ${'Row 19 lengths (mm)'.padEnd(30)}${r19.join('/').padStart(16)} ${w19.join('/').padStart(17)}   ` + (r19ok ? G('match') : R('DIFF')));
 
   const studs = out.terminalPinBig.studs;
   const sOk = studs === card.actual.terminalPinStuds;

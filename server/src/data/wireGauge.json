@@ -14,732 +14,728 @@
    "gauge": 20,
    "dia_mm": 0.914,
    "ohms_per_m": 2.17,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 5,
    "gauge": 20,
    "dia_mm": 0.914,
    "ohms_per_m": 2.16,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 6,
    "gauge": 20,
    "dia_mm": 0.914,
    "ohms_per_m": 2.19,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 7,
    "gauge": 20,
    "dia_mm": 0.914,
    "ohms_per_m": 2.2,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 8,
    "gauge": 20,
    "dia_mm": 0.914,
    "ohms_per_m": 2.18,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 9,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.79,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 10,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.65,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 11,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.77,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 12,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.7,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 13,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.83,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 14,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.81,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 15,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.64,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 16,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.6,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 17,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.75,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 18,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.74,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 19,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.73,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 20,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.76,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 21,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.72,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 22,
    "gauge": 21,
    "dia_mm": 0.81,
    "ohms_per_m": 2.68,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 23,
    "gauge": 21,
    "dia_mm": 0.813,
    "ohms_per_m": 2.682,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 24,
    "gauge": 21,
    "dia_mm": 0.813,
    "ohms_per_m": 2.686,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 25,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.51,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 26,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.6,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 27,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.56,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 28,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.7,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 29,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.62,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 30,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.63,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 31,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.54,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 32,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.64,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 33,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.51,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 34,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.74,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 35,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.55,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 36,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 3.53,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 37,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 2.72,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 38,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 2.7,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 39,
    "gauge": 22,
    "dia_mm": 0.711,
    "ohms_per_m": 3.607,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 40,
    "gauge": 22,
    "dia_mm": 0.711,
    "ohms_per_m": 3.578,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 41,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.91,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 42,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.84,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 43,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.93,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 44,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.92,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 45,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.97,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 46,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 5.09,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 47,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.96,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 48,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.94,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 49,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.76,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 50,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.81,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 51,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.95,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 52,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.82,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 53,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.9,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 54,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.78,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 55,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.8,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 56,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 4.701,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 57,
    "gauge": 23,
    "dia_mm": 0.61,
    "ohms_per_m": 3.7,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 58,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 5.7,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 59,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 5.62,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 60,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 5.9,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 61,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 5.6,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 62,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 5.66,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 63,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 5.74,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 64,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 5.78,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 65,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 5.62,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 66,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 5.9,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 67,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 10.7,
-   "mandrel_mm": 2.0,
-   "suspect": "resistivity implies ~2x any real alloy \u2014 excluded by default"
+   "mandrel_mm": 2
   },
   {
    "row": 68,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 10.8,
-   "mandrel_mm": 2.0,
-   "suspect": "resistivity implies ~2x any real alloy \u2014 excluded by default"
+   "mandrel_mm": 2
   },
   {
    "row": 69,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 10.6,
-   "mandrel_mm": 2.0,
-   "suspect": "resistivity implies ~2x any real alloy \u2014 excluded by default"
+   "mandrel_mm": 2
   },
   {
    "row": 70,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 10.4,
-   "mandrel_mm": 2.0,
-   "suspect": "resistivity implies ~2x any real alloy \u2014 excluded by default"
+   "mandrel_mm": 2
   },
   {
    "row": 71,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 6.909,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 72,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 6.867,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 73,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 6.817,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 74,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 6.909,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 75,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 6.949,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 76,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 7.033,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 77,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 6.891,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 78,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 7.086,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 79,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 7.074,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 80,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 7.049,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 81,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 7.062,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 82,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 7.125,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 83,
    "gauge": 25,
    "dia_mm": 0.508,
    "ohms_per_m": 7.076,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 85,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 6.67,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 86,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 6.51,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 87,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 6.64,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 89,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 8.56,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 90,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 8.56,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 91,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 8.76,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 92,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 8.6,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 93,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 8.45,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 94,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 8.57,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 95,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 8.38,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 96,
    "gauge": 26,
    "dia_mm": 0.46,
    "ohms_per_m": 8.4,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 97,
    "gauge": 26,
    "dia_mm": 0.457,
    "ohms_per_m": 8.669,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 98,
    "gauge": 26,
    "dia_mm": 0.457,
    "ohms_per_m": 8.662,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 99,
    "gauge": 26,
    "dia_mm": 0.457,
    "ohms_per_m": 7.79,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 100,
    "gauge": 27,
    "dia_mm": 0.42,
    "ohms_per_m": 10.7,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 101,
    "gauge": 27,
    "dia_mm": 0.42,
    "ohms_per_m": 10.8,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 102,
    "gauge": 27,
    "dia_mm": 0.42,
    "ohms_per_m": 10.5,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 103,
    "gauge": 27,
    "dia_mm": 0.42,
    "ohms_per_m": 10.69,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 104,
    "gauge": 27,
    "dia_mm": 0.42,
    "ohms_per_m": 10.77,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 105,
    "gauge": 27,
    "dia_mm": 0.42,
    "ohms_per_m": 10.62,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 106,
    "gauge": 27,
    "dia_mm": 0.42,
    "ohms_per_m": 10.79,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 107,
    "gauge": 27,
    "dia_mm": 0.42,
    "ohms_per_m": 10.24,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 108,
    "gauge": 27,
    "dia_mm": 0.42,
    "ohms_per_m": 10.9,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 109,
    "gauge": 27,
    "dia_mm": 0.417,
    "ohms_per_m": 10.189,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 110,
@@ -747,7 +743,8 @@
    "dia_mm": 0.417,
    "ohms_per_m": 7.82,
    "mandrel_mm": 1.8,
-   "alloy": "80/20"
+   "alloy": "80/20",
+   "excluded": "80/20 alloy — owner excluded from gauge selection, 22 Sep 2026"
   },
   {
    "row": 111,
@@ -755,7 +752,8 @@
    "dia_mm": 0.417,
    "ohms_per_m": 7.85,
    "mandrel_mm": 1.8,
-   "alloy": "80/20"
+   "alloy": "80/20",
+   "excluded": "80/20 alloy — owner excluded from gauge selection, 22 Sep 2026"
   },
   {
    "row": 112,
@@ -763,546 +761,552 @@
    "dia_mm": 0.417,
    "ohms_per_m": 7.83,
    "mandrel_mm": 1.8,
-   "alloy": "80/20"
+   "alloy": "80/20",
+   "excluded": "80/20 alloy — owner excluded from gauge selection, 22 Sep 2026"
   },
   {
    "row": 113,
    "gauge": 28,
    "dia_mm": 0.38,
    "ohms_per_m": 12.79,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 114,
    "gauge": 28,
    "dia_mm": 0.376,
    "ohms_per_m": 12.6,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 115,
    "gauge": 28,
    "dia_mm": 0.376,
    "ohms_per_m": 12.74,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 116,
    "gauge": 28,
    "dia_mm": 0.376,
    "ohms_per_m": 12.78,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 117,
    "gauge": 29,
    "dia_mm": 0.35,
    "ohms_per_m": 14.73,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 118,
    "gauge": 29,
    "dia_mm": 0.35,
    "ohms_per_m": 14.9,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 119,
    "gauge": 29,
    "dia_mm": 0.35,
    "ohms_per_m": 14.7,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 120,
    "gauge": 29,
    "dia_mm": 0.35,
    "ohms_per_m": 14.75,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 121,
    "gauge": 29,
    "dia_mm": 0.345,
    "ohms_per_m": 14.768,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 122,
    "gauge": 29,
    "dia_mm": 0.345,
    "ohms_per_m": 14.949,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 123,
    "gauge": 29,
    "dia_mm": 0.345,
    "ohms_per_m": 14.848,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 124,
    "gauge": 29,
    "dia_mm": 0.345,
    "ohms_per_m": 14.914,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 125,
    "gauge": 29,
    "dia_mm": 0.345,
    "ohms_per_m": 14.794,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 126,
    "gauge": 29,
    "dia_mm": 0.345,
    "ohms_per_m": 14.989,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 127,
    "gauge": 29,
    "dia_mm": 0.345,
    "ohms_per_m": 15.139,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 128,
    "gauge": 29,
    "dia_mm": 0.345,
    "ohms_per_m": 15.062,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 129,
    "gauge": 29,
    "dia_mm": 0.345,
    "ohms_per_m": 15.346,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 130,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 15.346,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 131,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 14.36,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 132,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 16.9,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 133,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 17.664,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 134,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 17.587,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 135,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 17.43,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 136,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 17.332,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 137,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 17.553,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 138,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 17.589,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 139,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 17.957,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 140,
    "gauge": 30,
    "dia_mm": 0.315,
    "ohms_per_m": 18.615,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 141,
    "gauge": 31,
    "dia_mm": 0.3,
-   "ohms_per_m": 21.0,
-   "mandrel_mm": 2.0
+   "ohms_per_m": 21,
+   "mandrel_mm": 2
   },
   {
    "row": 142,
    "gauge": 32,
    "dia_mm": 0.27,
    "ohms_per_m": 25.9,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 143,
    "gauge": 32,
    "dia_mm": 0.27,
    "ohms_per_m": 25.3,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 144,
    "gauge": 32,
    "dia_mm": 0.27,
    "ohms_per_m": 25.43,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 145,
    "gauge": 32,
    "dia_mm": 0.27,
    "ohms_per_m": 25.35,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 146,
    "gauge": 32,
    "dia_mm": 0.27,
    "ohms_per_m": 25.36,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 147,
    "gauge": 32,
    "dia_mm": 0.27,
    "ohms_per_m": 25.5,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 148,
    "gauge": 32,
    "dia_mm": 0.27,
    "ohms_per_m": 25.79,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 149,
    "gauge": 32,
    "dia_mm": 0.27,
    "ohms_per_m": 25.86,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 150,
    "gauge": 32,
    "dia_mm": 0.27,
-   "ohms_per_m": 25.0,
-   "mandrel_mm": 2.0
+   "ohms_per_m": 25,
+   "mandrel_mm": 2
   },
   {
    "row": 151,
    "gauge": 32,
    "dia_mm": 0.27,
    "ohms_per_m": 25.31,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 152,
    "gauge": 32,
    "dia_mm": 0.27,
    "ohms_per_m": 25.36,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 153,
    "gauge": 34,
    "dia_mm": 0.234,
    "ohms_per_m": 25.56,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 154,
    "gauge": 34,
    "dia_mm": 0.234,
    "ohms_per_m": 31.51,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 155,
    "gauge": 34,
    "dia_mm": 0.234,
    "ohms_per_m": 31.75,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 156,
    "gauge": 34,
    "dia_mm": 0.234,
    "ohms_per_m": 31.53,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 157,
    "gauge": 34,
    "dia_mm": 0.234,
    "ohms_per_m": 32.73,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 158,
    "gauge": 34,
    "dia_mm": 0.234,
    "ohms_per_m": 34.314,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 159,
    "gauge": 34,
    "dia_mm": 0.234,
    "ohms_per_m": 34.29,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 160,
    "gauge": 34,
    "dia_mm": 0.234,
    "ohms_per_m": 33.34,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 161,
    "gauge": 36,
    "dia_mm": 0.19,
    "ohms_per_m": 50.1,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 162,
    "gauge": 36,
    "dia_mm": 0.19,
-   "ohms_per_m": 52.0,
-   "mandrel_mm": 2.0
+   "ohms_per_m": 52,
+   "mandrel_mm": 2
   },
   {
    "row": 163,
    "gauge": 36,
    "dia_mm": 0.19,
    "ohms_per_m": 49.9,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 164,
    "gauge": 36,
    "dia_mm": 0.19,
    "ohms_per_m": 50.6,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 165,
    "gauge": 36,
    "dia_mm": 0.19,
-   "ohms_per_m": 50.0,
-   "mandrel_mm": 2.0
+   "ohms_per_m": 50,
+   "mandrel_mm": 2
   },
   {
    "row": 166,
    "gauge": 36,
    "dia_mm": 0.19,
    "ohms_per_m": 50.7,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 167,
    "gauge": 36,
    "dia_mm": 0.19,
    "ohms_per_m": 50.8,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 168,
    "gauge": 36,
    "dia_mm": 0.19,
    "ohms_per_m": 51.2,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 169,
    "gauge": 36,
    "dia_mm": 0.193,
    "ohms_per_m": 35.96,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 170,
    "gauge": 36,
    "dia_mm": 0.193,
    "ohms_per_m": 35.59,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 171,
    "gauge": 36,
    "dia_mm": 0.193,
    "ohms_per_m": 34.87,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 172,
    "gauge": 36,
    "dia_mm": 0.193,
    "ohms_per_m": 35.48,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 173,
    "gauge": 36,
    "dia_mm": 0.193,
    "ohms_per_m": 35.33,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 174,
    "gauge": 36,
    "dia_mm": 0.193,
    "ohms_per_m": 47.9,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 175,
    "gauge": 36,
    "dia_mm": 0.193,
    "ohms_per_m": 34.72,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 176,
    "gauge": 38,
    "dia_mm": 0.152,
    "ohms_per_m": 78.028,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 177,
    "gauge": 38,
    "dia_mm": 0.152,
-   "ohms_per_m": 76.0,
-   "mandrel_mm": 2.0
+   "ohms_per_m": 76,
+   "mandrel_mm": 2
   },
   {
    "row": 178,
    "gauge": 39,
    "dia_mm": 0.132,
    "ohms_per_m": 78.92,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 179,
    "gauge": 40,
    "dia_mm": 0.122,
    "ohms_per_m": 92.38,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 180,
    "gauge": 41,
    "dia_mm": 0.112,
    "ohms_per_m": 109.6,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 181,
    "gauge": 42,
    "dia_mm": 0.102,
    "ohms_per_m": 132.2,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 182,
    "gauge": 43,
    "dia_mm": 0.0914,
    "ohms_per_m": 164.6,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 183,
    "gauge": 44,
    "dia_mm": 0.0813,
    "ohms_per_m": 208.1,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 184,
    "gauge": 45,
    "dia_mm": 0.0711,
-   "ohms_per_m": 272.0,
-   "mandrel_mm": 2.0
+   "ohms_per_m": 272,
+   "mandrel_mm": 2
   },
   {
    "row": 185,
    "gauge": 46,
    "dia_mm": 0.061,
    "ohms_per_m": 369.6,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 186,
    "gauge": 47,
    "dia_mm": 0.0508,
    "ohms_per_m": 532.8,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 187,
    "gauge": 48,
    "dia_mm": 0.0406,
    "ohms_per_m": 834.2,
-   "mandrel_mm": 2.0
+   "mandrel_mm": 2
   },
   {
    "row": 188,
    "gauge": 49,
    "dia_mm": 0.0305,
-   "ohms_per_m": 1478.0,
-   "mandrel_mm": 2.0
+   "ohms_per_m": 1478,
+   "mandrel_mm": 2
   },
   {
    "row": 189,
    "gauge": 50,
    "dia_mm": 0.0254,
-   "ohms_per_m": 2131.0,
-   "mandrel_mm": 2.0
+   "ohms_per_m": 2131,
+   "mandrel_mm": 2
   }
+ ],
+ "notes": [
+  "24 SWG 0.56 mm rows confirmed real stock by the owner on 22 Sep 2026 and kept selectable.",
+  "80/20 alloy rows are kept for the record but excluded from gauge selection.",
+  "Rows carrying an \"excluded\" reason are never offered by the selector."
  ]
 }
