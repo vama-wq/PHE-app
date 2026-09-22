@@ -16,6 +16,15 @@ export default function InventoryDetail() {
   const [showTransaction, setShowTransaction] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
 
+  const canManage = ['owner', 'admin'].includes(user.role);
+  // Design keeps the drawings current: they attach newly approved ones, which
+  // supersede the old (hidden from use, kept in the timeline).
+  const canDraw = ['owner', 'admin', 'design'].includes(user.role);
+  const canSeeTimeline = ['owner', 'admin', 'design'].includes(user.role);
+  const canTransact = ['owner', 'admin', 'design'].includes(user.role); // QC can add stock transactions (no cost shown)
+  const canDelete = ['owner', 'admin'].includes(user.role);
+  const showCost = user.role !== 'design'; // hide all landed-cost figures from QC
+
   const [drawings, setDrawings] = useState([]);
   const [showDrawingModal, setShowDrawingModal] = useState(false);
   const loadDrawings = () => api.get(`/inventory/${id}/drawings`).then(r => setDrawings(r.data)).catch(() => {});
@@ -39,14 +48,6 @@ export default function InventoryDetail() {
 
   // Reorder level 0 = order-driven item (bought only when an order needs it) — never "low".
   const isLow = Number(item.reorder_level) > 0 && item.current_stock <= item.reorder_level;
-  const canManage = ['owner', 'admin'].includes(user.role);
-  // Design keeps the drawings current: they attach newly approved ones, which
-  // supersede the old (hidden from use, kept in the timeline).
-  const canDraw = ['owner', 'admin', 'design'].includes(user.role);
-  const canSeeTimeline = ['owner', 'admin', 'design'].includes(user.role);
-  const canTransact = ['owner', 'admin', 'design'].includes(user.role); // QC can add stock transactions (no cost shown)
-  const canDelete = ['owner', 'admin'].includes(user.role);
-  const showCost = user.role !== 'design'; // hide all landed-cost figures from QC
 
   const handleDelete = async () => {
     if (!window.confirm(`Delete inventory item "${item.item_code} — ${item.name}"?\n\nThis cannot be undone.`)) return;
