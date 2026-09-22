@@ -196,7 +196,7 @@ export default function PayrollRun() {
                 onChange={e => { const f = e.target.files[0]; e.target.value = ''; if (f || run.essl_file) reparseEssl(f); }} />
             </label>
           )}
-          {isOwner && editable && (
+          {canWork && editable && (
             <button className="btn-secondary btn-sm flex items-center gap-1.5 text-xs text-red-500" onClick={deleteRun} title="Delete this draft run">
               <Trash2 size={13} /> Delete
             </button>
@@ -223,13 +223,13 @@ export default function PayrollRun() {
               <Send size={15} /> Submit for Review
             </button>
           )}
-          {!dirty && isOwner && editable && (
+          {!dirty && canWork && editable && (
             <button className="btn-primary flex items-center gap-1.5"
               onClick={() => doAction('approve', `Approve ${run.month} salaries? This locks attendance, posts leave credits and settles advances.`)}>
               <CheckCircle size={15} /> Approve Payroll
             </button>
           )}
-          {!dirty && isOwner && approved && run.status !== 'paid' && (
+          {!dirty && canWork && approved && run.status !== 'paid' && (
             <button className="btn-primary flex items-center gap-1.5"
               onClick={() => doAction('mark-paid', 'Mark ALL salaries as paid?')}>
               <CheckCircle size={15} /> Mark All Paid
@@ -295,7 +295,7 @@ export default function PayrollRun() {
                       <td className="table-cell text-center">
                         {approved ? (
                           l.paid ? <CheckCircle size={15} className="inline text-green-600" />
-                            : (isOwner ? <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button> : '—')
+                            : (canWork ? <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button> : '—')
                         ) : '—'}
                       </td>
                     </>
@@ -440,7 +440,7 @@ export default function PayrollRun() {
                       <td className="table-cell text-center">
                         {approved ? (
                           l.paid ? <CheckCircle size={15} className="inline text-green-600" />
-                            : (isOwner ? <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button> : '—')
+                            : (canWork ? <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button> : '—')
                         ) : '—'}
                       </td>
                     </>
