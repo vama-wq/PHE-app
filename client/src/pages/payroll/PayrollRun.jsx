@@ -223,13 +223,13 @@ export default function PayrollRun() {
               <Send size={15} /> Submit for Review
             </button>
           )}
-          {!dirty && canWork && editable && (
+          {!dirty && isOwner && editable && (
             <button className="btn-primary flex items-center gap-1.5"
               onClick={() => doAction('approve', `Approve ${run.month} salaries? This locks attendance, posts leave credits and settles advances.`)}>
               <CheckCircle size={15} /> Approve Payroll
             </button>
           )}
-          {!dirty && canWork && approved && run.status !== 'paid' && (
+          {!dirty && isOwner && approved && run.status !== 'paid' && (
             <button className="btn-primary flex items-center gap-1.5"
               onClick={() => doAction('mark-paid', 'Mark ALL salaries as paid?')}>
               <CheckCircle size={15} /> Mark All Paid
@@ -295,7 +295,7 @@ export default function PayrollRun() {
                       <td className="table-cell text-center">
                         {approved ? (
                           l.paid ? <CheckCircle size={15} className="inline text-green-600" />
-                            : (canWork ? <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button> : '—')
+                            : (isOwner ? <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button> : '—')
                         ) : '—'}
                       </td>
                     </>
@@ -395,10 +395,14 @@ export default function PayrollRun() {
                                       <span className={`font-normal text-[10px] ml-1 ${left < 0 ? 'text-red-600' : 'text-gray-400'}`}>→ {left} left</span>
                                     )}
                                   </span>
-                                  <button type="button" className="p-0.5 text-gray-300 hover:text-brand-600" title="Edit carried balance (posts a manual leave-ledger adjustment)"
-                                    onClick={() => adjustCarried(l, carried)}>
-                                    <Pencil size={11} />
-                                  </button>
+                                  {/* Leaves available is the owner's to set — accounts
+                                      works the run but cannot move a leave balance. */}
+                                  {isOwner && (
+                                    <button type="button" className="p-0.5 text-gray-300 hover:text-brand-600" title="Edit carried balance (posts a manual leave-ledger adjustment)"
+                                      onClick={() => adjustCarried(l, carried)}>
+                                      <Pencil size={11} />
+                                    </button>
+                                  )}
                                 </span>
                               );
                             })()}
@@ -440,7 +444,7 @@ export default function PayrollRun() {
                       <td className="table-cell text-center">
                         {approved ? (
                           l.paid ? <CheckCircle size={15} className="inline text-green-600" />
-                            : (canWork ? <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button> : '—')
+                            : (isOwner ? <button className="text-xs text-brand-600 hover:underline" onClick={() => markLinePaid(l.id)}>mark</button> : '—')
                         ) : '—'}
                       </td>
                     </>

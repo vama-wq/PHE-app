@@ -323,7 +323,7 @@ router.get('/employees/:id/leave', authenticate, authorize('owner', 'accounts'),
   }
 });
 
-router.post('/employees/:id/leave', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+router.post('/employees/:id/leave', authenticate, authorize('owner'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid employee id' });
@@ -792,7 +792,7 @@ router.get('/runs/:id/changes', authenticate, authorize('owner', 'accounts'), as
 // Owner approves: locks the month, posts the leave ledger (+1 monthly accrual
 // for fixed groups, +sick credits, −credits used), settles advances, trims
 // year-start carryforward to the 5-leave cap.
-router.put('/runs/:id/approve', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid run id' });
@@ -987,7 +987,7 @@ router.delete('/runs/:id', authenticate, authorize('owner', 'accounts'), async (
 });
 
 // Owner marks the whole month paid (salary day = 7th) or individual lines
-router.put('/runs/:id/mark-paid', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+router.put('/runs/:id/mark-paid', authenticate, authorize('owner'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid run id' });
