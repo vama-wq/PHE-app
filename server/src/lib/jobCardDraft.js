@@ -50,6 +50,8 @@ const OVERRIDES = [
   { key: 'punching', label: 'Punching', type: 'text', from: 'wattage and voltage' },
   { key: 'cold_zone_big_in', label: 'Cold zone big (in)', type: 'number', from: 'policy Step 6, by total length' },
   { key: 'cold_zone_small_in', label: 'Cold zone small (in)', type: 'number', from: 'policy Step 6, by total length' },
+  { key: 'terminal_pin_big_in', label: 'Terminal pin big (in)', type: 'number', from: 'the big cold zone' },
+  { key: 'terminal_pin_small_in', label: 'Terminal pin small (in)', type: 'number', from: 'the small cold zone' },
   { key: 'wire_draw_pct_override', label: 'Wire draw (fraction, e.g. 0.31)', type: 'number', from: 'policy Step 7, by gauge' },
   { key: 'spool_row', label: 'Spool', type: 'select', from: 'the shortest coil of the chosen gauge' },
   { key: 'elements_per_assembly', label: 'Elements in the assembly', type: 'number', from: 'the drawing name' },
@@ -102,6 +104,8 @@ async function buildDraft(db, orderItemId, answers = {}) {
     coldZoneSmallIn: answers.cold_zone_small_in,
     wireDrawPctOverride: answers.wire_draw_pct_override,
     elementsPerAssembly: answers.elements_per_assembly,
+    terminalPinBigIn: answers.terminal_pin_big_in,
+    terminalPinSmallIn: answers.terminal_pin_small_in,
   });
   if (!card.ok) return { ok: false, error: card.error };
 
@@ -154,7 +158,9 @@ async function buildDraft(db, orderItemId, answers = {}) {
     ['Cold zone', card.coldZoneBigIn === std.coldZoneIn
       ? `${card.coldZoneBigIn}" — the policy standard for a ${card.totalLengthIn}" element`
       : `${card.coldZoneBigIn}" set by hand; the standard here is ${std.coldZoneIn}"`],
-    ['Terminal pin', `ceil(${card.coldZoneBigIn} ÷ 1.215 + 1) = ${card.terminalPinBig.studs}"`],
+    ['Terminal pin', card.terminalPinBig.overridden
+      ? `${card.terminalPinBig.studs}" set by hand — a ${card.coldZoneBigIn}" cold zone gives ${card.terminalPinBig.derivedStuds}"`
+      : `ceil(${card.coldZoneBigIn} ÷ 1.215 + 1) = ${card.terminalPinBig.studs}"`],
     ['Ohms after draw', `${card.voltage}² ÷ ${round(card.wattage, 2)} = ${card.ohmsAfterDraw} Ω, ±5%`],
     ['Quantity', parts.length > 1
       ? `${item.quantity} pcs over ${parts.length} cards (${describeSplit(parts)}) — no card runs more than 50`

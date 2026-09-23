@@ -2043,6 +2043,13 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fins_deducted BOOLEAN DEFAULT FALSE`);
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fins_kg NUMERIC`);
 
+      // What a generated job card was made from, so it can be re-rendered at
+      // print time rather than only existing as the file saved at creation.
+      // That is what lets the card and its material slip come out of one print
+      // job, and lets a reprint carry its stamp — the stored file cannot, since
+      // it is written once.
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS generated_spec JSONB`);
+
       // Every material slip that gets printed, so the store can tell an original
       // from a copy. A browser cannot be stopped from printing a page twice, so
       // the first print comes out clean and every one after it is stamped

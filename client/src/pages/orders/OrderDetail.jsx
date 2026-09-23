@@ -1898,7 +1898,13 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
   // Generating is the default; the upload path stays as the fallback for
   // anything the engine does not cover (11mm, or a card with no drawing length).
   const [mode, setMode] = useState('generate');
-  const [gen, setGen] = useState({ asmbly: '1', fixture: '', drawing_total_length_in: '' });
+  const [gen, setGen] = useState({
+    asmbly: '1', fixture: '', drawing_total_length_in: '',
+    // Derived unless set. Blank means "leave it to the policy".
+    cold_zone_big_in: '', cold_zone_small_in: '',
+    terminal_pin_big_in: '', terminal_pin_small_in: '',
+  });
+  const [showOverrides, setShowOverrides] = useState(false);
   const setGenF = k => e => { setGen(g => ({ ...g, [k]: e.target.value })); setPreview(null); };
   const [preview, setPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
@@ -2146,6 +2152,36 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
               {previewing ? 'Working it out…' : preview ? 'Work it out again' : 'Work it out'}
             </button>
 
+            {/* Cold zone and terminal pin come out of the policy. Both can be
+                forced: usually the zone changes and the pin follows, but the
+                pin can also be set on its own when the fitting calls for it. */}
+            <div>
+              <button type="button" onClick={() => setShowOverrides(v => !v)}
+                className="text-xs text-brand-600 hover:underline">
+                {showOverrides ? 'Hide' : 'Set'} cold zone or terminal pin by hand
+              </button>
+              {showOverrides && (
+                <div className="grid grid-cols-2 gap-3 mt-2 p-3 rounded-lg bg-gray-50 border border-gray-100">
+                  {[
+                    ['cold_zone_big_in', 'Cold zone big (in)', preview?.card?.coldZoneBigIn],
+                    ['cold_zone_small_in', 'Cold zone small (in)', preview?.card?.coldZoneSmallIn],
+                    ['terminal_pin_big_in', 'Terminal pin big (in)', preview?.card?.terminalPinBig?.derivedStuds],
+                    ['terminal_pin_small_in', 'Terminal pin small (in)', preview?.card?.terminalPinSmall?.derivedStuds],
+                  ].map(([k, label, derived]) => (
+                    <div key={k}>
+                      <label className="label text-xs">{label}</label>
+                      <input className="input" type="number" step="0.01" value={gen[k]} onChange={setGenF(k)}
+                        placeholder={derived != null ? `${derived} (from the policy)` : 'leave blank'} />
+                    </div>
+                  ))}
+                  <p className="col-span-2 text-[11px] text-gray-500 leading-relaxed">
+                    Leave blank and the policy decides. Change the cold zone and the pin follows it;
+                    set a pin on its own and the card records that it was forced.
+                  </p>
+                </div>
+              )}
+            </div>
+
             {preview?.ok && (
               <div className="rounded-xl border border-gray-200 divide-y text-sm">
                 <div className="px-3 py-2 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
@@ -2160,7 +2196,9 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
                   ['Ohms after draw', `${preview.card.ohmsAfterDrawMin} – ${preview.card.ohmsAfterDraw} – ${preview.card.ohmsAfterDrawMax}`],
                   ['Cutting length', `${preview.card.cuttingLengthIn}" · ${preview.card.cuttingLengthMm} mm (${(preview.card.tubeDrawPct * 100).toFixed(1)}% draw)`],
                   ['Spring range', `${preview.card.springWindowLowIn}" to ${preview.card.springWindowHighIn}"`],
-                  ['Cold zone', `${preview.card.coldZoneBigIn}" / ${preview.card.coldZoneSmallIn}" · pin ${preview.card.terminalPinBig?.studs}"`],
+                  ['Cold zone', `${preview.card.coldZoneBigIn}" / ${preview.card.coldZoneSmallIn}"`],
+                  ['Terminal pin', `${preview.card.terminalPinBig?.studs}" / ${preview.card.terminalPinSmall?.studs}"`
+                    + (preview.card.terminalPinBig?.overridden ? ` — set by hand, the cold zone gives ${preview.card.terminalPinBig.derivedStuds}"` : '')],
                   ['Punching', preview.head.punching],
                   ['Job card(s)', preview.split.names.map((nm, i) => `${nm} (${preview.split.quantities[i]})`).join(', ')],
                 ].map(([k, v]) => (

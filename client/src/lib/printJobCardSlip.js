@@ -55,8 +55,15 @@ export async function printJobCardSlip(jc) {
   const dwg = d.item.drawing_number || '';
   const partOfItem = d.cardCount > 1;
 
+  // A generated card comes back with its own sheet and styles, so the card and
+  // the slip print as ONE job — the floor presses print once and gets both.
+  // An uploaded PDF cannot have a page added to it, so that one still opens in
+  // its own tab alongside (see the end of this function).
+  const merged = !!d.card;
   const w = window.open('', '_blank');
-  w.document.write(`<!doctype html><html><head><title>Material Slip — ${d.jobCard.job_card_no}</title>
+  w.document.write(`<!doctype html><html><head><title>${merged ? d.card.title : `Material Slip — ${d.jobCard.job_card_no}`}</title>
+    ${merged ? d.card.fontLink : ''}
+    ${merged ? d.card.styles : ''}
     <style>
       body{font-family:Arial,'Noto Sans Gujarati','Noto Sans Devanagari',sans-serif;margin:26px;color:#111}
       h1{font-size:17px;margin:0 0 2px}
@@ -72,7 +79,14 @@ export async function printJobCardSlip(jc) {
       .reprint{border:2px solid #b91c1c;color:#b91c1c;font-weight:bold;letter-spacing:.08em;
                padding:5px 10px;display:inline-block;margin-bottom:10px;font-size:13px}
       .foot{margin-top:20px;font-size:12px;color:#333;display:flex;gap:50px}
+      /* The card's own stylesheet paints the page; the slip sits after it on a
+         fresh sheet, in the plain type the store is used to. */
+      .slip-page{page-break-before:always;font-family:Arial,'Noto Sans Gujarati','Noto Sans Devanagari',sans-serif;color:#111}
+      .slip-page:first-child{page-break-before:auto}
+      @media print { .aside{display:none} }
     </style></head><body>
+    ${merged ? `<div class="wrap">${d.card.sheets}</div>` : ''}
+    <div class="slip-page">
     ${d.isReprint ? `<div class="reprint">REPRINT — copy ${d.printNo} · ${today} · ${d.printedBy}</div>` : ''}
     <h1>Material Slip / સામાન સ્લિપ / सामान पर्ची</h1>
     <p><b>${d.order.order_code}</b> · ${d.order.customer_code || ''} · Printed ${today}</p>
@@ -90,11 +104,14 @@ export async function printJobCardSlip(jc) {
       </tr>`).join('')}
     </table>
     <div class="foot"><span>Design: ______________</span><span>Store: ______________</span><span>Overlooker / નિરીક્ષક: ______________</span></div>
+    </div>
     </body></html>`);
-  w.document.close(); w.print();
+  w.document.close();
+  // Let the fonts and the card's stylesheet settle before the print dialog,
+  // or the first page comes out in a fallback face.
+  setTimeout(() => w.print(), merged ? 400 : 0);
 
-  // The card itself opens alongside, so printing the job card brings its slip
-  // with it. A generated card is a page and prints straight through; an
-  // uploaded PDF opens in its own tab for the browser's own print dialog.
-  if (jc.file_path) window.open(`/uploads/${jc.file_path}`, '_blank');
+  // Only an uploaded card needs a second tab — a generated one is already in
+  // the document above.
+  if (!merged && jc.file_path) window.open(`/uploads/${jc.file_path}`, '_blank');
 }

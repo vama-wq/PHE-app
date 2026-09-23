@@ -7,7 +7,7 @@ const { applyMaterialDeductions } = require('../lib/materialDeduction');
 const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventoryDeduction');
 const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit } = require('../lib/jobCardSplit');
 const { buildDraft, draftQuestions } = require('../lib/jobCardDraft');
-const { render: renderJobCard } = require('../lib/jobCardRender');
+const { render: renderJobCard, renderParts } = require('../lib/jobCardRender');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
 // Must match client MANDATORY_STAGE_NOS. Optional/excluded: 2, 13(Buffing), 15(Brazing),
@@ -367,14 +367,29 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
     created = await db.withTransaction(async (client) => {
       const out = [];
       for (let i = 0; i < numbers.length; i++) {
+        // Each card keeps only its own sheet, so printing one never prints a
+        // sibling's, and the numbers it was built from so it can be re-rendered.
+        const spec = {
+          input: { tubeMaterial: item.tube_material, tubeDiameterMm: item.tube_diameter,
+                   wattage: item.wattage, voltage: item.voltage,
+                   drawingNumber: item.drawing_number, productCode: item.product_code,
+                   drawingTotalLengthIn: answers.drawing_total_length_in,
+                   coldZoneBigIn: answers.cold_zone_big_in, coldZoneSmallIn: answers.cold_zone_small_in,
+                   wireDrawPctOverride: answers.wire_draw_pct_override,
+                   elementsPerAssembly: answers.elements_per_assembly,
+                   terminalPinBigIn: answers.terminal_pin_big_in,
+                   terminalPinSmallIn: answers.terminal_pin_small_in },
+          sheet: { ...draft.sheets[i], cardNo: numbers[i] },
+          provenance: draft.provenance,
+        };
         const { rows: ins } = await client.query(`
           INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date,
-                                 notes, punching, drawing_no, product_name, uploaded_by, order_item_id)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+                                 notes, punching, drawing_no, product_name, uploaded_by, order_item_id, generated_spec)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
           [numbers[i], item.order_id, storagePath, filename, filename,
            parts[i], answers.dispatch_date, answers.notes || null,
            draft.head.punching, item.drawing_number || null, item.product_code || null,
-           req.user.id, item.id]);
+           req.user.id, item.id, JSON.stringify(spec)]);
         out.push({ id: ins[0].id, job_card_no: numbers[i], qty: parts[i] });
       }
       return out;
@@ -442,9 +457,25 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
       `Material slip for ${jc.job_card_no} reprinted (copy ${printNo}) by ${req.user.name}`, req.user.id);
   }
 
+  // A generated card can be re-rendered, so its sheet comes back with the slip
+  // and the two print as ONE job. An uploaded PDF cannot have a page added to
+  // it, so that one still opens in its own tab alongside.
+  let card = null;
+  if (jc.generated_spec) {
+    try {
+      const spec = typeof jc.generated_spec === 'string' ? JSON.parse(jc.generated_spec) : jc.generated_spec;
+      const built = require('../lib/jobCardEngine').buildJobCard(spec.input);
+      if (built.ok) {
+        const parts_ = renderParts(built, [spec.sheet], spec.provenance || []);
+        card = { styles: parts_.styles, fontLink: parts_.fontLink, sheets: parts_.sheets, title: parts_.title };
+      }
+    } catch (e) { console.error('[slip] could not re-render card:', e.message); }
+  }
+
   res.json({
     printNo, isReprint: printNo > 1,
     printedBy: req.user.name,
+    card,
     jobCard: { id: jc.id, job_card_no: jc.job_card_no, qty: jc.qty, drawing_no: jc.drawing_no, punching: jc.punching },
     order: { order_code: jc.order_code, customer_code: jc.customer_code },
     item: { id: item.id, quantity: item.quantity, drawing_number: item.drawing_number,

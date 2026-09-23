@@ -248,6 +248,7 @@ function buildJobCard(input) {
     drawingTotalLengthIn,            // straight off the approved drawing
     drawingNumber, productCode,
     coldZoneBigIn, coldZoneSmallIn,  // optional overrides
+    terminalPinBigIn, terminalPinSmallIn, // optional: forced independently of the cold zone
     wireDrawPctOverride,             // optional: planner overrides the policy band
     elementsPerAssembly,             // optional: beats reading "3in1" off the name
     tubeDiameterMm = 8,
@@ -265,6 +266,8 @@ function buildJobCard(input) {
 
   const czBigIn = optionalNumber(coldZoneBigIn, 'Cold zone (big)', errors);
   const czSmallIn = optionalNumber(coldZoneSmallIn, 'Cold zone (small)', errors);
+  const pinBigIn = optionalNumber(terminalPinBigIn, 'Terminal pin (big)', errors);
+  const pinSmallIn = optionalNumber(terminalPinSmallIn, 'Terminal pin (small)', errors);
   const drawOverride = optionalNumber(wireDrawPctOverride, 'Wire draw override', errors);
   // The policy writes draws as "31%", so a planner typing 31 means 0.31. Taken
   // literally that is a 3100% draw and a perfectly confident card at 24x the
@@ -274,6 +277,8 @@ function buildJobCard(input) {
   }
   if (czBigIn != null && czBigIn <= 0) errors.push(`Cold zone (big) must be greater than zero (got ${czBigIn}).`);
   if (czSmallIn != null && czSmallIn <= 0) errors.push(`Cold zone (small) must be greater than zero (got ${czSmallIn}).`);
+  if (pinBigIn != null && pinBigIn <= 0) errors.push(`Terminal pin (big) must be greater than zero (got ${pinBigIn}).`);
+  if (pinSmallIn != null && pinSmallIn <= 0) errors.push(`Terminal pin (small) must be greater than zero (got ${pinSmallIn}).`);
   if (errors.length) return { ok: false, error: errors.join(' ') };
 
   // Step 4 — split the stated wattage across a 2in1 / 3in1 assembly.
@@ -314,6 +319,12 @@ function buildJobCard(input) {
   // sometimes, scrap when it was an oversight — so it never passes unremarked.
   if (czBig !== czSmall) {
     warnings.push(`Ends differ: ${czBig}" cold zone with a ${terminalPin(czBig).studs}" pin at the big end, ${czSmall}" with a ${terminalPin(czSmall).studs}" pin at the small end. Confirm this is intended.`);
+  }
+
+  for (const [label, given, cz] of [['big', pinBigIn, czBig], ['small', pinSmallIn, czSmall]]) {
+    if (given != null && given !== terminalPin(cz).studs) {
+      warnings.push(`Terminal pin ${label} forced to ${given}" — a ${cz}" cold zone gives ${terminalPin(cz).studs}".`);
+    }
   }
 
   // Resistance the finished element must show, and the spread the shop works to.
@@ -388,8 +399,12 @@ function buildJobCard(input) {
     ohmsRangeMax: ohmsRangeMid == null ? null : round(ohmsRangeMid * 1.01, 4),
 
     coldZoneBigIn: czBig, coldZoneSmallIn: czSmall,
-    terminalPinBig: terminalPin(czBig),
-    terminalPinSmall: terminalPin(czSmall),
+    // The pin normally comes out of the cold zone. It can also be forced on its
+    // own — a different flange, a customer's fitting, what is on the shelf —
+    // and when it is, the card says so rather than showing a pin its own cold
+    // zone would never produce.
+    terminalPinBig: pinFor(czBig, pinBigIn),
+    terminalPinSmall: pinFor(czSmall, pinSmallIn),
     standardTerminalPinIn: std.terminalPinIn,
 
     springWindowLowIn: round(springWindow.lowIn, 4),
@@ -424,10 +439,18 @@ function terminalPin(coldZoneIn) {
   return { raw: round(raw, 6), studs: Math.ceil(raw), h26: round(raw * 2 - 2, 6) };
 }
 
+// The pin a cold zone gives, unless one was forced. `derivedStuds` keeps what
+// the policy would have said, so the card and the review screen can show both.
+function pinFor(coldZoneIn, forcedStuds) {
+  const derived = terminalPin(coldZoneIn);
+  if (forcedStuds == null) return { ...derived, derivedStuds: derived.studs, overridden: false };
+  return { ...derived, studs: forcedStuds, derivedStuds: derived.studs, overridden: true };
+}
+
 function round(n, dp) { const f = 10 ** dp; return Math.round(n * f) / f; }
 
 module.exports = {
   buildJobCard, chooseWire, springLengthIn,
-  materialClass, tubeDrawPct, wireDrawPct, standardColdZone, perElementWattage, terminalPin,
+  materialClass, tubeDrawPct, wireDrawPct, standardColdZone, perElementWattage, terminalPin, pinFor,
   TUBE_DRAW_8MM, WIRE_DRAW_8MM, SPRING_DIVISORS, TOTAL_LENGTH_ALLOWANCE_IN, ROW19_STEP_DOWN_MM, TIE_BREAK, WIRE_TABLE,
 };

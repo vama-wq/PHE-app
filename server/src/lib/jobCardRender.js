@@ -84,7 +84,7 @@ function specRows(c) {
 // `heads` is one head per sheet: a batch shares all its arithmetic and differs
 // only in card number and quantity, so the engine runs once and the sheets
 // print together — one page each, in one print job.
-function render(card, heads, provenance) {
+function renderParts(card, heads, provenance) {
   const c = card;
   const headList = Array.isArray(heads) ? heads : [heads];
   const head = headList[0];
@@ -144,8 +144,9 @@ function render(card, heads, provenance) {
     <div class="sign"><div>Production</div><div>QC</div><div>Approved</div></div>
   </section>`;
 
-  return `<title>${esc(head.title || `${head.cardNo} Job Card`)}</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Gujarati:wght@400;600&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
+  const title = esc(head.title || `${head.cardNo} Job Card`);
+  const fontLink = `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Gujarati:wght@400;600&family=Noto+Sans+Devanagari:wght@400;600&display=swap">`;
+  const styles = `
 <style>
   /* Steel and ink: a works order, not a brochure. Neutrals carry a slight
      green-grey bias (passivated stainless), and they stay quiet on purpose —
@@ -303,9 +304,11 @@ function render(card, heads, provenance) {
     td.actual .rule { min-height: 34px; }
   }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
-</style>
+</style>`;
 
-<div class="wrap">
+  // No wrapper here: the caller supplies it, so a print job can hold the card
+  // and the material slip under one set of styles.
+  const body = `
   ${headList.map(sheet).join('')}
 
   <aside class="aside">
@@ -332,9 +335,16 @@ function render(card, heads, provenance) {
       <p class="lede" style="margin:12px 0 0">The Actual column stays blank for the floor. Rows 13 and 14 were the bending rollers, now read off the drawing.</p>
     </div>
   </aside>
-</div>
 `;
+
+  return { title, fontLink, styles, sheets: headList.map(sheet).join(''), body };
 }
 
-module.exports = { render, n, esc };
+// The whole page, as stored on the order and opened from it.
+function render(card, heads, provenance) {
+  const p = renderParts(card, heads, provenance);
+  return `<title>${p.title}</title>\n${p.fontLink}\n${p.styles}\n<div class="wrap">${p.body}</div>\n`;
+}
+
+module.exports = { render, renderParts, n, esc };
 
