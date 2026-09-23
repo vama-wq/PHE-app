@@ -101,7 +101,7 @@ function render(card, head, provenance) {
           <div class="meta-value">${esc(v)}</div>
         </div>`).join('');
 
-  return `<title>BPE Flameproof Job Card</title>
+  return `<title>${esc(head.title || `${head.cardNo} Job Card`)}</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Gujarati:wght@400;600&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
 <style>
   /* Steel and ink: a works order, not a brochure. Neutrals carry a slight
@@ -328,40 +328,36 @@ function render(card, head, provenance) {
 module.exports = { render };
 
 if (require.main === module) {
-  // The BPE flameproof order, exactly as the engine computes it today.
-  const input = {
-    tubeMaterial: 'SS304', wattage: 9000, voltage: 230,
-    drawingTotalLengthIn: 45.6,
-    drawingNumber: 'PT-FlameProof-550U-9Kw-3in1', productCode: 'PT-FlameProof',
-    coldZoneBigIn: 3, coldZoneSmallIn: 3,
-  };
-  const card = E.buildJobCard(input);
+  // node scripts/renderJobCard.cjs <out.html> [card.json]
+  // card.json is { input, head, provenance? } — `input` goes to buildJobCard,
+  // `head` carries the fields the order already holds. With no file, the BPE
+  // flameproof card is rendered as the worked example.
+  const [outArg, specArg] = process.argv.slice(2);
+  const spec = specArg
+    ? JSON.parse(require('fs').readFileSync(specArg, 'utf8'))
+    : require('./sampleCardBPE.json');
+
+  const card = E.buildJobCard(spec.input);
   if (!card.ok) { console.error(card.error); process.exit(1); }
-  card.tubeMaterialLabel = 'SS304 / એસએસ ૩૦૪';
+  card.tubeMaterialLabel = spec.head.tubeMaterialLabel || spec.input.tubeMaterial;
 
-  const head = {
-    company: 'Peena Heat Elements', asmbly: '3',
-    cardNo: 'PT-FlameProof-550U-9Kw-3in1-1',
-    clientCode: 'BPE', orderDate: '17.09.26', productCode: 'PT-FlameProof',
-    drawingNumber: 'PT-FlameProof-550U-9Kw-3in1', punching: 'BHA-9000W-230V',
-    qty: '24 Nos (8 nos-3in1)', dispatchDate: '29.09.26', fixture: 'U-clamp, 550 mm centres',
-    orderCode: 'ORD-148-26',
-    remark: ['BSP will be provided by BPE, FLP-PHE', 'BSP, BPE દ્વારા આપવામાં આવશે', 'BSP, BPE द्वारा प्रदान किया जाएगा'],
-    plating: 'Buffing / બફિંગ / बफिंग',
-  };
-
-  const provenance = [
+  // Provenance is written per card, since what was asked and what was derived
+  // differs from one to the next.
+  const provenance = spec.provenance || [
     ['From the order', 'Order no, client code, order date, product code, drawing no, punching, quantity, tube material, plating, remark'],
     ['Asked when making the card', 'ASMBLY, fixture type, dispatch date, total length off the drawing'],
-    ['Total length', `45.6" on the drawing + 0.7" allowance = ${n(card.totalLengthIn, 1)}"`],
-    ['Wattage', `9000 W read as a 3-in-1 from the drawing name, so ${n(card.wattage, 0)} W per element`],
-    ['Tube draw', `${(card.tubeDrawPct * 100).toFixed(1)}% — SS between 44" and 50"`],
-    ['Wire gauge', `${card.gauge} SWG at ${(card.wireDrawPct * 100).toFixed(0)}% wire draw, the only self-consistent answer; ${card.spoolOptions.length} spools of it fit the spring window`],
-    ['Cold zone', `3" set by hand; the standard for a ${n(card.totalLengthIn, 1)}" element is 2"`],
-    ['Terminal pin', `ceil(3 ÷ 1.215 + 1) = ${card.terminalPinBig.studs}"`],
+    ['Total length', `${spec.input.drawingTotalLengthIn}" on the drawing + 0.7" allowance = ${n(card.totalLengthIn, 1)}"`],
+    ['Tube draw', `${(card.tubeDrawPct * 100).toFixed(1)}% — ${card.material === 'copper' ? 'copper' : 'SS'} at ${n(card.totalLengthIn, 1)}"`],
+    ['Wire gauge', card.gauge == null ? 'no wire in the table fits — choose by hand'
+      : `${card.gauge} SWG at ${(card.wireDrawPct * 100).toFixed(1)}% wire draw, ${card.gaugeResolution === 'unique' ? 'the only self-consistent answer' : 'the coarsest of several'}; ${card.spoolOptions.length} spools of it fit the spring window`],
+    ['Cold zone', card.coldZoneBigIn === E.standardColdZone(card.totalLengthIn).coldZoneIn
+      ? `${card.coldZoneBigIn}" — the standard for a ${n(card.totalLengthIn, 1)}" element`
+      : `${card.coldZoneBigIn}" set by hand; the standard here is ${E.standardColdZone(card.totalLengthIn).coldZoneIn}"`],
+    ['Terminal pin', `ceil(${card.coldZoneBigIn} ÷ 1.215 + 1) = ${card.terminalPinBig.studs}"`],
+    ['Ohms after draw', `${card.voltage}² ÷ ${n(card.wattage, 0)} = ${card.ohmsAfterDraw} Ω, ±5%`],
   ];
 
-  const out = process.argv[2] || 'jobcard-sample.html';
-  require('fs').writeFileSync(out, render(card, head, provenance));
-  console.log(`${out} — ${card.gauge} SWG @ ${(card.wireDrawPct * 100).toFixed(0)}%, ohms ${card.ohmsRangeMid}, ${card.warnings.length} warning(s)`);
+  const out = outArg || 'jobcard.html';
+  require('fs').writeFileSync(out, render(card, spec.head, provenance));
+  console.log(`${out} — ${card.gauge == null ? 'NO GAUGE' : `${card.gauge} SWG @ ${(card.wireDrawPct * 100).toFixed(0)}%`}, ohms ${card.ohmsRangeMid}, ${card.warnings.length} warning(s)`);
 }

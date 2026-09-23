@@ -1,0 +1,34 @@
+{
+ "input": {
+  "tubeMaterial": "SS304",
+  "wattage": 9000,
+  "voltage": 230,
+  "drawingTotalLengthIn": 45.6,
+  "drawingNumber": "PT-FlameProof-550U-9Kw-3in1",
+  "productCode": "PT-FlameProof",
+  "coldZoneBigIn": 3,
+  "coldZoneSmallIn": 3
+ },
+ "head": {
+  "company": "Peena Heat Elements",
+  "asmbly": "3",
+  "cardNo": "PT-FlameProof-550U-9Kw-3in1-1",
+  "clientCode": "BPE",
+  "orderCode": "ORD-148-26",
+  "orderDate": "17.09.26",
+  "productCode": "PT-FlameProof",
+  "drawingNumber": "PT-FlameProof-550U-9Kw-3in1",
+  "punching": "BHA-9000W-230V",
+  "qty": "24 Nos (8 nos-3in1)",
+  "dispatchDate": "29.09.26",
+  "fixture": "U-clamp, 550 mm centres",
+  "tubeMaterialLabel": "SS304 / એસએસ ૩૦૪",
+  "remark": [
+   "BSP will be provided by BPE, FLP-PHE",
+   "BSP, BPE દ્વારા આપવામાં આવશે",
+   "BSP, BPE द्वारा प्रदान किया जाएगा"
+  ],
+  "plating": "Buffing / બફિંગ / बफिंग",
+  "title": "BPE Flameproof Job Card"
+ }
+}
