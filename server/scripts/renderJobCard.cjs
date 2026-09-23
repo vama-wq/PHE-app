@@ -79,8 +79,13 @@ function specRows(c) {
   ];
 }
 
-function render(card, head, provenance) {
+// `heads` is one head per sheet: a batch shares all its arithmetic and differs
+// only in card number and quantity, so the engine runs once and the sheets
+// print together — one page each, in one print job.
+function render(card, heads, provenance) {
   const c = card;
+  const headList = Array.isArray(heads) ? heads : [heads];
+  const head = headList[0];
   const rows = specRows(c).map(([num, [gu, en, hi], val, note]) => `
       <tr>
         <td class="num">${num}</td>
@@ -89,7 +94,7 @@ function render(card, head, provenance) {
         <td class="actual"><span class="rule"></span></td>
       </tr>`).join('');
 
-  const meta = [
+  const metaFor = (head) => [
     [L.client, head.clientCode], [L.orderNo, head.orderCode],
     [L.orderDate, head.orderDate], [L.dispatch, head.dispatchDate],
     [L.product, head.productCode], [L.drawing, head.drawingNumber],
@@ -100,6 +105,42 @@ function render(card, head, provenance) {
           <div class="meta-label"><span class="gu">${esc(gu)}</span><span class="en">${esc(en)}</span><span class="hi">${esc(hi)}</span></div>
           <div class="meta-value">${esc(v)}</div>
         </div>`).join('');
+
+  const sheet = (h, i) => `
+  <section class="sheet">
+    <div class="sheet-head">
+      <div>
+        <div class="sheet-title">Heating Element Job Card</div>
+        <div class="sheet-sub">${esc(h.company)} &nbsp;·&nbsp; 8 mm tube${headList.length > 1 ? ` &nbsp;·&nbsp; sheet ${i + 1} of ${headList.length}` : ''}</div>
+      </div>
+      <div class="asmbly"><span>ASMBLY</span><b>${esc(h.asmbly)}</b></div>
+    </div>
+
+    <div class="meta">${metaFor(h)}</div>
+
+    <table>
+      <thead>
+        <tr><th class="c">#</th><th>Specification</th><th>Engine value</th><th class="c">Actual<br><span class="gu">વાસ્તવિક</span></th></tr>
+      </thead>
+      <tbody>${rows}
+      </tbody>
+    </table>
+
+    <div class="foot">
+      <div class="foot-row">
+        <div class="foot-num">15</div>
+        <div class="foot-label"><span class="gu">ટિપ્પણી</span><span class="en">Remark</span><span class="hi">टिप्पणी</span></div>
+        <div class="foot-value">${h.remark.map(l => `<span class="line">${esc(l)}</span>`).join('')}</div>
+      </div>
+      <div class="foot-row">
+        <div class="foot-num">16</div>
+        <div class="foot-label"><span class="gu">પડ ચડાવવું</span><span class="en">Plating</span><span class="hi">प्लेटिंग के लिए निर्देश</span></div>
+        <div class="foot-value">${box(esc(h.plating), 'key')}</div>
+      </div>
+    </div>
+
+    <div class="sign"><div>Production</div><div>QC</div><div>Approved</div></div>
+  </section>`;
 
   return `<title>${esc(head.title || `${head.cardNo} Job Card`)}</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Gujarati:wght@400;600&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
@@ -252,7 +293,8 @@ function render(card, head, provenance) {
     body { background: #fff; }
     .wrap { padding: 0; }
     .aside { display: none; }
-    .sheet { box-shadow: none; border: 1.5px solid #000; max-width: none; }
+    .sheet { box-shadow: none; border: 1.5px solid #000; max-width: none; page-break-after: always; }
+    .sheet:last-of-type { page-break-after: auto; }
     /* On paper the writing box gets a full pen's worth of room. */
     tbody td { padding: 14px 8px; }
     td.actual { width: 38mm; }
@@ -262,40 +304,7 @@ function render(card, head, provenance) {
 </style>
 
 <div class="wrap">
-  <section class="sheet">
-    <div class="sheet-head">
-      <div>
-        <div class="sheet-title">Heating Element Job Card</div>
-        <div class="sheet-sub">${esc(head.company)} &nbsp;·&nbsp; 8 mm tube</div>
-      </div>
-      <div class="asmbly"><span>ASMBLY</span><b>${esc(head.asmbly)}</b></div>
-    </div>
-
-    <div class="meta">${meta}</div>
-
-    <table>
-      <thead>
-        <tr><th class="c">#</th><th>Specification</th><th>Engine value</th><th class="c">Actual<br><span class="gu">વાસ્તવિક</span></th></tr>
-      </thead>
-      <tbody>${rows}
-      </tbody>
-    </table>
-
-    <div class="foot">
-      <div class="foot-row">
-        <div class="foot-num">15</div>
-        <div class="foot-label"><span class="gu">ટિપ્પણી</span><span class="en">Remark</span><span class="hi">टिप्पणी</span></div>
-        <div class="foot-value">${head.remark.map(l => `<span class="line">${esc(l)}</span>`).join('')}</div>
-      </div>
-      <div class="foot-row">
-        <div class="foot-num">16</div>
-        <div class="foot-label"><span class="gu">પડ ચડાવવું</span><span class="en">Plating</span><span class="hi">प्लेटिंग के लिए निर्देश</span></div>
-        <div class="foot-value">${box(esc(head.plating), 'key')}</div>
-      </div>
-    </div>
-
-    <div class="sign"><div>Production</div><div>QC</div><div>Approved</div></div>
-  </section>
+  ${headList.map(sheet).join('')}
 
   <aside class="aside">
     <div class="panel">
@@ -339,7 +348,9 @@ if (require.main === module) {
 
   const card = E.buildJobCard(spec.input);
   if (!card.ok) { console.error(card.error); process.exit(1); }
-  card.tubeMaterialLabel = spec.head.tubeMaterialLabel || spec.input.tubeMaterial;
+  // `sheets` is the batch; `head` alone is still accepted for a single card.
+  const heads = spec.sheets && spec.sheets.length ? spec.sheets : [spec.head];
+  card.tubeMaterialLabel = heads[0].tubeMaterialLabel || spec.input.tubeMaterial;
 
   // Provenance is written per card, since what was asked and what was derived
   // differs from one to the next.
@@ -358,6 +369,6 @@ if (require.main === module) {
   ];
 
   const out = outArg || 'jobcard.html';
-  require('fs').writeFileSync(out, render(card, spec.head, provenance));
-  console.log(`${out} — ${card.gauge == null ? 'NO GAUGE' : `${card.gauge} SWG @ ${(card.wireDrawPct * 100).toFixed(0)}%`}, ohms ${card.ohmsRangeMid}, ${card.warnings.length} warning(s)`);
+  require('fs').writeFileSync(out, render(card, heads, provenance));
+  console.log(`${out} — ${heads.length} sheet(s), ${card.gauge == null ? 'NO GAUGE' : `${card.gauge} SWG @ ${(card.wireDrawPct * 100).toFixed(0)}%`}, ohms ${card.ohmsRangeMid}, ${card.warnings.length} warning(s)`);
 }

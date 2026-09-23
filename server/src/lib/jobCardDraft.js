@@ -125,6 +125,17 @@ async function buildDraft(db, orderItemId, answers = {}) {
 
   const parts = splitQuantity(item.quantity);
   const base = String(item.drawing_number || item.product_code || `ITEM-${item.id}`).toUpperCase();
+  const names = parts.length > 1
+    ? parts.map((_, i) => `${base}-${SPLIT_MARKER}${i + 1}`)
+    : [base];
+
+  // The QTY line is the card's OWN quantity — it used to print the item's, so
+  // a sheet headed PT-X-S1 told the floor to build 100 on a card the system
+  // runs at 50. The parenthetical says where this batch sits in the run, so
+  // nobody reads 50 against a 100-piece order as a short delivery.
+  const qtyLine = (i) => parts.length > 1
+    ? `${parts[i]} Nos (${i + 1} of ${parts.length} · item ${item.quantity})`
+    : `${item.quantity} Nos`;
 
   return {
     ok: true,
@@ -137,12 +148,20 @@ async function buildDraft(db, orderItemId, answers = {}) {
       describe: describeSplit(parts),
       // Provisional: the real numbers are allocated at creation, gap-safely,
       // so a name shown here can differ if another card lands in between.
-      names: parts.length > 1 ? parts.map((_, i) => `${base}-${SPLIT_MARKER}${i + 1}`) : [base],
+      names,
     },
-    head: {
+    // One head per sheet. Every card of a batch shares the same arithmetic —
+    // same length, same gauge, same ohms — and differs only in its number and
+    // its quantity, so the engine runs once and the heads vary.
+    sheets: names.map((no, i) => ({ ...headFor(no, qtyLine(i)), sheetIndex: i + 1, sheetCount: names.length })),
+    head: headFor(names[0], qtyLine(0)),
+  };
+
+  function headFor(cardNo, qty) {
+    return {
       company: 'Peena Heat Elements',
       title: `${item.drawing_number || item.product_code || `Item ${item.id}`} Job Card`,
-      cardNo: parts.length > 1 ? `${base}-${SPLIT_MARKER}1` : base,
+      cardNo,
       asmbly: String(answers.asmbly),
       clientCode: customer?.customer_code || '',
       clientName: customer?.name || '',
@@ -151,15 +170,15 @@ async function buildDraft(db, orderItemId, answers = {}) {
       productCode: item.product_code || '',
       drawingNumber: item.drawing_number || '',
       punching,
-      qty: `${item.quantity} Nos`,
+      qty,
       dispatchDate: fmtDate(answers.dispatch_date),
       fixture: String(answers.fixture || ''),
       tubeMaterialLabel: item.tube_material || '',
       remark: String(item.remark || '').trim() ? [String(item.remark).trim()] : [],
       plating: PLATING_TRILINGUAL[String(item.plating_instructions || '').trim()]
         || item.plating_instructions || '',
-    },
-  };
+    };
+  }
 }
 
 // The card prints dd.mm.yy, as every existing one does. Callers must pass the
