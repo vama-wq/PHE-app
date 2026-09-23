@@ -89,6 +89,26 @@ async function activeCapaFor(db, jobCardId) {
     [jobCardId]);
 }
 
+// ...and answer a different question here: what CAPA is HOLDING this card?
+// A rejection CAPA holds every card of its order item but is filed against one
+// of them, so a sibling shows a hold with no explanation and no way into the
+// report that would unblock it. Deliberately separate from activeCapaFor: that
+// one gates repair-start, and a sibling's CAPA should not block a repair.
+async function holdingCapaFor(db, jobCardId) {
+  const own = await activeCapaFor(db, jobCardId);
+  if (own) return own;
+  return db.get(
+    `SELECT c.id, c.status, c.trigger_type, c.job_card_id AS raised_on_job_card_id,
+            j.job_card_no AS raised_on_job_card_no
+       FROM capa_reports c
+       JOIN job_cards j ON j.id = c.job_card_id
+      WHERE c.status IN ('open','awaiting_approval')
+        AND c.trigger_type = 'rejections'
+        AND j.order_item_id IS NOT NULL
+        AND j.order_item_id = (SELECT order_item_id FROM job_cards WHERE id=$1)
+      ORDER BY c.id DESC LIMIT 1`, [jobCardId]);
+}
+
 // Every CAPA currently blocking work — the dashboard uses this so a locked
 // card offers the CAPA rather than the legacy "approve hold" shortcut.
 router.get('/active', authenticate, async (req, res) => {
@@ -232,8 +252,20 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
   // Lift the rejection lock (the on-hold status the trigger set). Query-CAPAs
   // don't hold the card — the repair-start endpoint checks CAPA state itself.
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [capa.job_card_id]);
-  if (capa.trigger_type === 'rejections' && jc?.status === 'on_hold') {
-    await db.run("UPDATE job_cards SET status='in_progress' WHERE id=$1", [capa.job_card_id]);
+  if (capa.trigger_type === 'rejections') {
+    // A rejection CAPA holds every card of the item, not just the one that
+    // tripped it, so approval has to release them together — otherwise the
+    // siblings stay stopped with nothing on screen to explain why.
+    const released = await db.all(
+      `UPDATE job_cards SET status='in_progress'
+        WHERE status='on_hold'
+          AND (id = $1 OR (order_item_id IS NOT NULL AND order_item_id = $2))
+        RETURNING id, job_card_no`,
+      [capa.job_card_id, jc?.order_item_id || null]);
+    for (const c of released.filter(c => c.id !== capa.job_card_id)) {
+      await logActivity(jc?.order_id, c.id, 'status_changed',
+        `Job card ${c.job_card_no} released — CAPA on ${jc?.job_card_no || 'a sibling card'} approved`, req.user.id);
+    }
   }
 
   if (capa.created_by) {
@@ -278,3 +310,4 @@ router.put('/:id/reopen', authenticate, authorize('owner'), async (req, res) => 
 module.exports = router;
 module.exports.ensureCapa = ensureCapa;
 module.exports.activeCapaFor = activeCapaFor;
+module.exports.holdingCapaFor = holdingCapaFor;

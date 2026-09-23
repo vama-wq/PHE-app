@@ -637,20 +637,30 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   await syncOrderStatus(db, jc.order_id, userId);
 }
 
-// ── Helper: check cumulative rejections across all stages ─────────────────────
-// 3 or more pieces rejected in total → the card needs a CAPA report: it goes
-// on hold and a capa_reports row is opened. Work resumes only when the OWNER
-// approves the completed CAPA (routes/capa.js — approval flips the card back to
-// in_progress). This supersedes the old stage_no=0 cumulative hold, whose
-// watermark semantics carry over: an approved CAPA at total N only re-triggers
-// when the total exceeds N.
+// ── Helper: check cumulative rejections across an ORDER ITEM ─────────────────
+// 3 or more pieces rejected in total → a CAPA report is required: every card of
+// that item still in production goes on hold and a capa_reports row is opened
+// against the card that tripped it. Work resumes only when the OWNER approves
+// the completed CAPA (routes/capa.js — approval releases the whole family).
+// This supersedes the old stage_no=0 cumulative hold, whose watermark semantics
+// carry over: an approved CAPA at total N only re-triggers when N is exceeded.
+//
+// The count is ITEM-WIDE, not per card. An item over 50 pieces runs as several
+// cards, and counting each alone gave every card its own allowance of 3 — two
+// rejections on each of two cards is four on the item with nothing stopping it,
+// where the same item as one card would have tripped at three. Cards with no
+// order_item_id (legacy, replacements) count alone, as they always did.
 async function checkCumulativeRejections(db, jobCardId, userId) {
-  const jcRow = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);
+  const jcRow = await db.get('SELECT status, order_item_id FROM job_cards WHERE id=$1', [jobCardId]);
   if (!jcRow || jcRow.status === 'on_hold') return; // already on hold, skip
 
+  const family = jcRow.order_item_id
+    ? (await db.all('SELECT id FROM job_cards WHERE order_item_id=$1', [jcRow.order_item_id])).map(r => r.id)
+    : [jobCardId];
+
   const totRow = await db.get(
-    'SELECT COALESCE(SUM(rejection_qty), 0) AS total FROM production_checklist WHERE job_card_id=$1',
-    [jobCardId]
+    'SELECT COALESCE(SUM(rejection_qty), 0) AS total FROM production_checklist WHERE job_card_id = ANY($1)',
+    [family]
   );
   const total = parseInt(totRow?.total || 0, 10);
   if (total < 3) return; // owner's rule: 3 or more rejected pieces → CAPA
@@ -662,10 +672,22 @@ async function checkCumulativeRejections(db, jobCardId, userId) {
   });
   if (!capaId) return; // active CAPA already covers it, or approved watermark not exceeded
 
-  await db.run("UPDATE job_cards SET status='on_hold' WHERE id=$1", [jobCardId]);
+  // Hold the whole family. The siblings share a drawing, tooling and operator,
+  // so a cause found on one almost certainly applies to the rest — letting them
+  // run means building more of the same defect while the cause is unknown.
+  // Cards already dispatched or QC-approved are past production and left alone.
+  const held = await db.all(
+    `UPDATE job_cards SET status='on_hold'
+      WHERE id = ANY($1) AND status IN ('pending','in_progress','qc_pending')
+      RETURNING id, job_card_no`, [family]);
+
   if (jc) {
     await logActivity(jc.order_id, jobCardId, 'status_changed',
-      `Job card ${jc.job_card_no} ON HOLD — ${total} pieces rejected across stages; CAPA report required`, userId);
+      `Job card ${jc.job_card_no} ON HOLD — ${total} pieces rejected across this item; CAPA report required`, userId);
+    for (const sib of held.filter(h => h.id !== jobCardId)) {
+      await logActivity(jc.order_id, sib.id, 'status_changed',
+        `Job card ${sib.job_card_no} ON HOLD — same item as ${jc.job_card_no}, which is under CAPA`, userId);
+    }
   }
 }
 
@@ -686,8 +708,11 @@ router.get('/:id/checklist', authenticate, async (req, res) => {
 
   // A CAPA (open or awaiting owner approval) is what holds the card since the
   // per-stage quick-approve hold was retired — the client shows its banner.
-  const { activeCapaFor } = require('./capa');
-  const activeCapa = await activeCapaFor(db, req.params.id);
+  const { activeCapaFor, holdingCapaFor } = require('./capa');
+  const jcForCapa = await db.get('SELECT status FROM job_cards WHERE id=$1', [req.params.id]);
+  const activeCapa = jcForCapa?.status === 'on_hold'
+    ? await holdingCapaFor(db, req.params.id)
+    : await activeCapaFor(db, req.params.id);
 
   // Stage numbers in display order. 30 = Kharoch Process — an optional stage shown
   // right after Bending (14); it keeps a high id so existing data is never renumbered.
@@ -736,8 +761,8 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   // Block if card is on hold and trying to mark done. If a CAPA is what holds
   // it, say so and hand the client the id so it can link straight to the chat.
   if (done && jcCard.status === 'on_hold') {
-    const { activeCapaFor } = require('./capa');
-    const capa = await activeCapaFor(db, jobCardId);
+    const { holdingCapaFor } = require('./capa');
+    const capa = await holdingCapaFor(db, jobCardId);
     if (capa) {
       return res.status(400).json({
         error: capa.status === 'awaiting_approval'
