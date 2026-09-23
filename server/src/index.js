@@ -39,7 +39,20 @@ app.get('/uploads/*', async (req, res) => {
     const { data, error } = await supabase.storage.from('phe-uploads').download(storagePath);
     if (error || !data) return res.status(404).send('File not found');
     const buf = Buffer.from(await data.arrayBuffer());
-    res.set('Content-Type', data.type || 'application/octet-stream');
+    // Trust the EXTENSION over the blob's own type: Supabase hands back a
+    // generic type often enough that a generated .html job card was served as
+    // application/octet-stream and shown to the floor as source code.
+    const ext = String(storagePath).split('.').pop().toLowerCase();
+    const BY_EXT = {
+      html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
+      pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+      gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+      csv: 'text/csv; charset=utf-8', txt: 'text/plain; charset=utf-8',
+      json: 'application/json; charset=utf-8',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      xls: 'application/vnd.ms-excel',
+    };
+    res.set('Content-Type', BY_EXT[ext] || data.type || 'application/octet-stream');
     res.set('Cache-Control', 'public, max-age=86400');
     res.send(buf);
   } catch (err) {

@@ -65,24 +65,26 @@ export async function printJobCardSlip(jc) {
     ${merged ? d.card.fontLink : ''}
     ${merged ? d.card.styles : ''}
     <style>
-      body{font-family:Arial,'Noto Sans Gujarati','Noto Sans Devanagari',sans-serif;margin:26px;color:#111}
-      h1{font-size:17px;margin:0 0 2px}
-      p{color:#444;font-size:12px;margin:2px 0}
-      table{border-collapse:collapse;width:100%;margin-top:12px}
-      th,td{border:1px solid #999;padding:6px 7px;font-size:12px;text-align:left;vertical-align:middle}
-      th{background:#f3f4f6}
-      td.num{text-align:right}
-      td.num .of{color:#777;font-size:10px}
-      td.blank{min-width:64px;height:30px}
-      td.sign{min-width:100px}
-      tr{page-break-inside:avoid}
-      .reprint{border:2px solid #b91c1c;color:#b91c1c;font-weight:bold;letter-spacing:.08em;
-               padding:5px 10px;display:inline-block;margin-bottom:10px;font-size:13px}
-      .foot{margin-top:20px;font-size:12px;color:#333;display:flex;gap:50px}
-      /* The card's own stylesheet paints the page; the slip sits after it on a
-         fresh sheet, in the plain type the store is used to. */
-      .slip-page{page-break-before:always;font-family:Arial,'Noto Sans Gujarati','Noto Sans Devanagari',sans-serif;color:#111}
+      /* EVERY rule here is scoped to .slip-page. Unscoped, the slip's own
+         body/table/th/td rules landed on the job card sheet printed above it —
+         a 26px body margin and a full border on every cell — which pushed the
+         card onto a second page and made its table look nothing like itself. */
+      @page { size: A4; margin: 8mm; }
+      .slip-page{page-break-before:always;font-family:Arial,'Noto Sans Gujarati','Noto Sans Devanagari',sans-serif;color:#111;padding:4px 2px}
       .slip-page:first-child{page-break-before:auto}
+      .slip-page h1{font-size:17px;margin:0 0 2px}
+      .slip-page p{color:#444;font-size:12px;margin:2px 0}
+      .slip-page table{border-collapse:collapse;width:100%;margin-top:12px}
+      .slip-page th,.slip-page td{border:1px solid #999;padding:6px 7px;font-size:12px;text-align:left;vertical-align:middle}
+      .slip-page th{background:#f3f4f6}
+      .slip-page td.num{text-align:right}
+      .slip-page td.num .of{color:#777;font-size:10px}
+      .slip-page td.blank{min-width:64px;height:30px}
+      .slip-page td.sign{min-width:100px}
+      .slip-page tr{page-break-inside:avoid}
+      .slip-page .reprint{border:2px solid #b91c1c;color:#b91c1c;font-weight:bold;letter-spacing:.08em;
+               padding:5px 10px;display:inline-block;margin-bottom:10px;font-size:13px}
+      .slip-page .foot{margin-top:20px;font-size:12px;color:#333;display:flex;gap:50px}
       @media print { .aside{display:none} }
     </style></head><body>
     ${merged ? `<div class="wrap">${d.card.sheets}</div>` : ''}

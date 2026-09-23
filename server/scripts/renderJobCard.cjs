@@ -41,6 +41,8 @@ if (require.main === module) {
   ];
 
   const out = outArg || 'jobcard.html';
-  require('fs').writeFileSync(out, render(card, heads, provenance));
+  // Fragment form: these samples go to the Artifact tool, which supplies
+  // the document skeleton itself.
+  require('fs').writeFileSync(out, render(card, heads, provenance, { standalone: false }));
   console.log(`${out} — ${heads.length} sheet(s), ${card.gauge == null ? 'NO GAUGE' : `${card.gauge} SWG @ ${(card.wireDrawPct * 100).toFixed(0)}%`}, ohms ${card.ohmsRangeMid}, ${card.warnings.length} warning(s)`);
 }

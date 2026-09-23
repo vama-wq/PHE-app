@@ -42,13 +42,17 @@ const L = {
 // coloured dashes that read like marks on the sheet. Not reproduced.
 const box = (v, kind) => `<span class="box box--${kind}">${v}</span>`;
 
-function specRows(c) {
+// Numbered 1..N in the order they appear. The workbook's own numbering runs
+// 1,2,3,3,4,…,10,12,15,16 — two rows share a 3, and 11, 13 and 14 are missing
+// (13 and 14 were the bending rollers, now read off the drawing). Carrying
+// that over only made the sheet look like it had rows torn out of it.
+function specRows(c, head) {
   const wire = c.wire || {};
   return [
-    ['1', ['વિજળીનો ભાર / વોલ્ટેજ', 'Wattage / Voltage', 'वाट क्षमता / वोल्टेज'],
+    [['વિજળીનો ભાર / વોલ્ટેજ', 'Wattage / Voltage', 'वाट क्षमता / वोल्टेज'],
       `${box(n(c.wattage, 0), 'key')} W &nbsp; ${box(n(c.voltage, 0), 'key')} V`,
       c.elements > 1 ? `${n(c.statedWattage, 0)} W across ${c.elements} elements` : ''],
-    ['2', ['ટ્યુબ સામગ્રી', 'Tube Material', 'ट्यूब सामग्री'],
+    [['ટ્યુબ સામગ્રી', 'Tube Material', 'ट्यूब सामग्री'],
       `${box(esc(c.tubeMaterialLabel), 'key')} &nbsp; ${box(c.tubeDiameterMm, 'dia')} mm`,
       c.tubeMaterialLabelGu],
     // Four cells, in the card's own order and with no units printed — exactly
@@ -56,35 +60,44 @@ function specRows(c) {
     // third figure is the total in INCHES sitting between two millimetre
     // lengths; it looks odd written out, but moving or labelling it is what
     // would actually confuse someone who reads this row by position.
-    ['3', ['ડ્રોઇંગ પછી ટ્યુબની લંબાઈ', 'Tube Length After Draw', 'मोड़ने की लंबाई'],
+    [['ડ્રોઇંગ પછી ટ્યુબની લંબાઈ', 'Tube Length After Draw', 'मोड़ने की लंबाई'],
       `<span class="cells"><span>${n(c.row19LengthsMm[2])}</span>${box(n(c.row19LengthsMm[1]), 'mid')}${box(n(c.totalLengthIn), 'key')}<span>${n(c.row19LengthsMm[0])}</span></span>`, ''],
-    ['3', ['ટ્યુબ કાપવાની લંબાઈ', 'Tube Cutting Length', 'ट्यूब काटने की लंबाई'],
+    [['ટ્યુબ કાપવાની લંબાઈ', 'Tube Cutting Length', 'ट्यूब काटने की लंबाई'],
       `${n(c.cuttingLengthIn, 3)}" &nbsp;–&nbsp; ${n(c.cuttingLengthMm)} mm`,
       `${(c.tubeDrawPct * 100).toFixed(1)}% draw`],
-    ['4', ['વાયર ગેજ Ω/મીટર', 'Wire Gauge Ω/mtr', 'तार गेज Ω/मीटर'],
+    [['વાયર ગેજ Ω/મીટર', 'Wire Gauge Ω/mtr', 'तार गेज Ω/मीटर'],
       c.gauge == null ? '<span class="blank">to be chosen by hand</span>'
         : `${box(c.gauge, 'key')} SWG &nbsp; ${box(`${n(wire.ohms_per_m, 3)} Ω/mtr &nbsp; ${wire.mandrel_mm} Mandrel`, 'key')}`,
       c.spoolOptions.length > 1 ? `${c.spoolOptions.length} spools of this gauge fit` : ''],
-    ['5', ['સ્પ્રિંગની સીમા', 'Wire Length', 'स्प्रिंग की सीमा'],
+    [['સ્પ્રિંગની સીમા', 'Wire Length', 'स्प्रिंग की सीमा'],
       `${n(c.springWindowLowIn, 3)}" &nbsp;<span class="to">TO</span>&nbsp; ${n(c.springWindowHighIn, 3)}"`,
       c.springLengthIn ? `wound ${n(c.springLengthIn, 3)}"` : ''],
-    ['6', ['ઓહ્મ પ્રતિકાર', 'Ohms Range', 'ओम प्रतिरोध'],
+    [['ઓહ્મ પ્રતિકાર', 'Ohms Range', 'ओम प्रतिरोध'],
       c.ohmsRangeMid == null ? '<span class="blank">—</span>'
         : `${n(c.ohmsRangeMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsRangeMid, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsRangeMax, 3)} &nbsp; ${box(`${(c.wireDrawPct * 100).toFixed(1).replace(/\.0$/, '')}%`, 'key')}`,
       'the boxed figure is the wire draw'],
     // The highlight sits on the STUD LENGTH, not the cold zone: the stud is
     // what the floor picks off the rack, and it is the figure they look for.
-    ['7', ['ઠંડા ઝોનની મોટી લંબાઈ', 'Cold Zone Big', 'बड़ा कोल्ड ज़ोन'], `${n(c.coldZoneBigIn, 0)}"`, ''],
-    ['8', ['ઠંડા ઝોનની નાની લંબાઈ', 'Cold Zone Small', 'छोटा कोल्ड ज़ोन'], `${n(c.coldZoneSmallIn, 0)}"`, ''],
-    ['9', ['ટર્મિનલ પિન મોટો સ્ટડ', 'Terminal Pin — Big Stud', 'टर्मिनल पिन बड़ा स्टड'],
+    [['ઠંડા ઝોનની મોટી લંબાઈ', 'Cold Zone Big', 'बड़ा कोल्ड ज़ोन'], `${n(c.coldZoneBigIn, 0)}"`, ''],
+    [['ઠંડા ઝોનની નાની લંબાઈ', 'Cold Zone Small', 'छोटा कोल्ड ज़ोन'], `${n(c.coldZoneSmallIn, 0)}"`, ''],
+    [['ટર્મિનલ પિન મોટો સ્ટડ', 'Terminal Pin — Big Stud', 'टर्मिनल पिन बड़ा स्टड'],
       `એમ ૪-એસએસ &nbsp;·&nbsp; M4-SS &nbsp;·&nbsp; ${box(`${c.terminalPinBig.studs}"`, 'pin')}`,
       c.terminalPinBig.overridden ? `set by hand — a ${n(c.coldZoneBigIn, 0)}" cold zone gives ${c.terminalPinBig.derivedStuds}"` : ''],
-    ['10', ['ટર્મિનલ પિન નાનો સ્ટડ', 'Terminal Pin — Small Stud', 'टर्मिनल पिन छोटा स्टड'],
+    [['ટર્મિનલ પિન નાનો સ્ટડ', 'Terminal Pin — Small Stud', 'टर्मिनल पिन छोटा स्टड'],
       `એમ ૪-એસએસ &nbsp;·&nbsp; M4-SS &nbsp;·&nbsp; ${box(`${c.terminalPinSmall.studs}"`, 'pin')}`,
       c.terminalPinSmall.overridden ? `set by hand — a ${n(c.coldZoneSmallIn, 0)}" cold zone gives ${c.terminalPinSmall.derivedStuds}"` : ''],
-    ['12', ['ડ્રોઇંગ પછી પ્રતિકાર', 'Ω Ohms After Draw', 'ड्रॉ के बाद प्रतिरोध'],
+    [['ડ્રોઇંગ પછી પ્રતિકાર', 'Ω Ohms After Draw', 'ड्रॉ के बाद प्रतिरोध'],
       `${n(c.ohmsAfterDrawMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsAfterDraw, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsAfterDrawMax, 3)}`,
       '±5%'],
+
+    // Remark and plating are instructions the floor acts on, so they belong in
+    // the table with everything else rather than in a block underneath, where
+    // they sat below the fold and got missed. Nothing is measured against them,
+    // so they run across the Actual column — as the workbook merges them too.
+    [['ટિપ્પણી', 'Remark', 'टिप्पणी'],
+      (head?.remark || []).map(l => `<span class="line">${esc(l)}</span>`).join('') || '—', '', true],
+    [['પડ ચડાવવું', 'Plating', 'प्लेटिंग के लिए निर्देश'],
+      box(esc(head?.plating || '—'), 'key'), '', true],
   ];
 }
 
@@ -102,12 +115,12 @@ function renderParts(card, heads, provenance) {
     tubeMaterialLabel: card.tubeMaterialLabel || head?.tubeMaterialLabel || card.tubeMaterial || '',
     tubeMaterialLabelGu: card.tubeMaterialLabelGu || head?.tubeMaterialLabelGu || '',
   };
-  const rows = specRows(c).map(([num, [gu, en, hi], val, note]) => `
+  const rows = specRows(c, head).map(([[gu, en, hi], val, note, wide], i) => `
       <tr>
-        <td class="num">${num}</td>
+        <td class="num">${i + 1}</td>
         <td class="label"><span class="gu">${esc(gu)}</span><span class="en">${esc(en)}</span><span class="hi">${esc(hi)}</span></td>
-        <td class="value">${val}${note ? `<span class="note">${esc(note)}</span>` : ''}</td>
-        <td class="actual"><span class="rule"></span></td>
+        <td class="value${wide ? ' value--wide' : ''}"${wide ? ' colspan="2"' : ''}>${val}${note ? `<span class="note">${esc(note)}</span>` : ''}</td>
+        ${wide ? '' : '<td class="actual"><span class="rule"></span></td>'}
       </tr>`).join('');
 
   const metaFor = (head) => [
@@ -141,19 +154,6 @@ function renderParts(card, heads, provenance) {
       <tbody>${rows}
       </tbody>
     </table>
-
-    <div class="foot">
-      <div class="foot-row">
-        <div class="foot-num">15</div>
-        <div class="foot-label"><span class="gu">ટિપ્પણી</span><span class="en">Remark</span><span class="hi">टिप्पणी</span></div>
-        <div class="foot-value">${h.remark.map(l => `<span class="line">${esc(l)}</span>`).join('')}</div>
-      </div>
-      <div class="foot-row">
-        <div class="foot-num">16</div>
-        <div class="foot-label"><span class="gu">પડ ચડાવવું</span><span class="en">Plating</span><span class="hi">प्लेटिंग के लिए निर्देश</span></div>
-        <div class="foot-value">${box(esc(h.plating), 'key')}</div>
-      </div>
-    </div>
 
     <div class="sign"><div>Production</div><div>QC</div><div>Approved</div></div>
   </section>`;
@@ -198,7 +198,11 @@ function renderParts(card, heads, provenance) {
   * { box-sizing: border-box; }
   .wrap { display: flex; flex-direction: column; gap: 22px; align-items: center; padding: 24px 16px 56px; }
 
-  /* ── The sheet ───────────────────────────────────────────────────────── */
+  /* Every rule below is scoped to .sheet. Unscoped, the card's own .sign and
+     td.num landed on the material slip printed after it — the slip's Sign cell
+     became a 14px grid box and its Qty column was squeezed to 30px. Styles that
+     travel with two documents in one print job have to be fenced in.
+     ── The sheet ───────────────────────────────────────────────────────── */
   .sheet {
     width: 100%; max-width: 820px; background: var(--paper);
     border: 1.5px solid var(--rule-hard); padding: 10px 16px 8px;
@@ -214,7 +218,7 @@ function renderParts(card, heads, provenance) {
 
   .meta { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0;
     border-bottom: 2px solid var(--ink); }
-  .meta-cell { padding: 4px 12px 4px 0; border-bottom: 1px solid var(--rule); }
+  .meta-cell { padding: 3px 12px 3px 0; border-bottom: 1px solid var(--rule); }
   .meta-cell:nth-child(odd) { border-right: 1px solid var(--rule); padding-right: 16px; }
   .meta-cell:nth-child(even) { padding-left: 16px; }
   .meta-cell:nth-last-child(-n+2) { border-bottom: none; }
@@ -225,21 +229,21 @@ function renderParts(card, heads, provenance) {
   .hi { font-family: var(--hi); }
   .en { font-weight: 600; color: var(--ink-2); }
 
-  table { width: 100%; border-collapse: collapse; }
-  thead th { font-size: 9px; letter-spacing: .13em; text-transform: uppercase; color: var(--ink-3);
+  .sheet table { width: 100%; border-collapse: collapse; }
+  .sheet thead th { font-size: 9px; letter-spacing: .13em; text-transform: uppercase; color: var(--ink-3);
     text-align: left; padding: 6px 7px; border-bottom: 1px solid var(--rule-hard); font-weight: 600; }
-  thead th.c { text-align: center; }
-  tbody td { padding: 4px 7px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
-  td.num { width: 30px; font-family: var(--mono); font-size: 12px; color: var(--ink-3); text-align: center; }
+  .sheet thead th.c { text-align: center; }
+  .sheet tbody td { padding: 4px 7px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+  .sheet td.num { width: 30px; font-family: var(--mono); font-size: 12px; color: var(--ink-3); text-align: center; }
   /* The three languages run ON ONE LINE. Stacked they made every row 76px and
      the sheet ran to a second page; the real card keeps them inline and fits
      one. They wrap only when a label is genuinely long. */
-  td.label { width: 36%; }
-  td.label span { display: inline; line-height: 1.35; }
-  td.label span + span::before { content: ' | '; color: var(--rule-hard); }
-  td.label .gu, td.label .hi { font-size: 10.5px; color: var(--ink-2); }
-  td.label .en { font-size: 11.5px; color: var(--ink); }
-  td.value { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .sheet td.label { width: 36%; }
+  .sheet td.label span { display: inline; line-height: 1.35; }
+  .sheet td.label span + span::before { content: ' | '; color: var(--rule-hard); }
+  .sheet td.label .gu, .sheet td.label .hi { font-size: 10.5px; color: var(--ink-2); }
+  .sheet td.label .en { font-size: 11.5px; color: var(--ink); }
+  .sheet td.value { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ink); }
 
   /* ── The workbook's colour grading ───────────────────────────────────────
      These four fills are lifted straight off the sheet, and they stay literal
@@ -247,40 +251,34 @@ function renderParts(card, heads, provenance) {
      reads the label, so the fill is the content. Text on a fill is pinned to
      the sheet's ink rather than a theme token, since the fill does not change
      with the theme. */
-  .box { display: inline-block; padding: 1px 7px; color: #1B211F;
+  .sheet .box { display: inline-block; padding: 1px 7px; color: #1B211F;
     border: 1px solid rgba(0,0,0,.22); font-weight: 500; }
-  .box--key  { background: #F6C6AC; }
-  .box--dia  { background: #31859B; color: #FFFFFF; border-color: rgba(0,0,0,.3); }
-  .box--mid  { background: #FFF2CC; }
-  .box--pin  { background: #F9CB9C; }
-  td.value b { font-weight: 600; }
-  td.value .to { font-family: var(--sans); font-size: 10px; letter-spacing: .1em; color: var(--ink-3); }
+  .sheet .box--key  { background: #F6C6AC; }
+  .sheet .box--dia  { background: #31859B; color: #FFFFFF; border-color: rgba(0,0,0,.3); }
+  .sheet .box--mid  { background: #FFF2CC; }
+  .sheet .box--pin  { background: #F9CB9C; }
+  .sheet td.value b { font-weight: 600; }
+  .sheet td.value .to { font-family: var(--sans); font-size: 10px; letter-spacing: .1em; color: var(--ink-3); }
   /* Row 19 reads as four separate cells, the way it does on the sheet. */
-  td.value .cells { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px 7px; }
-  td.value .cells > span { min-width: 52px; }
-  td.value .cells > .box { min-width: 0; text-align: center; }
-  td.value .note { display: block; font-family: var(--sans); font-size: 10px; color: var(--ink-3); margin-top: 3px; letter-spacing: .01em; }
-  td.value .blank { color: var(--attention); font-family: var(--sans); font-size: 12px; }
+  .sheet td.value .cells { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px 7px; }
+  .sheet td.value .cells > span { min-width: 52px; }
+  .sheet td.value .cells > .box { min-width: 0; text-align: center; }
+  .sheet td.value .note { display: block; font-family: var(--sans); font-size: 10px; color: var(--ink-3); margin-top: 3px; letter-spacing: .01em; }
+  .sheet td.value .blank { color: var(--attention); font-family: var(--sans); font-size: 12px; }
   /* The floor writes its measured figure here in pen, so the column is sized
      for a hand rather than for the value it replaces: a wide box, a row tall
      enough to write in without crowding the line above, and a rule to write on. */
-  td.actual { width: 124px; border-left: 1px solid var(--rule-hard); padding: 4px 9px 3px; }
-  td.actual .rule { display: block; min-height: 22px; border-bottom: 1px solid var(--rule); }
+  .sheet td.actual { width: 124px; border-left: 1px solid var(--rule-hard); padding: 4px 9px 3px; }
+  .sheet td.actual .rule { display: block; min-height: 20px; border-bottom: 1px solid var(--rule); }
 
-  .foot { border-top: 2px solid var(--ink); margin-top: 2px; }
-  .foot-row { display: flex; gap: 16px; padding: 4px 0; border-bottom: 1px solid var(--rule); }
-  .foot-row:last-child { border-bottom: none; }
-  .foot-num { font-family: var(--mono); font-size: 12px; color: var(--ink-3); width: 30px; text-align: center; flex: none; }
-  .foot-label { width: 38%; flex: none; }
-  .foot-label span { display: inline; line-height: 1.35; }
-  .foot-label span + span::before { content: ' | '; color: var(--rule-hard); }
-  .foot-label .gu, .foot-label .hi { font-size: 10.5px; color: var(--ink-2); }
-  .foot-label .en { font-size: 11.5px; }
-  .foot-value { font-size: 11.5px; line-height: 1.45; }
-  .foot-value .line { display: block; }
+  /* Remark and plating run across the Actual column — nothing is measured
+     against an instruction, and the workbook merges those cells too. */
+  .sheet td.value--wide { font-family: var(--sans); font-size: 11.5px; line-height: 1.45; }
+  .sheet td.value--wide .line { display: block; }
 
-  .sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 6px; }
-  .sign div { border-top: 1px solid var(--rule-hard); padding-top: 6px; font-size: 10px;
+  /* Three boxes with room to actually sign in, not a caption under a rule. */
+  .sheet .sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 10px; }
+  .sheet .sign div { border: 1px solid var(--rule-hard); height: 46px; padding: 3px 7px; font-size: 9px;
     letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
 
   /* ── Screen-only commentary ──────────────────────────────────────────── */
@@ -356,9 +354,19 @@ function renderParts(card, heads, provenance) {
 }
 
 // The whole page, as stored on the order and opened from it.
-function render(card, heads, provenance) {
+//
+// `standalone` wraps it as a real HTML document, which is what a file served
+// from /uploads needs — without the doctype and <html> the browser has nothing
+// telling it this is a page. Pass false only where something else supplies the
+// skeleton (the Artifact tool does).
+function render(card, heads, provenance, { standalone = true } = {}) {
   const p = renderParts(card, heads, provenance);
-  return `<title>${p.title}</title>\n${p.fontLink}\n${p.styles}\n<div class="wrap">${p.body}</div>\n`;
+  const inner = `<title>${p.title}</title>\n${p.fontLink}\n${p.styles}\n<div class="wrap">${p.body}</div>\n`;
+  if (!standalone) return inner;
+  return `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n`
+       + `<meta name="viewport" content="width=device-width, initial-scale=1">\n`
+       + `<title>${p.title}</title>\n${p.fontLink}\n${p.styles}\n</head>\n`
+       + `<body>\n<div class="wrap">${p.body}</div>\n</body>\n</html>\n`;
 }
 
 module.exports = { render, renderParts, n, esc };
