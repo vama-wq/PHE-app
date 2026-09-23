@@ -33,7 +33,7 @@ const RED = 'FFF8CBAD', GREEN = 'FFC6EFCE', AMBER = 'FFFFEB9C', BLUE = 'FFDDEBF7
 
 async function buildMonth(db, startISO, endISO) {
   const cards = await db.all(`
-    SELECT jc.id, jc.job_card_no, jc.qty, jc.dispatch_date, jc.drawing_no, jc.product_name, jc.created_at,
+    SELECT jc.id, jc.job_card_no, jc.qty, jc.order_item_id, jc.dispatch_date, jc.drawing_no, jc.product_name, jc.created_at,
            jc.tube_used_qty, jc.tube_scrap_qty, jc.coil_used_qty, jc.coil_scrap_qty,
            jc.qc_route, jc.qc_fg_qty, jc.qc_dispatch_qty,
            o.order_code, o.order_type, c.customer_code,
@@ -108,8 +108,14 @@ async function buildMonth(db, startISO, endISO) {
       else { delay = 'Dispatched late (no hold or rejection recorded)'; }
     }
     const pkey = baseDrawing(c.drawing_no || c.product_name || c.job_card_no) || '—'; // FG groups by job-card/drawing name
-    (products[pkey] ||= { qty:0, count:0, customers:new Set() });
-    products[pkey].count++; products[pkey].qty += num(c.qty); products[pkey].customers.add(c.customer_code);
+    // "Times made" means how many times the shop was asked to make this, which
+    // is the ORDER ITEM — an item over 50 pieces runs as several cards, and
+    // counting cards turned a single 100-piece order into two makes, enough to
+    // trip the "made more than once, consider stocking" rule on a one-off.
+    (products[pkey] ||= { qty:0, count:0, makes:new Set(), customers:new Set() });
+    products[pkey].makes.add(c.order_item_id != null ? `i${c.order_item_id}` : `c${c.job_card_no}`);
+    products[pkey].count = products[pkey].makes.size;
+    products[pkey].qty += num(c.qty); products[pkey].customers.add(c.customer_code);
 
     return {
       jc: c.job_card_no, order: c.order_code, customer: c.customer_code,
@@ -136,7 +142,12 @@ function summarize(rows) {
   const n = rows.length, N = (r,k) => Number(r[k]) || 0;
   const qty = rows.reduce((s,r)=>s+N(r,'qty'),0);
   const rejects = rows.reduce((s,r)=>s+N(r,'rejects'),0);
-  const firstPass = rows.filter(r=>N(r,'rejects')===0).length;
+  // Counted in HEATERS, not job cards. An item over 50 pieces runs as several
+  // cards, and scoring each card pass/fail let the same physical quality read
+  // better simply for being split: 100 pieces with 3 rejects was one card
+  // scoring 0 of 1, and became a clean card plus a rejected one — 50%. Pieces
+  // cannot be gamed by how the paperwork is divided.
+  const goodPcs = rows.reduce((sum, r) => sum + Math.max(N(r, 'qty') - N(r, 'rejects'), 0), 0);
   // On-time % counts only cards that actually dispatched — FG-routed ('To FG')
   // and still-pending cards are excluded from the denominator.
   const disp = rows.filter(r=>r.onTime==='Yes'||r.onTime==='No');
@@ -147,7 +158,7 @@ function summarize(rows) {
     items:n, qty, rejects, remakes: rows.reduce((s,r)=>s+N(r,'remakes'),0),
     fgQty: rows.reduce((s,r)=>s+N(r,'fgQty'),0),
     rejectRate: qty ? round(rejects/qty*100,1) : 0,
-    firstPass: n ? round(firstPass/n*100,1) : 0,
+    firstPass: qty ? round(goodPcs/qty*100,1) : 0,
     onTime: disp.length ? round(ontime/disp.length*100,1) : 0,
     scrapTube: round(rows.reduce((s,r)=>s+N(r,'tubeScrap'),0)),
     scrapWire: round(rows.reduce((s,r)=>s+N(r,'wireScrap'),0),3),
@@ -234,6 +245,8 @@ async function generate(db, month) {
   an.addRow({}); an.addRow({ k:'QUALITY' });
   addKpi('Reject rate %', A.rejectRate, B.rejectRate, 'lower', 'Fewer rejects.', 'More rejects — see "Rejections by stage" below and fix the top stage.');
   addKpi('First-pass yield %', A.firstPass, B.firstPass, 'higher', 'More right-first-time.', 'More rework — target the worst stage/worker.');
+  // (Pieces good ÷ pieces made. Before Sep 2026 this was cards without a
+  // rejection ÷ cards, so figures from earlier months are not comparable.)
   addKpi('Avg |Ω deviation| %', A.avgOhmsDev, B.avgOhmsDev, 'lower', 'Coils more accurate.', 'Resistance drifting — check coil length/gauge & stage-3 ohms.');
   addKpi('Ω out-of-spec (>±5%)', A.outSpec, B.outSpec, 'lower', 'Fewer bad-resistance items.', 'More out-of-spec — review the flagged items in Item Detail.');
   an.addRow({}); an.addRow({ k:'ON-TIME DELIVERY' });
