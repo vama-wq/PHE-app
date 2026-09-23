@@ -1966,7 +1966,7 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
   const { user } = useAuthStore();
   const [selectedItemId, setSelectedItemId] = useState(defaultItemId ? String(defaultItemId) : '');
   const [form, setForm] = useState({
-    qty: '', dispatch_date: defaultDispatchDate || '',
+    dispatch_date: defaultDispatchDate || '',
     notes: '', punching: '',
   });
   const [file, setFile] = useState(null);
@@ -2066,7 +2066,6 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
       fd.append('product_name', selectedItem.product_code || '');
       fd.append('dispatch_date', form.dispatch_date);
       fd.append('punching', form.punching);
-      if (form.qty) fd.append('qty', form.qty);
       if (form.notes) fd.append('notes', form.notes);
       if (file) fd.append('file', file);
       await api.post('/job-cards', fd);
@@ -2164,23 +2163,26 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
             <input className="input" placeholder={mode === 'generate' ? 'e.g. BHA-750W-230V — leave blank to fill itself' : 'Enter punching value'}
               value={form.punching} onChange={set('punching')} required={mode !== 'generate'} />
           </div>
-          <div>
-            <label className="label">Quantity</label>
-            <input className="input" type="number" placeholder="e.g. 50" value={form.qty} onChange={set('qty')} />
-            {/* No card runs more than 50, so say up front how many this makes.
-                Blank falls back to the item quantity, exactly as the server does. */}
+          {/* No quantity field: the app decides it. A card covers what is still
+              uncovered on the item, split so none runs more than 50. */}
+          <div className="col-span-2">
             {(() => {
-              const effective = parseInt(form.qty, 10)
-                || (selectedItem ? uncovered(selectedItem) : 0) || 0;
+              const effective = selectedItem ? uncovered(selectedItem) : 0;
+              if (!(effective > 0)) return null;
               const parts = splitQuantity(effective);
-              if (parts.length <= 1) return null;
               const base = selectedItem?.drawing_number || selectedItem?.product_code || 'card';
+              const already = cardCountByItem[selectedItem?.id] > 0;
               return (
-                <div className="mt-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-2 py-1.5 leading-relaxed">
-                  {effective} pcs is over the {MAX_CARD_QTY} per card limit — this creates{' '}
-                  <span className="font-semibold">{parts.length} job cards</span>:{' '}
-                  {parts.map((q, i) => `${base}-${SPLIT_MARKER}${i + 1} (${q})`).join(', ')}.
-                  <span className="block text-blue-600/80">Each is produced and dispatched on its own and deducts only its share of the BOM.</span>
+                <div className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-2.5 py-2 leading-relaxed">
+                  {parts.length === 1 ? (
+                    <>This makes <span className="font-semibold">one job card</span> for {parts[0]} pcs
+                      {already ? ` — the ${effective} still uncovered of ${selectedItem.quantity}` : ''}.</>
+                  ) : (
+                    <>{effective} pcs is over the {MAX_CARD_QTY} per card limit — this makes{' '}
+                      <span className="font-semibold">{parts.length} job cards</span>:{' '}
+                      {parts.map((q, i) => `${base}-${SPLIT_MARKER}${i + 1} (${q})`).join(', ')}.
+                      <span className="block text-blue-600/80">Each is produced and dispatched on its own and deducts only its share of the BOM.</span></>
+                  )}
                 </div>
               );
             })()}
