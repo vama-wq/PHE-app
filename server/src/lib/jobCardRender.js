@@ -36,15 +36,17 @@ const L = {
 //   dia  #31859B  the tube diameter — which workbook this card came from
 //   mid  #FFF2CC  E19, the middle of the three lengths
 //   pin  #F9CB9C  the terminal stud length, which is what the floor picks
-//   tab  #FABF8F / #8ED873  the blank blocks beside the wattage and the gauge
+//
+// The workbook also fills two EMPTY cells — D17 beside the wattage and D21
+// beside the gauge. They carry no value, so on paper they came out as little
+// coloured dashes that read like marks on the sheet. Not reproduced.
 const box = (v, kind) => `<span class="box box--${kind}">${v}</span>`;
-const tab = kind => `<span class="box box--${kind} box--tab"></span>`;
 
 function specRows(c) {
   const wire = c.wire || {};
   return [
     ['1', ['વિજળીનો ભાર / વોલ્ટેજ', 'Wattage / Voltage', 'वाट क्षमता / वोल्टेज'],
-      `${box(n(c.wattage, 0), 'key')}${tab('tab2')} W &nbsp; ${box(n(c.voltage, 0), 'key')} V`,
+      `${box(n(c.wattage, 0), 'key')} W &nbsp; ${box(n(c.voltage, 0), 'key')} V`,
       c.elements > 1 ? `${n(c.statedWattage, 0)} W across ${c.elements} elements` : ''],
     ['2', ['ટ્યુબ સામગ્રી', 'Tube Material', 'ट्यूब सामग्री'],
       `${box(esc(c.tubeMaterialLabel), 'key')} &nbsp; ${box(c.tubeDiameterMm, 'dia')} mm`,
@@ -61,7 +63,7 @@ function specRows(c) {
       `${(c.tubeDrawPct * 100).toFixed(1)}% draw`],
     ['4', ['વાયર ગેજ Ω/મીટર', 'Wire Gauge Ω/mtr', 'तार गेज Ω/मीटर'],
       c.gauge == null ? '<span class="blank">to be chosen by hand</span>'
-        : `${box(c.gauge, 'key')}${tab('tab3')} SWG &nbsp; ${box(`${n(wire.ohms_per_m, 3)} Ω/mtr &nbsp; ${wire.mandrel_mm} Mandrel`, 'key')}`,
+        : `${box(c.gauge, 'key')} SWG &nbsp; ${box(`${n(wire.ohms_per_m, 3)} Ω/mtr &nbsp; ${wire.mandrel_mm} Mandrel`, 'key')}`,
       c.spoolOptions.length > 1 ? `${c.spoolOptions.length} spools of this gauge fit` : ''],
     ['5', ['સ્પ્રિંગની સીમા', 'Wire Length', 'स्प्रिंग की सीमा'],
       `${n(c.springWindowLowIn, 3)}" &nbsp;<span class="to">TO</span>&nbsp; ${n(c.springWindowHighIn, 3)}"`,
@@ -240,7 +242,7 @@ function renderParts(card, heads, provenance) {
   td.value { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ink); }
 
   /* ── The workbook's colour grading ───────────────────────────────────────
-     These six fills are lifted straight off the sheet, and they stay literal
+     These four fills are lifted straight off the sheet, and they stay literal
      in both themes: the floor identifies a figure by its colour before it
      reads the label, so the fill is the content. Text on a fill is pinned to
      the sheet's ink rather than a theme token, since the fill does not change
@@ -251,9 +253,6 @@ function renderParts(card, heads, provenance) {
   .box--dia  { background: #31859B; color: #FFFFFF; border-color: rgba(0,0,0,.3); }
   .box--mid  { background: #FFF2CC; }
   .box--pin  { background: #F9CB9C; }
-  .box--tab2 { background: #FABF8F; }
-  .box--tab3 { background: #8ED873; }
-  .box--tab  { width: 15px; padding: 2px 0; }
   td.value b { font-weight: 600; }
   td.value .to { font-family: var(--sans); font-size: 10px; letter-spacing: .1em; color: var(--ink-3); }
   /* Row 19 reads as four separate cells, the way it does on the sheet. */
@@ -347,7 +346,6 @@ function renderParts(card, heads, provenance) {
         <span class="sw"><b style="background:#31859B"></b>Tube diameter — which workbook the card came from</span>
         <span class="sw"><b style="background:#FFF2CC"></b>Middle of the three lengths</span>
         <span class="sw"><b style="background:#F9CB9C"></b>Terminal stud length</span>
-        <span class="sw"><b style="background:#FABF8F"></b><b style="background:#8ED873"></b>The blank tabs beside wattage and gauge</span>
       </div>
       <p class="lede" style="margin:12px 0 0">The Actual column stays blank for the floor. Rows 13 and 14 were the bending rollers, now read off the drawing.</p>
     </div>
