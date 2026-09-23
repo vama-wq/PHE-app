@@ -2043,6 +2043,19 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fins_deducted BOOLEAN DEFAULT FALSE`);
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fins_kg NUMERIC`);
 
+      // Every material slip that gets printed, so the store can tell an original
+      // from a copy. A browser cannot be stopped from printing a page twice, so
+      // the first print comes out clean and every one after it is stamped
+      // REPRINT with the date and who printed it.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS material_slip_prints (
+          id SERIAL PRIMARY KEY,
+          job_card_id INTEGER NOT NULL REFERENCES job_cards(id) ON DELETE CASCADE,
+          printed_by INTEGER REFERENCES users(id),
+          printed_at TIMESTAMPTZ DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_material_slip_prints_card ON material_slip_prints(job_card_id)`);
+
       // Plating is tracked per JOB CARD, not per order item. An item over 50
       // pieces runs as several cards and their batches reach the plater at
       // different times, so a single flag on the item could not record the

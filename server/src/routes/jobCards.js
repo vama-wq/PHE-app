@@ -400,6 +400,60 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
   });
 });
 
+// ── Material slip for ONE job card ───────────────────────────────────────────
+// The slip is the store's issue document and it travels with a card, so it
+// carries that card's share of the item's BOM — never the whole item's, which
+// would have the store issue double against a card that builds half.
+//
+// Recording the print is the point of doing this server-side: a browser cannot
+// be stopped from printing a page twice, so the first print comes out clean and
+// every one after it is stamped REPRINT with the date and who printed it.
+router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin', 'owner'), async (req, res) => {
+  const db = getDB();
+  const jc = await db.get(
+    `SELECT jc.*, o.order_code, c.customer_code
+       FROM job_cards jc JOIN orders o ON o.id = jc.order_id
+       LEFT JOIN customers c ON c.id = o.customer_id
+      WHERE jc.id=$1`, [req.params.id]);
+  if (!jc) return res.status(404).json({ error: 'Job card not found' });
+
+  const itemId = await resolveJobCardItemId(db, jc);
+  if (!itemId) return res.status(400).json({ error: 'This job card is not linked to an order item, so it has no BOM to issue against' });
+  const item = await db.get('SELECT * FROM order_items WHERE id=$1', [itemId]);
+
+  const lines = await db.all(
+    `SELECT ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty
+       FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+      WHERE oii.order_item_id=$1 ORDER BY ii.category, ii.item_code`, [itemId]);
+  if (!lines.length) return res.status(400).json({ error: 'This item has no inventory BOM attached — nothing to issue' });
+
+  // Every card of the item, so a line can be apportioned the same way each
+  // time: the shares always add back up to exactly the BOM figure.
+  const siblings = await db.all(
+    'SELECT id, qty FROM job_cards WHERE order_item_id=$1 ORDER BY job_card_no', [itemId]);
+  const quantities = siblings.map(s => Number(s.qty) || 0);
+  const mine = siblings.findIndex(s => s.id === jc.id);
+
+  const prior = await db.get('SELECT COUNT(*)::int AS n FROM material_slip_prints WHERE job_card_id=$1', [jc.id]);
+  await db.insert('INSERT INTO material_slip_prints (job_card_id, printed_by) VALUES ($1,$2)', [jc.id, req.user.id]);
+  const printNo = prior.n + 1;
+  if (printNo > 1) {
+    await logActivity(jc.order_id, jc.id, 'slip_reprinted',
+      `Material slip for ${jc.job_card_no} reprinted (copy ${printNo}) by ${req.user.name}`, req.user.id);
+  }
+
+  res.json({
+    printNo, isReprint: printNo > 1,
+    printedBy: req.user.name,
+    jobCard: { id: jc.id, job_card_no: jc.job_card_no, qty: jc.qty, drawing_no: jc.drawing_no, punching: jc.punching },
+    order: { order_code: jc.order_code, customer_code: jc.customer_code },
+    item: { id: item.id, quantity: item.quantity, drawing_number: item.drawing_number,
+            product_code: item.product_code, remark: item.remark },
+    cardIndex: mine < 0 ? 0 : mine, cardCount: siblings.length, quantities,
+    lines,
+  });
+});
+
 // ── POST create job card ──────────────────────────────────────────────────────
 router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, async (req, res) => {
   const { job_card_no, order_id, qty, dispatch_date, notes, punching, drawing_no, product_name, order_item_id } = req.body;

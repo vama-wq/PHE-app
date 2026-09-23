@@ -5,11 +5,12 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS, getStageLabel, stagesFor, downloadExcel, WORKER_NAME_STAGES, SCRAP_VALUE_STAGES } from '../../lib/utils';
+import { printJobCardSlip } from '../../lib/printJobCardSlip';
 import { compressImage } from '../../lib/compressImage';
 import {
   Wrench, Calendar, Plus, CheckSquare, Square, CheckCircle,
   X, ExternalLink, ClipboardList, Check, Image as ImageIcon,
-  AlertTriangle, ChevronRight, ArrowLeft, Lock, Download, HelpCircle, Truck, Upload
+  AlertTriangle, ChevronRight, ArrowLeft, Lock, Download, HelpCircle, Truck, Upload, Printer,
 } from 'lucide-react';
 
 export default function ProductionDashboard() {
@@ -708,11 +709,17 @@ function ChecklistModal({ card, onClose, onSave }) {
           {card.file_name && (
             <div>
               <dt className="text-xs text-gray-500 font-medium uppercase">Job Card File</dt>
-              <dd className="text-sm mt-0.5">
+              <dd className="text-sm mt-0.5 flex items-center gap-3">
                 <a href={`/uploads/job-cards/${card.file_name}`} target="_blank" rel="noopener noreferrer"
                   className="text-brand-600 hover:underline flex items-center gap-1">
                   <ExternalLink size={11} /> View File
                 </a>
+                {/* Printing the card brings its material slip with it, carrying
+                    this card's share of the BOM for the store to issue against. */}
+                <button type="button" onClick={() => printJobCardSlip(card)}
+                  className="text-brand-600 hover:underline flex items-center gap-1">
+                  <Printer size={11} /> Print + Slip
+                </button>
               </dd>
             </div>
           )}
