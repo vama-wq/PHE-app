@@ -8,7 +8,7 @@ const { createNotification } = require('./notifications');
 // longer tied to drawing approval — it now fires when the item clears QC (single
 // job card) or when a partially-dispatched item is fully dispatched (see qc.js /
 // dispatch.js). These helpers stay imported for the inventory-edit reconcile path.
-const { deductItemInventory, restoreItemInventory } = require('../lib/inventoryDeduction');
+const { deductItemInventory, restoreItemInventory, replayDeductions } = require('../lib/inventoryDeduction');
 
 // Which of these inventory ids are Fins? Fins BOM lines carry no qty — they
 // deduct by tube length at QC approval (see lib/inventoryDeduction).
@@ -531,7 +531,15 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
     }
   }
 
-  const wasDeducted = item.inventory_deducted;
+  // Gate on what was ACTUALLY taken, not on the settle flag. An item over 50
+  // pieces runs as several cards and spends the whole middle of its life
+  // part-deducted with inventory_deducted still FALSE — so the flag alone let
+  // an edit orphan everything already out of stock (the DELETE below drops
+  // qty_deducted with the rows) and then take it again at settle.
+  const partly = await db.get(
+    'SELECT 1 AS x FROM order_item_inventory WHERE order_item_id=$1 AND COALESCE(qty_deducted,0) > 0 LIMIT 1',
+    [item.id]);
+  const wasDeducted = !!item.inventory_deducted || !!partly;
   if (wasDeducted) await restoreItemInventory(db, item.id, orderCode, req.user.id, 'Inventory edited');
 
   await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
@@ -540,7 +548,10 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
       [item.id, parseInt(sel.id), parseFloat(sel.qty) || 0]);
   }
 
-  if (wasDeducted) await deductItemInventory(db, item.id, orderCode, req.user.id);
+  // Re-take against the new BOM, to the progress the cards have actually made
+  // — a part-built item must not have its whole BOM deducted just because the
+  // selection was edited.
+  if (wasDeducted) await replayDeductions(db, item.id, orderCode, req.user.id);
   await logActivity(req.params.id, null, 'inventory_edited', `Inventory selection updated for item #${item.id}`, req.user.id);
   res.json({ message: 'Inventory updated', reDeducted: wasDeducted });
 });

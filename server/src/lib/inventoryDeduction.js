@@ -104,8 +104,12 @@ async function deductPartialAtQC(db, jc, userId) {
 
   const fresh = await db.get('SELECT * FROM job_cards WHERE id=$1', [jc.id]); // qc_* qtys were just written
   const approvedQty = (Number(fresh?.qc_dispatch_qty) || 0) + (Number(fresh?.qc_fg_qty) || 0);
-  const baseQty = approvedQty > 0 ? approvedQty : (Number(jc.qty) || 0);
-  const ratio = Number(item.quantity) > 0 ? Math.min(1, baseQty / Number(item.quantity)) : 0;
+  // Only a real approval consumes material. QC rejection returns work to stage
+  // 29 and settles from there, at which point the qc_* quantities are unset —
+  // falling back to the card quantity took half the BOM out of stock for pieces
+  // that were sitting rejected on the floor.
+  if (fresh?.status !== 'qc_approved' || !(approvedQty > 0)) return;
+  const ratio = Number(item.quantity) > 0 ? Math.min(1, approvedQty / Number(item.quantity)) : 0;
   if (ratio <= 0) return;
 
   const stageCats = Object.values(STAGE_CATEGORY_MAP).flat();
@@ -133,6 +137,14 @@ async function deductPartialAtQC(db, jc, userId) {
 // from THIS card's stage-8 (Draw) Total Length — not the BOM qty.
 async function deductFinsByLength(db, jc, userId) {
   if (!jc || jc.is_fg) return; // FG inventory cards have no Draw stage
+  // Once per card. Nothing used to stop this running again on a second QC
+  // cycle, and a rejection that returns work to stage 29 settles too — so a
+  // card could draw fin strip several times over, uncapped, including for
+  // pieces that were rejected.
+  const guard = await db.get('SELECT fins_deducted, status, qc_dispatch_qty, qc_fg_qty FROM job_cards WHERE id=$1', [jc.id]);
+  if (guard?.fins_deducted) return;
+  const approved = (Number(guard?.qc_dispatch_qty) || 0) + (Number(guard?.qc_fg_qty) || 0);
+  if (guard?.status !== 'qc_approved' || !(approved > 0)) return;
   const itemId = await resolveJobCardItemId(db, jc);
   if (!itemId) return;
   const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
@@ -166,13 +178,11 @@ async function deductFinsByLength(db, jc, userId) {
 
   // Per-piece weight × QC-approved qty of THIS card (dispatch + FG). A partial
   // dispatch therefore deducts fins only for the pieces actually approved.
-  const fresh = await db.get('SELECT qc_dispatch_qty, qc_fg_qty, qty FROM job_cards WHERE id=$1', [jc.id]);
-  const approvedQty = (Number(fresh?.qc_dispatch_qty) || 0) + (Number(fresh?.qc_fg_qty) || 0);
-  const pcs = approvedQty > 0 ? approvedQty : (Number(fresh?.qty) || 0);
-  if (!(pcs > 0)) return;
+  const pcs = approved;
 
   const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
   const orderCode = o?.order_code || `Order #${jc.order_id}`;
+  let totalKg = 0;
   for (const sel of sels) {
     const perBase = FINS_WEIGHT_PER_BASE[sel.item_code];
     const kgs = Math.round((lengthMm / FINS_MM_BASE) * perBase * pcs * 1000) / 1000;
@@ -181,7 +191,9 @@ async function deductFinsByLength(db, jc, userId) {
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
     noteParts.push(`Fins by tube length: ${lengthMm}mm × ${perBase}kg/${FINS_MM_BASE}mm × ${pcs} pcs = ${kgs}kg (JC ${jc.job_card_no})`);
     await deductLine(db, sel, kgs, noteParts.join(' | '), userId);
+    totalKg += kgs;
   }
+  await db.run('UPDATE job_cards SET fins_deducted=TRUE, fins_kg=$1 WHERE id=$2', [totalKg, jc.id]);
 }
 
 // QC-time deduction: everything not already consumed by a stage trigger.
@@ -254,6 +266,35 @@ async function restoreItemInventory(db, itemId, orderCode, userId, reasonNote) {
   await db.run('UPDATE order_items SET inventory_deducted=FALSE WHERE id=$1', [itemId]);
 }
 
+// Rebuild an item's deductions against its CURRENT BOM, to the exact progress
+// its cards have actually made. Used after the BOM is edited mid-run: the
+// caller restores everything first (so qty_deducted is zero across the board),
+// swaps the lines, then calls this to re-take what production has genuinely
+// consumed so far.
+//
+// It works because each deduction path caps itself at `total - already`, so
+// replaying a stage that has been reached takes exactly that stage's share of
+// the new BOM and nothing more.
+async function replayDeductions(db, itemId, orderCode, userId) {
+  const cards = await db.all('SELECT * FROM job_cards WHERE order_item_id=$1 ORDER BY id', [itemId]);
+  for (const jc of cards) {
+    const done = await db.all(
+      'SELECT stage_no FROM production_checklist WHERE job_card_id=$1 AND done=1 AND stage_no = ANY($2)',
+      [jc.id, Object.keys(STAGE_CATEGORY_MAP).map(Number)]);
+    for (const { stage_no } of done) await deductStageCategories(db, jc, Number(stage_no), userId);
+
+    if (jc.status === 'qc_approved') {
+      // Fins were restored with everything else, so let them re-take too.
+      await db.run('UPDATE job_cards SET fins_deducted=FALSE WHERE id=$1', [jc.id]);
+      await deductFinsByLength(db, jc, userId);
+      await deductPartialAtQC(db, jc, userId);
+    }
+  }
+  // If every card is finished the item settles in full, exactly as it would
+  // have done on its own.
+  await settleItemInventory(db, itemId, userId, orderCode);
+}
+
 // Resolve which order item a job card belongs to. Job cards carry order_item_id
 // going forward; fall back to matching the drawing number within the order for
 // legacy cards created before that link existed.
@@ -297,4 +338,4 @@ async function settleItemInventory(db, orderItemId, userId, orderCode) {
   if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)');
 }
 
-module.exports = { buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, deductPartialAtQC, deductFinsByLength };
+module.exports = { buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, deductPartialAtQC, deductFinsByLength, replayDeductions };

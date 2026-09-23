@@ -2036,6 +2036,24 @@ async function initDB(retries = 20, delayMs = 10000) {
         UPDATE order_items SET plating_instructions = TRIM(plating_instructions)
          WHERE plating_instructions IS NOT NULL AND plating_instructions <> TRIM(plating_instructions)`);
 
+      // Fins deducted on every QC settle with nothing to stop them doing it
+      // twice — and a QC rejection that returns work to stage 29 settles too,
+      // so a rejected card drew fin strip for goods back on the floor. These
+      // give fins the same per-card guard tube, coil and filling already have.
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fins_deducted BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fins_kg NUMERIC`);
+
+      // Cards that already drew fins carry the new flag as FALSE, so the guard
+      // above would not have protected them — a second QC settle would have
+      // deducted again. Backfilled from the ledger, which names the card in the
+      // note it writes. Idempotent: it only ever sets the flag TRUE.
+      await pool.query(`
+        UPDATE job_cards jc SET fins_deducted = TRUE
+         WHERE COALESCE(jc.fins_deducted, FALSE) = FALSE
+           AND EXISTS (SELECT 1 FROM inventory_transactions t
+                        WHERE t.notes LIKE '%Fins by tube length%'
+                          AND t.notes LIKE '%(JC ' || jc.job_card_no || ')%')`);
+
       // Orders closed by a partial dispatch before the order status became
       // card-aware: 'dispatched' while some of their job cards were still on
       // the floor. Five such orders on 23 Sep 2026, ORD-045-26 with six cards
