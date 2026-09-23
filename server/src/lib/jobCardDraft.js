@@ -10,6 +10,7 @@
 // into real job cards through the normal creation path.
 
 const E = require('./jobCardEngine');
+const round = (n, dp) => Math.round(Number(n) * 10 ** dp) / 10 ** dp;
 const { splitQuantity, describeSplit, SPLIT_MARKER } = require('./jobCardSplit');
 
 // The plating dropdown is a closed set of five, and the card prints all three
@@ -137,10 +138,34 @@ async function buildDraft(db, orderItemId, answers = {}) {
     ? `${parts[i]} Nos (${i + 1} of ${parts.length} · item ${item.quantity})`
     : `${item.quantity} Nos`;
 
+  // "Where each figure came from", printed on the page below the sheet (screen
+  // only). Derived rather than written by hand, so it always describes what the
+  // engine actually did on THIS card.
+  const pct = (v) => `${(v * 100).toFixed(1)}%`;
+  const std = E.standardColdZone(card.totalLengthIn);
+  const provenance = [
+    ['From the order', 'Order no, client code, order date, product code, drawing no, punching, quantity, tube material, plating, remark'],
+    ['Asked when making the card', 'ASMBLY, fixture type, dispatch date, total length off the drawing'],
+    ['Total length', `${answers.drawing_total_length_in}" on the drawing + ${E.TOTAL_LENGTH_ALLOWANCE_IN}" allowance = ${card.totalLengthIn}"`],
+    ['Tube draw', `${pct(card.tubeDrawPct)} — ${card.material === 'copper' ? 'copper' : 'SS / Incoloy'} at ${card.totalLengthIn}"`],
+    ['Wire gauge', card.gauge == null
+      ? 'no wire on the sheet reaches the required coil length — choose by hand'
+      : `${card.gauge} SWG at ${pct(card.wireDrawPct)} wire draw, ${card.gaugeResolution === 'unique' ? 'the only self-consistent answer' : 'the coarsest of several'}; ${card.spoolOptions.length} spool(s) of it fit the spring window`],
+    ['Cold zone', card.coldZoneBigIn === std.coldZoneIn
+      ? `${card.coldZoneBigIn}" — the policy standard for a ${card.totalLengthIn}" element`
+      : `${card.coldZoneBigIn}" set by hand; the standard here is ${std.coldZoneIn}"`],
+    ['Terminal pin', `ceil(${card.coldZoneBigIn} ÷ 1.215 + 1) = ${card.terminalPinBig.studs}"`],
+    ['Ohms after draw', `${card.voltage}² ÷ ${round(card.wattage, 2)} = ${card.ohmsAfterDraw} Ω, ±5%`],
+    ['Quantity', parts.length > 1
+      ? `${item.quantity} pcs over ${parts.length} cards (${describeSplit(parts)}) — no card runs more than 50`
+      : `${item.quantity} pcs on one card`],
+  ];
+
   return {
     ok: true,
     orderItemId: item.id,
     notes,
+    provenance,
     card: { ...card, wire: chosenSpool },
     split: {
       cards: parts.length,

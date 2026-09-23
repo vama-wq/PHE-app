@@ -1,12 +1,13 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromStorage } = require('../middleware/upload');
+const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromStorage, uploadToStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { applyMaterialDeductions } = require('../lib/materialDeduction');
 const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventoryDeduction');
 const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit } = require('../lib/jobCardSplit');
 const { buildDraft, draftQuestions } = require('../lib/jobCardDraft');
+const { render: renderJobCard } = require('../lib/jobCardRender');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
 // Must match client MANDATORY_STAGE_NOS. Optional/excluded: 2, 13(Buffing), 15(Brazing),
@@ -305,6 +306,98 @@ router.post('/draft', authenticate, authorize('admin', 'owner'), async (req, res
   const draft = await buildDraft(getDB(), parseInt(order_item_id, 10), answers);
   if (!draft.ok) return res.status(400).json(draft);
   res.json(draft);
+});
+
+// ── Generate the job card the app makes itself ───────────────────────────────
+// Same draft the review screen shows, rendered to the page the shop floor
+// reads, saved to storage, and attached to the cards it creates — so a
+// generated card sits in the order exactly where an uploaded PDF used to.
+//
+// Creation still goes through the normal path below: this endpoint prepares the
+// file and hands it over, so the 50-piece split, the numbering and the no-BOM
+// gate all behave identically whether a card was generated or uploaded.
+router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, res) => {
+  const db = getDB();
+  const { order_item_id, ...answers } = req.body || {};
+  if (!order_item_id) return res.status(400).json({ error: 'Order item is required' });
+
+  const draft = await buildDraft(db, parseInt(order_item_id, 10), answers);
+  if (!draft.ok) return res.status(400).json(draft);
+
+  const item = await db.get('SELECT * FROM order_items WHERE id=$1', [parseInt(order_item_id, 10)]);
+
+  // No BOM, no card — the same gate the upload path applies, checked here so a
+  // generated card cannot slip past it.
+  const bom = await db.get('SELECT COUNT(*)::int AS n FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
+  if (!bom.n && !(req.user.role === 'owner' && String(req.body.confirm_no_bom) === 'true')) {
+    return res.status(400).json({
+      error: 'This item has no inventory BOM attached — no materials would ever be deducted for it. Ask design to attach the BOM on the order item first.',
+      code: 'NO_BOM',
+    });
+  }
+
+  const covered = await db.get(
+    'SELECT COUNT(*)::int AS n, COALESCE(SUM(qty),0)::int AS covered FROM job_cards WHERE order_item_id=$1', [item.id]);
+  if (covered.n > 0 && covered.covered >= (parseInt(item.quantity, 10) || 0)) {
+    return res.status(409).json({ error: `This item is already covered by ${covered.n} job card(s) totalling ${covered.covered} of ${item.quantity} pcs` });
+  }
+
+  const html = renderJobCard(draft.card, draft.sheets, draft.provenance || []);
+  const filename = `${Date.now()}-${String(item.drawing_number || item.product_code || `item-${item.id}`)
+    .replace(/[^A-Za-z0-9._-]+/g, '-')}.html`;
+  let storagePath;
+  try {
+    storagePath = await uploadToStorage('job-cards', filename, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+  } catch (e) {
+    return res.status(502).json({ error: `Could not save the generated job card: ${e.message}` });
+  }
+
+  const baseNo = String(item.drawing_number || item.product_code || `ITEM-${item.id}`).toUpperCase();
+  const parts = draft.split.quantities;
+  const taken = await takenNumbersFor(db, baseNo);
+  let numbers;
+  try {
+    numbers = allocateCardNumbers(baseNo, Math.max(parts.length, 1), taken, { forceMarker: covered.n > 0 });
+  } catch (e) {
+    return res.status(409).json({ error: e.message });
+  }
+
+  let created;
+  try {
+    created = await db.withTransaction(async (client) => {
+      const out = [];
+      for (let i = 0; i < numbers.length; i++) {
+        const { rows: ins } = await client.query(`
+          INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date,
+                                 notes, punching, drawing_no, product_name, uploaded_by, order_item_id)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+          [numbers[i], item.order_id, storagePath, filename, filename,
+           parts[i], answers.dispatch_date, answers.notes || null,
+           draft.head.punching, item.drawing_number || null, item.product_code || null,
+           req.user.id, item.id]);
+        out.push({ id: ins[0].id, job_card_no: numbers[i], qty: parts[i] });
+      }
+      return out;
+    });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'Could not allocate a job card number — please retry' });
+    throw e;
+  }
+
+  await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [item.order_id]);
+  for (const c of created) {
+    await logActivity(item.order_id, c.id, 'job_card_created',
+      `Job Card ${c.job_card_no} generated by the app — ${c.qty} pcs`
+      + (created.length > 1 ? ` (${describeSplit(parts)}, max ${MAX_CARD_QTY} per card)` : '')
+      + (draft.card.gauge != null ? ` · ${draft.card.gauge} SWG @ ${(draft.card.wireDrawPct * 100).toFixed(1)}%` : ' · gauge left blank'),
+      req.user.id);
+  }
+
+  res.status(201).json({
+    id: created[0].id, job_card_no: created[0].job_card_no,
+    split: created.length > 1, cards: created, file_path: storagePath,
+    warnings: draft.card.warnings, notes: draft.notes,
+  });
 });
 
 // ── POST create job card ──────────────────────────────────────────────────────
