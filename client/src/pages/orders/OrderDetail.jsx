@@ -1974,6 +1974,27 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
   const [saving, setSaving] = useState(false);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
+  // The app can work the card out itself, or you can upload one made by hand.
+  // Generating is the default; the upload path stays as the fallback for
+  // anything the engine does not cover (11mm, or a card with no drawing length).
+  const [mode, setMode] = useState('generate');
+  const [gen, setGen] = useState({ asmbly: '1', fixture: '', drawing_total_length_in: '' });
+  const setGenF = k => e => { setGen(g => ({ ...g, [k]: e.target.value })); setPreview(null); };
+  const [preview, setPreview] = useState(null);
+  const [previewing, setPreviewing] = useState(false);
+
+  const runPreview = async () => {
+    setError(''); setPreviewing(true);
+    try {
+      const r = await api.post('/job-cards/draft', {
+        order_item_id: selectedItemId, ...gen,
+        dispatch_date: form.dispatch_date, punching: form.punching,
+      });
+      setPreview(r.data);
+    } catch (e) { setPreview(null); setError(e.response?.data?.error || 'Could not work out the card'); }
+    finally { setPreviewing(false); }
+  };
+
   // An item is "taken" only once a job card links to its id — not merely because
   // another item shares its drawing number. (Legacy cards with no linked item id
   // still fall back to blocking by drawing number.)
@@ -2003,6 +2024,35 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
     e.preventDefault();
     if (!selectedItemId) return setError('Please select an item');
     if (!form.dispatch_date) return setError('Dispatch date is required');
+
+    if (mode === 'generate') {
+      if (!gen.fixture.trim()) return setError('Fixture type is required');
+      if (!(parseFloat(gen.drawing_total_length_in) > 0)) return setError('Total length on the drawing is required');
+      if (!preview?.ok) return setError('Check the card first — press Work it out.');
+      setSaving(true);
+      try {
+        await api.post('/job-cards/generate', {
+          order_item_id: selectedItemId, ...gen,
+          dispatch_date: form.dispatch_date, punching: form.punching, notes: form.notes,
+        });
+        onSave();
+      } catch (err) {
+        if (err.response?.data?.code === 'NO_BOM' && user?.role === 'owner'
+            && window.confirm(err.response.data.error + '\n\nGenerate the job card anyway WITHOUT any inventory deduction? (Owner override)')) {
+          try {
+            await api.post('/job-cards/generate', {
+              order_item_id: selectedItemId, ...gen, dispatch_date: form.dispatch_date,
+              punching: form.punching, notes: form.notes, confirm_no_bom: 'true',
+            });
+            onSave(); return;
+          } catch (e2) { setError(e2.response?.data?.error || 'Failed to generate'); setSaving(false); return; }
+        }
+        setError(err.response?.data?.error || 'Failed to generate');
+        setSaving(false);
+      }
+      return;
+    }
+
     if (!form.punching.trim()) return setError('Punching value is required');
     setSaving(true);
     let fd;
@@ -2038,8 +2088,19 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
   };
 
   return (
-    <Modal open title="Upload Job Card" onClose={onClose} size="md">
+    <Modal open title={mode === 'generate' ? 'Make Job Card' : 'Upload Job Card'} onClose={onClose} size="md">
       <form onSubmit={handleSubmit} className="space-y-4">
+
+        {/* How the card gets made. Generating is the default; uploading stays
+            for anything the engine does not cover. */}
+        <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+          {[['generate', 'Make it in the app'], ['upload', 'Upload a file']].map(([m, label]) => (
+            <button key={m} type="button" onClick={() => { setMode(m); setError(''); }}
+              className={`flex-1 px-3 py-2 ${mode === m ? 'bg-cyan-600 text-white font-medium' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
 
         {/* Step 1 — Pick item */}
         <div>
@@ -2097,8 +2158,11 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
         {/* Remaining fields */}
         <div className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
-            <label className="label">Punching <span className="text-red-500">*</span></label>
-            <input className="input" placeholder="Enter punching value" value={form.punching} onChange={set('punching')} required />
+            <label className="label">Punching {mode === 'generate'
+              ? <span className="text-gray-400 font-normal">(filled in from wattage &amp; voltage — change only if it differs)</span>
+              : <span className="text-red-500">*</span>}</label>
+            <input className="input" placeholder={mode === 'generate' ? 'e.g. BHA-750W-230V — leave blank to fill itself' : 'Enter punching value'}
+              value={form.punching} onChange={set('punching')} required={mode !== 'generate'} />
           </div>
           <div>
             <label className="label">Quantity</label>
@@ -2131,16 +2195,79 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
           </div>
         </div>
 
-        <div>
-          <label className="label">Job Card File <span className="text-gray-400 font-normal">(PDF or image)</span></label>
-          <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Upload job card document" />
-        </div>
+        {mode === 'generate' ? (
+          <>
+            {/* The four things only the planner knows. Everything else comes
+                off the order or out of the policy. */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">ASMBLY <span className="text-red-500">*</span></label>
+                <select className="input" value={gen.asmbly} onChange={setGenF('asmbly')}>
+                  {['1', '2', '3'].map(v => <option key={v} value={v}>ASMBLY {v}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Total length on the drawing <span className="text-red-500">*</span></label>
+                <input className="input" type="number" step="0.01" placeholder="inches, e.g. 34"
+                  value={gen.drawing_total_length_in} onChange={setGenF('drawing_total_length_in')} />
+                <p className="text-[11px] text-gray-400 mt-0.5">The card adds the 0.7&quot; allowance itself.</p>
+              </div>
+              <div className="col-span-2">
+                <label className="label">Fixture type <span className="text-red-500">*</span></label>
+                <input className="input" placeholder="as it should read on the card"
+                  value={gen.fixture} onChange={setGenF('fixture')} />
+              </div>
+            </div>
+
+            <button type="button" className="btn-secondary w-full" disabled={previewing || !selectedItemId}
+              onClick={runPreview}>
+              {previewing ? 'Working it out…' : preview ? 'Work it out again' : 'Work it out'}
+            </button>
+
+            {preview?.ok && (
+              <div className="rounded-xl border border-gray-200 divide-y text-sm">
+                <div className="px-3 py-2 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                  What the card will say
+                </div>
+                {[
+                  ['Wire gauge', preview.card.gauge == null
+                    ? 'none fits — will print blank'
+                    : `${preview.card.gauge} SWG · ${preview.card.wire?.ohms_per_m} Ω/mtr · ${preview.card.wire?.mandrel_mm} mandrel`],
+                  ['Ohms range', preview.card.ohmsRangeMid == null ? '—'
+                    : `${preview.card.ohmsRangeMin} – ${preview.card.ohmsRangeMid} – ${preview.card.ohmsRangeMax}`],
+                  ['Ohms after draw', `${preview.card.ohmsAfterDrawMin} – ${preview.card.ohmsAfterDraw} – ${preview.card.ohmsAfterDrawMax}`],
+                  ['Cutting length', `${preview.card.cuttingLengthIn}" · ${preview.card.cuttingLengthMm} mm (${(preview.card.tubeDrawPct * 100).toFixed(1)}% draw)`],
+                  ['Spring range', `${preview.card.springWindowLowIn}" to ${preview.card.springWindowHighIn}"`],
+                  ['Cold zone', `${preview.card.coldZoneBigIn}" / ${preview.card.coldZoneSmallIn}" · pin ${preview.card.terminalPinBig?.studs}"`],
+                  ['Punching', preview.head.punching],
+                  ['Job card(s)', preview.split.names.map((nm, i) => `${nm} (${preview.split.quantities[i]})`).join(', ')],
+                ].map(([k, v]) => (
+                  <div key={k} className="flex gap-3 px-3 py-1.5">
+                    <span className="w-36 flex-shrink-0 text-gray-500">{k}</span>
+                    <span className="font-mono text-gray-800 break-words">{v}</span>
+                  </div>
+                ))}
+                {[...(preview.card.warnings || []), ...(preview.notes || [])].map((w, i) => (
+                  <div key={i} className="px-3 py-2 bg-amber-50 text-amber-900 text-xs leading-relaxed">{w}</div>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <div>
+            <label className="label">Job Card File <span className="text-gray-400 font-normal">(PDF or image)</span></label>
+            <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Upload job card document" />
+          </div>
+        )}
 
         {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
         <div className="flex gap-3 pt-2">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary flex-1" disabled={saving}>
-            {saving ? 'Uploading...' : 'Upload Job Card'}
+            {saving ? (mode === 'generate' ? 'Making…' : 'Uploading…')
+              : mode === 'generate'
+                ? `Make job card${preview?.ok && preview.split.cards > 1 ? `s (${preview.split.cards})` : ''}`
+                : 'Upload Job Card'}
           </button>
         </div>
       </form>
