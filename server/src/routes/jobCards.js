@@ -6,6 +6,7 @@ const { createNotification } = require('./notifications');
 const { applyMaterialDeductions } = require('../lib/materialDeduction');
 const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventoryDeduction');
 const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit } = require('../lib/jobCardSplit');
+const { buildDraft, draftQuestions } = require('../lib/jobCardDraft');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
 // Must match client MANDATORY_STAGE_NOS. Optional/excluded: 2, 13(Buffing), 15(Brazing),
@@ -286,6 +287,24 @@ router.get('/:id', authenticate, async (req, res) => {
   jc.qc_report = qcReport || null;
 
   res.json(jc);
+});
+
+// ── Job card draft ────────────────────────────────────────────────────────────
+// Computes what the card WOULD say, and creates nothing. The owner reviews the
+// draft and only then presses create, which goes through POST / below like any
+// other card. Sending it back with overrides (cold zone, spool, wire draw)
+// recomputes — so the review screen is a live calculator, not a preview.
+router.get('/draft/questions', authenticate, authorize('admin', 'owner'), async (req, res) => {
+  const itemId = parseInt(req.query.order_item_id, 10);
+  res.json({ questions: await draftQuestions(getDB(), itemId || 0) });
+});
+
+router.post('/draft', authenticate, authorize('admin', 'owner'), async (req, res) => {
+  const { order_item_id, ...answers } = req.body || {};
+  if (!order_item_id) return res.status(400).json({ error: 'Order item is required' });
+  const draft = await buildDraft(getDB(), parseInt(order_item_id, 10), answers);
+  if (!draft.ok) return res.status(400).json(draft);
+  res.json(draft);
 });
 
 // ── POST create job card ──────────────────────────────────────────────────────
