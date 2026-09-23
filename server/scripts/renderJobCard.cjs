@@ -11,6 +11,8 @@ const E = require('../src/lib/jobCardEngine');
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const n = (v, dp = 2) => v == null ? '—' : Number(v).toFixed(dp);
+// The inch cell is printed as the planner types it — 46.3, not 46.30.
+const asTyped = v => v == null ? '—' : String(Number(v));
 
 // Row labels exactly as the workbook carries them: Gujarati, English, Hindi.
 const L = {
@@ -33,8 +35,14 @@ function specRows(c) {
       c.elements > 1 ? `${n(c.statedWattage, 0)} W across ${c.elements} elements` : ''],
     ['2', ['ટ્યુબ સામગ્રી', 'Tube Material', 'ट्यूब सामग्री'],
       `${esc(c.tubeMaterialLabel)} &nbsp;·&nbsp; ${c.tubeDiameterMm} mm`, ''],
+    // Four cells, in the card's own order and with no units printed — exactly
+    // as C19 / E19 / F19 / G19 sit on the sheet the floor already reads. The
+    // third figure is the total in INCHES sitting between two millimetre
+    // lengths; it looks odd written out, but moving or labelling it is what
+    // would actually confuse someone who reads this row by position.
     ['3', ['ડ્રોઇંગ પછી ટ્યુબની લંબાઈ', 'Tube Length After Draw', 'मोड़ने की लंबाई'],
-      c.row19LengthsMm.slice().reverse().map(v => n(v)).join(' &nbsp;–&nbsp; ') + ' mm', ''],
+      `<span class="cells">${[n(c.row19LengthsMm[2]), n(c.row19LengthsMm[1]), asTyped(c.totalLengthIn), n(c.row19LengthsMm[0])]
+        .map(v => `<span>${v}</span>`).join('')}</span>`, ''],
     ['3', ['ટ્યુબ કાપવાની લંબાઈ', 'Tube Cutting Length', 'ट्यूब काटने की लंबाई'],
       `${n(c.cuttingLengthIn, 3)}" &nbsp;–&nbsp; ${n(c.cuttingLengthMm)} mm`,
       `${(c.tubeDrawPct * 100).toFixed(1)}% draw`],
@@ -163,6 +171,9 @@ function render(card, head, provenance) {
   td.value { font-family: var(--mono); font-size: 13.5px; font-variant-numeric: tabular-nums; color: var(--computed); }
   td.value b { font-weight: 600; }
   td.value .to { font-family: var(--sans); font-size: 10px; letter-spacing: .1em; color: var(--ink-3); }
+  /* Row 19 reads as four separate cells, the way it does on the sheet. */
+  td.value .cells { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  td.value .cells span { min-width: 58px; }
   td.value .note { display: block; font-family: var(--sans); font-size: 10.5px; color: var(--ink-3); margin-top: 3px; letter-spacing: .01em; }
   td.value .blank { color: var(--attention); font-family: var(--sans); font-size: 12px; }
   td.actual { width: 88px; border-left: 1px solid var(--rule); }
