@@ -10,6 +10,7 @@
 // into real job cards through the normal creation path.
 
 const E = require('./jobCardEngine');
+const { toGujarati, toHindi, isTranslated } = require('./translit');
 const round = (n, dp) => Math.round(Number(n) * 10 ** dp) / 10 ** dp;
 const { splitQuantity, describeSplit, SPLIT_MARKER } = require('./jobCardSplit');
 
@@ -214,10 +215,26 @@ async function buildDraft(db, orderItemId, answers = {}) {
       punching,
       qty,
       dispatchDate: fmtDate(answers.dispatch_date),
+      // The fixture is free text the planner types, and the floor reads the
+      // card in three languages — so it is translated word by word from the
+      // shop dictionary. Anything the dictionary does not know stays English,
+      // which beats a garbled letter-mapping on a working document.
       fixture: String(answers.fixture || ''),
+      fixtureAlt: [toGujarati(answers.fixture), toHindi(answers.fixture)]
+        .filter(v => isTranslated(answers.fixture, v)).join('  ·  '),
       tubeMaterialLabel: tubeLabel,
       tubeMaterialLabelGu: tubeLabelGu,
-      remark: String(item.remark || '').trim() ? [String(item.remark).trim()] : [],
+      // Same treatment as the fixture: the remark is an instruction the floor
+      // acts on, so it carries its Gujarati and Hindi. Customer-specific text
+      // the dictionary does not know stays English rather than being mangled.
+      // Gujarati and Hindi share ONE line, separated by a dot. Stacked they
+      // cost the sheet a line per instruction and pushed it onto a second page.
+      remark: (() => {
+        const en = String(item.remark || '').trim();
+        if (!en) return [];
+        const both = [toGujarati(en), toHindi(en)].filter(v => isTranslated(en, v));
+        return [en, ...(both.length ? [both.join('  ·  ')] : [])];
+      })(),
       plating: PLATING_TRILINGUAL[String(item.plating_instructions || '').trim()]
         || item.plating_instructions || '',
     };

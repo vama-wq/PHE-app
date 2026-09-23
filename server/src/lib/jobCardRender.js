@@ -128,11 +128,15 @@ function renderParts(card, heads, provenance) {
     [L.orderDate, head.orderDate], [L.dispatch, head.dispatchDate],
     [L.product, head.productCode], [L.drawing, head.drawingNumber],
     [L.punching, head.punching], [L.qty, head.qty],
-    [L.cardNo, head.cardNo], [L.fixture, head.fixture],
-  ].map(([[gu, en, hi], v]) => `
+    [L.cardNo, head.cardNo],
+    // The fixture carries its own Gujarati and Hindi under the English, the
+    // way the remark and the plating do — it is an instruction, not a code.
+    [L.fixture, head.fixture, head.fixtureAlt ? [head.fixtureAlt] : []],
+  ].map(([[gu, en, hi], v, alts]) => `
         <div class="meta-cell">
           <div class="meta-label"><span class="gu">${esc(gu)}</span><span class="en">${esc(en)}</span><span class="hi">${esc(hi)}</span></div>
           <div class="meta-value">${esc(v)}</div>
+          ${(alts || []).length ? `<div class="meta-alt">${alts.map(a => `<span>${esc(a)}</span>`).join('')}</div>` : ''}
         </div>`).join('');
 
   const sheet = (h, i) => `
@@ -205,7 +209,7 @@ function renderParts(card, heads, provenance) {
      ── The sheet ───────────────────────────────────────────────────────── */
   .sheet {
     width: 100%; max-width: 820px; background: var(--paper);
-    border: 1.5px solid var(--rule-hard); padding: 10px 16px 8px;
+    border: 1.5px solid var(--rule-hard); padding: 10px 16px 6px;
     box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 28px rgba(0,0,0,.06);
   }
   .sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
@@ -218,12 +222,15 @@ function renderParts(card, heads, provenance) {
 
   .meta { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0;
     border-bottom: 2px solid var(--ink); }
-  .meta-cell { padding: 3px 12px 3px 0; border-bottom: 1px solid var(--rule); }
+  .meta-cell { padding: 2px 12px 2px 0; border-bottom: 1px solid var(--rule); }
   .meta-cell:nth-child(odd) { border-right: 1px solid var(--rule); padding-right: 16px; }
   .meta-cell:nth-child(even) { padding-left: 16px; }
   .meta-cell:nth-last-child(-n+2) { border-bottom: none; }
-  .meta-label { display: flex; flex-wrap: wrap; gap: 0 6px; font-size: 9.5px; color: var(--ink-3); line-height: 1.35; }
+  .meta-label { display: flex; flex-wrap: wrap; gap: 0 6px; font-size: 9.5px; color: var(--ink-3); line-height: 1.25; }
   .meta-value { font-family: var(--mono); font-size: 12.5px; font-weight: 500; margin-top: 1px; word-break: break-word; }
+  /* The Gujarati and Hindi of a free-text instruction, under its English. */
+  .meta-alt { font-size: 9.5px; color: var(--ink-2); line-height: 1.3; }
+  .meta-alt span { display: block; }
 
   .gu { font-family: var(--gu); }
   .hi { font-family: var(--hi); }
@@ -273,12 +280,12 @@ function renderParts(card, heads, provenance) {
 
   /* Remark and plating run across the Actual column — nothing is measured
      against an instruction, and the workbook merges those cells too. */
-  .sheet td.value--wide { font-family: var(--sans); font-size: 11.5px; line-height: 1.45; }
+  .sheet td.value--wide { font-family: var(--sans); font-size: 11.5px; line-height: 1.35; }
   .sheet td.value--wide .line { display: block; }
 
   /* Three boxes with room to actually sign in, not a caption under a rule. */
   .sheet .sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 10px; }
-  .sheet .sign div { border: 1px solid var(--rule-hard); height: 46px; padding: 3px 7px; font-size: 9px;
+  .sheet .sign div { border: 1px solid var(--rule-hard); height: 40px; padding: 3px 7px; font-size: 9px;
     letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
 
   /* ── Screen-only commentary ──────────────────────────────────────────── */
