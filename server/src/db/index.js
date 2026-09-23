@@ -2036,6 +2036,23 @@ async function initDB(retries = 20, delayMs = 10000) {
         UPDATE order_items SET plating_instructions = TRIM(plating_instructions)
          WHERE plating_instructions IS NOT NULL AND plating_instructions <> TRIM(plating_instructions)`);
 
+      // Orders closed by a partial dispatch before the order status became
+      // card-aware: 'dispatched' while some of their job cards were still on
+      // the floor. Five such orders on 23 Sep 2026, ORD-045-26 with six cards
+      // still running — invisible on every dashboard and missing from the
+      // Accounts outstanding total. Guarded on the same condition the fix now
+      // computes, so it is idempotent and corrects nothing that is genuinely
+      // finished. A card parked in Finished Goods is not "still running".
+      await pool.query(`
+        UPDATE orders o SET status='partially_dispatched'
+         WHERE o.status='dispatched'
+           AND EXISTS (SELECT 1 FROM job_cards j WHERE j.order_id=o.id
+                        AND j.status IN ('dispatched','resolved_dispatched','repaired_dispatched'))
+           AND EXISTS (SELECT 1 FROM job_cards j WHERE j.order_id=o.id
+                        AND j.status NOT IN ('dispatched','resolved_dispatched','repaired_dispatched')
+                        AND NOT (j.status='qc_approved' AND j.qc_route='finished_goods'
+                                 AND COALESCE(j.qc_dispatch_qty,0)=0))`);
+
       // Spring-gauge wire was named "FeCrAl 80:20 Kanthal D" on all 21 items.
       // Kanthal D IS FeCrAl, but "80/20" is a nichrome designation and does not
       // belong on it — and the job card wire sheet uses "80/20" to mean three
