@@ -5,6 +5,7 @@ const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromSto
 const { createNotification } = require('./notifications');
 const { applyMaterialDeductions } = require('../lib/materialDeduction');
 const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventoryDeduction');
+const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit } = require('../lib/jobCardSplit');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
 // Must match client MANDATORY_STAGE_NOS. Optional/excluded: 2, 13(Buffing), 15(Brazing),
@@ -342,49 +343,72 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
     if (already) return res.status(409).json({ error: 'This item already has a job card' });
   }
 
-  // Pick the smallest free number for this base: the base itself if untaken,
-  // else base-2, base-3, … skipping any already used. This is gap-safe — the old
-  // COUNT(*)+1 scheme collided whenever a card in the sequence had been deleted
-  // (e.g. base and base-3 exist → COUNT+1 = base-3, which is taken).
-  const pickFreeNo = async () => {
-    const exists = await db.get('SELECT id FROM job_cards WHERE job_card_no=$1', [baseNo]);
-    if (!exists) return baseNo;
-    const rows = await db.all('SELECT job_card_no FROM job_cards WHERE job_card_no=$1 OR job_card_no LIKE $2', [baseNo, `${baseNo}-%`]);
-    const taken = new Set(rows.map(r => r.job_card_no));
-    let n = 2;
-    while (taken.has(`${baseNo}-${n}`)) n++;
-    return `${baseNo}-${n}`;
-  };
+  // A card never runs more than MAX_CARD_QTY, so an item for 100 becomes two
+  // cards of 50 that the floor picks up, finishes and dispatches separately.
+  // The quantity falls back to the item's own when the form leaves it blank —
+  // without a number there is nothing to split, and a card with no quantity
+  // cannot prorate its BOM either.
+  let cardQty = parseInt(qty, 10);
+  if (!(cardQty > 0) && orderItemId) {
+    const oi = await db.get('SELECT quantity FROM order_items WHERE id=$1', [orderItemId]);
+    cardQty = parseInt(oi?.quantity, 10);
+  }
+  const parts = cardQty > 0 ? splitQuantity(cardQty) : [];
 
-  let finalNo, r;
+  // Numbering is gap-safe and shares this space with the `-P1` partial-split and
+  // `-FG` inventory schemes, so ask for the whole batch at once. If a concurrent
+  // upload takes one of the numbers between the read and the write, recompute
+  // the whole batch and try again rather than failing the planner's click.
+  let created;
   for (let attempt = 0; ; attempt++) {
-    finalNo = await pickFreeNo();
+    const taken = await takenNumbersFor(db, baseNo);
+    let numbers;
     try {
-      r = await db.insert(`
-        INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, punching, drawing_no, product_name, uploaded_by, order_item_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-      `, [
-        finalNo, parseInt(order_id, 10),
-        req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null,
-        qty || null, dispatch_date, notes || null,
-        punching || null, drawing_no || null, product_name || null,
-        req.user.id, orderItemId
-      ]);
+      numbers = allocateCardNumbers(baseNo, Math.max(parts.length, 1), taken);
+    } catch (e) {
+      return res.status(409).json({ error: e.message });
+    }
+
+    const rows = numbers.map((no, i) => ({ no, qty: parts[i] != null ? parts[i] : (cardQty > 0 ? cardQty : null) }));
+
+    try {
+      created = await db.withTransaction(async (client) => {
+        const out = [];
+        for (const row of rows) {
+          const { rows: ins } = await client.query(`
+            INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, punching, drawing_no, product_name, uploaded_by, order_item_id)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id
+          `, [
+            row.no, parseInt(order_id, 10),
+            req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null,
+            row.qty, dispatch_date, notes || null,
+            punching || null, drawing_no || null, product_name || null,
+            req.user.id, orderItemId,
+          ]);
+          out.push({ id: ins[0].id, job_card_no: row.no, qty: row.qty });
+        }
+        return out;
+      });
       break;
     } catch (e) {
-      // A concurrent upload grabbed the same number — recompute and retry a few times.
       if (e.code === '23505' && attempt < 5) continue;
       if (e.code === '23505') return res.status(409).json({ error: 'Could not allocate a job card number — please retry' });
       throw e;
     }
   }
 
-  const existing = await db.get('SELECT COUNT(*) as c FROM job_cards WHERE order_id=$1', [order_id]);
-  if (parseInt(existing.c, 10) <= 1) {
-    await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [order_id]);
+  const split = created.length > 1;
+  for (const c of created) {
+    await logActivity(order_id, c.id, 'job_card_created',
+      split ? `Job Card ${c.job_card_no} created — ${c.qty} of ${cardQty} pcs (${describeSplit(parts)}, max ${MAX_CARD_QTY} per card)`
+            : `Job Card ${c.job_card_no} uploaded`,
+      req.user.id);
   }
-  await logActivity(order_id, r.lastInsertRowid, 'job_card_created', `Job Card ${finalNo} uploaded`, req.user.id);
-  res.status(201).json({ id: r.lastInsertRowid, job_card_no: finalNo });
+
+  await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [order_id]);
+  // id / job_card_no stay on the response as the first card, so any caller that
+  // only ever read those keeps working.
+  res.status(201).json({ id: created[0].id, job_card_no: created[0].job_card_no, split, cards: created });
 });
 
 // ── PUT update job card metadata ──────────────────────────────────────────────
@@ -1254,39 +1278,65 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
       }
     }
 
-    // Unique job card number: DRAWING-FG, -FG2, -FG3 ...
+    // Unique job card number off DRAWING-FG, allocated gap-safely — the old
+    // COUNT(*) LIKE 'base%' scheme also counted the -FG-1/-FG-2 split cards and
+    // would hand back a number already in use.
     const base = `${(item.drawing_number || `ITEM-${item.id}`).toUpperCase()}-FG`;
-    const dup = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE job_card_no LIKE $1', [`${base}%`]);
-    const jobCardNo = parseInt(dup.n, 10) > 0 ? `${base}${parseInt(dup.n, 10) + 1}` : base;
 
-    const r = await db.insert(
-      `INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, drawing_no, product_name, uploaded_by, order_item_id, is_fg, fg_source_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,TRUE,$13)`,
-      [jobCardNo, order_id, req.file.storagePath, req.file.filename, req.file.originalname,
-       parsedQty, dispatch_date, notes || null, item.drawing_number || null, item.product_code || null,
-       req.user.id, order_item_id, fg.id]
-    );
-
-    // Deduct the Finished Goods stock now — material is issued to production
-    await db.run('UPDATE finished_goods SET qty_available = qty_available - $1 WHERE id=$2', [parsedQty, fg.id]);
-    await db.insert(
-      `INSERT INTO finished_goods_log
-         (finished_good_id, movement_type, qty, outward_type, notes, location, order_code, job_card_no, created_by)
-       VALUES ($1,'outward',$2,'production',$3,$4,$5,$6,$7)`,
-      [fg.id, parsedQty, `Issued to production for FG order ${order.order_code}`, fg.location || null,
-       order.order_code, jobCardNo, req.user.id]
-    );
-
-    // Surface it in production's Today's Work immediately (admin-created, ready to run)
+    // The 50-piece cap applies here too: an FG order for 100 runs as two cards.
+    const parts = splitQuantity(parsedQty);
+    const taken = await takenNumbersFor(db, base);
+    let numbers;
     try {
-      await db.run('INSERT INTO production_day_picks (pick_date, job_card_id, picked_by) VALUES ($1,$2,$3)',
-        [TODAY(), r.lastInsertRowid, req.user.id]);
-    } catch (e) { if (e.code !== '23505') console.error('fg pick failed:', e.message); }
+      numbers = allocateCardNumbers(base, parts.length, taken);
+    } catch (e) {
+      return res.status(409).json({ error: e.message });
+    }
+    const split = numbers.length > 1;
+
+    const created = await db.withTransaction(async (client) => {
+      const out = [];
+      for (let i = 0; i < numbers.length; i++) {
+        const { rows: ins } = await client.query(
+          `INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, drawing_no, product_name, uploaded_by, order_item_id, is_fg, fg_source_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,TRUE,$13) RETURNING id`,
+          [numbers[i], order_id, req.file.storagePath, req.file.filename, req.file.originalname,
+           parts[i], dispatch_date, notes || null, item.drawing_number || null, item.product_code || null,
+           req.user.id, order_item_id, fg.id]
+        );
+        out.push({ id: ins[0].id, job_card_no: numbers[i], qty: parts[i] });
+      }
+
+      // Stock is issued once for the whole item; the ledger records it per card
+      // so each line ties back to the card that consumed it.
+      await client.query('UPDATE finished_goods SET qty_available = qty_available - $1 WHERE id=$2', [parsedQty, fg.id]);
+      for (const c of out) {
+        await client.query(
+          `INSERT INTO finished_goods_log
+             (finished_good_id, movement_type, qty, outward_type, notes, location, order_code, job_card_no, created_by)
+           VALUES ($1,'outward',$2,'production',$3,$4,$5,$6,$7)`,
+          [fg.id, c.qty, `Issued to production for FG order ${order.order_code}`, fg.location || null,
+           order.order_code, c.job_card_no, req.user.id]
+        );
+      }
+      return out;
+    });
+
+    // Surface them in production's Today's Work immediately (admin-created, ready to run)
+    for (const c of created) {
+      try {
+        await db.run('INSERT INTO production_day_picks (pick_date, job_card_id, picked_by) VALUES ($1,$2,$3)',
+          [TODAY(), c.id, req.user.id]);
+      } catch (e) { if (e.code !== '23505') console.error('fg pick failed:', e.message); }
+    }
 
     await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [order_id]);
-    await logActivity(order_id, r.lastInsertRowid, 'job_card_created',
-      `Inventory job card ${jobCardNo} created — ${parsedQty} pcs drawn from Finished Goods (${fg.base_drawing_no || fg.drawing_no})`, req.user.id);
-    res.status(201).json({ id: r.lastInsertRowid, job_card_no: jobCardNo });
+    for (const c of created) {
+      await logActivity(order_id, c.id, 'job_card_created',
+        `Inventory job card ${c.job_card_no} created — ${c.qty} pcs drawn from Finished Goods (${fg.base_drawing_no || fg.drawing_no})`
+        + (split ? ` (${describeSplit(parts)}, max ${MAX_CARD_QTY} per card)` : ''), req.user.id);
+    }
+    res.status(201).json({ id: created[0].id, job_card_no: created[0].job_card_no, split, cards: created });
   } catch (e) {
     console.error('fg job card create error:', e);
     res.status(500).json({ error: 'Failed to create inventory job card' });

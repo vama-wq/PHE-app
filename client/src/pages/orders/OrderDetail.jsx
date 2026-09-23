@@ -8,6 +8,7 @@ import FileUpload from '../../components/ui/FileUpload';
 import DrawingUploadModal from '../../components/DrawingUploadModal';
 import InventoryEditModal from '../../components/InventoryEditModal';
 import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati } from '../../lib/utils';
+import { splitQuantity, MAX_CARD_QTY } from '../../lib/jobCardSplit';
 import { compressImages } from '../../lib/compressImage';
 import {
   ArrowLeft, CheckCircle, CheckCircle2, XCircle, FileText, Plus, Upload,
@@ -2046,6 +2047,22 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
           <div>
             <label className="label">Quantity</label>
             <input className="input" type="number" placeholder="e.g. 50" value={form.qty} onChange={set('qty')} />
+            {/* No card runs more than 50, so say up front how many this makes.
+                Blank falls back to the item quantity, exactly as the server does. */}
+            {(() => {
+              const effective = parseInt(form.qty, 10) || parseInt(selectedItem?.quantity, 10) || 0;
+              const parts = splitQuantity(effective);
+              if (parts.length <= 1) return null;
+              const base = selectedItem?.drawing_number || selectedItem?.product_code || 'card';
+              return (
+                <div className="mt-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-2 py-1.5 leading-relaxed">
+                  {effective} pcs is over the {MAX_CARD_QTY} per card limit — this creates{' '}
+                  <span className="font-semibold">{parts.length} job cards</span>:{' '}
+                  {parts.map((q, i) => `${base}-${i + 1} (${q})`).join(', ')}.
+                  <span className="block text-blue-600/80">Each is produced and dispatched on its own and deducts only its share of the BOM.</span>
+                </div>
+              );
+            })()}
           </div>
           <div>
             <label className="label">Dispatch Date <span className="text-red-500">*</span></label>
