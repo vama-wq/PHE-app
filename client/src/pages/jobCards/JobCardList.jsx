@@ -165,7 +165,7 @@ export default function JobCardList() {
                   </td>
                   <td className="table-cell text-center">
                     {jc.file_name ? (
-                      <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+                      <a href={`/api/job-cards/${jc.id}/view`} target="_blank" rel="noopener noreferrer"
                         className="inline-flex items-center justify-center text-brand-600 hover:text-brand-800 p-1 rounded hover:bg-brand-50 transition-colors">
                         <ExternalLink size={15} />
                       </a>

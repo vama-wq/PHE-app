@@ -308,7 +308,7 @@ function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore }) {
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 {jc.file_name && (
-                  <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+                  <a href={`/api/job-cards/${jc.id}/view`} target="_blank" rel="noopener noreferrer"
                     className="btn-secondary btn-sm flex items-center gap-1">
                     <ExternalLink size={13} /> View Card
                   </a>
@@ -376,7 +376,7 @@ function AllCardsTab({ cards, todayPickIds, canManage, onPick, onUnpick, onCheck
                     )}
                   </div>
                   {jc.file_name && (
-                    <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+                    <a href={`/api/job-cards/${jc.id}/view`} target="_blank" rel="noopener noreferrer"
                       className="text-xs text-brand-500 hover:underline flex items-center gap-0.5 mt-0.5">
                       <ExternalLink size={10} /> View file
                     </a>
@@ -710,7 +710,7 @@ function ChecklistModal({ card, onClose, onSave }) {
             <div>
               <dt className="text-xs text-gray-500 font-medium uppercase">Job Card File</dt>
               <dd className="text-sm mt-0.5 flex items-center gap-3">
-                <a href={`/uploads/job-cards/${card.file_name}`} target="_blank" rel="noopener noreferrer"
+                <a href={`/api/job-cards/${card.id}/view`} target="_blank" rel="noopener noreferrer"
                   className="text-brand-600 hover:underline flex items-center gap-1">
                   <ExternalLink size={11} /> View File
                 </a>

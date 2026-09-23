@@ -274,7 +274,7 @@ export default function QCDashboard() {
                     {/* Actions */}
                     <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
                       {jc.file_name && (
-                        <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+                        <a href={`/api/job-cards/${jc.id}/view`} target="_blank" rel="noopener noreferrer"
                           className="btn-secondary btn-sm flex items-center gap-1">
                           <ExternalLink size={13} /> Job Card
                         </a>

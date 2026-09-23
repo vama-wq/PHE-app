@@ -945,7 +945,7 @@ function OverviewTab({ jc, userRole }) {
         <h2 className="section-title mb-4">Attachments</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {jc.file_name && (
-            <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+            <a href={`/api/job-cards/${jc.id}/view`} target="_blank" rel="noopener noreferrer"
               className="p-4 border-2 border-blue-200 rounded-lg hover:bg-blue-50 transition-colors flex items-center gap-3">
               <FileText size={24} className="text-blue-600" />
               <div>

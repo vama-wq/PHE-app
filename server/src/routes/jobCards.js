@@ -485,6 +485,36 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
   });
 });
 
+// ── View a job card ──────────────────────────────────────────────────────────
+// Re-renders a generated card from its spec rather than serving the file saved
+// when it was made. Three reasons: the stored file is a snapshot of whatever
+// the layout was that day, /uploads caches for 24h so a fix does not reach a
+// browser that already fetched it, and the card that prints and the card that
+// is viewed should be the same document. Cards with no spec (uploaded PDFs,
+// anything made before generation existed) fall through to the stored file.
+router.get('/:id/view', authenticate, async (req, res) => {
+  const db = getDB();
+  const jc = await db.get('SELECT id, job_card_no, file_path, generated_spec FROM job_cards WHERE id=$1', [req.params.id]);
+  if (!jc) return res.status(404).send('Job card not found');
+
+  if (jc.generated_spec) {
+    try {
+      const spec = typeof jc.generated_spec === 'string' ? JSON.parse(jc.generated_spec) : jc.generated_spec;
+      const built = require('../lib/jobCardEngine').buildJobCard(spec.input);
+      if (built.ok) {
+        res.set('Content-Type', 'text/html; charset=utf-8');
+        // Never cached: this is rendered fresh so a layout fix shows up at once.
+        res.set('Cache-Control', 'no-store');
+        return res.send(renderJobCard(built, [spec.sheet], spec.provenance || []));
+      }
+      console.error(`[view] ${jc.job_card_no} could not be rebuilt: ${built.error}`);
+    } catch (e) { console.error('[view] re-render failed:', e.message); }
+  }
+
+  if (!jc.file_path) return res.status(404).send('This job card has no file');
+  res.redirect(`/uploads/${jc.file_path}`);
+});
+
 // ── POST create job card ──────────────────────────────────────────────────────
 router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, async (req, res) => {
   const { job_card_no, order_id, qty, dispatch_date, notes, punching, drawing_no, product_name, order_item_id } = req.body;

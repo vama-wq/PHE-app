@@ -115,5 +115,7 @@ export async function printJobCardSlip(jc) {
 
   // Only an uploaded card needs a second tab — a generated one is already in
   // the document above.
-  if (!merged && jc.file_path) window.open(`/uploads/${jc.file_path}`, '_blank');
+  // Through the view route, so an uploaded card opens the same way it does
+  // everywhere else and a generated one is never served from a stale cache.
+  if (!merged && (jc.file_path || jc.file_name)) window.open(`/api/job-cards/${jc.id}/view`, '_blank');
 }

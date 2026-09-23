@@ -797,7 +797,7 @@ export default function OrderDetail() {
                           <ClipboardList size={12} /> Checklist
                         </Link>
                         {jc.file_name && (
-                          <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+                          <a href={`/api/job-cards/${jc.id}/view`} target="_blank" rel="noopener noreferrer"
                             className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1">
                             <ExternalLink size={12} /> View
                           </a>
@@ -902,7 +902,7 @@ export default function OrderDetail() {
                         <ClipboardList size={12} /> Checklist
                       </Link>
                       {jc.file_name && (
-                        <a href={`/uploads/job-cards/${jc.file_name}`} target="_blank" rel="noopener noreferrer"
+                        <a href={`/api/job-cards/${jc.id}/view`} target="_blank" rel="noopener noreferrer"
                           className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1">
                           <ExternalLink size={12} /> View
                         </a>
