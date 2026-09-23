@@ -35,7 +35,7 @@ const L = {
 //   key  #F6C6AC  the figure that matters on that row
 //   dia  #31859B  the tube diameter — which workbook this card came from
 //   mid  #FFF2CC  E19, the middle of the three lengths
-//   cz   #F9CB9C  both cold zones
+//   pin  #F9CB9C  the terminal stud length, which is what the floor picks
 //   tab  #FABF8F / #8ED873  the blank blocks beside the wattage and the gauge
 const box = (v, kind) => `<span class="box box--${kind}">${v}</span>`;
 const tab = kind => `<span class="box box--${kind} box--tab"></span>`;
@@ -70,12 +70,16 @@ function specRows(c) {
       c.ohmsRangeMid == null ? '<span class="blank">—</span>'
         : `${n(c.ohmsRangeMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsRangeMid, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsRangeMax, 3)} &nbsp; ${box(`${(c.wireDrawPct * 100).toFixed(1).replace(/\.0$/, '')}%`, 'key')}`,
       'the boxed figure is the wire draw'],
-    ['7', ['ઠંડા ઝોનની મોટી લંબાઈ', 'Cold Zone Big', 'बड़ा कोल्ड ज़ोन'], box(n(c.coldZoneBigIn, 0), 'cz'), ''],
-    ['8', ['ઠંડા ઝોનની નાની લંબાઈ', 'Cold Zone Small', 'छोटा कोल्ड ज़ोन'], box(n(c.coldZoneSmallIn, 0), 'cz'), ''],
+    // The highlight sits on the STUD LENGTH, not the cold zone: the stud is
+    // what the floor picks off the rack, and it is the figure they look for.
+    ['7', ['ઠંડા ઝોનની મોટી લંબાઈ', 'Cold Zone Big', 'बड़ा कोल्ड ज़ोन'], `${n(c.coldZoneBigIn, 0)}"`, ''],
+    ['8', ['ઠંડા ઝોનની નાની લંબાઈ', 'Cold Zone Small', 'छोटा कोल्ड ज़ोन'], `${n(c.coldZoneSmallIn, 0)}"`, ''],
     ['9', ['ટર્મિનલ પિન મોટો સ્ટડ', 'Terminal Pin — Big Stud', 'टर्मिनल पिन बड़ा स्टड'],
-      `એમ ૪-એસએસ &nbsp;·&nbsp; M4-SS &nbsp;·&nbsp; ${c.terminalPinBig.studs}"`, ''],
+      `એમ ૪-એસએસ &nbsp;·&nbsp; M4-SS &nbsp;·&nbsp; ${box(`${c.terminalPinBig.studs}"`, 'pin')}`,
+      c.terminalPinBig.overridden ? `set by hand — a ${n(c.coldZoneBigIn, 0)}" cold zone gives ${c.terminalPinBig.derivedStuds}"` : ''],
     ['10', ['ટર્મિનલ પિન નાનો સ્ટડ', 'Terminal Pin — Small Stud', 'टर्मिनल पिन छोटा स्टड'],
-      `એમ ૪-એસએસ &nbsp;·&nbsp; M4-SS &nbsp;·&nbsp; ${c.terminalPinSmall.studs}"`, ''],
+      `એમ ૪-એસએસ &nbsp;·&nbsp; M4-SS &nbsp;·&nbsp; ${box(`${c.terminalPinSmall.studs}"`, 'pin')}`,
+      c.terminalPinSmall.overridden ? `set by hand — a ${n(c.coldZoneSmallIn, 0)}" cold zone gives ${c.terminalPinSmall.derivedStuds}"` : ''],
     ['12', ['ડ્રોઇંગ પછી પ્રતિકાર', 'Ω Ohms After Draw', 'ड्रॉ के बाद प्रतिरोध'],
       `${n(c.ohmsAfterDrawMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsAfterDraw, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsAfterDrawMax, 3)}`,
       '±5%'],
@@ -246,7 +250,7 @@ function renderParts(card, heads, provenance) {
   .box--key  { background: #F6C6AC; }
   .box--dia  { background: #31859B; color: #FFFFFF; border-color: rgba(0,0,0,.3); }
   .box--mid  { background: #FFF2CC; }
-  .box--cz   { background: #F9CB9C; }
+  .box--pin  { background: #F9CB9C; }
   .box--tab2 { background: #FABF8F; }
   .box--tab3 { background: #8ED873; }
   .box--tab  { width: 15px; padding: 2px 0; }
@@ -342,7 +346,7 @@ function renderParts(card, heads, provenance) {
         <span class="sw"><b style="background:#F6C6AC"></b>The figure that matters on that row</span>
         <span class="sw"><b style="background:#31859B"></b>Tube diameter — which workbook the card came from</span>
         <span class="sw"><b style="background:#FFF2CC"></b>Middle of the three lengths</span>
-        <span class="sw"><b style="background:#F9CB9C"></b>Cold zones</span>
+        <span class="sw"><b style="background:#F9CB9C"></b>Terminal stud length</span>
         <span class="sw"><b style="background:#FABF8F"></b><b style="background:#8ED873"></b>The blank tabs beside wattage and gauge</span>
       </div>
       <p class="lede" style="margin:12px 0 0">The Actual column stays blank for the floor. Rows 13 and 14 were the bending rollers, now read off the drawing.</p>
