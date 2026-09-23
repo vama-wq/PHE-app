@@ -2032,6 +2032,21 @@ async function initDB(retries = 20, delayMs = 10000) {
         UPDATE order_items SET plating_instructions = TRIM(plating_instructions)
          WHERE plating_instructions IS NOT NULL AND plating_instructions <> TRIM(plating_instructions)`);
 
+      // Spring-gauge wire was named "FeCrAl 80:20 Kanthal D" on all 21 items.
+      // Kanthal D IS FeCrAl, but "80/20" is a nichrome designation and does not
+      // belong on it — and the job card wire sheet uses "80/20" to mean three
+      // specific spools that really are nichrome (implied resistivity 1.07
+      // against 1.47 for the ordinary rows), so the same words meant two
+      // different alloys in two places. Drops the 80:20 and adds the SWG the
+      // bare gauge number was missing. Guarded on the exact old shape, so it is
+      // idempotent and touches nothing else. item_code (SPR-KD-nn) is untouched
+      // — that is what the deduction code matches on; the name is display only.
+      await pool.query(`
+        UPDATE inventory_items
+           SET name = regexp_replace(name, '^Spring Gauge ([0-9]+) FeCrAl 80:20 Kanthal D$', 'Spring Gauge \\1 SWG FeCrAl Kanthal D')
+         WHERE lower(trim(category)) = 'spring guage'
+           AND name ~ '^Spring Gauge [0-9]+ FeCrAl 80:20 Kanthal D$'`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
