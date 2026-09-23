@@ -31,13 +31,20 @@ function splitQuantity(total, max = MAX_CARD_QTY, minLast = MIN_LAST_CARD) {
 }
 
 // Suffix only when the item actually splits: 40 pieces stay plain `PT-X`, and
-// 100 become `PT-X-1` and `PT-X-2`.
+// 100 become `PT-X-S1` and `PT-X-S2`.
 //
-// Three numbering schemes already share this space, so allocation is gap-safe
-// rather than count-based: `-P1` marks a partial-dispatch split, `-FG` an
-// inventory card, and a bare name collision has always fallen back to `-2`.
-// `taken` is mutated as names are handed out, so one call can allocate a whole
-// batch without re-reading the table.
+// The `S` matters. Four numbering schemes share this space and each carries its
+// own marker: `-P1` a partial-dispatch split, `-FG` an inventory card, `-RPL` a
+// replacement — and a BARE `-2`, which is not a free slot but the company's own
+// way of telling apart separate order items that share a drawing. Production
+// carries PT-MS2-48-500W with -2, -3 and -4 as four different items, and
+// ORD-130-26 alone has seven items on that drawing. Minting bare `-1`/`-2` for
+// batches of one item would make the two meanings indistinguishable.
+//
+// Allocation is gap-safe rather than count-based, and `taken` is mutated as
+// names are handed out so one call can allocate a whole batch without
+// re-reading the table.
+const SPLIT_MARKER = 'S';
 function allocateCardNumbers(baseNo, count, taken) {
   const CEILING = 10000; // a base with this many cards is a bug, not a big order
   if (count <= 1) {
@@ -51,7 +58,7 @@ function allocateCardNumbers(baseNo, count, taken) {
   const names = [];
   let n = 1;
   while (names.length < count && n < CEILING) {
-    const candidate = `${baseNo}-${n}`;
+    const candidate = `${baseNo}-${SPLIT_MARKER}${n}`;
     if (!taken.has(candidate)) { names.push(candidate); taken.add(candidate); }
     n++;
   }
@@ -73,4 +80,4 @@ function describeSplit(parts) {
   return parts.length <= 1 ? `${parts[0] || 0} pcs` : `${parts.join(' + ')} = ${parts.reduce((a, b) => a + b, 0)} pcs`;
 }
 
-module.exports = { MAX_CARD_QTY, MIN_LAST_CARD, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit };
+module.exports = { MAX_CARD_QTY, MIN_LAST_CARD, SPLIT_MARKER, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit };

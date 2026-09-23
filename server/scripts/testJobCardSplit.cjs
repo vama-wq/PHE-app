@@ -49,25 +49,33 @@ eq('no card under 10 once an order splits', tinyBad, 0);
 
 console.log('\nNumbering');
 eq('a single card keeps the plain name', S.allocateCardNumbers('PT-X', 1, new Set()), ['PT-X']);
-eq('a split always suffixes', S.allocateCardNumbers('PT-X', 2, new Set()), ['PT-X-1', 'PT-X-2']);
+eq('a split always suffixes', S.allocateCardNumbers('PT-X', 2, new Set()), ['PT-X-S1', 'PT-X-S2']);
 eq('a split suffixes even when the plain name is free',
-  S.allocateCardNumbers('PT-X', 3, new Set()), ['PT-X-1', 'PT-X-2', 'PT-X-3']);
+  S.allocateCardNumbers('PT-X', 3, new Set()), ['PT-X-S1', 'PT-X-S2', 'PT-X-S3']);
 eq('a single card falls back past a taken name',
   S.allocateCardNumbers('PT-X', 1, new Set(['PT-X'])), ['PT-X-2']);
 eq('a second batch on the same drawing skips what is taken',
-  S.allocateCardNumbers('PT-X', 2, new Set(['PT-X-1', 'PT-X-2'])), ['PT-X-3', 'PT-X-4']);
+  S.allocateCardNumbers('PT-X', 2, new Set(['PT-X-S1', 'PT-X-S2'])), ['PT-X-S3', 'PT-X-S4']);
 eq('gaps are reused rather than skipped',
-  S.allocateCardNumbers('PT-X', 2, new Set(['PT-X-2'])), ['PT-X-1', 'PT-X-3']);
+  S.allocateCardNumbers('PT-X', 2, new Set(['PT-X-S2'])), ['PT-X-S1', 'PT-X-S3']);
+// The bare -2/-3 space belongs to SEPARATE ITEMS sharing a drawing. A split
+// must never take one of those names, nor be blocked by one.
+eq('a separate item on the same drawing does not block a split',
+  S.allocateCardNumbers('PT-X', 2, new Set(['PT-X', 'PT-X-2', 'PT-X-3', 'PT-X-4'])), ['PT-X-S1', 'PT-X-S2']);
+eq('a split never mints a bare -n that means a separate item',
+  S.allocateCardNumbers('PT-X', 3, new Set()).some(n => /-\d+$/.test(n)), false);
 // The three schemes share this space and must not tread on each other.
-eq('a partial-dispatch -P1 does not block -1',
-  S.allocateCardNumbers('PT-X', 2, new Set(['PT-X-P1', 'PT-X-P2'])), ['PT-X-1', 'PT-X-2']);
+eq('a partial-dispatch -P1 does not block -S1',
+  S.allocateCardNumbers('PT-X', 2, new Set(['PT-X-P1', 'PT-X-P2'])), ['PT-X-S1', 'PT-X-S2']);
+eq('a replacement -RPL does not block -S1',
+  S.allocateCardNumbers('PT-X', 2, new Set(['PT-X-RPL'])), ['PT-X-S1', 'PT-X-S2']);
 eq('an -FG card does not block -1',
   S.allocateCardNumbers('PT-X', 1, new Set(['PT-X-FG'])), ['PT-X']);
 eq('allocating marks the names taken as it goes', (() => {
   const taken = new Set();
   S.allocateCardNumbers('PT-X', 2, taken);
   return S.allocateCardNumbers('PT-X', 2, taken);
-})(), ['PT-X-3', 'PT-X-4']);
+})(), ['PT-X-S3', 'PT-X-S4']);
 
 console.log('\nDescriptions');
 eq('single card', S.describeSplit([40]), '40 pcs');

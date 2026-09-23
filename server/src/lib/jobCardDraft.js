@@ -10,7 +10,7 @@
 // into real job cards through the normal creation path.
 
 const E = require('./jobCardEngine');
-const { splitQuantity, describeSplit } = require('./jobCardSplit');
+const { splitQuantity, describeSplit, SPLIT_MARKER } = require('./jobCardSplit');
 
 // The plating dropdown is a closed set of five, and the card prints all three
 // languages. Taken from the real cards where they exist.
@@ -137,12 +137,12 @@ async function buildDraft(db, orderItemId, answers = {}) {
       describe: describeSplit(parts),
       // Provisional: the real numbers are allocated at creation, gap-safely,
       // so a name shown here can differ if another card lands in between.
-      names: parts.length > 1 ? parts.map((_, i) => `${base}-${i + 1}`) : [base],
+      names: parts.length > 1 ? parts.map((_, i) => `${base}-${SPLIT_MARKER}${i + 1}`) : [base],
     },
     head: {
       company: 'Peena Heat Elements',
       title: `${item.drawing_number || item.product_code || `Item ${item.id}`} Job Card`,
-      cardNo: parts.length > 1 ? `${base}-1` : base,
+      cardNo: parts.length > 1 ? `${base}-${SPLIT_MARKER}1` : base,
       asmbly: String(answers.asmbly),
       clientCode: customer?.customer_code || '',
       clientName: customer?.name || '',

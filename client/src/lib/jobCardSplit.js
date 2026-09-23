@@ -7,6 +7,7 @@
 // not do.
 export const MAX_CARD_QTY = 50;
 export const MIN_LAST_CARD = 10;
+export const SPLIT_MARKER = 'S';
 
 export function splitQuantity(total, max = MAX_CARD_QTY, minLast = MIN_LAST_CARD) {
   const n = Math.floor(Number(total));
