@@ -997,7 +997,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
   // Plating Transportation: pick which Nickel/Electropolish/Teflon items this trip
   // carries (send out or bring back) — one cash bill shared across them.
   const [platingDir, setPlatingDir] = useState('sent');   // 'sent' | 'returned'
-  const [platingItems, setPlatingItems] = useState([]);   // eligible order items
+  const [platingItems, setPlatingItems] = useState([]);   // eligible job cards
   const [platingSel, setPlatingSel] = useState({});       // order_item_id -> true
   const [platingVendor, setPlatingVendor] = useState('');
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
@@ -1063,7 +1063,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
       }
       if (isMachinery && !f.description.trim()) return setError('Description is required for Machinery.');
       if (isPlating && !receipt) return setError('A payment QR is required for Plating.');
-      if (isPlatingTransport && platingSelIds.length === 0) return setError('Select the item(s) this transport carried.');
+      if (isPlatingTransport && platingSelIds.length === 0) return setError('Select the job card(s) this transport carried.');
       // The vendor decides whether the goods are expected back — leaving it
       // blank would silently put a one-way transfer on the return list.
       if (isPlatingTransport && platingDir === 'sent' && !platingVendor) return setError('Select the plating vendor.');
@@ -1080,7 +1080,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
       // items' send/return status AND creates the cash ledger entry in one go.
       if (isPlatingTransport) {
         await api.post('/plating/trips', {
-          direction: platingDir, item_ids: platingSelIds, vendor: platingVendor,
+          direction: platingDir, card_ids: platingSelIds, vendor: platingVendor,
           paid_to: f.paid_to.trim(), transport_cost: f.amount,
           trip_date: f.entry_date, notes: f.description,
         });
@@ -1412,15 +1412,21 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
                     </p>
                   ) : (
                     <div className="max-h-44 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50 bg-white">
+                      {/* A consignment is one job card's batch, not a whole
+                          item: an item over 50 pcs runs as several cards whose
+                          pieces reach the plater at different times. */}
                       {platingItems.map(it => {
-                        const checked = !!platingSel[it.order_item_id];
+                        const checked = !!platingSel[it.job_card_id];
+                        const partOfItem = Number(it.card_qty) > 0 && Number(it.card_qty) !== Number(it.quantity);
                         return (
-                          <button type="button" key={it.order_item_id}
-                            onClick={() => setPlatingSel(p => { const n = { ...p }; if (n[it.order_item_id]) delete n[it.order_item_id]; else n[it.order_item_id] = true; return n; })}
+                          <button type="button" key={it.job_card_id}
+                            onClick={() => setPlatingSel(p => { const n = { ...p }; if (n[it.job_card_id]) delete n[it.job_card_id]; else n[it.job_card_id] = true; return n; })}
                             className={`w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-gray-50 ${checked ? 'bg-cyan-50/60' : ''}`}>
                             {checked ? <CheckSquare size={15} className="text-cyan-600 flex-shrink-0" /> : <Square size={15} className="text-gray-300 flex-shrink-0" />}
-                            <span className="text-sm text-gray-800 truncate">{it.drawing_number || it.product_code}</span>
-                            <span className="text-xs text-gray-400 truncate">{it.order_code} · {it.plating_instructions} · qty {it.quantity}</span>
+                            <span className="text-sm text-gray-800 truncate">{it.job_card_no || it.drawing_number || it.product_code}</span>
+                            <span className="text-xs text-gray-400 truncate">
+                              {it.order_code} · {it.plating_instructions} · {it.card_qty} pcs{partOfItem ? ` of ${it.quantity}` : ''}
+                            </span>
                           </button>
                         );
                       })}
@@ -1429,7 +1435,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
                 </div>
                 {platingShare > 0 && (
                   <p className="text-[11px] text-cyan-800">
-                    {platingSelIds.length} item(s) — per-item transport share: <b>₹{platingShare.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</b>
+                    {platingSelIds.length} job card(s) — per-card transport share: <b>₹{platingShare.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</b>
                   </p>
                 )}
               </div>

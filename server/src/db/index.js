@@ -2043,6 +2043,28 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fins_deducted BOOLEAN DEFAULT FALSE`);
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fins_kg NUMERIC`);
 
+      // Plating is tracked per JOB CARD, not per order item. An item over 50
+      // pieces runs as several cards and their batches reach the plater at
+      // different times, so a single flag on the item could not record the
+      // second consignment while the first was out.
+      await pool.query(`ALTER TABLE plating_trip_items ADD COLUMN IF NOT EXISTS job_card_id INTEGER REFERENCES job_cards(id) ON DELETE SET NULL`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS plating_status TEXT`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_plating_trip_items_card ON plating_trip_items(job_card_id)`);
+      // Backfill only where it is unambiguous — an item with exactly one card.
+      // Items with several cards are history; their live state is carried by
+      // the item flag until their next trip, which will name a card.
+      await pool.query(`
+        UPDATE plating_trip_items pti SET job_card_id = (
+          SELECT j.id FROM job_cards j WHERE j.order_item_id = pti.order_item_id)
+         WHERE pti.job_card_id IS NULL
+           AND (SELECT COUNT(*) FROM job_cards j WHERE j.order_item_id = pti.order_item_id) = 1`);
+      await pool.query(`
+        UPDATE job_cards j SET plating_status = oi.plating_status
+          FROM order_items oi
+         WHERE oi.id = j.order_item_id
+           AND j.plating_status IS NULL AND oi.plating_status IS NOT NULL
+           AND (SELECT COUNT(*) FROM job_cards x WHERE x.order_item_id = oi.id) = 1`);
+
       // Cards that already drew fins carry the new flag as FALSE, so the guard
       // above would not have protected them — a second QC settle would have
       // deducted again. Backfilled from the ledger, which names the card in the
