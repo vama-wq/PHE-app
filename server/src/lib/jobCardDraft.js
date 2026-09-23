@@ -87,6 +87,17 @@ async function buildDraft(db, orderItemId, answers = {}) {
   const missing = missingAnswers(answers);
   if (missing.length) return { ok: false, error: `Still needed: ${missing.join(', ')}.`, questions: QUESTIONS };
 
+  // The card has to name the tube production takes off the rack, not just its
+  // code: order_items.tube_material holds the inventory ITEM CODE, so the row
+  // read "TUB-SS304-038-T06" where the real card reads "SS304 3/8\" Tube".
+  // Both go on, the name to read and the code to pick by.
+  const tube = item.tube_material
+    ? await db.get('SELECT item_code, name, name_gu FROM inventory_items WHERE upper(item_code)=upper($1) LIMIT 1',
+        [String(item.tube_material).trim()])
+    : null;
+  const tubeLabel = tube ? tube.name : (item.tube_material || '');
+  const tubeLabelGu = tube ? [tube.name_gu, tube.item_code].filter(Boolean).join(' · ') : '';
+
   const customer = order.customer_id
     ? await db.get('SELECT customer_code, name FROM customers WHERE id=$1', [order.customer_id])
     : null;
@@ -204,7 +215,8 @@ async function buildDraft(db, orderItemId, answers = {}) {
       qty,
       dispatchDate: fmtDate(answers.dispatch_date),
       fixture: String(answers.fixture || ''),
-      tubeMaterialLabel: item.tube_material || '',
+      tubeMaterialLabel: tubeLabel,
+      tubeMaterialLabelGu: tubeLabelGu,
       remark: String(item.remark || '').trim() ? [String(item.remark).trim()] : [],
       plating: PLATING_TRILINGUAL[String(item.plating_instructions || '').trim()]
         || item.plating_instructions || '',

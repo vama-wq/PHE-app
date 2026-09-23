@@ -47,7 +47,8 @@ function specRows(c) {
       `${box(n(c.wattage, 0), 'key')}${tab('tab2')} W &nbsp; ${box(n(c.voltage, 0), 'key')} V`,
       c.elements > 1 ? `${n(c.statedWattage, 0)} W across ${c.elements} elements` : ''],
     ['2', ['ટ્યુબ સામગ્રી', 'Tube Material', 'ट्यूब सामग्री'],
-      `${box(esc(c.tubeMaterialLabel), 'key')} &nbsp; ${box(c.tubeDiameterMm, 'dia')} mm`, ''],
+      `${box(esc(c.tubeMaterialLabel), 'key')} &nbsp; ${box(c.tubeDiameterMm, 'dia')} mm`,
+      c.tubeMaterialLabelGu],
     // Four cells, in the card's own order and with no units printed — exactly
     // as C19 / E19 / F19 / G19 sit on the sheet the floor already reads. The
     // third figure is the total in INCHES sitting between two millimetre
@@ -67,7 +68,7 @@ function specRows(c) {
       c.springLengthIn ? `wound ${n(c.springLengthIn, 3)}"` : ''],
     ['6', ['ઓહ્મ પ્રતિકાર', 'Ohms Range', 'ओम प्रतिरोध'],
       c.ohmsRangeMid == null ? '<span class="blank">—</span>'
-        : `${n(c.ohmsRangeMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsRangeMid, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsRangeMax, 3)} &nbsp; ${box(`${(c.wireDrawPct * 100).toFixed(0)}%`, 'key')}`,
+        : `${n(c.ohmsRangeMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsRangeMid, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsRangeMax, 3)} &nbsp; ${box(`${(c.wireDrawPct * 100).toFixed(1).replace(/\.0$/, '')}%`, 'key')}`,
       'the boxed figure is the wire draw'],
     ['7', ['ઠંડા ઝોનની મોટી લંબાઈ', 'Cold Zone Big', 'बड़ा कोल्ड ज़ोन'], box(n(c.coldZoneBigIn, 0), 'cz'), ''],
     ['8', ['ઠંડા ઝોનની નાની લંબાઈ', 'Cold Zone Small', 'छोटा कोल्ड ज़ोन'], box(n(c.coldZoneSmallIn, 0), 'cz'), ''],
@@ -85,9 +86,16 @@ function specRows(c) {
 // only in card number and quantity, so the engine runs once and the sheets
 // print together — one page each, in one print job.
 function renderParts(card, heads, provenance) {
-  const c = card;
   const headList = Array.isArray(heads) ? heads : [heads];
   const head = headList[0];
+  // The tube label is built by the draft and lives on the head — taking it off
+  // the card left row 2 blank on everything the app generated, while the CLI
+  // (which set it on the card by hand) looked fine.
+  const c = {
+    ...card,
+    tubeMaterialLabel: card.tubeMaterialLabel || head?.tubeMaterialLabel || card.tubeMaterial || '',
+    tubeMaterialLabelGu: card.tubeMaterialLabelGu || head?.tubeMaterialLabelGu || '',
+  };
   const rows = specRows(c).map(([num, [gu, en, hi], val, note]) => `
       <tr>
         <td class="num">${num}</td>
@@ -187,25 +195,25 @@ function renderParts(card, heads, provenance) {
   /* ── The sheet ───────────────────────────────────────────────────────── */
   .sheet {
     width: 100%; max-width: 820px; background: var(--paper);
-    border: 1.5px solid var(--rule-hard); padding: 22px 24px 20px;
+    border: 1.5px solid var(--rule-hard); padding: 10px 16px 8px;
     box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 28px rgba(0,0,0,.06);
   }
   .sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
-    border-bottom: 2px solid var(--ink); padding-bottom: 12px; }
-  .sheet-title { font-size: 19px; font-weight: 700; letter-spacing: .10em; text-transform: uppercase; text-wrap: balance; }
+    border-bottom: 2px solid var(--ink); padding-bottom: 7px; }
+  .sheet-title { font-size: 16px; font-weight: 700; letter-spacing: .10em; text-transform: uppercase; text-wrap: balance; }
   .sheet-sub { font-size: 11px; color: var(--ink-3); letter-spacing: .04em; margin-top: 4px; }
-  .asmbly { border: 1.5px solid var(--ink); padding: 7px 13px; text-align: center; flex: none; }
+  .asmbly { border: 1.5px solid var(--ink); padding: 4px 12px; text-align: center; flex: none; }
   .asmbly span { display: block; font-size: 9px; letter-spacing: .13em; color: var(--ink-2); }
-  .asmbly b { font-family: var(--mono); font-size: 19px; font-weight: 600; }
+  .asmbly b { font-family: var(--mono); font-size: 17px; font-weight: 600; }
 
   .meta { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0;
     border-bottom: 2px solid var(--ink); }
-  .meta-cell { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); }
+  .meta-cell { padding: 4px 12px 4px 0; border-bottom: 1px solid var(--rule); }
   .meta-cell:nth-child(odd) { border-right: 1px solid var(--rule); padding-right: 16px; }
   .meta-cell:nth-child(even) { padding-left: 16px; }
   .meta-cell:nth-last-child(-n+2) { border-bottom: none; }
-  .meta-label { display: flex; flex-wrap: wrap; gap: 0 7px; font-size: 10px; color: var(--ink-3); line-height: 1.5; }
-  .meta-value { font-family: var(--mono); font-size: 14px; font-weight: 500; margin-top: 2px; word-break: break-word; }
+  .meta-label { display: flex; flex-wrap: wrap; gap: 0 6px; font-size: 9.5px; color: var(--ink-3); line-height: 1.35; }
+  .meta-value { font-family: var(--mono); font-size: 12.5px; font-weight: 500; margin-top: 1px; word-break: break-word; }
 
   .gu { font-family: var(--gu); }
   .hi { font-family: var(--hi); }
@@ -213,15 +221,19 @@ function renderParts(card, heads, provenance) {
 
   table { width: 100%; border-collapse: collapse; }
   thead th { font-size: 9px; letter-spacing: .13em; text-transform: uppercase; color: var(--ink-3);
-    text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--rule-hard); font-weight: 600; }
+    text-align: left; padding: 6px 7px; border-bottom: 1px solid var(--rule-hard); font-weight: 600; }
   thead th.c { text-align: center; }
-  tbody td { padding: 11px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tbody td { padding: 4px 7px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
   td.num { width: 30px; font-family: var(--mono); font-size: 12px; color: var(--ink-3); text-align: center; }
-  td.label { width: 40%; }
-  td.label span { display: block; line-height: 1.45; }
-  td.label .gu, td.label .hi { font-size: 11.5px; color: var(--ink-2); }
-  td.label .en { font-size: 12.5px; color: var(--ink); }
-  td.value { font-family: var(--mono); font-size: 13.5px; font-variant-numeric: tabular-nums; color: var(--ink); }
+  /* The three languages run ON ONE LINE. Stacked they made every row 76px and
+     the sheet ran to a second page; the real card keeps them inline and fits
+     one. They wrap only when a label is genuinely long. */
+  td.label { width: 36%; }
+  td.label span { display: inline; line-height: 1.35; }
+  td.label span + span::before { content: ' | '; color: var(--rule-hard); }
+  td.label .gu, td.label .hi { font-size: 10.5px; color: var(--ink-2); }
+  td.label .en { font-size: 11.5px; color: var(--ink); }
+  td.value { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ink); }
 
   /* ── The workbook's colour grading ───────────────────────────────────────
      These six fills are lifted straight off the sheet, and they stay literal
@@ -229,7 +241,7 @@ function renderParts(card, heads, provenance) {
      reads the label, so the fill is the content. Text on a fill is pinned to
      the sheet's ink rather than a theme token, since the fill does not change
      with the theme. */
-  .box { display: inline-block; padding: 2px 9px; color: #1B211F;
+  .box { display: inline-block; padding: 1px 7px; color: #1B211F;
     border: 1px solid rgba(0,0,0,.22); font-weight: 500; }
   .box--key  { background: #F6C6AC; }
   .box--dia  { background: #31859B; color: #FFFFFF; border-color: rgba(0,0,0,.3); }
@@ -241,29 +253,30 @@ function renderParts(card, heads, provenance) {
   td.value b { font-weight: 600; }
   td.value .to { font-family: var(--sans); font-size: 10px; letter-spacing: .1em; color: var(--ink-3); }
   /* Row 19 reads as four separate cells, the way it does on the sheet. */
-  td.value .cells { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-  td.value .cells > span { min-width: 58px; }
+  td.value .cells { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px 7px; }
+  td.value .cells > span { min-width: 52px; }
   td.value .cells > .box { min-width: 0; text-align: center; }
-  td.value .note { display: block; font-family: var(--sans); font-size: 10.5px; color: var(--ink-3); margin-top: 3px; letter-spacing: .01em; }
+  td.value .note { display: block; font-family: var(--sans); font-size: 10px; color: var(--ink-3); margin-top: 3px; letter-spacing: .01em; }
   td.value .blank { color: var(--attention); font-family: var(--sans); font-size: 12px; }
   /* The floor writes its measured figure here in pen, so the column is sized
      for a hand rather than for the value it replaces: a wide box, a row tall
      enough to write in without crowding the line above, and a rule to write on. */
-  td.actual { width: 155px; border-left: 1px solid var(--rule-hard); padding: 11px 10px 8px; }
-  td.actual .rule { display: block; min-height: 30px; border-bottom: 1px solid var(--rule); }
+  td.actual { width: 124px; border-left: 1px solid var(--rule-hard); padding: 4px 9px 3px; }
+  td.actual .rule { display: block; min-height: 22px; border-bottom: 1px solid var(--rule); }
 
   .foot { border-top: 2px solid var(--ink); margin-top: 2px; }
-  .foot-row { display: flex; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+  .foot-row { display: flex; gap: 16px; padding: 4px 0; border-bottom: 1px solid var(--rule); }
   .foot-row:last-child { border-bottom: none; }
   .foot-num { font-family: var(--mono); font-size: 12px; color: var(--ink-3); width: 30px; text-align: center; flex: none; }
-  .foot-label { width: 40%; flex: none; }
-  .foot-label span { display: block; line-height: 1.45; }
-  .foot-label .gu, .foot-label .hi { font-size: 11.5px; color: var(--ink-2); }
-  .foot-label .en { font-size: 12.5px; }
-  .foot-value { font-size: 12.5px; line-height: 1.65; }
+  .foot-label { width: 38%; flex: none; }
+  .foot-label span { display: inline; line-height: 1.35; }
+  .foot-label span + span::before { content: ' | '; color: var(--rule-hard); }
+  .foot-label .gu, .foot-label .hi { font-size: 10.5px; color: var(--ink-2); }
+  .foot-label .en { font-size: 11.5px; }
+  .foot-value { font-size: 11.5px; line-height: 1.45; }
   .foot-value .line { display: block; }
 
-  .sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 26px; }
+  .sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 6px; }
   .sign div { border-top: 1px solid var(--rule-hard); padding-top: 6px; font-size: 10px;
     letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
 
@@ -288,20 +301,20 @@ function renderParts(card, heads, provenance) {
     .meta-cell:nth-child(odd) { border-right: none; padding-right: 0; }
     .meta-cell:nth-child(even) { padding-left: 0; }
     .meta-cell:nth-last-child(2) { border-bottom: 1px solid var(--rule); }
-    td.label { width: 38%; }
+    td.label { width: 36%; }
     td.actual { width: 96px; }
     .sign { grid-template-columns: 1fr; gap: 18px; }
   }
+  @page { size: A4; margin: 8mm; }
   @media print {
     body { background: #fff; }
     .wrap { padding: 0; }
     .aside { display: none; }
     .sheet { box-shadow: none; border: 1.5px solid #000; max-width: none; page-break-after: always; }
     .sheet:last-of-type { page-break-after: auto; }
-    /* On paper the writing box gets a full pen's worth of room. */
-    tbody td { padding: 14px 8px; }
-    td.actual { width: 38mm; }
-    td.actual .rule { min-height: 34px; }
+    /* The sheet must land on ONE page — the floor works from a single sheet —
+       so the writing box gets what is left rather than a fixed height. */
+    td.actual { width: 34mm; }
   }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>`;
