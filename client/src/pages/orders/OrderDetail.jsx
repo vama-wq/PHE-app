@@ -40,13 +40,70 @@ function validateItem(f) {
 // inventory. Names carried in English + ગુજરાતી (stored, else transliterated)
 // + हिंदी (transliterated); blank Issued/Scrap/Sign columns travel with the
 // job card to the store and floor.
+// Apportion a BOM line across the item's cards so the slips still add up to
+// exactly what the BOM says. Whole-number lines (flanges, nuts, pins) use
+// largest-remainder so nobody is asked to issue half a flange and the total is
+// never off by one; measured lines (Kgs, metres) just divide.
+function apportion(total, quantities) {
+  const sum = quantities.reduce((a, b) => a + b, 0);
+  if (!(sum > 0)) return quantities.map(() => 0);
+  const exact = quantities.map(q => (Number(total) * q) / sum);
+  if (!Number.isInteger(Number(total))) {
+    // Rounding each share independently drifts the total (0.375 over three
+    // cards came to 0.376), so the largest share absorbs the difference.
+    const r = exact.map(v => Math.round(v * 1000) / 1000);
+    const drift = Math.round((Number(total) - r.reduce((a, b) => a + b, 0)) * 1000) / 1000;
+    if (drift) r[r.indexOf(Math.max(...r))] = Math.round((r[r.indexOf(Math.max(...r))] + drift) * 1000) / 1000;
+    return r;
+  }
+  const floors = exact.map(Math.floor);
+  let left = Math.round(Number(total)) - floors.reduce((a, b) => a + b, 0);
+  return exact
+    .map((v, i) => ({ i, frac: v - floors[i] }))
+    .sort((a, b) => b.frac - a.frac)
+    .reduce((acc, { i }) => { if (left > 0) { acc[i] += 1; left -= 1; } return acc; }, [...floors]);
+}
+
+// One slip per JOB CARD, each listing that card's share of the item's BOM.
+// The slip travels with its card to the store, so a slip showing the whole
+// item's quantities against a card that builds half of them makes the store
+// issue double — and the other card gets no slip at all.
 function printMaterialSlip(order, item, jobCards) {
   const inv = item.inventory_items || [];
   if (!inv.length) return;
-  const jc = (jobCards || []).find(j => j.order_item_id === item.id);
+  const cards = (jobCards || []).filter(j => j.order_item_id === item.id)
+    .sort((a, b) => String(a.job_card_no).localeCompare(String(b.job_card_no), undefined, { numeric: true }));
   const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   const dwg = item.drawing_number || '';
+
+  // No cards yet — the slip is being printed ahead of them, so it covers the
+  // whole item exactly as it always did, with the card number left blank.
+  const sheets = cards.length
+    ? cards.map(c => ({ card: c, qty: Number(c.qty) || 0 }))
+    : [{ card: null, qty: Number(item.quantity) || 0 }];
+  const shares = inv.map(r => apportion(r.qty, sheets.map(x => x.qty)));
+
   const w = window.open('', '_blank');
+  const page = (sheet, si) => `
+    <section class="slip">
+    <h1>Material Slip / સામાન સ્લિપ / सामान पर्ची</h1>
+    <p><b>${order.order_code}</b> · ${item.customer_code || order.customer_code || ''} · Printed ${today}</p>
+    <p>Drawing: <b>${dwg}</b>${dwg ? ` · ગુ: ${transliterateGujarati(dwg)} · हि: ${transliterateHindi(dwg)}` : ''}</p>
+    <p>Job Card: <b>${sheet.card ? sheet.card.job_card_no : '____________'}</b> · Qty: <b>${sheet.qty}</b>${sheets.length > 1 ? ` of ${item.quantity} · slip ${si + 1} of ${sheets.length}` : ''}${item.remark ? ` · ${item.remark}` : ''}</p>
+    <table>
+      <tr><th>#</th><th>Code</th><th>Name</th><th>ગુજરાતી</th><th>हिंदी</th><th>Qty</th>
+          <th>Issued / આપ્યું</th><th>Scrap / સ્ક્રેપ</th><th>Sign / સહી</th></tr>
+      ${inv.map((r, i) => `<tr>
+        <td>${i + 1}</td><td><b>${r.item_code}</b></td><td>${r.name || ''}</td>
+        <td>${r.name_gu || transliterateGujarati(r.name || '')}</td>
+        <td>${transliterateHindi(r.name || '')}</td>
+        <td class="num">${shares[i][si]} ${(r.unit || '').trim()}${sheets.length > 1 ? ` <span class="of">of ${r.qty}</span>` : ''}</td>
+        <td class="blank"></td><td class="blank"></td><td class="sign"></td>
+      </tr>`).join('')}
+    </table>
+    <div class="foot"><span>Design: ______________</span><span>Store: ______________</span><span>Overlooker / નિરીક્ષક: ______________</span></div>
+    </section>`;
+
   w.document.write(`<!doctype html><html><head><title>Material Slip — ${dwg || item.product_code || ''}</title>
     <style>
       body{font-family:Arial,'Noto Sans Gujarati','Noto Sans Devanagari',sans-serif;margin:26px;color:#111}
@@ -56,27 +113,15 @@ function printMaterialSlip(order, item, jobCards) {
       th,td{border:1px solid #999;padding:6px 7px;font-size:12px;text-align:left;vertical-align:middle}
       th{background:#f3f4f6}
       td.num{text-align:right}
+      td.num .of{color:#777;font-size:10px}
       td.blank{min-width:64px;height:30px}
       td.sign{min-width:100px}
       tr{page-break-inside:avoid}
+      .slip{page-break-after:always}
+      .slip:last-child{page-break-after:auto}
       .foot{margin-top:20px;font-size:12px;color:#333;display:flex;gap:50px}
     </style></head><body>
-    <h1>Material Slip / સામાન સ્લિપ / सामान पर्ची</h1>
-    <p><b>${order.order_code}</b> · ${item.customer_code || order.customer_code || ''} · Printed ${today}</p>
-    <p>Drawing: <b>${dwg}</b>${dwg ? ` · ગુ: ${transliterateGujarati(dwg)} · हि: ${transliterateHindi(dwg)}` : ''}</p>
-    <p>Job Card: <b>${jc ? jc.job_card_no : '____________'}</b> · Order Qty: <b>${item.quantity}</b>${item.remark ? ` · ${item.remark}` : ''}</p>
-    <table>
-      <tr><th>#</th><th>Code</th><th>Name</th><th>ગુજરાતી</th><th>हिंदी</th><th>Qty</th>
-          <th>Issued / આપ્યું</th><th>Scrap / સ્ક્રેપ</th><th>Sign / સહી</th></tr>
-      ${inv.map((r, i) => `<tr>
-        <td>${i + 1}</td><td><b>${r.item_code}</b></td><td>${r.name || ''}</td>
-        <td>${r.name_gu || transliterateGujarati(r.name || '')}</td>
-        <td>${transliterateHindi(r.name || '')}</td>
-        <td class="num">${r.qty} ${(r.unit || '').trim()}</td>
-        <td class="blank"></td><td class="blank"></td><td class="sign"></td>
-      </tr>`).join('')}
-    </table>
-    <div class="foot"><span>Design: ______________</span><span>Store: ______________</span><span>Overlooker / નિરીક્ષક: ______________</span></div>
+    ${sheets.map(page).join('')}
     </body></html>`);
   w.document.close(); w.print();
 }
