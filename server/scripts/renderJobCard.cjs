@@ -21,10 +21,9 @@ const L = {
   orderDate: ['ઓર્ડર તારીખ', 'Order Date', 'आदेश दिनांक'],
   product: ['માલ કોડ', 'Product Code', 'उत्पाद कोड'],
   drawing: ['ડ્રોઈંગ નંબર', 'Drawing No', 'हीटरों का नाम'],            // order_items.drawing_number
-  drawingFile: ['ડ્રોઈંગ ફાઇલ', 'Drawing File', 'ड्रॉइंग फ़ाइल'],       // order_drawings.file_name (approved, this item)
   punching: ['પંચિંગ', 'Punching', 'पंचिंग'],
   qty: ['સંખ્યા', 'QTY', 'मात्रा'],
-  cardNo: ['જોબ કાર્ડ નંબર', 'Job Card No', 'कार्य पत्रक संख्या'],
+  cardNo: ['જોબ કાર્ડ નંબર', 'Job Card No', 'कार्य पत्रक संख्या'],      // job_cards.job_card_no
   dispatch: ['માલ મોકલવાની તારીખ', 'Dispatch Date', 'भेजने की तिथि'],
   fixture: ['ફિક્સ્ચર પ્રકાર', 'Fixture Type', 'फिक्स्चर प्रकार'],
 };
@@ -87,7 +86,7 @@ function render(card, head, provenance) {
         <td class="num">${num}</td>
         <td class="label"><span class="gu">${esc(gu)}</span><span class="en">${esc(en)}</span><span class="hi">${esc(hi)}</span></td>
         <td class="value">${val}${note ? `<span class="note">${esc(note)}</span>` : ''}</td>
-        <td class="actual"></td>
+        <td class="actual"><span class="rule"></span></td>
       </tr>`).join('');
 
   const meta = [
@@ -95,7 +94,7 @@ function render(card, head, provenance) {
     [L.orderDate, head.orderDate], [L.dispatch, head.dispatchDate],
     [L.product, head.productCode], [L.drawing, head.drawingNumber],
     [L.punching, head.punching], [L.qty, head.qty],
-    [L.drawingFile, head.drawingFileName], [L.fixture, head.fixture],
+    [L.cardNo, head.cardNo], [L.fixture, head.fixture],
   ].map(([[gu, en, hi], v]) => `
         <div class="meta-cell">
           <div class="meta-label"><span class="gu">${esc(gu)}</span><span class="en">${esc(en)}</span><span class="hi">${esc(hi)}</span></div>
@@ -163,7 +162,6 @@ function render(card, head, provenance) {
   .meta-cell:nth-last-child(-n+2) { border-bottom: none; }
   .meta-label { display: flex; flex-wrap: wrap; gap: 0 7px; font-size: 10px; color: var(--ink-3); line-height: 1.5; }
   .meta-value { font-family: var(--mono); font-size: 14px; font-weight: 500; margin-top: 2px; word-break: break-word; }
-  .meta-cell:nth-last-child(2) .meta-value { font-weight: 600; }
 
   .gu { font-family: var(--gu); }
   .hi { font-family: var(--hi); }
@@ -173,7 +171,7 @@ function render(card, head, provenance) {
   thead th { font-size: 9px; letter-spacing: .13em; text-transform: uppercase; color: var(--ink-3);
     text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--rule-hard); font-weight: 600; }
   thead th.c { text-align: center; }
-  tbody td { padding: 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tbody td { padding: 11px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
   td.num { width: 30px; font-family: var(--mono); font-size: 12px; color: var(--ink-3); text-align: center; }
   td.label { width: 40%; }
   td.label span { display: block; line-height: 1.45; }
@@ -204,7 +202,11 @@ function render(card, head, provenance) {
   td.value .cells > .box { min-width: 0; text-align: center; }
   td.value .note { display: block; font-family: var(--sans); font-size: 10.5px; color: var(--ink-3); margin-top: 3px; letter-spacing: .01em; }
   td.value .blank { color: var(--attention); font-family: var(--sans); font-size: 12px; }
-  td.actual { width: 88px; border-left: 1px solid var(--rule); }
+  /* The floor writes its measured figure here in pen, so the column is sized
+     for a hand rather than for the value it replaces: a wide box, a row tall
+     enough to write in without crowding the line above, and a rule to write on. */
+  td.actual { width: 155px; border-left: 1px solid var(--rule-hard); padding: 11px 10px 8px; }
+  td.actual .rule { display: block; min-height: 30px; border-bottom: 1px solid var(--rule); }
 
   .foot { border-top: 2px solid var(--ink); margin-top: 2px; }
   .foot-row { display: flex; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
@@ -242,8 +244,8 @@ function render(card, head, provenance) {
     .meta-cell:nth-child(odd) { border-right: none; padding-right: 0; }
     .meta-cell:nth-child(even) { padding-left: 0; }
     .meta-cell:nth-last-child(2) { border-bottom: 1px solid var(--rule); }
-    td.label { width: 50%; }
-    td.actual { width: 52px; }
+    td.label { width: 38%; }
+    td.actual { width: 96px; }
     .sign { grid-template-columns: 1fr; gap: 18px; }
   }
   @media print {
@@ -251,6 +253,10 @@ function render(card, head, provenance) {
     .wrap { padding: 0; }
     .aside { display: none; }
     .sheet { box-shadow: none; border: 1.5px solid #000; max-width: none; }
+    /* On paper the writing box gets a full pen's worth of room. */
+    tbody td { padding: 14px 8px; }
+    td.actual { width: 38mm; }
+    td.actual .rule { min-height: 34px; }
   }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
@@ -260,7 +266,7 @@ function render(card, head, provenance) {
     <div class="sheet-head">
       <div>
         <div class="sheet-title">Heating Element Job Card</div>
-        <div class="sheet-sub">${esc(head.company)} &nbsp;·&nbsp; 8 mm &nbsp;·&nbsp; ${esc(head.cardNo)}</div>
+        <div class="sheet-sub">${esc(head.company)} &nbsp;·&nbsp; 8 mm tube</div>
       </div>
       <div class="asmbly"><span>ASMBLY</span><b>${esc(head.asmbly)}</b></div>
     </div>
@@ -334,18 +340,18 @@ if (require.main === module) {
   card.tubeMaterialLabel = 'SS304 / એસએસ ૩૦૪';
 
   const head = {
-    company: 'Peena Heat Elements', cardNo: 'JC-2609-0148', asmbly: '3',
+    company: 'Peena Heat Elements', asmbly: '3',
+    cardNo: 'PT-FlameProof-550U-9Kw-3in1-1',
     clientCode: 'BPE', orderDate: '17.09.26', productCode: 'PT-FlameProof',
     drawingNumber: 'PT-FlameProof-550U-9Kw-3in1', punching: 'BHA-9000W-230V',
     qty: '24 Nos (8 nos-3in1)', dispatchDate: '29.09.26', fixture: 'U-clamp, 550 mm centres',
     orderCode: 'ORD-148-26',
-    drawingFileName: 'BPE_PT-FlameProof-550U-9Kw-3in1_rev2.pdf',
     remark: ['BSP will be provided by BPE, FLP-PHE', 'BSP, BPE દ્વારા આપવામાં આવશે', 'BSP, BPE द्वारा प्रदान किया जाएगा'],
     plating: 'Buffing / બફિંગ / बफिंग',
   };
 
   const provenance = [
-    ['From the order', 'Order no, client code, order date, product code, drawing no, approved drawing file, punching, quantity, tube material, plating, remark'],
+    ['From the order', 'Order no, client code, order date, product code, drawing no, punching, quantity, tube material, plating, remark'],
     ['Asked when making the card', 'ASMBLY, fixture type, dispatch date, total length off the drawing'],
     ['Total length', `45.6" on the drawing + 0.7" allowance = ${n(card.totalLengthIn, 1)}"`],
     ['Wattage', `9000 W read as a 3-in-1 from the drawing name, so ${n(card.wattage, 0)} W per element`],
@@ -353,7 +359,6 @@ if (require.main === module) {
     ['Wire gauge', `${card.gauge} SWG at ${(card.wireDrawPct * 100).toFixed(0)}% wire draw, the only self-consistent answer; ${card.spoolOptions.length} spools of it fit the spring window`],
     ['Cold zone', `3" set by hand; the standard for a ${n(card.totalLengthIn, 1)}" element is 2"`],
     ['Terminal pin', `ceil(3 ÷ 1.215 + 1) = ${card.terminalPinBig.studs}"`],
-    ['Drawing file', 'The approved drawing on this order item — what the floor opens for roller detail and any dimension not on this sheet'],
   ];
 
   const out = process.argv[2] || 'jobcard-sample.html';
