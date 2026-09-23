@@ -1977,11 +1977,22 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
   // An item is "taken" only once a job card links to its id — not merely because
   // another item shares its drawing number. (Legacy cards with no linked item id
   // still fall back to blocking by drawing number.)
-  const takenItemIds = new Set(jobCards.map(jc => jc.order_item_id).filter(Boolean));
+  // Cards cover an item's quantity between them, so an item stays available
+  // until its cards add up to it — deleting one card of a split leaves the
+  // item offerable again for the pieces that are now uncovered.
+  const coveredByItem = jobCards.reduce((acc, jc) => {
+    if (jc.order_item_id) acc[jc.order_item_id] = (acc[jc.order_item_id] || 0) + (Number(jc.qty) || 0);
+    return acc;
+  }, {});
+  const cardCountByItem = jobCards.reduce((acc, jc) => {
+    if (jc.order_item_id) acc[jc.order_item_id] = (acc[jc.order_item_id] || 0) + 1;
+    return acc;
+  }, {});
+  const uncovered = (item) => (Number(item.quantity) || 0) - (coveredByItem[item.id] || 0);
   const takenDrawings = new Set(jobCards.filter(jc => jc.order_item_id == null).map(jc => jc.drawing_no).filter(Boolean));
   const availableItems = items.filter(item =>
     (drawingBypassed || itemDrawingStatus[item.id] === 'approved')
-    && !takenItemIds.has(item.id)
+    && !(cardCountByItem[item.id] > 0 && uncovered(item) <= 0)
     && !takenDrawings.has(item.drawing_number)
   );
 
@@ -2049,7 +2060,7 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
                 const originalIdx = items.indexOf(item);
                 return (
                   <option key={item.id} value={item.id}>
-                    Item {originalIdx + 1}{item.product_code ? ` · ${item.product_code}` : ''}{item.drawing_number ? ` · ${item.drawing_number}` : ''}
+                    Item {originalIdx + 1}{item.product_code ? ` · ${item.product_code}` : ''}{item.drawing_number ? ` · ${item.drawing_number}` : ''}{cardCountByItem[item.id] > 0 ? ` · ${uncovered(item)} of ${item.quantity} still uncovered` : ''}
                   </option>
                 );
               })}
@@ -2095,7 +2106,8 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
             {/* No card runs more than 50, so say up front how many this makes.
                 Blank falls back to the item quantity, exactly as the server does. */}
             {(() => {
-              const effective = parseInt(form.qty, 10) || parseInt(selectedItem?.quantity, 10) || 0;
+              const effective = parseInt(form.qty, 10)
+                || (selectedItem ? uncovered(selectedItem) : 0) || 0;
               const parts = splitQuantity(effective);
               if (parts.length <= 1) return null;
               const base = selectedItem?.drawing_number || selectedItem?.product_code || 'card';

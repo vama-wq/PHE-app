@@ -45,9 +45,12 @@ function splitQuantity(total, max = MAX_CARD_QTY, minLast = MIN_LAST_CARD) {
 // names are handed out so one call can allocate a whole batch without
 // re-reading the table.
 const SPLIT_MARKER = 'S';
-function allocateCardNumbers(baseNo, count, taken) {
+// `forceMarker` keeps the -S scheme when topping a batch back up: an item of
+// 100 whose PT-X-S2 was deleted needs ONE more card, and without this it would
+// be handed the bare base name and sit oddly beside PT-X-S1.
+function allocateCardNumbers(baseNo, count, taken, { forceMarker = false } = {}) {
   const CEILING = 10000; // a base with this many cards is a bug, not a big order
-  if (count <= 1) {
+  if (count <= 1 && !forceMarker) {
     if (!taken.has(baseNo)) return [baseNo];
     let n = 2;
     while (taken.has(`${baseNo}-${n}`) && n < CEILING) n++;

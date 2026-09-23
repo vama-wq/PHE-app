@@ -355,11 +355,24 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
     }
   }
 
-  // One job card per order item — block a duplicate upload onto an item that
-  // already has one (partial-dispatch splits use a separate endpoint).
+  // Cards cover an item's quantity between them, so the guard counts pieces
+  // rather than cards: block only once the item is fully covered. Existence
+  // alone used to block, which meant deleting one card of a split left the item
+  // stuck short of its quantity for good — and an item whose only card was
+  // deleted could never get another.
+  let coveredQty = 0, existingCards = 0;
   if (orderItemId) {
-    const already = await db.get('SELECT id FROM job_cards WHERE order_item_id=$1', [orderItemId]);
-    if (already) return res.status(409).json({ error: 'This item already has a job card' });
+    const cov = await db.get(
+      'SELECT COUNT(*)::int AS n, COALESCE(SUM(qty), 0)::int AS covered FROM job_cards WHERE order_item_id=$1',
+      [orderItemId]);
+    coveredQty = cov.covered; existingCards = cov.n;
+    const itemRow = await db.get('SELECT quantity FROM order_items WHERE id=$1', [orderItemId]);
+    const itemQty = parseInt(itemRow?.quantity, 10) || 0;
+    if (existingCards > 0 && coveredQty >= itemQty) {
+      return res.status(409).json({
+        error: `This item is already covered by ${existingCards} job card${existingCards > 1 ? 's' : ''} totalling ${coveredQty} of ${itemQty} pcs`,
+      });
+    }
   }
 
   // A card never runs more than MAX_CARD_QTY, so an item for 100 becomes two
@@ -367,10 +380,12 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
   // The quantity falls back to the item's own when the form leaves it blank —
   // without a number there is nothing to split, and a card with no quantity
   // cannot prorate its BOM either.
+  // Default to what is still UNCOVERED, not the whole item — topping a batch
+  // back up should make cards for the missing pieces, not a second full set.
   let cardQty = parseInt(qty, 10);
   if (!(cardQty > 0) && orderItemId) {
     const oi = await db.get('SELECT quantity FROM order_items WHERE id=$1', [orderItemId]);
-    cardQty = parseInt(oi?.quantity, 10);
+    cardQty = (parseInt(oi?.quantity, 10) || 0) - coveredQty;
   }
   const parts = cardQty > 0 ? splitQuantity(cardQty) : [];
 
@@ -383,7 +398,10 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
     const taken = await takenNumbersFor(db, baseNo);
     let numbers;
     try {
-      numbers = allocateCardNumbers(baseNo, Math.max(parts.length, 1), taken);
+      // Keep the -S scheme if this item already has split cards, so a top-up
+      // card sits with its siblings instead of taking the bare base name.
+      numbers = allocateCardNumbers(baseNo, Math.max(parts.length, 1), taken,
+        { forceMarker: existingCards > 0 });
     } catch (e) {
       return res.status(409).json({ error: e.message });
     }
@@ -457,7 +475,13 @@ router.delete('/:id', authenticate, authorize('admin', 'owner'), async (req, res
   await db.run('DELETE FROM job_card_assemblies WHERE job_card_id=$1', [jc.id]);
   await db.run('UPDATE activity_log SET job_card_id=NULL WHERE job_card_id=$1', [jc.id]);
 
-  if (jc.file_path) await deleteFromStorage(jc.file_path);
+  // Every card of a split shares one uploaded PDF, so deleting one card must
+  // not take the file its siblings still render a View button for.
+  if (jc.file_path) {
+    const shared = await db.get('SELECT 1 AS x FROM job_cards WHERE file_path=$1 AND id<>$2 LIMIT 1',
+      [jc.file_path, jc.id]);
+    if (!shared) await deleteFromStorage(jc.file_path);
+  }
   await db.run('DELETE FROM job_cards WHERE id=$1', [req.params.id]);
   res.json({ message: 'Deleted' });
 });

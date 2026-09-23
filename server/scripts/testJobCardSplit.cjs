@@ -77,6 +77,14 @@ eq('allocating marks the names taken as it goes', (() => {
   return S.allocateCardNumbers('PT-X', 2, taken);
 })(), ['PT-X-S3', 'PT-X-S4']);
 
+// Topping a batch back up after a card is deleted.
+eq('a top-up card keeps the -S scheme beside its siblings',
+  S.allocateCardNumbers('PT-X', 1, new Set(['PT-X-S1']), { forceMarker: true }), ['PT-X-S2']);
+eq('a top-up reuses the number the deleted card freed',
+  S.allocateCardNumbers('PT-X', 1, new Set(['PT-X-S1', 'PT-X-S3']), { forceMarker: true }), ['PT-X-S2']);
+eq('without forceMarker a lone card still takes the plain name',
+  S.allocateCardNumbers('PT-X', 1, new Set(['PT-X-S1'])), ['PT-X']);
+
 console.log('\nDescriptions');
 eq('single card', S.describeSplit([40]), '40 pcs');
 eq('split', S.describeSplit([50, 26, 25]), '50 + 26 + 25 = 101 pcs');
