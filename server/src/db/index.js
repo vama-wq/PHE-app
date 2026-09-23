@@ -1438,7 +1438,11 @@ async function initDB(retries = 20, delayMs = 10000) {
         'pending_approval','approved','rejected','job_card_created','in_progress',
         'qc_pending','qc_approved','packaging','dispatched','on_hold',
         'customer_query','resolved_dispatched','product_return',
-        'fg_qc_pending','fg_qc_approved','in_finished_goods'
+        'fg_qc_pending','fg_qc_approved','in_finished_goods',
+        -- Some of the order's job cards have gone out and some have not. An
+        -- item over 50 pieces runs as several cards, so this is now the normal
+        -- middle of an order's life rather than an exception.
+        'partially_dispatched'
       ))`);
       await pool.query(`ALTER TABLE job_cards DROP CONSTRAINT IF EXISTS job_cards_status_check`);
       await pool.query(`ALTER TABLE job_cards ADD CONSTRAINT job_cards_status_check CHECK(status IN (

@@ -4,6 +4,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { uploadDispatch, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { settleItemInventory, resolveJobCardItemId } = require('../lib/inventoryDeduction');
+const { syncOrderStatus } = require('./jobCards');
 
 router.get('/job-card/:jobCardId', authenticate, async (req, res) => {
   const docs = await getDB().all(
@@ -125,7 +126,12 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
   }
 
   await db.run("UPDATE job_cards SET status='dispatched', dispatched_at=NOW() WHERE id=$1", [req.params.jobCardId]);
-  await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [jc.order_id]);
+  // Recompute the order from ALL its cards instead of stamping it closed. An
+  // item over 50 pieces runs as several cards, so dispatching the first one
+  // used to mark the whole order dispatched while the rest were still on the
+  // floor — taking its balance off the Accounts totals and pulling it out of
+  // the plating queue.
+  await syncOrderStatus(db, jc.order_id, req.user.id);
 
   // Repaired return: close the customer query now that it's re-dispatched.
   if (isRepairDispatch) {

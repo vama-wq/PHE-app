@@ -559,10 +559,21 @@ async function syncOrderStatus(db, orderId, userId) {
   const done = (c) => DISPATCHED.includes(c.status) || toFg(c);
   const nonDispatched = cards.filter(c => !done(c)).map(c => c.status);
 
+  // Genuinely out the door, as against parked in Finished Goods stock.
+  const shipped = (c) => DISPATCHED.includes(c.status);
+
   if (cards.every(done)) {
     // All finished. If any of it went to stock rather than out the door, say
     // so plainly instead of calling it dispatched.
     newOrderStatus = cards.some(toFg) ? 'in_finished_goods' : 'dispatched';
+  } else if (cards.some(shipped)) {
+    // Some cards have shipped and some have not. This outranks the states
+    // below because "half of it has left the building" is the most useful
+    // thing to know about the order, and because the order must stay OPEN —
+    // its balance is still owed and its remaining pieces may still need
+    // plating. Cards sitting in Finished Goods do not count as shipped, so an
+    // order part-made to stock still reports where its production has reached.
+    newOrderStatus = 'partially_dispatched';
   } else if (nonDispatched.length > 0 && nonDispatched.every(s => s === 'qc_approved')) {
     // All remaining (non-dispatched) cards must be qc_approved
     newOrderStatus = 'qc_approved';
@@ -1363,3 +1374,6 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
 });
 
 module.exports = router;
+// dispatch.js needs this: marking one card dispatched must recompute the order
+// from every card, not stamp it closed.
+module.exports.syncOrderStatus = syncOrderStatus;

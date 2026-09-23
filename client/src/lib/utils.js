@@ -114,6 +114,7 @@ export const STATUS_LABELS = {
   in_finished_goods: 'In Finished Goods',
   packaging:        'Packaging',
   dispatched:       'Dispatched',
+  partially_dispatched: 'Partly Dispatched',
   pending:          'Pending',
   completed:        'Completed',
   customer_query:      'Query Raised',
@@ -136,6 +137,9 @@ export const STATUS_COLORS = {
   in_finished_goods: 'bg-teal-100 text-teal-800',
   packaging:        'bg-teal-100 text-teal-800',
   dispatched:       'bg-gray-100 text-gray-700',
+  // Some cards out, some still running — an open order, so it reads warm
+  // rather than the closed grey of a finished one.
+  partially_dispatched: 'bg-amber-100 text-amber-800',
   // Job card statuses
   pending:          'bg-yellow-100 text-yellow-800',
   completed:        'bg-green-100 text-green-800',

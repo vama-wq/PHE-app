@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
+const { syncOrderStatus } = require('./jobCards');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadToStorage, deleteFromStorage, uploadChatAttachments, uploadJobCard } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
@@ -650,7 +651,9 @@ router.put('/:id/repair-complete', authenticate, authorize('owner', 'accounts'),
   if (q.job_card_id) {
     await db.run("UPDATE job_cards SET status='repaired_dispatched', dispatched_at=NOW() WHERE id=$1", [q.job_card_id]);
   }
-  await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [q.order_id]);
+  // Recompute from every card rather than stamping the order closed — a
+  // repaired card going out does not mean its siblings have.
+  await syncOrderStatus(db, q.order_id, req.user.id);
 
   await logActivity(q.order_id, q.job_card_id, 'repair_dispatched',
     `Repaired product dispatched — ${shipping_carrier || 'carrier'}, tracking: ${tracking_number || 'N/A'}`, req.user.id);
@@ -668,10 +671,10 @@ router.put('/:id/debit-note-complete', authenticate, authorize('owner', 'account
     UPDATE customer_queries SET return_status='debit_note_issued', status='resolved', updated_at=NOW() WHERE id=$1
   `, [req.params.id]);
 
-  await db.run("UPDATE orders SET status='dispatched' WHERE id=$1", [q.order_id]);
   if (q.job_card_id) {
     await db.run("UPDATE job_cards SET status='dispatched', dispatched_at=NOW() WHERE id=$1", [q.job_card_id]);
   }
+  await syncOrderStatus(db, q.order_id, req.user.id);
 
   await logActivity(q.order_id, q.job_card_id, 'debit_note_issued',
     `Debit note ${q.debit_note_no || 'N/A'} issued for return ${q.query_no}`, req.user.id);
