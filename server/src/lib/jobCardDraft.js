@@ -22,12 +22,12 @@ const PLATING_TRILINGUAL = {
   'No Plating': 'No Plating / પ્લેટિંગ નથી / कोई प्लेटिंग नहीं',
 };
 
-// Punching is ASKED, never derived — the owner enters it before the card is
-// generated. This only supplies the field's starting value: 94% of the 209
-// existing cards punch exactly BHA-{wattage}W-{voltage}V, and the rest are real
-// exceptions (an ITY- prefix, "No Punching", an -INC suffix, and a handful
-// whose punch voltage differs from the item's), which is exactly why the value
-// is confirmed by a person rather than assumed.
+// Punching fills itself in as BHA-{wattage}W-{voltage}V, which is exactly what
+// 94% of the 209 existing cards carry. Like the cold zone and the terminal pin,
+// it is derived unless the planner overrides it — and the overrides are real
+// (an ITY- prefix, "No Punching", an -INC suffix, and a handful whose punch
+// voltage differs from the item's), so an override is always noted on the draft
+// rather than passing silently.
 function derivePunching(wattage, voltage) {
   if (!(Number(wattage) > 0) || !(Number(voltage) > 0)) return '';
   return `BHA-${Number(wattage)}W-${Number(voltage)}V`;
@@ -41,17 +41,29 @@ const QUESTIONS = [
   { key: 'dispatch_date', label: 'Dispatch date', type: 'date', required: true },
   { key: 'drawing_total_length_in', label: 'Total length on the drawing (inches)', type: 'number', required: true,
     help: 'Straight off the drawing — the card adds the 0.7" allowance itself.' },
-  { key: 'punching', label: 'Punching', type: 'text', required: true,
-    help: 'Prefilled from the wattage and voltage — confirm or overwrite it.' },
 ];
 
-// The questions with their starting values filled in for one item, so the form
-// opens populated rather than empty.
+// Everything the planner MAY override on the review screen, as against the four
+// questions they must answer up front. All derived until they say otherwise.
+const OVERRIDES = [
+  { key: 'punching', label: 'Punching', type: 'text', from: 'wattage and voltage' },
+  { key: 'cold_zone_big_in', label: 'Cold zone big (in)', type: 'number', from: 'policy Step 6, by total length' },
+  { key: 'cold_zone_small_in', label: 'Cold zone small (in)', type: 'number', from: 'policy Step 6, by total length' },
+  { key: 'wire_draw_pct_override', label: 'Wire draw (fraction, e.g. 0.31)', type: 'number', from: 'policy Step 7, by gauge' },
+  { key: 'spool_row', label: 'Spool', type: 'select', from: 'the shortest coil of the chosen gauge' },
+  { key: 'elements_per_assembly', label: 'Elements in the assembly', type: 'number', from: 'the drawing name' },
+];
+
+// The questions with their derived starting values filled in for one item, so
+// the form opens populated rather than empty.
 async function draftQuestions(db, orderItemId) {
   const item = await db.get('SELECT wattage, voltage FROM order_items WHERE id=$1', [orderItemId]);
-  return QUESTIONS.map(q => q.key === 'punching' && item
-    ? { ...q, suggested: derivePunching(item.wattage, item.voltage) }
-    : q);
+  return {
+    questions: QUESTIONS,
+    overrides: OVERRIDES.map(o => o.key === 'punching' && item
+      ? { ...o, derived: derivePunching(item.wattage, item.voltage) }
+      : o),
+  };
 }
 
 function missingAnswers(answers = {}) {
@@ -101,12 +113,23 @@ async function buildDraft(db, orderItemId, answers = {}) {
     if (picked) chosenSpool = picked;
   }
 
+  // Head-level overrides are noted the same way the engine notes its own, so
+  // the review screen shows everything a person changed in one list.
+  const notes = [];
+  const derivedPunching = derivePunching(item.wattage, item.voltage);
+  const punching = (answers.punching != null && String(answers.punching).trim())
+    ? String(answers.punching).trim() : derivedPunching;
+  if (punching !== derivedPunching) {
+    notes.push(`Punching set by hand to "${punching}"${derivedPunching ? ` — the wattage and voltage give "${derivedPunching}"` : ''}.`);
+  }
+
   const parts = splitQuantity(item.quantity);
   const base = String(item.drawing_number || item.product_code || `ITEM-${item.id}`).toUpperCase();
 
   return {
     ok: true,
     orderItemId: item.id,
+    notes,
     card: { ...card, wire: chosenSpool },
     split: {
       cards: parts.length,
@@ -127,7 +150,7 @@ async function buildDraft(db, orderItemId, answers = {}) {
       orderDate: fmtDate(order.order_date_text),
       productCode: item.product_code || '',
       drawingNumber: item.drawing_number || '',
-      punching: String(answers.punching).trim(),
+      punching,
       qty: `${item.quantity} Nos`,
       dispatchDate: fmtDate(answers.dispatch_date),
       fixture: String(answers.fixture || ''),
@@ -150,4 +173,4 @@ function fmtDate(v) {
   return d ? `${d[1]}.${d[2]}.${d[3].slice(-2)}` : String(v);
 }
 
-module.exports = { buildDraft, draftQuestions, derivePunching, missingAnswers, QUESTIONS, PLATING_TRILINGUAL };
+module.exports = { buildDraft, draftQuestions, derivePunching, missingAnswers, QUESTIONS, OVERRIDES, PLATING_TRILINGUAL };

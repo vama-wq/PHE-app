@@ -296,7 +296,7 @@ router.get('/:id', authenticate, async (req, res) => {
 // recomputes — so the review screen is a live calculator, not a preview.
 router.get('/draft/questions', authenticate, authorize('admin', 'owner'), async (req, res) => {
   const itemId = parseInt(req.query.order_item_id, 10);
-  res.json({ questions: await draftQuestions(getDB(), itemId || 0) });
+  res.json(await draftQuestions(getDB(), itemId || 0));
 });
 
 router.post('/draft', authenticate, authorize('admin', 'owner'), async (req, res) => {
