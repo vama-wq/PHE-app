@@ -11,8 +11,6 @@ const E = require('../src/lib/jobCardEngine');
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const n = (v, dp = 2) => v == null ? '—' : Number(v).toFixed(dp);
-// The inch cell is printed as the planner types it — 46.3, not 46.30.
-const asTyped = v => v == null ? '—' : String(Number(v));
 
 // Row labels exactly as the workbook carries them: Gujarati, English, Hindi.
 const L = {
@@ -27,38 +25,47 @@ const L = {
   fixture: ['ફિક્સ્ચર પ્રકાર', 'Fixture Type', 'फिक्स्चर प्रकार'],
 };
 
+// The colour grading off the workbook, cell for cell. The floor reads these
+// boxes before it reads the labels, so they are content, not decoration:
+//   key  #F6C6AC  the figure that matters on that row
+//   dia  #31859B  the tube diameter — which workbook this card came from
+//   mid  #FFF2CC  E19, the middle of the three lengths
+//   cz   #F9CB9C  both cold zones
+//   tab  #FABF8F / #8ED873  the blank blocks beside the wattage and the gauge
+const box = (v, kind) => `<span class="box box--${kind}">${v}</span>`;
+const tab = kind => `<span class="box box--${kind} box--tab"></span>`;
+
 function specRows(c) {
   const wire = c.wire || {};
   return [
     ['1', ['વિજળીનો ભાર / વોલ્ટેજ', 'Wattage / Voltage', 'वाट क्षमता / वोल्टेज'],
-      `${n(c.wattage, 0)} W &nbsp;·&nbsp; ${n(c.voltage, 0)} V`,
+      `${box(n(c.wattage, 0), 'key')}${tab('tab2')} W &nbsp; ${box(n(c.voltage, 0), 'key')} V`,
       c.elements > 1 ? `${n(c.statedWattage, 0)} W across ${c.elements} elements` : ''],
     ['2', ['ટ્યુબ સામગ્રી', 'Tube Material', 'ट्यूब सामग्री'],
-      `${esc(c.tubeMaterialLabel)} &nbsp;·&nbsp; ${c.tubeDiameterMm} mm`, ''],
+      `${box(esc(c.tubeMaterialLabel), 'key')} &nbsp; ${box(c.tubeDiameterMm, 'dia')} mm`, ''],
     // Four cells, in the card's own order and with no units printed — exactly
     // as C19 / E19 / F19 / G19 sit on the sheet the floor already reads. The
     // third figure is the total in INCHES sitting between two millimetre
     // lengths; it looks odd written out, but moving or labelling it is what
     // would actually confuse someone who reads this row by position.
     ['3', ['ડ્રોઇંગ પછી ટ્યુબની લંબાઈ', 'Tube Length After Draw', 'मोड़ने की लंबाई'],
-      `<span class="cells">${[n(c.row19LengthsMm[2]), n(c.row19LengthsMm[1]), asTyped(c.totalLengthIn), n(c.row19LengthsMm[0])]
-        .map(v => `<span>${v}</span>`).join('')}</span>`, ''],
+      `<span class="cells"><span>${n(c.row19LengthsMm[2])}</span>${box(n(c.row19LengthsMm[1]), 'mid')}${box(n(c.totalLengthIn), 'key')}<span>${n(c.row19LengthsMm[0])}</span></span>`, ''],
     ['3', ['ટ્યુબ કાપવાની લંબાઈ', 'Tube Cutting Length', 'ट्यूब काटने की लंबाई'],
       `${n(c.cuttingLengthIn, 3)}" &nbsp;–&nbsp; ${n(c.cuttingLengthMm)} mm`,
       `${(c.tubeDrawPct * 100).toFixed(1)}% draw`],
     ['4', ['વાયર ગેજ Ω/મીટર', 'Wire Gauge Ω/mtr', 'तार गेज Ω/मीटर'],
       c.gauge == null ? '<span class="blank">to be chosen by hand</span>'
-        : `${c.gauge} SWG &nbsp;·&nbsp; ${n(wire.ohms_per_m, 3)} Ω/mtr &nbsp;·&nbsp; ${wire.mandrel_mm} mandrel`,
+        : `${box(c.gauge, 'key')}${tab('tab3')} SWG &nbsp; ${box(`${n(wire.ohms_per_m, 3)} Ω/mtr &nbsp; ${wire.mandrel_mm} Mandrel`, 'key')}`,
       c.spoolOptions.length > 1 ? `${c.spoolOptions.length} spools of this gauge fit` : ''],
     ['5', ['સ્પ્રિંગની સીમા', 'Wire Length', 'स्प्रिंग की सीमा'],
       `${n(c.springWindowLowIn, 3)}" &nbsp;<span class="to">TO</span>&nbsp; ${n(c.springWindowHighIn, 3)}"`,
       c.springLengthIn ? `wound ${n(c.springLengthIn, 3)}"` : ''],
     ['6', ['ઓહ્મ પ્રતિકાર', 'Ohms Range', 'ओम प्रतिरोध'],
       c.ohmsRangeMid == null ? '<span class="blank">—</span>'
-        : `${n(c.ohmsRangeMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsRangeMid, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsRangeMax, 3)}`,
-      c.wireDrawPct ? `${(c.wireDrawPct * 100).toFixed(1)}% wire draw` : ''],
-    ['7', ['ઠંડા ઝોનની મોટી લંબાઈ', 'Cold Zone Big', 'बड़ा कोल्ड ज़ोन'], `${n(c.coldZoneBigIn, 0)}"`, ''],
-    ['8', ['ઠંડા ઝોનની નાની લંબાઈ', 'Cold Zone Small', 'छोटा कोल्ड ज़ोन'], `${n(c.coldZoneSmallIn, 0)}"`, ''],
+        : `${n(c.ohmsRangeMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsRangeMid, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsRangeMax, 3)} &nbsp; ${box(`${(c.wireDrawPct * 100).toFixed(0)}%`, 'key')}`,
+      'the boxed figure is the wire draw'],
+    ['7', ['ઠંડા ઝોનની મોટી લંબાઈ', 'Cold Zone Big', 'बड़ा कोल्ड ज़ोन'], box(n(c.coldZoneBigIn, 0), 'cz'), ''],
+    ['8', ['ઠંડા ઝોનની નાની લંબાઈ', 'Cold Zone Small', 'छोटा कोल्ड ज़ोन'], box(n(c.coldZoneSmallIn, 0), 'cz'), ''],
     ['9', ['ટર્મિનલ પિન મોટો સ્ટડ', 'Terminal Pin — Big Stud', 'टर्मिनल पिन बड़ा स्टड'],
       `એમ ૪-એસએસ &nbsp;·&nbsp; M4-SS &nbsp;·&nbsp; ${c.terminalPinBig.studs}"`, ''],
     ['10', ['ટર્મિનલ પિન નાનો સ્ટડ', 'Terminal Pin — Small Stud', 'टर्मिनल पिन छोटा स्टड'],
@@ -94,9 +101,9 @@ function render(card, head, provenance) {
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Gujarati:wght@400;600&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
 <style>
   /* Steel and ink: a works order, not a brochure. Neutrals carry a slight
-     green-grey bias (passivated stainless); the one accent is the indigo that
-     marks every figure the engine calculated, so the owner can see at a glance
-     what came off the order and what came out of the arithmetic. */
+     green-grey bias (passivated stainless), and they stay quiet on purpose —
+     the only colour on the sheet is the workbook's own cell grading, which the
+     floor already reads. See the .box rules below. */
   :root {
     --paper: #FBFBF9;
     --ground: #EDEEEA;
@@ -105,8 +112,6 @@ function render(card, head, provenance) {
     --ink-3: #79827D;
     --rule: #C7CCC6;
     --rule-hard: #8C948E;
-    --computed: #2F4E7A;
-    --computed-bg: #EBF0F7;
     --attention: #8A4B10;
     --attention-bg: #F8EFE4;
     --sans: 'IBM Plex Sans', system-ui, sans-serif;
@@ -118,13 +123,13 @@ function render(card, head, provenance) {
     :root:not([data-theme="light"]) {
       --paper: #1A1E1C; --ground: #121514; --ink: #E8EBE8; --ink-2: #A8B0AB;
       --ink-3: #79827D; --rule: #333B37; --rule-hard: #59615B;
-      --computed: #9BB8DE; --computed-bg: #1D2732; --attention: #D9A26A; --attention-bg: #2B221A;
+      --attention: #D9A26A; --attention-bg: #2B221A;
     }
   }
   :root[data-theme="dark"] {
     --paper: #1A1E1C; --ground: #121514; --ink: #E8EBE8; --ink-2: #A8B0AB;
     --ink-3: #79827D; --rule: #333B37; --rule-hard: #59615B;
-    --computed: #9BB8DE; --computed-bg: #1D2732; --attention: #D9A26A; --attention-bg: #2B221A;
+    --attention: #D9A26A; --attention-bg: #2B221A;
   }
 
   body { background: var(--ground); color: var(--ink); font-family: var(--sans); }
@@ -168,12 +173,29 @@ function render(card, head, provenance) {
   td.label span { display: block; line-height: 1.45; }
   td.label .gu, td.label .hi { font-size: 11.5px; color: var(--ink-2); }
   td.label .en { font-size: 12.5px; color: var(--ink); }
-  td.value { font-family: var(--mono); font-size: 13.5px; font-variant-numeric: tabular-nums; color: var(--computed); }
+  td.value { font-family: var(--mono); font-size: 13.5px; font-variant-numeric: tabular-nums; color: var(--ink); }
+
+  /* ── The workbook's colour grading ───────────────────────────────────────
+     These six fills are lifted straight off the sheet, and they stay literal
+     in both themes: the floor identifies a figure by its colour before it
+     reads the label, so the fill is the content. Text on a fill is pinned to
+     the sheet's ink rather than a theme token, since the fill does not change
+     with the theme. */
+  .box { display: inline-block; padding: 2px 9px; color: #1B211F;
+    border: 1px solid rgba(0,0,0,.22); font-weight: 500; }
+  .box--key  { background: #F6C6AC; }
+  .box--dia  { background: #31859B; color: #FFFFFF; border-color: rgba(0,0,0,.3); }
+  .box--mid  { background: #FFF2CC; }
+  .box--cz   { background: #F9CB9C; }
+  .box--tab2 { background: #FABF8F; }
+  .box--tab3 { background: #8ED873; }
+  .box--tab  { width: 15px; padding: 2px 0; }
   td.value b { font-weight: 600; }
   td.value .to { font-family: var(--sans); font-size: 10px; letter-spacing: .1em; color: var(--ink-3); }
   /* Row 19 reads as four separate cells, the way it does on the sheet. */
-  td.value .cells { display: flex; flex-wrap: wrap; gap: 4px 10px; }
-  td.value .cells span { min-width: 58px; }
+  td.value .cells { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+  td.value .cells > span { min-width: 58px; }
+  td.value .cells > .box { min-width: 0; text-align: center; }
   td.value .note { display: block; font-family: var(--sans); font-size: 10.5px; color: var(--ink-3); margin-top: 3px; letter-spacing: .01em; }
   td.value .blank { color: var(--attention); font-family: var(--sans); font-size: 12px; }
   td.actual { width: 88px; border-left: 1px solid var(--rule); }
@@ -205,7 +227,9 @@ function render(card, head, provenance) {
   .warns li { background: var(--attention-bg); border-left: 3px solid var(--attention);
     padding: 9px 12px; font-size: 12.5px; line-height: 1.5; color: var(--ink); }
   .key { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 11.5px; color: var(--ink-3); }
-  .key i { font-style: normal; color: var(--computed); font-family: var(--mono); }
+  .key { align-items: center; }
+  .key .sw { display: inline-flex; align-items: center; gap: 7px; }
+  .key .sw b { width: 15px; height: 15px; border: 1px solid rgba(0,0,0,.25); flex: none; }
 
   @media (max-width: 600px) {
     .meta { grid-template-columns: 1fr; }
@@ -254,7 +278,7 @@ function render(card, head, provenance) {
       <div class="foot-row">
         <div class="foot-num">16</div>
         <div class="foot-label"><span class="gu">પડ ચડાવવું</span><span class="en">Plating</span><span class="hi">प्लेटिंग के लिए निर्देश</span></div>
-        <div class="foot-value">${esc(head.plating)}</div>
+        <div class="foot-value">${box(esc(head.plating), 'key')}</div>
       </div>
     </div>
 
@@ -273,12 +297,16 @@ function render(card, head, provenance) {
       <ul class="warns">${c.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul>
     </div>` : ''}
     <div class="panel">
-      <h2>Reading the sheet</h2>
+      <h2>The colour grading</h2>
+      <p class="lede">Lifted off your workbook, cell for cell — the same six fills on the same figures.</p>
       <div class="key">
-        <span><i>Blue figures</i> are filled in by the app.</span>
-        <span>The Actual column stays blank for the floor.</span>
-        <span>Rows 13 and 14 were the bending rollers, now read off the drawing.</span>
+        <span class="sw"><b style="background:#F6C6AC"></b>The figure that matters on that row</span>
+        <span class="sw"><b style="background:#31859B"></b>Tube diameter — which workbook the card came from</span>
+        <span class="sw"><b style="background:#FFF2CC"></b>Middle of the three lengths</span>
+        <span class="sw"><b style="background:#F9CB9C"></b>Cold zones</span>
+        <span class="sw"><b style="background:#FABF8F"></b><b style="background:#8ED873"></b>The blank tabs beside wattage and gauge</span>
       </div>
+      <p class="lede" style="margin:12px 0 0">The Actual column stays blank for the floor. Rows 13 and 14 were the bending rollers, now read off the drawing.</p>
     </div>
   </aside>
 </div>
