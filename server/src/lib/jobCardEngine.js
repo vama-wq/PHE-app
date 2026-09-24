@@ -33,14 +33,16 @@ const INCH_MM = 25.4;
 // shifts every spring length by ~0.05% and would stop reproducing real cards.
 const PI = 3.14;
 
-// Policy Step 5 — tube draw, by material and total length (inches). 8 mm only.
+// Policy Step 5 — tube draw, by material and total length (inches).
+// 11 mm SS above 51" moved from 13% to 15% (owner, 24 Sep 2026). Everything
+// else — 15.6% below 51", copper flat at 16%, and the whole 8 mm set — stands.
 const TUBE_DRAW = {
   8: {
     steel:  [ { maxTL: 43, pct: 0.20 }, { maxTL: 50, pct: 0.197 }, { maxTL: Infinity, pct: 0.19 } ],
     copper: [ { maxTL: Infinity, pct: 0.23 } ],
   },
   11: {
-    steel:  [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.13 } ],
+    steel:  [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.15 } ],
     copper: [ { maxTL: Infinity, pct: 0.16 } ],
   },
 };

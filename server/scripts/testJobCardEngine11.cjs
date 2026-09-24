@@ -4,7 +4,7 @@
 //
 // Unlike the 8 mm suite, NONE of these reproduce end to end — all three predate
 // the percentages the owner settled on 24 Sep 2026 (they use 14.5%/14% tube
-// draw against the final 15.6/13/16, and 15%/8%/17% wire draw against 12/12/17).
+// draw against the final 15.6/15/16, and 15%/8%/17% wire draw against 12/12/17).
 // So this splits into two halves:
 //
 //   1. What the policy cannot move — row 19 and ohms after draw — is checked
@@ -91,7 +91,7 @@ for (const { name, input, card } of CARDS) {
   check('Ohms after draw −5%', o.ohmsAfterDrawMin, card.ohmsAfterDraw * 0.95, 0.001);
 
   // ── 2. What the settled percentages deliberately move ───────────────────
-  note('Tube draw', o.tubeDrawPct, card.tubeDraw, 'card predates the final 15.6 / 13 / 16');
+  note('Tube draw', o.tubeDrawPct, card.tubeDraw, 'card predates the final 15.6 / 15 / 16');
 
   // ── 3. The same arithmetic, fed the card's own percentages ──────────────
   const cut = card.totalLengthIn / (1 + card.tubeDraw);
