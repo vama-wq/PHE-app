@@ -37,9 +37,11 @@ const PI = 3.14;
 // 11 mm SS above 51" moved from 13% to 15% (owner, 24 Sep 2026). Everything
 // else — 15.6% below 51", copper flat at 16%, and the whole 8 mm set — stands.
 const TUBE_DRAW = {
+  // 8 mm went flat at every length (owner, 24 Sep 2026): 20.7% steel / Incoloy,
+  // 23.7% copper. The old 43" and 50" breaks (20 / 19.7 / 19) are retired.
   8: {
-    steel:  [ { maxTL: 43, pct: 0.20 }, { maxTL: 50, pct: 0.197 }, { maxTL: Infinity, pct: 0.19 } ],
-    copper: [ { maxTL: Infinity, pct: 0.23 } ],
+    steel:  [ { maxTL: Infinity, pct: 0.207 } ],
+    copper: [ { maxTL: Infinity, pct: 0.237 } ],
   },
   11: {
     steel:  [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.15 } ],
@@ -55,7 +57,9 @@ const WIRE_DRAW = {
       { minG: 20, maxG: 24, pct: 0.23 },
       { minG: 25, maxG: 28, pct: 0.31, pctWhen1kW: 0.33 },
       { minG: 29, maxG: 29, pct: 0.41 },
-      { minG: 30, maxG: Infinity, pct: 0.455 },
+      // 30 and above moved 45.5% -> 46% (owner, 24 Sep 2026). Steel / Incoloy
+      // only — copper's ladder below is untouched.
+      { minG: 30, maxG: Infinity, pct: 0.46 },
     ],
     copper: [
       { minG: 20, maxG: 24, pct: 0.15 },

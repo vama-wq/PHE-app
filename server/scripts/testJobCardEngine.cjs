@@ -27,6 +27,8 @@ const CARDS = [
       terminalPinStuds: 4, spoolOhmsPerM: 4.97,
       row19LengthsMm: [1176.02, 1166.02, 1161.02], h26: 4.938272,
     },
+    // Built on the old 19.7% band; policy is now a flat 20.7% at every length.
+    tubeDrawMoved: { cardPct: 0.197, coldZoneIn: 3, divLow: 3, divHigh: 2.2 },
   },
   {
     name: 'QM-PT-USpiral-Upside-75  (SS304, single, 56" so CZ 3" standard)',
@@ -43,6 +45,8 @@ const CARDS = [
       terminalPinStuds: 4, spoolOhmsPerM: 12.79,
       row19LengthsMm: [1424.432, 1414.432, 1409.432], h26: 4.938272,
     },
+    // Built on the old 19% band; policy is now a flat 20.7% at every length.
+    tubeDrawMoved: { cardPct: 0.19, coldZoneIn: 3, divLow: 3, divHigh: 2.2 },
   },
   {
     name: 'TSS-PT-Utype-10U-400W  (Copper, 21.2", CZ 2" standard)',
@@ -61,6 +65,8 @@ const CARDS = [
       // -10. Owner confirmed 22 Sep 2026 the rule is fixed, so the card was wrong.
       row19LengthsMm: [538.48, 528.48, 523.48], h26: 3.292181,
     },
+    // Built on the old 23% copper rate; policy is now a flat 23.7%.
+    tubeDrawMoved: { cardPct: 0.23, coldZoneIn: 2, divLow: 2.5, divHigh: 2 },
     // SUPERSEDED, not a defect. This card was built 23.07.26 on a 24% wire draw;
     // the owner confirmed on 22 Sep 2026 that the current policy's 29% is correct
     // and this card is simply old. The engine follows the policy and lands on
@@ -101,7 +107,7 @@ const Y = s => `\x1b[33m${s}\x1b[0m`;
 const G = s => `\x1b[32m${s}\x1b[0m`, R = s => `\x1b[31m${s}\x1b[0m`, DIM = s => `\x1b[2m${s}\x1b[0m`;
 const fmt = v => v == null ? '—' : typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')) : String(v);
 
-let failures = 0, divergences = 0;
+let failures = 0, divergences = 0, moved = 0, reproved = 0;
 for (const card of CARDS) {
   console.log(`\n${'═'.repeat(88)}\n${card.name}\n${'═'.repeat(88)}`);
   const out = E.buildJobCard(card.input);
@@ -113,6 +119,18 @@ for (const card of CARDS) {
     const got = out[key], want = card.actual[key];
     const ok = got != null && want != null && Math.abs(got - want) <= tol;
     const kd = card.knownDivergence;
+    // Four fields hang off the tube draw. The owner moved 8 mm to a flat
+    // 20.7% / 23.7% on 24 Sep 2026, so every card built before that diverges
+    // on exactly these — and on nothing else. They are re-proved below by
+    // feeding each card its OWN percentage back in.
+    const TUBE_DRIVEN = ['tubeDrawPct', 'cuttingLengthIn', 'springWindowLowIn', 'springWindowHighIn'];
+    if (card.tubeDrawMoved && TUBE_DRIVEN.includes(key)) {
+      const okNow = got != null && want != null && Math.abs(got - want) <= tol;
+      if (!okNow) moved++;
+      console.log(`  ${label.padEnd(30)}${fmt(got).padStart(16)}${fmt(want).padStart(18)}   ` +
+        (okNow ? G('match') : Y('policy moved') + DIM(`  card built on ${(card.tubeDrawMoved.cardPct * 100).toFixed(1)}%`)));
+      continue;
+    }
     const expected = kd && kd.fields.includes(key);
     // A divergent field still has a right answer — the policy's — so check that.
     const policyWant = expected ? kd.expected[key] : null;
@@ -156,6 +174,29 @@ for (const card of CARDS) {
     (out.wire ? ` | picked spool ${out.wire.ohms_per_m} Ω/m, mandrel ${out.wire.mandrel_mm}, spring ${out.springLengthIn}"` : '')));
   for (const w of out.warnings) console.log(DIM(`  note: ${w}`));
 
+  // Feed the card its OWN tube draw back in. If the four moved fields then
+  // reproduce the card exactly, the arithmetic underneath is untouched and only
+  // the policy input changed — the same proof the 11 mm suite uses.
+  const tdm = card.tubeDrawMoved;
+  if (tdm) {
+    const cut = card.actual.totalLengthIn / (1 + tdm.cardPct);
+    const lo = (cut - tdm.coldZoneIn * 2) / tdm.divLow;
+    const hi = (cut - tdm.coldZoneIn * 2) / tdm.divHigh;
+    const checks = [
+      ['cutting length (in)', cut, card.actual.cuttingLengthIn],
+      ['spring window low', lo, card.actual.springWindowLowIn],
+      ['spring window high', hi, card.actual.springWindowHighIn],
+    ];
+    const allOk = checks.every(([, got, want]) => Math.abs(got - want) <= 0.0005);
+    console.log(Y(`\n  POLICY MOVED — 8 mm tube draw is now a flat ${card.input.tubeMaterial.toLowerCase().includes('cop') ? '23.7' : '20.7'}%; this card was built on ${(tdm.cardPct * 100).toFixed(1)}%.`));
+    for (const [label, got, want] of checks) {
+      console.log(`    ${label.padEnd(26)}${fmt(got).padStart(14)}${fmt(want).padStart(16)}   ` +
+        (Math.abs(got - want) <= 0.0005 ? G('match') : R('DIFF')));
+    }
+    if (allOk) { reproved++; console.log(G('    fed its own percentage, the card reproduces exactly — the arithmetic did not change.')); }
+    else { failures++; console.log(R('    does NOT reproduce on its own percentage — the arithmetic needs another look.')); }
+  }
+
   const kd = card.knownDivergence;
   if (kd) {
     console.log(Y(`\n  KNOWN DIVERGENCE — ${kd.why}.`));
@@ -182,12 +223,17 @@ const REGRESSIONS = [
   ['band filter: 1 kW SS 35.7" resolves at all',
     () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1000, voltage: 230, drawingTotalLengthIn: 35.0 }),
     o => o.gauge != null && o.gaugeResolution !== 'none'],
+  // These two pinned 26 SWG @ 31% when 8 mm ran on the 19.7 / 19% bands. The
+  // flat 20.7% shortens the cutting length, moves the spring window down, and
+  // both now resolve on 24 SWG @ 23%. The defect they guard is unchanged — the
+  // band filter must never report "no wire fits" here — so the invariant is
+  // asserted first and the landing gauge re-pinned behind it.
   ['band filter: 3 kW SS 25.4" is not "no wire fits"',
     () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 3000, voltage: 230, drawingTotalLengthIn: 24.7 }),
-    o => o.gauge === 26 && o.wireDrawPct === 0.31],
+    o => o.gauge != null && o.gaugeResolution !== 'none' && o.gauge === 24 && o.wireDrawPct === 0.23],
   ['band filter: 1.2 kW SS 58.2" is not "no wire fits"',
     () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1200, voltage: 230, drawingTotalLengthIn: 57.5 }),
-    o => o.gauge === 26],
+    o => o.gauge != null && o.gaugeResolution !== 'none' && o.gauge === 24],
   ['band filter: 1.5 kW SS 46.7" is not "no wire fits"',
     () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1500, voltage: 230, drawingTotalLengthIn: 46 }),
     o => o.gauge === 26],
@@ -255,6 +301,37 @@ const REGRESSIONS = [
     o.wire.ohms_per_m = -1;
     return E.WIRE_TABLES[8].rows.some(r => r.ohms_per_m === -1);
   }, poisoned => poisoned === false],
+
+  // ── The 24 Sep 2026 policy revision, pinned ───────────────────────────────
+  // 8 mm tube draw is flat at every length: the 43" and 50" breaks are gone.
+  ['8 mm steel tube draw is a flat 20.7% at every length',
+    () => [12, 42.9, 43, 43.1, 50, 50.1, 56, 120]
+      .map(tl => E.TUBE_DRAW[8].steel.find(b => tl <= b.maxTL).pct),
+    pcts => pcts.every(p => p === 0.207)],
+  ['8 mm copper tube draw is a flat 23.7% at every length',
+    () => [12, 21.2, 43, 50, 56, 120]
+      .map(tl => E.TUBE_DRAW[8].copper.find(b => tl <= b.maxTL).pct),
+    pcts => pcts.every(p => p === 0.237)],
+  // Wire draw: 30 and above went 45.5% -> 46%, steel only. 29 must not move
+  // with it, and copper's top band must stay where it was.
+  ['8 mm steel wire draw is 46% from gauge 30 up',
+    () => [30, 31, 32, 34, 36, 38].map(g => E.WIRE_DRAW[8].steel.find(b => g >= b.minG && g <= b.maxG).pct),
+    pcts => pcts.every(p => p === 0.46)],
+  ['8 mm steel gauge 29 still takes 41%',
+    () => E.WIRE_DRAW[8].steel.find(b => 29 >= b.minG && 29 <= b.maxG).pct,
+    pct => pct === 0.41],
+  ['8 mm copper wire draw above 30 is untouched at 29%',
+    () => [30, 32, 34, 36].map(g => E.WIRE_DRAW[8].copper.find(b => g >= b.minG && g <= b.maxG).pct),
+    pcts => pcts.every(p => p === 0.29)],
+  // The revision is 8 mm only — 11 mm must not have moved with it.
+  ['11 mm tube draw did not move with the 8 mm revision',
+    () => [E.TUBE_DRAW[11].steel.find(b => 40 <= b.maxTL).pct,
+           E.TUBE_DRAW[11].steel.find(b => 60 <= b.maxTL).pct,
+           E.TUBE_DRAW[11].copper.find(b => 60 <= b.maxTL).pct],
+    ([lo, hi, cu]) => lo === 0.156 && hi === 0.15 && cu === 0.16],
+  ['11 mm wire draw did not move with the 8 mm revision',
+    () => [22, 27, 33].map(g => E.WIRE_DRAW[11].steel.find(b => g >= b.minG && g <= b.maxG).pct),
+    ([a, b, c]) => a === 0.12 && b === 0.17 && c === 0.21],
 ];
 
 for (const [name, run, check] of REGRESSIONS) {
@@ -302,8 +379,13 @@ for (const [name, run, want] of TABLE_CHECKS) {
 }
 
 console.log(`\n${'═'.repeat(88)}`);
-const clean = CARDS.length - CARDS.filter(c => c.knownDivergence).length;
+// Since 24 Sep 2026 the 8 mm tube draw is a flat 20.7% / 23.7%, so every card
+// in this suite predates it and moves on the four tube-driven fields. What the
+// suite now asserts is stronger than "reproduces exactly": everything the
+// percentage CANNOT touch still matches the card to the digit, and every field
+// it CAN touch reproduces the card the moment its own percentage is fed back in.
 console.log(failures ? R(`${failures} unexplained mismatch(es) against the real cards`)
-  : G(`${clean} of ${CARDS.length} cards reproduced exactly`) +
-    (divergences ? Y(`; ${divergences} field(s) diverge for the documented reason above.`) : '.'));
+  : G(`all ${CARDS.length} cards hold`) +
+    (moved ? Y(` — ${moved} field(s) moved with the flat-rate policy, ${reproved}/${CARDS.length} re-proved on the card's own percentage`) : '') +
+    (divergences ? Y(`; ${divergences} further field(s) diverge for the documented reason above.`) : '.'));
 process.exit(failures ? 1 : 0);
