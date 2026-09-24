@@ -381,6 +381,12 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
                    terminalPinSmallIn: answers.terminal_pin_small_in },
           sheet: { ...draft.sheets[i], cardNo: numbers[i] },
           provenance: draft.provenance,
+          // The figures this card was built from, frozen. The card is
+          // re-rendered on every view and reprint so layout fixes reach it, but
+          // a later policy revision must never move the numbers on a card that
+          // is already on the shopfloor — so they are stored, not recomputed.
+          computed: draft.card,
+          computedAt: new Date().toISOString(),
         };
         const { rows: ins } = await client.query(`
           INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date,
@@ -414,6 +420,17 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
     warnings: draft.card.warnings, notes: draft.notes,
   });
 });
+
+// A generated card is re-rendered on every view and every reprint, so the
+// LAYOUT stays live and a fix reaches cards already made. The FIGURES must not:
+// once a card is on the shopfloor, a later policy revision (a tube draw rate, a
+// wire draw band) must never change what that card says. So generation freezes
+// the engine's output into the spec and this reads it back. buildJobCard is the
+// fallback only for specs written before the freeze existed.
+function cardFromSpec(spec) {
+  if (spec && spec.computed && spec.computed.ok) return spec.computed;
+  return require('../lib/jobCardEngine').buildJobCard(spec.input);
+}
 
 // ── Material slip for ONE job card ───────────────────────────────────────────
 // The slip is the store's issue document and it travels with a card, so it
@@ -464,7 +481,7 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
   if (jc.generated_spec) {
     try {
       const spec = typeof jc.generated_spec === 'string' ? JSON.parse(jc.generated_spec) : jc.generated_spec;
-      const built = require('../lib/jobCardEngine').buildJobCard(spec.input);
+      const built = cardFromSpec(spec);
       if (built.ok) {
         const parts_ = renderParts(built, [spec.sheet], spec.provenance || []);
         card = { styles: parts_.styles, fontLink: parts_.fontLink, sheets: parts_.sheets, title: parts_.title };
@@ -500,7 +517,7 @@ router.get('/:id/view', authenticate, async (req, res) => {
   if (jc.generated_spec) {
     try {
       const spec = typeof jc.generated_spec === 'string' ? JSON.parse(jc.generated_spec) : jc.generated_spec;
-      const built = require('../lib/jobCardEngine').buildJobCard(spec.input);
+      const built = cardFromSpec(spec);
       if (built.ok) {
         res.set('Content-Type', 'text/html; charset=utf-8');
         // Never cached: this is rendered fresh so a layout fix shows up at once.
