@@ -5,7 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import InventoryEditModal from '../../components/InventoryEditModal';
-import { fmtDate, fmtDateTime, daysUntil } from '../../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES } from '../../lib/utils';
 import { compressImage } from '../../lib/compressImage';
 import { downloadExcel } from '../../lib/utils';
 import {
@@ -245,7 +245,17 @@ export default function QCDashboard() {
                             <RotateCcw size={11} /> Customer Return
                           </span>
                         )}
+                        {jc.qc_rejected && (
+                          <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                            <AlertTriangle size={11} /> Re-check
+                          </span>
+                        )}
                       </div>
+                      {jc.qc_rejected && jc.qc_rejection_notes && (
+                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-2.5 py-1.5 mb-1.5">
+                          <span className="font-semibold">Sent back: </span>{jc.qc_rejection_notes}
+                        </div>
+                      )}
                       <div className="text-sm text-gray-600 mb-1">
                         <Link to={`/orders/${jc.order_id}`} className="text-brand-600 hover:underline font-medium">
                           {jc.order_code}
@@ -508,14 +518,19 @@ function UploadReportModal({ card, onClose, onSaved }) {
 // ── Reject Modal ──────────────────────────────────────────────────────────────
 function RejectModal({ card, onClose, onSaved }) {
   const [notes, setNotes] = useState('');
+  // Where it goes: back to the QC queue for a re-check (nothing on the
+  // checklist moves), or back to the floor from a chosen stage.
+  const [sendTo, setSendTo] = useState('production');
+  const [returnToStage, setReturnToStage] = useState(29);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const stages = PRODUCTION_STAGES.filter(s => s.no <= 29);
 
   const handleReject = async () => {
     setSaving(true);
     setError('');
     try {
-      await api.put(`/qc/${card.id}/reject`, { notes });
+      await api.put(`/qc/${card.id}/reject`, { notes, send_to: sendTo, return_to_stage: returnToStage });
       onSaved();
     } catch (e) {
       setError(e.response?.data?.error || 'Failed to reject');
@@ -523,11 +538,27 @@ function RejectModal({ card, onClose, onSaved }) {
     }
   };
 
+  const choice = (value, title, body) => (
+    <button type="button" onClick={() => setSendTo(value)}
+      className={`w-full text-left p-3 rounded-xl border-2 ${sendTo === value ? 'border-red-500 bg-red-50' : 'border-gray-200 hover:border-gray-300'}`}>
+      <div className="font-semibold text-sm">{title}</div>
+      <div className="text-xs text-gray-500 mt-0.5">{body}</div>
+    </button>
+  );
+
   return (
     <Modal open title={`QC Reject — ${card.job_card_no}`} onClose={onClose} size="sm">
-      <p className="text-sm text-gray-600 mb-4">
-        This job card will be sent back to production for rework.
-      </p>
+      <div className="space-y-2 mb-4">
+        {choice('production', 'Back to production',
+          'Re-opens the checklist from the stage you pick; the floor reworks it and re-submits to QC.')}
+        {sendTo === 'production' && (
+          <select className="input w-full text-sm" value={returnToStage} onChange={e => setReturnToStage(Number(e.target.value))}>
+            {stages.map(s => <option key={s.no} value={s.no}>Redo from stage {s.no} — {s.name}</option>)}
+          </select>
+        )}
+        {choice('qc', 'Back to QC for re-check',
+          'Nothing on the checklist moves. The card returns to the QC queue with your notes for a fresh inspection or a re-done report.')}
+      </div>
       <div className="mb-4">
         <label className="block text-sm font-medium text-gray-700 mb-1">Rejection Notes</label>
         <textarea
@@ -548,7 +579,7 @@ function RejectModal({ card, onClose, onSaved }) {
           className="btn-primary bg-red-600 hover:bg-red-700 border-red-600"
           onClick={handleReject} disabled={saving}
         >
-          {saving ? 'Rejecting...' : 'Reject & Return to Production'}
+          {saving ? 'Rejecting...' : sendTo === 'qc' ? 'Reject & Send Back to QC' : 'Reject & Return to Production'}
         </button>
       </div>
     </Modal>

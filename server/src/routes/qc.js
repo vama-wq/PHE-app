@@ -386,27 +386,36 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
     return res.status(400).json({ error: 'This job card is already dispatched' });
   }
 
-  // Optional: send the work back to an earlier production stage (e.g. Brazing)
-  // instead of only re-opening QC. Everything from that stage onward is redone.
+  // Where the rejected card goes. 'production' (the default, and the only
+  // behaviour until 24 Sep 2026) re-opens the checklist from return_to_stage
+  // and hands the card back to the floor. 'qc' keeps the work as it is and
+  // puts the card straight back in the QC queue — for a re-inspection, a
+  // re-done report, or a reversal that should be looked at again rather than
+  // rebuilt. Nothing on the checklist moves in that case.
+  const sendTo = req.body.send_to === 'qc' ? 'qc' : 'production';
   const backTo = parseInt(req.body.return_to_stage, 10);
   const returnToStage = Number.isInteger(backTo) && backTo >= 1 && backTo <= 29 ? backTo : 29;
 
-  // Re-open the stages that have to be redone (stage 29 at minimum, so
-  // production can re-submit to QC after fixing).
-  await db.run(
-    `UPDATE production_checklist SET done=0, done_at=NULL WHERE job_card_id=$1 AND stage_no >= $2`,
-    [req.params.id, returnToStage]
-  );
+  if (sendTo === 'qc') {
+    await db.run(`UPDATE job_cards SET status='qc_pending' WHERE id=$1`, [req.params.id]);
+  } else {
+    // Re-open the stages that have to be redone (stage 29 at minimum, so
+    // production can re-submit to QC after fixing).
+    await db.run(
+      `UPDATE production_checklist SET done=0, done_at=NULL WHERE job_card_id=$1 AND stage_no >= $2`,
+      [req.params.id, returnToStage]
+    );
 
-  // Back to production. current_stage is the LAST COMPLETED stage (same rule as
-  // updateJobCardAfterStageChange), so after re-opening it recomputes to the
-  // stage just before the one being redone — the card then presents that stage
-  // as the next thing to do.
-  const maxDone = await db.get(
-    'SELECT MAX(stage_no) AS m FROM production_checklist WHERE job_card_id=$1 AND done=1 AND stage_no < 30',
-    [req.params.id]);
-  await db.run(`UPDATE job_cards SET status='in_progress', current_stage=$2 WHERE id=$1`,
-    [req.params.id, maxDone?.m || 0]);
+    // Back to production. current_stage is the LAST COMPLETED stage (same rule as
+    // updateJobCardAfterStageChange), so after re-opening it recomputes to the
+    // stage just before the one being redone — the card then presents that stage
+    // as the next thing to do.
+    const maxDone = await db.get(
+      'SELECT MAX(stage_no) AS m FROM production_checklist WHERE job_card_id=$1 AND done=1 AND stage_no < 30',
+      [req.params.id]);
+    await db.run(`UPDATE job_cards SET status='in_progress', current_stage=$2 WHERE id=$1`,
+      [req.params.id, maxDone?.m || 0]);
+  }
 
   // Flag the rejection for production to see (graceful — columns may not exist on first deploy)
   try {
@@ -424,15 +433,17 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
   } catch (_) { /* column may not exist yet — ignore, core flow already done */ }
 
   const stageName = STAGE_NAMES[returnToStage] || `stage ${returnToStage}`;
+  const where = sendTo === 'qc' ? 'sent back to QC for re-check' : `returned to production at ${stageName}`;
   await logActivity(jc.order_id, jc.id, 'status_changed',
-    `Job card ${jc.job_card_no} QC ${isReversal ? 'approval reversed' : 'Rejected'} — returned to production at ${stageName}. ${notes || ''}`,
+    `Job card ${jc.job_card_no} QC ${isReversal ? 'approval reversed' : 'Rejected'} — ${where}. ${notes || ''}`,
     req.user.id);
   await syncOrderStatus(db, jc.order_id, req.user.id);
-  // Only settle inventory when the goods are staying finished (a plain QC
-  // re-check). Sending work back to an earlier stage means it is not finished,
+  // Only settle inventory when the goods are staying finished — a re-check,
+  // whether it waits in the QC queue or goes back to the floor at stage 29
+  // untouched. Sending work back to an earlier stage means it is not finished,
   // so nothing should be consumed yet.
-  if (returnToStage === 29) await settleAfterQC(db, jc, req.user.id);
-  res.json({ message: `QC rejected — returned to production at ${stageName}` });
+  if (sendTo === 'qc' || returnToStage === 29) await settleAfterQC(db, jc, req.user.id);
+  res.json({ message: `QC rejected — ${where}` });
 });
 
 // Inventory (BOM) the job card's order item consumes — shown at QC approval so
