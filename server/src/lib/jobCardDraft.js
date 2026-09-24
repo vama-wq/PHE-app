@@ -158,21 +158,23 @@ async function buildDraft(db, orderItemId, answers = {}) {
   // only). Derived rather than written by hand, so it always describes what the
   // engine actually did on THIS card.
   const pct = (v) => `${(v * 100).toFixed(1)}%`;
-  const std = E.standardColdZone(card.totalLengthIn);
+  const dia = card.tubeDiameterMm;
+  const std = E.standardColdZone(card.totalLengthIn, dia);
+  const pinDiv = (E.PIN_DIVISOR[dia] || E.PIN_DIVISOR[8])[card.material] || 1.215;
   const provenance = [
     ['From the order', 'Order no, client code, order date, product code, drawing no, punching, quantity, tube material, plating, remark'],
     ['Asked when making the card', 'ASMBLY, fixture type, dispatch date, total length off the drawing'],
     ['Total length', `${answers.drawing_total_length_in}" on the drawing + ${E.TOTAL_LENGTH_ALLOWANCE_IN}" allowance = ${card.totalLengthIn}"`],
-    ['Tube draw', `${pct(card.tubeDrawPct)} — ${card.material === 'copper' ? 'copper' : 'SS / Incoloy'} at ${card.totalLengthIn}"`],
+    ['Tube draw', `${pct(card.tubeDrawPct)} — ${dia} mm ${card.material === 'copper' ? 'copper' : 'SS / Incoloy'} at ${card.totalLengthIn}"`],
     ['Wire gauge', card.gauge == null
       ? 'no wire on the sheet reaches the required coil length — choose by hand'
       : `${card.gauge} SWG at ${pct(card.wireDrawPct)} wire draw, ${card.gaugeResolution === 'unique' ? 'the only self-consistent answer' : 'the coarsest of several'}; ${card.spoolOptions.length} spool(s) of it fit the spring window`],
     ['Cold zone', card.coldZoneBigIn === std.coldZoneIn
-      ? `${card.coldZoneBigIn}" — the policy standard for a ${card.totalLengthIn}" element`
-      : `${card.coldZoneBigIn}" set by hand; the standard here is ${std.coldZoneIn}"`],
+      ? `${card.coldZoneBigIn}" — the ${dia} mm standard for a ${card.totalLengthIn}" element`
+      : `${card.coldZoneBigIn}" set by hand; the ${dia} mm standard here is ${std.coldZoneIn}"`],
     ['Terminal pin', card.terminalPinBig.overridden
       ? `${card.terminalPinBig.studs}" set by hand — a ${card.coldZoneBigIn}" cold zone gives ${card.terminalPinBig.derivedStuds}"`
-      : `ceil(${card.coldZoneBigIn} ÷ 1.215 + 1) = ${card.terminalPinBig.studs}"`],
+      : `ceil(${card.coldZoneBigIn} ÷ ${pinDiv} + 1) = ${card.terminalPinBig.studs}" on a ${card.studLabel} stud`],
     ['Ohms after draw', `${card.voltage}² ÷ ${round(card.wattage, 2)} = ${card.ohmsAfterDraw} Ω, ±5%`],
     ['Quantity', parts.length > 1
       ? `${item.quantity} pcs over ${parts.length} cards (${describeSplit(parts)}) — no card runs more than 50`
