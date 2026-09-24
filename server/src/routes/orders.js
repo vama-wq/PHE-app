@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
+const { scaleBomQty, isSuspectLine } = require('../lib/bom');
 const { PLATING_INSTRUCTIONS, isValidPlating } = require('../lib/plating');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, uploadQC, deleteFromStorage, copyInStorage } = require('../middleware/upload');
@@ -414,30 +415,56 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
   // re-approves it; the job card is NOT copied — it's created fresh later.
   let drawingCopied = false;
   if (copy_from_item_id) {
-    // Reuse (part 1): carry over the source item's inventory selection. It will be
-    // confirmed/edited by QC and deducted later (at QC / full dispatch).
-    const srcInv = await db.all(`SELECT inventory_item_id, qty FROM order_item_inventory WHERE order_item_id=$1`, [copy_from_item_id]);
+    // Reuse (part 1): carry over the source item's inventory selection, RE-SIZED
+    // to this item's quantity. A stored qty is the total for the source item's
+    // whole quantity, so copying it verbatim onto an item of a different size
+    // silently changes the per-piece rate — which is how a BOM for 22 pieces
+    // ended up on a 12-piece item. The source quantity is not in the request
+    // (the client blanks it deliberately), so it is read here.
+    const srcItem = await db.get('SELECT quantity FROM order_items WHERE id=$1', [copy_from_item_id]);
+    const fromQty = Number(srcItem?.quantity) || 0;
+    const toQty = Number(quantity) || 0;
+    const srcInv = await db.all(
+      `SELECT oii.inventory_item_id, oii.qty, ii.unit, ii.item_code
+         FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+        WHERE oii.order_item_id=$1`, [copy_from_item_id]);
+    const scaleNotes = [];
     for (const s of srcInv) {
+      const r = scaleBomQty(s.qty, fromQty, toQty, s.unit);
+      if (r.reason) scaleNotes.push(`${s.item_code}: ${r.reason}`);
       await db.run('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
-        [itemId, s.inventory_item_id, s.qty]);
+        [itemId, s.inventory_item_id, r.qty]);
     }
-    // If the source item had no inventory, flag design to add it for this reused item.
-    if (srcInv.length === 0) {
-      try {
-        const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
-        const designers = await db.all(`SELECT id FROM users WHERE role='design'`);
-        for (const u of designers) {
-          await createNotification(db, {
-            userId: u.id,
-            type: 'inventory_needed',
-            title: 'Add inventory for reused item',
-            body: `${ord?.order_code || 'An order'} has a reused item (${drawing_number || product_code || `item #${itemId}`}) with no inventory selected — please add its inventory.`,
-            link: `/orders/${req.params.id}`,
-            sourceUserId: req.user.id,
-          });
-        }
-      } catch (e) { console.error('[orders] reuse inventory notify failed:', e.message); }
-    }
+
+    // Design must look at every carried BOM before the drawing can be approved —
+    // the reuse path is the one way into production that never passes through
+    // the screen where a BOM is chosen and validated.
+    const why = srcInv.length === 0
+      ? 'Reused item came across with no inventory at all — add its BOM.'
+      : scaleNotes.length
+        ? `Carried from a ${fromQty}-piece item and re-sized to ${toQty}. These lines do not come to a whole number of pieces, so the original BOM is wrong: ${scaleNotes.join('; ')}`
+        : `Carried from a ${fromQty}-piece item and re-sized to ${toQty}. Check the quantities and add anything missing.`;
+    await db.run(
+      'UPDATE order_items SET copied_from_item_id=$1, bom_review=$2, bom_review_reason=$3 WHERE id=$4',
+      [copy_from_item_id, 'needed', why, itemId]);
+    // Tell design there is a BOM waiting. This used to fire only when the source
+    // item had NO inventory — i.e. only when there was nothing to check — which
+    // is exactly backwards: a carried BOM is the case that needs looking at.
+    try {
+      const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
+      const designers = await db.all(`SELECT id FROM users WHERE role='design'`);
+      const label = drawing_number || product_code || `item #${itemId}`;
+      for (const u of designers) {
+        await createNotification(db, {
+          userId: u.id,
+          type: 'inventory_needed',
+          title: srcInv.length === 0 ? 'Add inventory for reused item' : 'Check the inventory on a reused item',
+          body: `${ord?.order_code || 'An order'} — ${label}. ${why} The drawing cannot be approved until you confirm it.`,
+          link: `/orders/${req.params.id}`,
+          sourceUserId: req.user.id,
+        });
+      }
+    } catch (e) { console.error('[orders] reuse inventory notify failed:', e.message); }
     const ext = (name, fallback) => (name && name.includes('.') ? name.split('.').pop() : fallback);
     const src = await db.get(
       `SELECT * FROM order_drawings WHERE item_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`,
@@ -489,6 +516,8 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
     });
   }
   const db = getDB();
+  const before = await db.get('SELECT quantity FROM order_items WHERE id=$1 AND order_id=$2',
+    [req.params.itemId, req.params.id]);
   await db.run(
     `UPDATE order_items SET product_code=$1, drawing_number=$2, tube_material=$3, tube_diameter=$4, wattage=$5,
        voltage=$6, plating_instructions=$7, quantity=$8, remark=$9
@@ -496,8 +525,41 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
     [product_code||null, drawing_number||null, tube_material||null, tube_diameter||null, wattage||null,
      voltage||null, plating_instructions||null, quantity, remark||null, req.params.itemId, req.params.id]
   );
-  // Inventory is managed at the drawing-upload step now, so editing the item's
-  // specs here must NOT touch its inventory selection.
+
+  // Editing the item's SPECS must not touch its inventory — design chose that.
+  // But quantity is not a spec: every BOM line is a total for the item's whole
+  // quantity, so changing 50 to 20 and leaving the BOM alone leaves a BOM for
+  // 50. Lines that have already moved stock are left exactly as they are —
+  // re-sizing those needs the restore/replay the inventory route does, not a
+  // multiply — and design is asked to look at the item either way.
+  const fromQty = Number(before?.quantity) || 0;
+  const toQty = Number(quantity) || 0;
+  if (fromQty > 0 && toQty > 0 && fromQty !== toQty) {
+    const lines = await db.all(
+      `SELECT oii.id, oii.qty, oii.qty_deducted, ii.unit, ii.item_code
+         FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+        WHERE oii.order_item_id=$1`, [req.params.itemId]);
+    if (lines.length) {
+      const notes = [], held = [];
+      for (const l of lines) {
+        if (Number(l.qty_deducted) > 0) { held.push(l.item_code); continue; }
+        const r = scaleBomQty(l.qty, fromQty, toQty, l.unit);
+        if (r.reason) notes.push(`${l.item_code}: ${r.reason}`);
+        if (Number(r.qty) !== Number(l.qty)) {
+          await db.run('UPDATE order_item_inventory SET qty=$1 WHERE id=$2', [r.qty, l.id]);
+        }
+      }
+      const why = [
+        `Quantity changed from ${fromQty} to ${toQty}; the BOM was re-sized to match.`,
+        held.length ? `Left untouched because stock has already moved against them: ${held.join(', ')}.` : '',
+        notes.length ? `These do not come to a whole number of pieces, so the original BOM is wrong: ${notes.join('; ')}` : '',
+      ].filter(Boolean).join(' ');
+      await db.run('UPDATE order_items SET bom_review=$1, bom_review_reason=$2, bom_review_by=NULL, bom_review_at=NULL WHERE id=$3',
+        ['needed', why, req.params.itemId]);
+      await logActivity(req.params.id, null, 'bom_rescaled',
+        `BOM re-sized on ${drawing_number || product_code || `item #${req.params.itemId}`}: quantity ${fromQty} → ${toQty}${held.length ? ` (${held.length} line(s) left, already deducted)` : ''}`, req.user.id);
+    }
+  }
   res.json({ message: 'Updated' });
 });
 
@@ -552,6 +614,16 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
   // — a part-built item must not have its whole BOM deducted just because the
   // selection was edited.
   if (wasDeducted) await replayDeductions(db, item.id, orderCode, req.user.id);
+
+  // Design rewriting the BOM IS the review — clear the flag on the way past so
+  // they never have to confirm a thing they just finished editing.
+  if (['design', 'admin', 'owner'].includes(req.user.role)) {
+    await db.run(
+      "UPDATE order_items SET bom_review=CASE WHEN bom_review='needed' THEN 'confirmed' ELSE bom_review END, " +
+      "bom_review_by=CASE WHEN bom_review='needed' THEN $1 ELSE bom_review_by END, " +
+      "bom_review_at=CASE WHEN bom_review='needed' THEN NOW() ELSE bom_review_at END WHERE id=$2",
+      [req.user.id, item.id]);
+  }
   await logActivity(req.params.id, null, 'inventory_edited', `Inventory selection updated for item #${item.id}`, req.user.id);
   res.json({ message: 'Inventory updated', reDeducted: wasDeducted });
 });
@@ -636,6 +708,13 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
       );
     }
 
+    // Design picked this BOM by hand on the way in — that satisfies the check.
+    await db.run(
+      "UPDATE order_items SET bom_review=CASE WHEN bom_review='needed' THEN 'confirmed' ELSE bom_review END, " +
+      "bom_review_by=CASE WHEN bom_review='needed' THEN $1 ELSE bom_review_by END, " +
+      "bom_review_at=CASE WHEN bom_review='needed' THEN NOW() ELSE bom_review_at END WHERE id=$2",
+      [req.user.id, parseInt(item_id)]);
+
     await logActivity(req.params.id, null, 'drawing_uploaded',
       req.file ? `Reference drawing uploaded: ${req.file.originalname}` : 'Drawing entry recorded without file (finished-goods order)', req.user.id);
     res.status(201).json({ id: r.lastInsertRowid, file_name: req.file?.filename || null, original_name: req.file?.originalname || null });
@@ -667,11 +746,50 @@ router.put('/:id/drawing-bypass', authenticate, authorize('owner'), async (req, 
   }
 });
 
+// ── Design confirms a carried BOM ────────────────────────────────────────────
+// The counterpart to the gate above. Design either edits the inventory (which
+// confirms it on the way past, below) or — when the carried BOM is already
+// right — says so here without touching it. Owner and admin can also confirm,
+// so a missing designer never stops an order.
+router.put('/:id/items/:itemId/bom-confirm', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
+  const db = getDB();
+  const it = await db.get('SELECT id, drawing_number, product_code, bom_review FROM order_items WHERE id=$1 AND order_id=$2',
+    [req.params.itemId, req.params.id]);
+  if (!it) return res.status(404).json({ error: 'Item not found' });
+  if (it.bom_review !== 'needed') return res.status(400).json({ error: 'This item is not waiting on a BOM check.' });
+
+  const lines = await db.all('SELECT 1 FROM order_item_inventory WHERE order_item_id=$1 AND qty > 0', [req.params.itemId]);
+  if (!lines.length) {
+    return res.status(400).json({ error: 'This item has no inventory on it — add the BOM before confirming.' });
+  }
+
+  await db.run(
+    "UPDATE order_items SET bom_review='confirmed', bom_review_by=$1, bom_review_at=NOW() WHERE id=$2",
+    [req.user.id, req.params.itemId]);
+  await logActivity(req.params.id, null, 'bom_confirmed',
+    `Inventory confirmed on ${it.drawing_number || it.product_code || `item #${it.id}`} by ${req.user.name}`, req.user.id);
+  res.json({ message: 'Inventory confirmed — the drawing can be approved now.' });
+});
+
 // ── Drawing review: owner approves or rejects individual drawings ──────────────
 router.put('/:id/drawings/:drawingId/approve', authenticate, authorize('owner'), async (req, res) => {
   const db = getDB();
   const d = await db.get('SELECT * FROM order_drawings WHERE id=$1 AND order_id=$2', [req.params.drawingId, req.params.id]);
   if (!d) return res.status(404).json({ error: 'Drawing not found' });
+
+  // Design's check of the BOM is compulsory (owner, 24 Sep 2026). A reused item
+  // reaches production without ever passing the screen where a BOM is chosen,
+  // so the approval that lets it through is where the check is enforced.
+  if (d.item_id) {
+    const it = await db.get('SELECT bom_review, bom_review_reason, drawing_number, product_code FROM order_items WHERE id=$1', [d.item_id]);
+    if (it && it.bom_review === 'needed') {
+      return res.status(400).json({
+        error: `Design has not confirmed the inventory on ${it.drawing_number || it.product_code || 'this item'} yet. ${it.bom_review_reason || ''}`.trim(),
+        code: 'BOM_REVIEW_REQUIRED', item_id: d.item_id,
+      });
+    }
+  }
+
   await db.run(`UPDATE order_drawings SET drawing_status='approved', rejection_reason=NULL WHERE id=$1`, [req.params.drawingId]);
   // NOTE: inventory is NOT deducted here anymore. The item's selected inventory is
   // confirmed/edited and deducted at the QC stage (single job card) or once the

@@ -91,6 +91,16 @@ export default function OrderDetail() {
   const isFG                 = order.order_type === 'finished_goods';
   const canManageItems       = ['admin', 'owner'].includes(user.role) || canResubmit;
   const canEditInventory     = ['design', 'admin', 'owner'].includes(user.role);
+
+  // Design says the carried BOM is right as it stands. The other way to clear
+  // the flag is to edit the quantities, which confirms it on the way past.
+  const confirmBom = async (item) => {
+    if (!window.confirm(`Confirm the inventory on ${item.drawing_number || `item #${item.id}`} is correct for ${item.quantity} pcs?`)) return;
+    try {
+      await api.put(`/orders/${id}/items/${item.id}/bom-confirm`);
+      load();
+    } catch (e) { alert(e.response?.data?.error || 'Could not confirm'); }
+  };
   const canUploadQuotation   = ['admin', 'owner'].includes(user.role) && !restrictedRole;
   // Step 2: Design can upload drawings only after order is approved
   const canUploadDrawing     = ['design', 'admin', 'owner'].includes(user.role) && orderApproved;
@@ -463,14 +473,43 @@ export default function OrderDetail() {
                                 against a card's batch, not against the whole
                                 item — see printJobCardSlip. */}
                           </div>
+                          {item.bom_review === 'needed' && (
+                            <div className="mb-2 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                              <div className="flex items-center gap-1.5 text-amber-800 text-xs font-semibold mb-0.5">
+                                <AlertTriangle size={12} /> Design must check this inventory
+                              </div>
+                              <p className="text-xs text-amber-700">{item.bom_review_reason}</p>
+                              {canEditInventory && (
+                                <div className="flex gap-2 mt-1.5">
+                                  <button className="text-xs font-medium bg-white border border-amber-300 rounded px-2 py-1 hover:bg-amber-100"
+                                    onClick={() => setInvEditItem(item)}>Edit the quantities</button>
+                                  <button className="text-xs font-medium bg-white border border-amber-300 rounded px-2 py-1 hover:bg-amber-100"
+                                    onClick={() => confirmBom(item)}>It's correct — confirm</button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {item.bom_review === 'confirmed' && (
+                            <div className="mb-1 text-xs text-green-700 flex items-center gap-1">
+                              <CheckCircle2 size={11} /> Inventory confirmed by design
+                            </div>
+                          )}
                           {item.inventory_items?.length > 0 ? (
                             <div className="flex flex-wrap gap-1.5">
-                              {item.inventory_items.map(inv => (
-                                <span key={inv.id} className="inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-700 rounded-full px-2 py-0.5">
-                                  <span className="font-mono font-medium">{inv.item_code}</span>
-                                  <span className="text-gray-400">× {inv.qty} {inv.unit}</span>
-                                </span>
-                              ))}
+                              {item.inventory_items.map(inv => {
+                                const per = Number(item.quantity) > 0 ? Number(inv.qty) / Number(item.quantity) : null;
+                                const odd = per != null && Number(inv.qty) > 0 && Math.abs(per - Math.round(per)) > 1e-9;
+                                return (
+                                  <span key={inv.id}
+                                    className={`inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5 ${
+                                      odd ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-gray-100 text-gray-700'}`}
+                                    title={per != null ? `${per} per piece` : ''}>
+                                    <span className="font-mono font-medium">{inv.item_code}</span>
+                                    <span className={odd ? 'text-amber-700' : 'text-gray-400'}>× {inv.qty} {inv.unit}</span>
+                                    {per != null && <span className={odd ? 'text-amber-600' : 'text-gray-400'}>({+per.toFixed(3)}/pc)</span>}
+                                  </span>
+                                );
+                              })}
                             </div>
                           ) : (
                             <span className="text-xs text-gray-400 italic">None selected yet — added with the drawing.</span>

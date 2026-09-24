@@ -335,6 +335,8 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
       code: 'NO_BOM',
     });
   }
+  const reviewBlock = await bomReviewBlock(db, item);
+  if (reviewBlock) return res.status(400).json(reviewBlock);
 
   const covered = await db.get(
     'SELECT COUNT(*)::int AS n, COALESCE(SUM(qty),0)::int AS covered FROM job_cards WHERE order_item_id=$1', [item.id]);
@@ -420,6 +422,19 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
     warnings: draft.card.warnings, notes: draft.notes,
   });
 });
+
+// Design's BOM check is compulsory (owner, 24 Sep 2026). It is enforced at
+// drawing approval, but two cases never reach that: an order the owner has put
+// on drawing-bypass, and any caller that posts straight to this endpoint — the
+// drawing requirement itself is a browser-side condition, not a server one. So
+// the same question is asked here, where the card is actually made.
+async function bomReviewBlock(db, item) {
+  if (!item || item.bom_review !== 'needed') return null;
+  return {
+    error: `Design has not confirmed the inventory on ${item.drawing_number || item.product_code || 'this item'} yet — a reused BOM has to be checked before a card is made. ${item.bom_review_reason || ''}`.trim(),
+    code: 'BOM_REVIEW_REQUIRED', order_item_id: item.id,
+  };
+}
 
 // A generated card is re-rendered on every view and every reprint, so the
 // LAYOUT stays live and a fix reaches cards already made. The FIGURES must not:
@@ -578,6 +593,10 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
         code: 'NO_BOM',
       });
     }
+    const itemRow = await db.get(
+      'SELECT id, bom_review, bom_review_reason, drawing_number, product_code FROM order_items WHERE id=$1', [orderItemId]);
+    const reviewBlock = await bomReviewBlock(db, itemRow);
+    if (reviewBlock) return res.status(400).json(reviewBlock);
   }
 
   // Cards cover an item's quantity between them, so the guard counts pieces

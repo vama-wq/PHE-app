@@ -2140,6 +2140,19 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE capa_reports ADD CONSTRAINT capa_reports_status_check
         CHECK (status IN ('open','awaiting_approval','approved','waived'))`);
 
+      // A reused order item carries the source item's BOM. Until 24 Sep 2026 it
+      // carried the source's TOTALS unscaled, so a BOM sized for 22 pieces
+      // landed on a 12-piece item. Two columns fix the two halves of that:
+      // copied_from_item_id records the reuse (nothing in the schema did), and
+      // bom_review makes design's check of the carried BOM compulsory.
+      // bom_review is NULL by default — only items that actually need a look are
+      // set to 'needed', so no open order jams on the migration.
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS copied_from_item_id INTEGER`);
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bom_review TEXT`);
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bom_review_reason TEXT`);
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bom_review_by INTEGER REFERENCES users(id)`);
+      await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bom_review_at TIMESTAMPTZ`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.
