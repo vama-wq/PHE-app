@@ -30,7 +30,7 @@ const DATA_SOURCES = {
       { key: 'created_at',     label: 'Created',       type: 'datetime' },
     ],
     filters: [
-      { key: 'status',    label: 'Status',   type: 'select', options: ['pending_approval','approved','rejected','job_card_created','in_progress','on_hold','qc_pending','qc_approved','packaging','dispatched'] },
+      { key: 'status',    label: 'Status',   type: 'select', options: ['pending_approval','approved','rejected','job_card_created','in_progress','on_hold','qc_pending','qc_approved','partially_dispatched','in_finished_goods','dispatched','customer_query','product_return','resolved_dispatched'] },
       { key: 'priority',  label: 'Priority', type: 'select', options: ['low','medium','high','urgent'] },
       { key: 'date_from', label: 'From Date', type: 'date' },
       { key: 'date_to',   label: 'To Date',   type: 'date' },

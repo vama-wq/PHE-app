@@ -6,7 +6,18 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
-import { fmtDate, downloadExcel } from '../../lib/utils';
+import { fmtDate, downloadExcel, STATUS_LABELS } from '../../lib/utils';
+
+// Every status an ORDER can hold, in the order it moves through them. Labels
+// come from STATUS_LABELS so the filter reads the same as the badge beside it.
+// 'packaging' is a job-card state, never an order's — it was in this list for
+// months and matched nothing; 'partially_dispatched' and 'in_finished_goods'
+// were missing, so nine and five orders had no filter that would show them.
+const ORDER_STATUSES = [
+  'pending_approval', 'approved', 'rejected', 'job_card_created', 'in_progress',
+  'qc_pending', 'qc_approved', 'partially_dispatched', 'in_finished_goods', 'dispatched',
+  'customer_query', 'product_return', 'resolved_dispatched',
+];
 import { Plus, Search, Trash2, Edit2, Package, Image as ImageIcon, X, Download, RotateCcw } from 'lucide-react';
 
 // Fixed plating-instruction choices for order items.
@@ -114,15 +125,7 @@ export default function OrderList() {
         </select>
         <select className="input max-w-[180px]" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
           <option value="">All Statuses</option>
-          <option value="pending_approval">Pending Approval</option>
-          <option value="approved">Approved</option>
-          <option value="job_card_created">Job Card Created</option>
-          <option value="in_progress">In Progress</option>
-          <option value="qc_pending">QC Pending</option>
-          <option value="qc_approved">QC Approved</option>
-          <option value="packaging">Packaging</option>
-          <option value="dispatched">Dispatched</option>
-          <option value="rejected">Rejected</option>
+          {ORDER_STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s] || s}</option>)}
         </select>
         <input type="date" className="input w-[140px]" value={dateFrom}
           onChange={e => setDateFrom(e.target.value)} title="Order date from" />
