@@ -395,8 +395,24 @@ router.delete('/:id/fifo-lots/:lotId', authenticate, authorize('owner'), async (
 
 router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res) => {
   const db = getDB();
-  const item = await db.get('SELECT id, current_stock FROM inventory_items WHERE id=$1', [req.params.id]);
+  const item = await db.get('SELECT id, item_code, name, current_stock, drawing_file FROM inventory_items WHERE id=$1', [req.params.id]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
+
+  // Say what is holding it BEFORE trying. The FK would refuse anyway, but
+  // "still referenced by an order" sends the owner hunting through 36 orders;
+  // naming them is the difference between a dead end and a to-do list.
+  const holders = await db.all(
+    `SELECT DISTINCT o.order_code FROM order_item_inventory oii
+       JOIN order_items oi ON oi.id = oii.order_item_id JOIN orders o ON o.id = oi.order_id
+      WHERE oii.inventory_item_id=$1 ORDER BY o.order_code`, [req.params.id]);
+  if (holders.length) {
+    const codes = holders.map(h => h.order_code);
+    const shown = codes.slice(0, 6).join(', ') + (codes.length > 6 ? ` and ${codes.length - 6} more` : '');
+    return res.status(400).json({
+      error: `Cannot delete: ${item.item_code} is still on the bill of materials of ${codes.length} order(s) — ${shown}. Swap it for the right item on each (Edit inventory) and try again.`,
+      code: 'ITEM_IN_USE', orders: codes,
+    });
+  }
 
   const poRow = await db.get('SELECT COUNT(*) AS n FROM purchase_order_items WHERE inventory_item_id=$1', [req.params.id]);
   const poCount = parseInt(poRow.n, 10);
@@ -415,19 +431,29 @@ router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res
     });
   }
 
+  let removed = { lots: 0, transactions: 0 };
   try {
     await db.withTransaction(async (client) => {
-      await client.query('DELETE FROM inventory_fifo_lots WHERE item_id=$1', [req.params.id]);
-      await client.query('DELETE FROM inventory_transactions WHERE item_id=$1', [req.params.id]);
+      const l = await client.query('DELETE FROM inventory_fifo_lots WHERE item_id=$1', [req.params.id]);
+      const t = await client.query('DELETE FROM inventory_transactions WHERE item_id=$1', [req.params.id]);
       await client.query('DELETE FROM inventory_items WHERE id=$1', [req.params.id]);
+      removed = { lots: l.rowCount, transactions: t.rowCount };
     });
   } catch (e) {
-    // Referenced elsewhere (an order line, job card, etc.) — FK stops the delete.
+    // Referenced somewhere the pre-check does not cover — FK stops the delete.
     if (e.code === '23503') {
-      return res.status(400).json({ error: 'Cannot delete: this item is still referenced by an order or job card. Remove those references first.' });
+      return res.status(400).json({ error: `Cannot delete: ${item.item_code} is still referenced by another record (${e.constraint || 'foreign key'}). Remove that reference first.` });
     }
     throw e;
   }
+  // The drawing row cascades with the item; its file in storage does not, so
+  // it would sit orphaned forever. Best effort — a missing file is not an error.
+  if (item.drawing_file) await deleteFromStorage(item.drawing_file).catch(() => {});
+  // This was the one destructive route that left no trace. The ledger it
+  // removes is gone, so the log line is the only record of what went with it.
+  await logActivity(null, null, 'inventory_item_deleted',
+    `Inventory item ${item.item_code} — ${item.name || ''} deleted (stock was ${item.current_stock}; ${removed.transactions} ledger entries and ${removed.lots} FIFO lots removed with it)`,
+    req.user.id);
   res.json({ message: 'Deleted' });
 });
 
