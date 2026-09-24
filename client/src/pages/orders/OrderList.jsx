@@ -454,12 +454,14 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
         {/* Electrical */}
         <div>
           <label className="label">Wattage (W) <span className="text-red-500">*</span></label>
-          <input className="input" type="number" step="any" placeholder="e.g. 2000"
+          <input className="input disabled:bg-gray-100 disabled:text-gray-500" disabled={reusing}
+            type="number" step="any" placeholder="e.g. 2000"
             value={f.wattage} onChange={set('wattage')} />
         </div>
         <div>
           <label className="label">Voltage (V) <span className="text-red-500">*</span></label>
-          <input className="input" type="number" step="any" placeholder="e.g. 230"
+          <input className="input disabled:bg-gray-100 disabled:text-gray-500" disabled={reusing}
+            type="number" step="any" placeholder="e.g. 230"
             value={f.voltage} onChange={set('voltage')} />
         </div>
 

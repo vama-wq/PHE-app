@@ -402,23 +402,35 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
 
   // Reusing a previous item pins its identity. The product code and the drawing
   // number ARE the item — change either and you have a different heater wearing
-  // the old one's drawing and its carried BOM. The form disables both fields;
-  // this is the rule itself, so no caller can get round it. Everything else
-  // (tube, diameter, wattage, voltage, plating, remark, quantity) stays open.
+  // the old one's drawing and its carried BOM. The rating is part of that
+  // identity too: the drawing was made for one wattage at one voltage, and the
+  // carried BOM and every job card figure hang off them. The form disables all
+  // four; this is the rule itself, so no caller can get round it. Plating,
+  // remark and quantity stay open, and the tube is handled just below.
   let pCode = product_code, dNo = drawing_number, tMat = tube_material, tDia = tube_diameter;
+  let watts = wattage, volts = voltage;
   if (copy_from_item_id) {
     const srcId = await db.get(
-      'SELECT product_code, drawing_number, tube_material, tube_diameter FROM order_items WHERE id=$1',
+      'SELECT product_code, drawing_number, tube_material, tube_diameter, wattage, voltage FROM order_items WHERE id=$1',
       [copy_from_item_id]);
     if (!srcId) return res.status(404).json({ error: 'The item you are reusing no longer exists.' });
     const same = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+    // Numbers compare as numbers, so "2000" and 2000 and 2000.0 are one value.
+    const sameNum = (a, b) => (a == null || a === '') === (b == null || b === '') && Number(a) === Number(b);
     if (!same(product_code, srcId.product_code) || !same(drawing_number, srcId.drawing_number)) {
       return res.status(400).json({
         error: `A reused item keeps the product code and drawing number it came from — ${srcId.product_code || '(none)'} / ${srcId.drawing_number || '(none)'}. To use a different code or drawing, add the item without reusing a previous one.`,
         code: 'REUSE_IDENTITY_LOCKED',
       });
     }
+    if (!sameNum(wattage, srcId.wattage) || !sameNum(voltage, srcId.voltage)) {
+      return res.status(400).json({
+        error: `A reused item keeps the rating it came from — ${srcId.wattage ?? '?'} W at ${srcId.voltage ?? '?'} V. For a different rating, add the item without reusing a previous one.`,
+        code: 'REUSE_RATING_LOCKED',
+      });
+    }
     pCode = srcId.product_code; dNo = srcId.drawing_number;
+    watts = srcId.wattage; volts = srcId.voltage;
 
     // The tube locks too, but only when the source holds a REAL tube from the
     // dropdown. Older items store free text ("Incoloy", "Copper") which is not
@@ -445,7 +457,7 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
     `INSERT INTO order_items (order_id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [req.params.id, pCode||null, dNo||null, tMat||null, tDia||null,
-     wattage||null, voltage||null, plating_instructions||null, quantity, remark||null]
+     watts||null, volts||null, plating_instructions||null, quantity, remark||null]
   );
   const itemId = r.lastInsertRowid;
   // Inventory is no longer chosen here — design selects it when uploading the
@@ -559,20 +571,27 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
   }
   const db = getDB();
   const before = await db.get(
-    `SELECT quantity, product_code, drawing_number, tube_material, tube_diameter, copied_from_item_id
+    `SELECT quantity, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, copied_from_item_id
        FROM order_items WHERE id=$1 AND order_id=$2`,
     [req.params.itemId, req.params.id]);
 
   // Same lock as creation, held afterwards: an item that came from a previous
-  // order keeps its product code and drawing number, and keeps its tube when
-  // that tube is a real one off the dropdown. Otherwise the identity could be
-  // pinned at creation and quietly edited a minute later.
+  // order keeps its product code, drawing number and rating, and keeps its
+  // tube when that tube is a real one off the dropdown. Otherwise the identity
+  // could be pinned at creation and quietly edited a minute later.
   if (before && before.copied_from_item_id) {
     const same = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+    const sameNum = (a, b) => (a == null || a === '') === (b == null || b === '') && Number(a) === Number(b);
     if (!same(product_code, before.product_code) || !same(drawing_number, before.drawing_number)) {
       return res.status(400).json({
         error: `This item was reused from a previous order, so its product code and drawing number are fixed — ${before.product_code || '(none)'} / ${before.drawing_number || '(none)'}.`,
         code: 'REUSE_IDENTITY_LOCKED',
+      });
+    }
+    if (!sameNum(wattage, before.wattage) || !sameNum(voltage, before.voltage)) {
+      return res.status(400).json({
+        error: `This item was reused from a previous order, so its rating is fixed — ${before.wattage ?? '?'} W at ${before.voltage ?? '?'} V.`,
+        code: 'REUSE_RATING_LOCKED',
       });
     }
     if (before.tube_material && !same(tube_material, before.tube_material)) {
