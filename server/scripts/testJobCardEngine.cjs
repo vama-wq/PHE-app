@@ -329,6 +329,17 @@ const REGRESSIONS = [
            E.TUBE_DRAW[11].steel.find(b => 60 <= b.maxTL).pct,
            E.TUBE_DRAW[11].copper.find(b => 60 <= b.maxTL).pct],
     ([lo, hi, cu]) => lo === 0.156 && hi === 0.15 && cu === 0.16],
+  // Rows 37/38 of the wire sheet carry a "22 SWG" spool at 2.72 / 2.70 ohm/m —
+  // physically a 21 SWG figure (0.71 mm wire runs 3.5-3.7). The owner's own
+  // IT-PT-UL-48U7L card picked 21 SWG where the app picked this phantom 22, and
+  // on 24 Sep 2026 he confirmed the rows are mis-keyed. Excluded in BOTH
+  // tables; 21 SWG already carries the same spools at rows 12 and 21.
+  ['rows 37/38 (phantom 22 SWG @ 2.72 / 2.70) are excluded in both tables',
+    () => [8, 11].flatMap(d => E.WIRE_TABLES[d].rows.filter(r => r.row === 37 || r.row === 38).map(r => !!r.excluded)),
+    flags => flags.length === 4 && flags.every(Boolean)],
+  ['no card can land on the phantom 22 SWG spool',
+    () => [8, 11].map(d => E.WIRE_TABLES[d].rows.some(r => r.gauge === 22 && r.ohms_per_m < 3 && !r.excluded)),
+    hits => hits.every(h => h === false)],
   ['11 mm wire draw did not move with the 8 mm revision',
     () => [22, 27, 33].map(g => E.WIRE_DRAW[11].steel.find(b => g >= b.minG && g <= b.maxG).pct),
     ([a, b, c]) => a === 0.12 && b === 0.17 && c === 0.21],

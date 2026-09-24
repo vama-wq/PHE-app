@@ -1,4 +1,4 @@
-// Runs the engine against the three real 11 mm cards from the workbook.
+// Runs the engine against the real 11 mm cards — three from the workbook and the owner's IT card.
 //
 //   node scripts/testJobCardEngine11.cjs
 //
@@ -69,6 +69,23 @@ const CARDS = [
             springLow: 11.57017544, springHigh: 13.88421053, ceilingDiv: 2.5,
             wireDraw: 0.17, ohmsMid: 41.262, gauge: 26, spoolOhms: 8.700 },
   },
+  {
+    // The owner's own card for ORD-129-26's drawing, built 28.08.26 for 12 pcs,
+    // sent in when the app's card disagreed with it. Row 19 and ohms after draw
+    // match exactly. It was built on 14.5% tube draw (policy is now 15% above
+    // 51"), and it prints cutting length to one decimal and the window to two —
+    // hence the wider tolerances. Its real value is the gauge: the app first
+    // said 22 SWG because rows 37/38 of the wire sheet carried a 22 SWG spool
+    // at 2.72 / 2.70 ohm/m, which is physically a 21 SWG figure (22 SWG runs
+    // 3.5-3.7). Those rows are now excluded, and this card is the proof.
+    name: 'IT-PT-UL-48U7L-2.5Kw       (SS304, 109.8", cold zone 10")',
+    input: { tubeMaterial: 'SS304', tubeDiameterMm: 11, wattage: 2500, voltage: 230,
+             drawingTotalLengthIn: 109.8 - E.TOTAL_LENGTH_ALLOWANCE_IN,
+             coldZoneBigIn: 10, coldZoneSmallIn: 10, drawingNumber: 'PT-UL-48U7L-2.5Kw' },
+    card: { totalLengthIn: 109.8, row19: [2788.92, 2770.92, 2765.92], ohmsAfterDraw: 21.16,
+            tubeDraw: 0.145, cuttingLengthIn: 95.9, cutTol: 0.05, springLow: 25.30, springHigh: 34.50, springTol: 0.005,
+            ceilingDiv: 2.2, wireDraw: 0.12, ohmsMid: 23.6992, gauge: 21, spoolOhms: 2.810 },
+  },
 ];
 
 for (const { name, input, card } of CARDS) {
@@ -108,9 +125,9 @@ for (const { name, input, card } of CARDS) {
 
   console.log(DIM(`  ${'-'.repeat(82)}`));
   console.log(DIM(`  fed the card's own ${(card.tubeDraw * 100).toFixed(1)}% tube / ${(card.wireDraw * 100).toFixed(0)}% wire draw:`));
-  check('  cutting length (in)', cut, card.cuttingLengthIn, 0.0005);
-  check('  spring low (in)', lo, card.springLow, 0.0005);
-  check('  spring high (in)', hi, card.springHigh, 0.0005);
+  check('  cutting length (in)', cut, card.cuttingLengthIn, card.cutTol || 0.0005);
+  check('  spring low (in)', lo, card.springLow, card.springTol || 0.0005);
+  check('  spring high (in)', hi, card.springHigh, card.springTol || 0.0005);
   check('  ohms range mid', req, card.ohmsMid, 0.0005);
   const gOk = forced && forced.w.gauge === card.gauge;
   if (!gOk && !card.gaugeDivergence) failed++;

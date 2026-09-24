@@ -245,14 +245,16 @@
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 2.72,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "excluded": "Mis-keyed on the sheet: 22 SWG at 2.72 / 2.70 ohm/m cannot be 0.71 mm wire (22 SWG runs 3.5-3.7); these are the 21 SWG spools already at rows 12 and 21 — owner excluded, 24 Sep 2026"
   },
   {
    "row": 38,
    "gauge": 22,
    "dia_mm": 0.71,
    "ohms_per_m": 2.7,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "excluded": "Mis-keyed on the sheet: 22 SWG at 2.72 / 2.70 ohm/m cannot be 0.71 mm wire (22 SWG runs 3.5-3.7); these are the 21 SWG spools already at rows 12 and 21 — owner excluded, 24 Sep 2026"
   },
   {
    "row": 39,
