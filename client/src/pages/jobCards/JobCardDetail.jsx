@@ -5,7 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
-import { fmtDate, fmtDateTime, daysUntil, dispatchPending, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor } from '../../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, dispatchPending, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor, capaBlocks } from '../../lib/utils';
 import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle, Truck } from 'lucide-react';
 
 const JC_STATUSES = [
@@ -65,7 +65,7 @@ export default function JobCardDetail() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      {capa && capa.status !== 'approved' && (
+      {capa && capaBlocks(capa.status) && (
         <Link to={`/capa/${capa.id}`} className="flex items-center justify-between gap-3 mb-4 px-4 py-3 rounded-xl border bg-red-50 border-red-200 text-red-800 hover:bg-red-100">
           <span className="text-sm font-medium">
             {capa.status === 'awaiting_approval'

@@ -1758,7 +1758,7 @@ async function initDB(retries = 20, delayMs = 10000) {
                             WHERE c.job_card_id=jc.id AND c.status IN ('open','awaiting_approval'))
            AND t.total > COALESCE((SELECT MAX(trigger_total) FROM capa_reports c2
                                     WHERE c2.job_card_id=jc.id AND c2.trigger_type='rejections'
-                                      AND c2.status='approved'), 0)`);
+                                      AND c2.status IN ('approved','waived')), 0)`);
       await pool.query(`
         UPDATE job_cards SET status='on_hold'
          WHERE status IN ('pending','in_progress','repair_in_progress')
@@ -2127,6 +2127,18 @@ async function initDB(retries = 20, delayMs = 10000) {
            SET name = regexp_replace(name, '^Spring Gauge ([0-9]+) FeCrAl 80:20 Kanthal D$', 'Spring Gauge \\1 SWG FeCrAl Kanthal D')
          WHERE lower(trim(category)) = 'spring guage'
            AND name ~ '^Spring Gauge [0-9]+ FeCrAl 80:20 Kanthal D$'`);
+
+      // A CAPA the owner decides isn't needed — the cause is already understood
+      // and the fix agreed off the system. 'waived' is a fourth terminal status
+      // rather than a flag on the query, so every gate that already asks "is a
+      // CAPA open on this card?" (repair start, production hold, the sibling
+      // release) clears at once, and the reason stays on the report itself.
+      await pool.query(`ALTER TABLE capa_reports ADD COLUMN IF NOT EXISTS waived_by INTEGER REFERENCES users(id)`);
+      await pool.query(`ALTER TABLE capa_reports ADD COLUMN IF NOT EXISTS waived_at TIMESTAMPTZ`);
+      await pool.query(`ALTER TABLE capa_reports ADD COLUMN IF NOT EXISTS waive_reason TEXT`);
+      await pool.query(`ALTER TABLE capa_reports DROP CONSTRAINT IF EXISTS capa_reports_status_check`);
+      await pool.query(`ALTER TABLE capa_reports ADD CONSTRAINT capa_reports_status_check
+        CHECK (status IN ('open','awaiting_approval','approved','waived'))`);
 
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's

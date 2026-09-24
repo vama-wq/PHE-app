@@ -3,18 +3,20 @@ import { useParams, Link } from 'react-router-dom';
 import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
-import { fmtDateTime } from '../../lib/utils';
+import { fmtDateTime, capaBlocks } from '../../lib/utils';
 import { compressImages } from '../../lib/compressImage';
 import {
   ArrowLeft, Send, Camera, X, ShieldAlert, CheckCircle, Clock,
-  Printer, RotateCcw, Bot, Loader2,
+  Printer, RotateCcw, Bot, Loader2, MinusCircle,
 } from 'lucide-react';
 
 const STATUS_META = {
   open:              { label: 'CAPA in progress', cls: 'bg-red-100 text-red-800 border-red-200', Icon: ShieldAlert },
   awaiting_approval: { label: 'Awaiting owner approval', cls: 'bg-amber-100 text-amber-800 border-amber-200', Icon: Clock },
   approved:          { label: 'Approved — work unlocked', cls: 'bg-green-100 text-green-800 border-green-200', Icon: CheckCircle },
+  waived:            { label: 'Waived by owner — no report needed', cls: 'bg-gray-100 text-gray-700 border-gray-300', Icon: MinusCircle },
 };
+
 
 export default function CapaReport() {
   const { id } = useParams();
@@ -26,6 +28,8 @@ export default function CapaReport() {
   const [error, setError] = useState('');
   const [reopenOpen, setReopenOpen] = useState(false);
   const [reopenNote, setReopenNote] = useState('');
+  const [waiveOpen, setWaiveOpen] = useState(false);
+  const [waiveReason, setWaiveReason] = useState('');
   const bottomRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -37,7 +41,7 @@ export default function CapaReport() {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [capa?.conversation?.length, sending]);
 
   const conversation = Array.isArray(capa?.conversation) ? capa.conversation : [];
-  const canChat = capa && capa.status !== 'approved' && ['production', 'admin', 'owner'].includes(user?.role);
+  const canChat = capa && capaBlocks(capa.status) && ['production', 'admin', 'owner'].includes(user?.role);
 
   const attach = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -70,6 +74,14 @@ export default function CapaReport() {
     catch (err) { setError(err.response?.data?.error || 'Approve failed'); }
   };
 
+  const waive = async () => {
+    try {
+      await api.put(`/capa/${id}/waive`, { reason: waiveReason });
+      setWaiveOpen(false); setWaiveReason('');
+      await load();
+    } catch (err) { setError(err.response?.data?.error || 'Failed'); }
+  };
+
   const reopen = async () => {
     try {
       await api.put(`/capa/${id}/reopen`, { note: reopenNote });
@@ -100,6 +112,9 @@ export default function CapaReport() {
 
   if (!capa) return <div className="p-6 text-gray-500">{error || 'Loading…'}</div>;
   const meta = STATUS_META[capa.status] || STATUS_META.open;
+  // A waived CAPA usually has no report at all — don't show (or print) four
+  // empty fields where a finished report would be.
+  const hasReport = !!capa.problem_statement || capa.status === 'awaiting_approval' || capa.status === 'approved';
 
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-6 space-y-4 pb-44">
@@ -112,10 +127,25 @@ export default function CapaReport() {
             <meta.Icon size={13} /> {meta.label}
           </span>
         </div>
-        {capa.status !== 'open' && (
-          <button onClick={printReport} className="btn-secondary flex items-center gap-1.5"><Printer size={15} /> Print report</button>
-        )}
+        <div className="flex items-center gap-2">
+          {hasReport && (
+            <button onClick={printReport} className="btn-secondary flex items-center gap-1.5"><Printer size={15} /> Print report</button>
+          )}
+          {user?.role === 'owner' && capaBlocks(capa.status) && (
+            <button onClick={() => setWaiveOpen(true)} className="btn-secondary flex items-center gap-1.5 text-gray-600">
+              <MinusCircle size={15} /> No CAPA needed
+            </button>
+          )}
+        </div>
       </div>
+
+      {capa.status === 'waived' && (
+        <div className="card p-4 border-l-4 border-gray-400 text-sm space-y-1">
+          <div className="font-semibold flex items-center gap-1.5"><MinusCircle size={15} /> No CAPA needed — waived by the owner</div>
+          <div className="text-gray-700">{capa.waive_reason}</div>
+          <div className="text-xs text-gray-500">{capa.waived_by_name} · {fmtDateTime(capa.waived_at)}</div>
+        </div>
+      )}
 
       <div className="card p-4 text-sm space-y-1">
         <div className="font-semibold">CAPA #{capa.id} — {capa.trigger_type === 'rejections'
@@ -127,13 +157,13 @@ export default function CapaReport() {
             Rejections: {capa.rejections.map(r => `stage ${r.stage_no}: ${r.rejection_qty}`).join(' · ')}
           </div>
         )}
-        <div className="text-gray-500 text-xs">
+        {capaBlocks(capa.status) && <div className="text-gray-500 text-xs">
           Explain the issue below. The AI facilitator will question you until the real root cause is found — it needs
           specifics and photos, and it will push back on vague answers. The report unlocks work only after the owner approves it.
-        </div>
+        </div>}
       </div>
 
-      {(capa.problem_statement || capa.status !== 'open') && (
+      {hasReport && (
         <div className="card p-4 space-y-2 border-l-4 border-blue-400">
           <div className="font-semibold text-sm">CAPA report</div>
           {[['Problem statement', capa.problem_statement], ['Root cause', capa.root_cause],
@@ -222,6 +252,22 @@ export default function CapaReport() {
           </div>
         </div>
       )}
+
+      <Modal open={waiveOpen} onClose={() => setWaiveOpen(false)} title="No CAPA needed">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">
+            This releases the job card without a CAPA report. Say why — the cause is already known, the fix
+            already agreed — and it stays on the record against this card.
+          </p>
+          <textarea value={waiveReason} onChange={e => setWaiveReason(e.target.value)} rows={3}
+            className="w-full border rounded-lg px-3 py-2 text-sm"
+            placeholder="e.g. MS pin rusting — cause known, moved this customer to SS pins, discussed with production on 24.09.26" />
+          <div className="flex justify-end gap-2">
+            <button className="btn-secondary" onClick={() => setWaiveOpen(false)}>Cancel</button>
+            <button className="btn-primary" onClick={waive} disabled={!waiveReason.trim()}>Waive &amp; unlock</button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={reopenOpen} onClose={() => setReopenOpen(false)} title="Send CAPA back">
         <div className="space-y-3">

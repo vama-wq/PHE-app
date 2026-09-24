@@ -298,3 +298,8 @@ export const isAllToFinishedGoods = (jc) =>
 
 // One question the whole UI should ask: is this card still waiting to go out?
 export const awaitingDispatch = (jc) => !isDispatched(jc?.status) && !isAllToFinishedGoods(jc);
+
+// A CAPA holds work up only while it is open or awaiting the owner's approval.
+// 'approved' and 'waived' are both settled — so every banner and gate asks this
+// one question rather than testing for 'approved' and silently ignoring a waive.
+export const capaBlocks = (status) => status === 'open' || status === 'awaiting_approval';

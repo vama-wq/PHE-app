@@ -4,13 +4,13 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
-import { fmtDate, fmtDateTime, ROLE_LABELS, PRODUCTION_STAGES } from '../../lib/utils';
+import { fmtDate, fmtDateTime, ROLE_LABELS, PRODUCTION_STAGES, capaBlocks } from '../../lib/utils';
 import { compressImages } from '../../lib/compressImage';
 import {
   ArrowLeft, Send, Camera, Upload, CheckCircle, XCircle, AlertTriangle,
   MessageSquare, Clock, User, AtSign, ChevronRight, Truck, FileText,
   RotateCcw, CreditCard, Package, Wrench, Image, X, Paperclip, Download, File
-, RefreshCw } from 'lucide-react';
+, RefreshCw, MinusCircle } from 'lucide-react';
 
 const QUERY_STATUS_LABELS = {
   open: 'Open', in_progress: 'In Progress', resolved: 'Resolved', product_return: 'Product Return',
@@ -73,6 +73,7 @@ export default function CustomerQueryDetail() {
   const [showQCResult, setShowQCResult] = useState(false);
   const [showRepairComplete, setShowRepairComplete] = useState(false);
   const [showPhotoUpload, setShowPhotoUpload] = useState(false);
+  const [showWaiveCapa, setShowWaiveCapa] = useState(false);
 
   const load = useCallback(() => {
     Promise.all([
@@ -311,15 +312,31 @@ export default function CustomerQueryDetail() {
 
               {/* Action buttons for return flow */}
               <div className="pt-2 space-y-2">
-                {capa && capa.status !== 'approved' && (
+                {capa && capaBlocks(capa.status) && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-2.5 text-red-800 space-y-2">
+                    <Link to={`/capa/${capa.id}`} className="block hover:underline">
+                      <div className="text-xs font-semibold mb-0.5">CAPA required before repair</div>
+                      <div className="text-xs">
+                        {capa.status === 'awaiting_approval'
+                          ? 'Report complete — awaiting owner approval.'
+                          : 'Production must complete the CAPA report with the AI facilitator.'} Open CAPA →
+                      </div>
+                    </Link>
+                    {isOwner && (
+                      <button onClick={() => setShowWaiveCapa(true)}
+                        className="w-full text-xs font-medium bg-white border border-red-200 rounded-md py-1.5 hover:bg-red-100 flex items-center justify-center gap-1.5">
+                        <MinusCircle size={13} /> This return doesn't need a CAPA
+                      </button>
+                    )}
+                  </div>
+                )}
+                {capa && capa.status === 'waived' && (
                   <Link to={`/capa/${capa.id}`}
-                    className="block bg-red-50 border border-red-200 rounded-lg p-2.5 text-red-800 hover:bg-red-100">
-                    <div className="text-xs font-semibold mb-0.5">CAPA required before repair</div>
-                    <div className="text-xs">
-                      {capa.status === 'awaiting_approval'
-                        ? 'Report complete — awaiting owner approval.'
-                        : 'Production must complete the CAPA report with the AI facilitator.'} Open CAPA →
+                    className="block bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-gray-700 hover:bg-gray-100">
+                    <div className="text-xs font-semibold mb-0.5 flex items-center gap-1.5">
+                      <MinusCircle size={13} /> CAPA waived — no report needed
                     </div>
+                    <div className="text-xs">{capa.waive_reason || 'The owner released this one without a CAPA.'}</div>
                   </Link>
                 )}
                 {/* If pending_return and no return_type yet → Set Return Type */}
@@ -593,6 +610,7 @@ export default function CustomerQueryDetail() {
       {/* ── Modals ── */}
       {showResolve && <ResolveModal query={query} onClose={() => setShowResolve(false)} onDone={() => { setShowResolve(false); load(); }} />}
       {showReturnType && <ReturnTypeModal query={query} onClose={() => setShowReturnType(false)} onDone={() => { setShowReturnType(false); load(); }} />}
+      {showWaiveCapa && capa && <WaiveCapaModal capa={capa} onClose={() => setShowWaiveCapa(false)} onDone={() => { setShowWaiveCapa(false); load(); }} />}
       {showDebitNote && <DebitNoteModal query={query} onClose={() => setShowDebitNote(false)} onDone={() => { setShowDebitNote(false); load(); }} />}
       {showRepairStage && <RepairStageModal queryId={id} onClose={() => setShowRepairStage(false)} onDone={() => { setShowRepairStage(false); load(); }} />}
       {showQCResult && <QCResultModal query={query} onClose={() => setShowQCResult(false)} onDone={() => { setShowQCResult(false); load(); }} />}
@@ -722,12 +740,57 @@ function ResolveModal({ query, onClose, onDone }) {
   );
 }
 
+// ── Waive CAPA Modal — owner says this one doesn't need a report ────────────
+function WaiveCapaModal({ capa, onClose, onDone }) {
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    setSaving(true); setError('');
+    try {
+      await api.put(`/capa/${capa.id}/waive`, { reason });
+      onDone();
+    } catch (err) { setError(err.response?.data?.error || 'Failed to waive'); setSaving(false); }
+  };
+
+  return (
+    <Modal open title="This return doesn't need a CAPA" onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-sm text-gray-600">
+          The repair can start without a CAPA report. Say why — the cause is already known and the fix already
+          agreed — and it stays on the record against this job card.
+        </p>
+        <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+          className="w-full border rounded-lg px-3 py-2 text-sm"
+          placeholder="e.g. MS pin rusting — cause known, moved to SS pins, discussed with production" />
+        {error && <p className="text-red-600 text-sm">{error}</p>}
+        <div className="flex gap-3">
+          <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button className="btn-primary flex-1" onClick={submit} disabled={saving || !reason.trim()}>
+            {saving ? 'Saving...' : 'Waive & unlock'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ── Return Type Modal ──────────────────────────────────────────────────────
 function ReturnTypeModal({ query, onClose, onDone }) {
   const [type, setType] = useState('repair');
   const [coupon, setCoupon] = useState('');
+  const [suggested, setSuggested] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  // The next number off the ledger, filled in for you — nobody has to remember
+  // which coupon the last return used.
+  useEffect(() => {
+    api.get('/customer-queries/next-return-coupon')
+      .then(r => { setSuggested(r.data.next); setCoupon(c => c || r.data.next); })
+      .catch(() => {});
+  }, []);
 
   const handleSubmit = async () => {
     setSaving(true);
@@ -761,7 +824,12 @@ function ReturnTypeModal({ query, onClose, onDone }) {
         <div>
           <label className="label">Return Coupon No</label>
           <input className="input" value={coupon} onChange={e => setCoupon(e.target.value)}
-            placeholder="e.g. RET-001" />
+            placeholder={suggested || 'e.g. RET-001'} />
+          <p className="text-xs text-gray-500 mt-1">
+            {suggested
+              ? <>Next free number is <span className="font-medium">{suggested}</span> — filled in for you. Change it if you need to.</>
+              : 'Leave it blank and the next free number is used.'}
+          </p>
         </div>
         {error && <p className="text-red-600 text-sm">{error}</p>}
         <div className="flex gap-3">

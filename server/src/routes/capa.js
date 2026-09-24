@@ -53,8 +53,11 @@ async function ensureCapa(db, { jobCardId, orderId, triggerType, customerQueryId
   if (active) return null; // one active CAPA per card covers all triggers
 
   if (triggerType === 'rejections') {
+    // A waived CAPA sets the watermark exactly like an approved one — otherwise
+    // the waive lasts until the next checklist save and the CAPA comes straight
+    // back at the same rejection total.
     const watermark = await db.get(
-      "SELECT COALESCE(MAX(trigger_total),0) AS t FROM capa_reports WHERE job_card_id=$1 AND trigger_type='rejections' AND status='approved'",
+      "SELECT COALESCE(MAX(trigger_total),0) AS t FROM capa_reports WHERE job_card_id=$1 AND trigger_type='rejections' AND status IN ('approved','waived')",
       [jobCardId]);
     if (triggerTotal <= parseInt(watermark?.t || 0, 10)) return null;
   }
@@ -134,12 +137,13 @@ router.get('/:id', authenticate, async (req, res) => {
   const capa = await db.get(`
     SELECT c.*, jc.job_card_no, jc.product_name, jc.drawing_no, jc.qty AS card_qty,
            o.order_code, u.name AS created_by_name, ua.name AS approved_by_name,
-           cq.query_no
+           cq.query_no, uw.name AS waived_by_name
     FROM capa_reports c
     JOIN job_cards jc ON jc.id = c.job_card_id
     LEFT JOIN orders o ON o.id = c.order_id
     LEFT JOIN users u ON u.id = c.created_by
     LEFT JOIN users ua ON ua.id = c.approved_by
+    LEFT JOIN users uw ON uw.id = c.waived_by
     LEFT JOIN customer_queries cq ON cq.id = c.customer_query_id
     WHERE c.id=$1`, [req.params.id]);
   if (!capa) return res.status(404).json({ error: 'CAPA not found' });
@@ -156,6 +160,7 @@ router.post('/:id/message', authenticate, authorize('production', 'admin', 'owne
   const capa = await db.get('SELECT * FROM capa_reports WHERE id=$1', [req.params.id]);
   if (!capa) return res.status(404).json({ error: 'CAPA not found' });
   if (capa.status === 'approved') return res.status(400).json({ error: 'This CAPA is already approved.' });
+  if (capa.status === 'waived') return res.status(400).json({ error: 'The owner waived this CAPA — no report is needed.' });
 
   const text = (req.body.text || '').trim();
   const photos = (req.files || []).map(f => ({ path: f.storagePath, name: f.originalname }));
@@ -238,6 +243,25 @@ router.post('/:id/message', authenticate, authorize('production', 'admin', 'owne
   res.json({ reply: result.reply, finalized: !!result.finalized });
 });
 
+// Lift the rejection lock (the on-hold status the trigger set). Query-CAPAs
+// don't hold the card — the repair-start endpoint checks CAPA state itself.
+// A rejection CAPA holds every card of the item, not just the one that tripped
+// it, so closing it has to release them together — otherwise the siblings stay
+// stopped with nothing on screen to explain why. Shared by approve and waive.
+async function releaseRejectionHold(db, capa, jc, userId, verb) {
+  if (capa.trigger_type !== 'rejections') return;
+  const released = await db.all(
+    `UPDATE job_cards SET status='in_progress'
+      WHERE status='on_hold'
+        AND (id = $1 OR (order_item_id IS NOT NULL AND order_item_id = $2))
+      RETURNING id, job_card_no`,
+    [capa.job_card_id, jc?.order_item_id || null]);
+  for (const c of released.filter(c => c.id !== capa.job_card_id)) {
+    await logActivity(jc?.order_id, c.id, 'status_changed',
+      `Job card ${c.job_card_no} released — CAPA on ${jc?.job_card_no || 'a sibling card'} ${verb}`, userId);
+  }
+}
+
 // ── Owner approves — unlocks the job card ────────────────────────────────────
 router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) => {
   const db = getDB();
@@ -249,24 +273,8 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
     "UPDATE capa_reports SET status='approved', approved_by=$1, approved_at=NOW(), updated_at=NOW() WHERE id=$2",
     [req.user.id, capa.id]);
 
-  // Lift the rejection lock (the on-hold status the trigger set). Query-CAPAs
-  // don't hold the card — the repair-start endpoint checks CAPA state itself.
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [capa.job_card_id]);
-  if (capa.trigger_type === 'rejections') {
-    // A rejection CAPA holds every card of the item, not just the one that
-    // tripped it, so approval has to release them together — otherwise the
-    // siblings stay stopped with nothing on screen to explain why.
-    const released = await db.all(
-      `UPDATE job_cards SET status='in_progress'
-        WHERE status='on_hold'
-          AND (id = $1 OR (order_item_id IS NOT NULL AND order_item_id = $2))
-        RETURNING id, job_card_no`,
-      [capa.job_card_id, jc?.order_item_id || null]);
-    for (const c of released.filter(c => c.id !== capa.job_card_id)) {
-      await logActivity(jc?.order_id, c.id, 'status_changed',
-        `Job card ${c.job_card_no} released — CAPA on ${jc?.job_card_no || 'a sibling card'} approved`, req.user.id);
-    }
-  }
+  await releaseRejectionHold(db, capa, jc, req.user.id, 'approved');
 
   if (capa.created_by) {
     await createNotification(db, {
@@ -305,6 +313,44 @@ router.put('/:id/reopen', authenticate, authorize('owner'), async (req, res) => 
     });
   }
   res.json({ message: 'CAPA reopened.' });
+});
+
+// ── Owner waives it — no report needed, work unlocks ─────────────────────────
+// For the case where the cause is already known and the fix already agreed off
+// the system: the owner says so in writing and the card is released. The report
+// is kept as a waived record, never deleted, so the decision is auditable.
+router.put('/:id/waive', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const reason = (req.body.reason || '').trim();
+  if (!reason) return res.status(400).json({ error: 'Write why this one does not need a CAPA — it goes on the record.' });
+
+  const capa = await db.get('SELECT * FROM capa_reports WHERE id=$1', [req.params.id]);
+  if (!capa) return res.status(404).json({ error: 'CAPA not found' });
+  if (capa.status === 'approved') return res.status(400).json({ error: 'This CAPA is already approved — nothing to waive.' });
+  if (capa.status === 'waived') return res.status(400).json({ error: 'This CAPA is already waived.' });
+
+  const conversation = Array.isArray(capa.conversation) ? capa.conversation : [];
+  conversation.push({ role: 'user', text: `[Owner waived the CAPA]: ${reason}`, by: req.user.name, at: new Date().toISOString() });
+
+  await db.run(`
+    UPDATE capa_reports SET status='waived', waived_by=$1, waived_at=NOW(), waive_reason=$2,
+      conversation=$3::jsonb, updated_at=NOW() WHERE id=$4`,
+    [req.user.id, reason, JSON.stringify(conversation), capa.id]);
+
+  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [capa.job_card_id]);
+  await releaseRejectionHold(db, capa, jc, req.user.id, 'waived');
+
+  if (capa.created_by && capa.created_by !== req.user.id) {
+    await createNotification(db, {
+      userId: capa.created_by, type: 'capa_waived',
+      title: `CAPA waived — ${jc?.job_card_no || ''}`,
+      body: `No CAPA report needed: ${reason}`,
+      link: `/capa/${capa.id}`, sourceUserId: req.user.id,
+    });
+  }
+  await logActivity(capa.order_id, capa.job_card_id, 'capa_waived',
+    `CAPA on ${jc?.job_card_no || `card #${capa.job_card_id}`} waived by owner — ${reason}`, req.user.id);
+  res.json({ message: 'CAPA waived — work unlocked.' });
 });
 
 module.exports = router;

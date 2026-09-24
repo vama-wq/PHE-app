@@ -24,6 +24,22 @@ async function genQueryNo(db) {
   return `${prefix}-${String(seq).padStart(4, '0')}`;
 }
 
+// Next return coupon: RET-NNN, one past the highest number already used.
+// Numbered by hand until now, which is how RET-001 ended up on two returns and
+// RET-003 on none — so the number is read off the ledger, not off memory. Any
+// coupon whose tail is a number counts, whatever prefix it was written with.
+async function nextReturnCoupon(db) {
+  const rows = await db.all(
+    "SELECT return_coupon_no AS c FROM customer_queries WHERE return_coupon_no ~ '[0-9]+$'");
+  const highest = rows.reduce((m, r) => Math.max(m, parseInt(String(r.c).match(/(\d+)$/)[1], 10)), 0);
+  return `RET-${String(highest + 1).padStart(3, '0')}`;
+}
+
+// ── The next free return coupon number (to prefill the form) ────────────────
+router.get('/next-return-coupon', authenticate, authorize('accounts', 'owner', 'admin'), async (req, res) => {
+  res.json({ next: await nextReturnCoupon(getDB()) });
+});
+
 // ── List all queries (with filters) ─────────────────────────────────────────
 router.get('/', authenticate, async (req, res) => {
   const { status, order_id, assigned_department } = req.query;
@@ -430,16 +446,33 @@ router.put('/:id/return-type', authenticate, authorize('owner'), async (req, res
   if (!q) return res.status(404).json({ error: 'Query not found' });
   if (q.status !== 'product_return') return res.status(400).json({ error: 'Query must be in product_return status' });
 
+  // Left blank, the next number is taken off the ledger. Typed in, it is checked
+  // against the coupons already issued — two returns sharing a number is what
+  // made these hard to track in the first place.
+  let coupon = (return_coupon_no || '').trim();
+  if (!coupon) {
+    coupon = await nextReturnCoupon(db);
+  } else {
+    const clash = await db.get(
+      'SELECT query_no FROM customer_queries WHERE UPPER(return_coupon_no)=UPPER($1) AND id<>$2',
+      [coupon, req.params.id]);
+    if (clash) {
+      return res.status(400).json({
+        error: `Coupon ${coupon} is already on ${clash.query_no}. The next free number is ${await nextReturnCoupon(db)}.`,
+      });
+    }
+  }
+
   // Set the return type but stay at pending_return — user must confirm material received next
   await db.run(`
     UPDATE customer_queries SET return_type=$1, return_coupon_no=$2,
       return_status='pending_return', updated_at=NOW() WHERE id=$3
-  `, [return_type, return_coupon_no || null, req.params.id]);
+  `, [return_type, coupon, req.params.id]);
 
   await logActivity(q.order_id, q.job_card_id, 'return_type_set',
-    `Return type set to ${return_type} for ${q.query_no} — coupon: ${return_coupon_no || 'N/A'}. Awaiting material return.`, req.user.id);
+    `Return type set to ${return_type} for ${q.query_no} — coupon: ${coupon}. Awaiting material return.`, req.user.id);
 
-  res.json({ message: `Return type set to ${return_type}. Mark material as received when product arrives.` });
+  res.json({ message: `Return type set to ${return_type} — coupon ${coupon}. Mark material as received when product arrives.`, return_coupon_no: coupon });
 });
 
 // ── Add debit note number ──────────────────────────────────────────────────
