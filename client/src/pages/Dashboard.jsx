@@ -986,9 +986,9 @@ function DesignDashboard() {
   const [rejections, setRejections] = useState([]);
   const [recent, setRecent]         = useState([]);
   // Order items whose carried inventory design has to check before the
-  // drawing can be approved (open orders) — plus the flagged history behind.
+  // drawing can be approved. Open orders only — the endpoint drops items on
+  // orders already dispatched or in stock, where nothing is blocked.
   const [bomReview, setBomReview]   = useState([]);
-  const [showClosedBom, setShowClosedBom] = useState(false);
   const [loading, setLoading]       = useState(true);
 
   const hasQC        = canSee(user, 'qc');
@@ -1011,8 +1011,7 @@ function DesignDashboard() {
   const pending  = qcCards.filter(c => c.status === 'pending');
   const approved = qcCards.filter(c => c.status === 'approved');
   const rejected = qcCards.filter(c => c.result  === 'rejected');
-  const bomOpen   = bomReview.filter(r => r.is_open);
-  const bomClosed = bomReview.filter(r => !r.is_open);
+  const bomOpen   = bomReview;
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -1057,24 +1056,6 @@ function DesignDashboard() {
                   {r.bom_review_reason && (
                     <p className="text-xs text-amber-700 mt-1 line-clamp-2">{r.bom_review_reason}</p>
                   )}
-                </Link>
-              ))}
-              {bomClosed.length > 0 && (
-                <button type="button" onClick={() => setShowClosedBom(v => !v)}
-                  className="w-full text-left px-5 py-2.5 text-xs text-gray-500 hover:bg-gray-50">
-                  {showClosedBom ? '▾' : '▸'} {bomClosed.length} more on orders already dispatched or in stock — records only, nothing is blocked
-                </button>
-              )}
-              {showClosedBom && bomClosed.map(r => (
-                <Link key={r.item_id} to={`/orders/${r.order_id}`}
-                  className="flex items-center justify-between gap-3 px-5 py-2.5 hover:bg-gray-50 text-gray-500">
-                  <div className="min-w-0 text-sm">
-                    <span className="font-medium">{r.order_code}</span>
-                    <span className="mx-2">·</span>
-                    <span>{r.drawing_number || r.product_code}</span>
-                    <span className="text-xs ml-2">{r.quantity} pcs</span>
-                  </div>
-                  <StatusBadge status={r.order_status} className="flex-shrink-0" />
                 </Link>
               ))}
             </div>
