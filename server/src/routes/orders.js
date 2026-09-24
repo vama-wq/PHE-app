@@ -216,6 +216,25 @@ router.get('/', authenticate, async (req, res) => {
   res.json(orders);
 });
 
+// Every order item whose carried inventory is waiting on design's check. Open
+// orders come first — the drawing-approval gate is live there, so those are
+// the ones that stop work; items on orders already dispatched or in stock are
+// a records matter and sit behind them. Declared before /:id so the path
+// segment is not read as an order id.
+router.get('/bom-review/pending', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
+  const rows = await getDB().all(`
+    SELECT oi.id AS item_id, oi.drawing_number, oi.product_code, oi.quantity, oi.bom_review_reason,
+           oi.created_at AS flagged_at,
+           o.id AS order_id, o.order_code, o.status AS order_status, c.customer_code,
+           (o.status NOT IN ('dispatched','in_finished_goods','resolved_dispatched','cancelled','closed','completed')) AS is_open
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      LEFT JOIN customers c ON c.id = o.customer_id
+     WHERE oi.bom_review = 'needed'
+     ORDER BY is_open DESC, o.created_at DESC, oi.id`);
+  res.json(rows);
+});
+
 router.get('/:id', authenticate, async (req, res) => {
   const db = getDB();
   const canSeeNames = withCustomerVisibility(req);

@@ -985,6 +985,10 @@ function DesignDashboard() {
   const [materialPOs, setMaterialPOs] = useState([]);
   const [rejections, setRejections] = useState([]);
   const [recent, setRecent]         = useState([]);
+  // Order items whose carried inventory design has to check before the
+  // drawing can be approved (open orders) — plus the flagged history behind.
+  const [bomReview, setBomReview]   = useState([]);
+  const [showClosedBom, setShowClosedBom] = useState(false);
   const [loading, setLoading]       = useState(true);
 
   const hasQC        = canSee(user, 'qc');
@@ -992,6 +996,7 @@ function DesignDashboard() {
 
   useEffect(() => {
     const reqs = [api.get('/activity/recent?limit=10').then(r => setRecent(r.data))];
+    reqs.push(api.get('/orders/bom-review/pending').then(r => setBomReview(r.data)).catch(() => {}));
     if (hasQC) {
       reqs.push(api.get('/qc').then(r => setQcCards(r.data)));
       if (hasPurchases)
@@ -1006,6 +1011,8 @@ function DesignDashboard() {
   const pending  = qcCards.filter(c => c.status === 'pending');
   const approved = qcCards.filter(c => c.status === 'approved');
   const rejected = qcCards.filter(c => c.result  === 'rejected');
+  const bomOpen   = bomReview.filter(r => r.is_open);
+  const bomClosed = bomReview.filter(r => !r.is_open);
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -1015,7 +1022,8 @@ function DesignDashboard() {
       </div>
 
       {hasQC && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+          <StatCard label="Inventory to Check"  value={bomOpen.length}      icon={Package}       color={bomOpen.length > 0 ? 'orange' : 'green'} sub={bomOpen.length > 0 ? 'Blocks drawing approval' : 'All checked'} />
           <StatCard label="QC Pending"          value={pending.length}      icon={FlaskConical}  color={pending.length > 0 ? 'orange' : 'green'} sub={pending.length > 0 ? 'Awaiting check' : 'All clear!'} to="/qc" />
           <StatCard label="Material QC Pending" value={materialPOs.length}  icon={Package}       color={materialPOs.length > 0 ? 'violet' : 'green'} sub="Received materials" to="/qc" />
           <StatCard label="Approved"            value={approved.length}     icon={CheckCircle}   color="green" />
@@ -1025,6 +1033,52 @@ function DesignDashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
+
+          {/* Inventory design must check — carried BOMs waiting on her */}
+          <SectionCard
+            title="Inventory to Check" icon={Package} iconColor="text-orange-500"
+            action={bomOpen.length > 0 && <span className="text-xs text-orange-600 font-medium">{bomOpen.length} blocking approval</span>}
+          >
+            <div className="divide-y divide-gray-50">
+              {bomOpen.length === 0 ? (
+                <EmptyRow message="Nothing waiting on you — every carried BOM is confirmed" />
+              ) : bomOpen.map(r => (
+                <Link key={r.item_id} to={`/orders/${r.order_id}`}
+                  className="block px-5 py-3.5 hover:bg-orange-50/30 transition-colors">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className="font-semibold text-sm text-gray-900">{r.order_code}</span>
+                      <span className="text-gray-400 mx-2">·</span>
+                      <span className="text-sm text-gray-700">{r.drawing_number || r.product_code || `item #${r.item_id}`}</span>
+                      <span className="text-xs text-gray-400 ml-2">{r.customer_code} · {r.quantity} pcs</span>
+                    </div>
+                    <StatusBadge status={r.order_status} className="flex-shrink-0" />
+                  </div>
+                  {r.bom_review_reason && (
+                    <p className="text-xs text-amber-700 mt-1 line-clamp-2">{r.bom_review_reason}</p>
+                  )}
+                </Link>
+              ))}
+              {bomClosed.length > 0 && (
+                <button type="button" onClick={() => setShowClosedBom(v => !v)}
+                  className="w-full text-left px-5 py-2.5 text-xs text-gray-500 hover:bg-gray-50">
+                  {showClosedBom ? '▾' : '▸'} {bomClosed.length} more on orders already dispatched or in stock — records only, nothing is blocked
+                </button>
+              )}
+              {showClosedBom && bomClosed.map(r => (
+                <Link key={r.item_id} to={`/orders/${r.order_id}`}
+                  className="flex items-center justify-between gap-3 px-5 py-2.5 hover:bg-gray-50 text-gray-500">
+                  <div className="min-w-0 text-sm">
+                    <span className="font-medium">{r.order_code}</span>
+                    <span className="mx-2">·</span>
+                    <span>{r.drawing_number || r.product_code}</span>
+                    <span className="text-xs ml-2">{r.quantity} pcs</span>
+                  </div>
+                  <StatusBadge status={r.order_status} className="flex-shrink-0" />
+                </Link>
+              ))}
+            </div>
+          </SectionCard>
 
           {/* QC Pending job cards */}
           {hasQC && (
