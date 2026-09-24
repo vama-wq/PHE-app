@@ -563,7 +563,6 @@ function NewOrderModal({ onClose, onSave }) {
     order_type: 'local_he'
   });
   const [customers, setCustomers] = useState([]);
-  const [inquiries, setInquiries] = useState([]);
   const [quotationFile, setQuotationFile] = useState(null);
   const [items, setItems] = useState([]);
   const [itemImages, setItemImages] = useState({}); // { [itemIndex]: File[] }
@@ -574,7 +573,6 @@ function NewOrderModal({ onClose, onSave }) {
 
   useEffect(() => {
     api.get('/customers').then(r => setCustomers(r.data)).catch(() => {});
-    api.get('/orders/inquiries/all').then(r => setInquiries(r.data)).catch(() => {});
     api.get('/orders/next-code').then(r => setForm(f => ({ ...f, order_code: r.data.code }))).catch(() => {});
   }, []);
 
@@ -684,10 +682,6 @@ function NewOrderModal({ onClose, onSave }) {
                 <input className="input" type="date" value={form.order_date} onChange={set('order_date')} required />
               </div>
               <div>
-                <label className="label">Dispatch Date <span className="text-gray-400 font-normal">(optional)</span></label>
-                <input className="input" type="date" value={form.dispatch_date} onChange={set('dispatch_date')} />
-              </div>
-              <div>
                 <label className="label">
                   Customer {isInventoryOnly
                     ? <span className="text-gray-400 font-normal">(optional — PHE inventory order)</span>
@@ -696,15 +690,6 @@ function NewOrderModal({ onClose, onSave }) {
                 <select className="input" value={form.customer_id} onChange={set('customer_id')} required={!isInventoryOnly}>
                   <option value="">{isInventoryOnly ? 'None — internal PHE inventory' : 'Select customer...'}</option>
                   {customers.map(c => <option key={c.id} value={c.id}>{c.customer_code} — {c.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Linked Inquiry <span className="text-gray-400 font-normal">(optional)</span></label>
-                <select className="input" value={form.inquiry_id} onChange={set('inquiry_id')}>
-                  <option value="">None</option>
-                  {inquiries
-                    .filter(i => !form.customer_id || String(i.customer_id) === String(form.customer_id))
-                    .map(i => <option key={i.id} value={i.id}>{i.inquiry_code}</option>)}
                 </select>
               </div>
               <div className="col-span-2">
