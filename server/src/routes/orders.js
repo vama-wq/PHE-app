@@ -399,10 +399,52 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
   if (!quantity) return res.status(400).json({ error: 'Quantity is required' });
 
   const db = getDB();
+
+  // Reusing a previous item pins its identity. The product code and the drawing
+  // number ARE the item — change either and you have a different heater wearing
+  // the old one's drawing and its carried BOM. The form disables both fields;
+  // this is the rule itself, so no caller can get round it. Everything else
+  // (tube, diameter, wattage, voltage, plating, remark, quantity) stays open.
+  let pCode = product_code, dNo = drawing_number, tMat = tube_material, tDia = tube_diameter;
+  if (copy_from_item_id) {
+    const srcId = await db.get(
+      'SELECT product_code, drawing_number, tube_material, tube_diameter FROM order_items WHERE id=$1',
+      [copy_from_item_id]);
+    if (!srcId) return res.status(404).json({ error: 'The item you are reusing no longer exists.' });
+    const same = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+    if (!same(product_code, srcId.product_code) || !same(drawing_number, srcId.drawing_number)) {
+      return res.status(400).json({
+        error: `A reused item keeps the product code and drawing number it came from — ${srcId.product_code || '(none)'} / ${srcId.drawing_number || '(none)'}. To use a different code or drawing, add the item without reusing a previous one.`,
+        code: 'REUSE_IDENTITY_LOCKED',
+      });
+    }
+    pCode = srcId.product_code; dNo = srcId.drawing_number;
+
+    // The tube locks too, but only when the source holds a REAL tube from the
+    // dropdown. Older items store free text ("Incoloy", "Copper") which is not
+    // a selectable option and not a tube anyone can order against — those stay
+    // open so a proper tube can be picked. The diameter follows the tube.
+    const pickedTube = srcId.tube_material
+      ? await db.get(
+          "SELECT item_code FROM inventory_items WHERE item_code=$1 AND LOWER(TRIM(category))='tube'",
+          [srcId.tube_material])
+      : null;
+    if (pickedTube) {
+      if (!same(tube_material, srcId.tube_material)) {
+        return res.status(400).json({
+          error: `A reused item keeps the tube it came from — ${srcId.tube_material}. To use a different tube, add the item without reusing a previous one.`,
+          code: 'REUSE_TUBE_LOCKED',
+        });
+      }
+      tMat = srcId.tube_material;
+      if (srcId.tube_diameter) tDia = srcId.tube_diameter;
+    }
+  }
+
   const r = await db.insert(
     `INSERT INTO order_items (order_id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [req.params.id, product_code||null, drawing_number||null, tube_material||null, tube_diameter||null,
+    [req.params.id, pCode||null, dNo||null, tMat||null, tDia||null,
      wattage||null, voltage||null, plating_instructions||null, quantity, remark||null]
   );
   const itemId = r.lastInsertRowid;
@@ -516,8 +558,35 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
     });
   }
   const db = getDB();
-  const before = await db.get('SELECT quantity FROM order_items WHERE id=$1 AND order_id=$2',
+  const before = await db.get(
+    `SELECT quantity, product_code, drawing_number, tube_material, tube_diameter, copied_from_item_id
+       FROM order_items WHERE id=$1 AND order_id=$2`,
     [req.params.itemId, req.params.id]);
+
+  // Same lock as creation, held afterwards: an item that came from a previous
+  // order keeps its product code and drawing number, and keeps its tube when
+  // that tube is a real one off the dropdown. Otherwise the identity could be
+  // pinned at creation and quietly edited a minute later.
+  if (before && before.copied_from_item_id) {
+    const same = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+    if (!same(product_code, before.product_code) || !same(drawing_number, before.drawing_number)) {
+      return res.status(400).json({
+        error: `This item was reused from a previous order, so its product code and drawing number are fixed — ${before.product_code || '(none)'} / ${before.drawing_number || '(none)'}.`,
+        code: 'REUSE_IDENTITY_LOCKED',
+      });
+    }
+    if (before.tube_material && !same(tube_material, before.tube_material)) {
+      const pickedTube = await db.get(
+        "SELECT item_code FROM inventory_items WHERE item_code=$1 AND LOWER(TRIM(category))='tube'",
+        [before.tube_material]);
+      if (pickedTube) {
+        return res.status(400).json({
+          error: `This item was reused from a previous order, so its tube is fixed — ${before.tube_material}.`,
+          code: 'REUSE_TUBE_LOCKED',
+        });
+      }
+    }
+  }
   await db.run(
     `UPDATE order_items SET product_code=$1, drawing_number=$2, tube_material=$3, tube_diameter=$4, wattage=$5,
        voltage=$6, plating_instructions=$7, quantity=$8, remark=$9

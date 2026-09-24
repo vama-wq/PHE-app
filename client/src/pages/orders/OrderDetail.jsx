@@ -1489,6 +1489,14 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
   // from the drawing that was already approved for it. Choosing "Start fresh"
   // clears the lock.
   const reusing = !!copyFromItemId;
+  // The tube locks only when the source held a REAL tube picked from the list.
+  // Older items store free text ("Incoloy", "Copper"), which is not selectable
+  // and not something the floor can draw against — those stay open so a proper
+  // tube gets picked, and the diameter stays open with them. Held as its own
+  // flag rather than inferred from the field being filled, or picking a tube
+  // would lock it instantly and a mis-pick could not be corrected. The server
+  // applies the same test, so this only mirrors it.
+  const [reuseTubeLocked, setReuseTubeLocked] = useState(false);
 
   useEffect(() => {
     api.get('/products').then(r => setProducts(r.data)).catch(() => {});
@@ -1505,16 +1513,17 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
 
   const selectPrevItem = (e) => {
     const pid = e.target.value;
-    if (!pid) { setCopyFromItemId(null); return; }
+    if (!pid) { setCopyFromItemId(null); setReuseTubeLocked(false); return; }
     const p = prevItems.find(x => String(x.id) === String(pid));
     if (!p) return;
+    const realTube = !!p.tube_material
+      && inventoryItems.some(i => (i.category || '').toLowerCase().trim() === 'tube' && i.item_code === p.tube_material);
+    setReuseTubeLocked(realTube);
     setF({
       product_code: p.product_code || '', drawing_number: p.drawing_number || '',
-      // Carry the tube forward when the source holds a real inventory code.
-      // Legacy items store free text ("Copper", "SS 304") which is not a
-      // selectable option, so those are left blank for a proper pick.
-      tube_material: inventoryItems.some(i => (i.category || '').toLowerCase().trim() === 'tube' && i.item_code === p.tube_material)
-        ? p.tube_material : '',
+      // Carried and locked when it is a real tube from the list; left blank to
+      // be picked when the source only held free text.
+      tube_material: realTube ? p.tube_material : '',
       tube_diameter: p.tube_diameter || '',
       wattage: p.wattage || '', voltage: p.voltage || '',
       plating_instructions: p.plating_instructions || '',
@@ -1623,8 +1632,10 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
                     {prevItems.find(p => String(p.id) === String(copyFromItemId))?.has_drawing
                       ? 'Details pre-filled. Its reference drawing will be copied in for re-approval.'
                       : 'Details pre-filled. This item had no drawing on file.'}
-                    {' '}The specification is locked to the previous item — only plating, remark
-                    and quantity can be set. Choose "Start fresh" to enter a different item.
+                    {' '}The product code and drawing number are fixed to the previous item
+                    {f.tube_material ? ', and so is its tube' : ''}. Enter this order's quantity
+                    (left blank since it varies); plating and remark can be changed.
+                    Choose "Start fresh" to enter a different item.
                   </p>
                 )}
               </>
@@ -1675,7 +1686,7 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
         <div>
           <label className="label">Tube Material <span className="text-red-500">*</span></label>
           <select className="input disabled:bg-gray-100 disabled:text-gray-500"
-            disabled={reusing && !!f.tube_material} value={f.tube_material} onChange={set('tube_material')}>
+            disabled={reusing && reuseTubeLocked} value={f.tube_material} onChange={set('tube_material')}>
             <option value="">— Select tube —</option>
             {f.tube_material && !tubeItems.some(i => i.item_code === f.tube_material) && (
               <option value={f.tube_material}>{f.tube_material} (existing)</option>
@@ -1687,7 +1698,8 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
         </div>
         <div>
           <label className="label">Tube Diameter (mm) <span className="text-red-500">*</span></label>
-          <select className="input disabled:bg-gray-100 disabled:text-gray-500" disabled={reusing}
+          <select className="input disabled:bg-gray-100 disabled:text-gray-500"
+            disabled={reusing && reuseTubeLocked}
             value={f.tube_diameter ?? ''} onChange={set('tube_diameter')}>
             <option value="">— Select diameter —</option>
             <option value="8">8mm</option>

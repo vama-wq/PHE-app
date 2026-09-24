@@ -247,6 +247,15 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
   // "Reuse a previous item" picker (only when adding a new item)
   const [prevItems, setPrevItems] = useState([]);
   const [copyFromItemId, setCopyFromItemId] = useState(item?.copy_from_item_id || null);
+  // Reusing a previous item pins what identifies it. The product code and the
+  // drawing number ARE the item — change either and it is a different heater
+  // wearing the old one's drawing and its carried BOM. The server refuses them
+  // too; this just stops the field looking editable.
+  const reusing = !!copyFromItemId;
+  // The tube locks only when the source carries a REAL tube off the dropdown.
+  // Older items hold free text ("Incoloy", "Copper"), which is not a selectable
+  // option — those stay open so a proper tube can be picked.
+  const [reuseTubeLocked, setReuseTubeLocked] = useState(false);
   const imgRef = useRef();
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
@@ -264,12 +273,16 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
 
   const selectPrevItem = (e) => {
     const id = e.target.value;
-    if (!id) { setCopyFromItemId(null); return; }
+    if (!id) { setCopyFromItemId(null); setReuseTubeLocked(false); return; }
     const p = prevItems.find(x => String(x.id) === String(id));
     if (!p) return;
+    const realTube = !!p.tube_material && tubeItems.some(i => i.item_code === p.tube_material);
+    setReuseTubeLocked(realTube);
     setF({
       product_code: p.product_code || '', drawing_number: p.drawing_number || '',
-      tube_material: '', // not carried forward — must be re-selected from the Tube list
+      // Carried and locked when it is a real tube; left blank to be picked when
+      // the source only held free text.
+      tube_material: realTube ? p.tube_material : '',
       tube_diameter: p.tube_diameter || '',
       wattage: p.wattage || '', voltage: p.voltage || '',
       plating_instructions: p.plating_instructions || '',
@@ -357,7 +370,10 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
                     {prevItems.find(p => String(p.id) === String(copyFromItemId))?.has_drawing
                       ? 'Details pre-filled. Its reference drawing will be copied in for re-approval.'
                       : 'Details pre-filled. This item had no drawing on file.'}
-                    {' '}Enter this order's quantity (left blank since it varies).
+                    {' '}The product code and drawing number are fixed to the previous item
+                    {reuseTubeLocked ? ', and so is its tube' : ''}. Enter this order's quantity
+                    (left blank since it varies); plating and remark can be changed.
+                    Choose "Start fresh" to enter a different item.
                   </p>
                 )}
               </>
@@ -368,11 +384,12 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
         <div className="col-span-2 relative">
           <label className="label">Product Code <span className="text-red-500">*</span></label>
           <input
-            className="input"
+            className="input disabled:bg-gray-100 disabled:text-gray-500"
+            disabled={reusing}
             placeholder="Search by product code or name..."
             value={productSearch}
             onChange={e => { setProductSearch(e.target.value); setShowDropdown(true); setF(p => ({ ...p, product_code: e.target.value })); }}
-            onFocus={() => setShowDropdown(true)}
+            onFocus={() => !reusing && setShowDropdown(true)}
             onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
             autoComplete="off"
           />
@@ -403,14 +420,17 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
         {/* Drawing Number */}
         <div className="col-span-2">
           <label className="label">Drawing Number <span className="text-red-500">*</span></label>
-          <input className="input" placeholder="e.g. PT-FlangeHe-QU-2Kw-Cop"
+          <input className="input disabled:bg-gray-100 disabled:text-gray-500" disabled={reusing}
+            placeholder="e.g. PT-FlangeHe-QU-2Kw-Cop"
             value={f.drawing_number} onChange={set('drawing_number')} />
         </div>
 
         {/* Tube */}
         <div>
           <label className="label">Tube Material <span className="text-red-500">*</span></label>
-          <select className="input" value={f.tube_material} onChange={set('tube_material')}>
+          <select className="input disabled:bg-gray-100 disabled:text-gray-500"
+            disabled={reusing && reuseTubeLocked}
+            value={f.tube_material} onChange={set('tube_material')}>
             <option value="">— Select tube —</option>
             {f.tube_material && !tubeItems.some(i => i.item_code === f.tube_material) && (
               <option value={f.tube_material}>{f.tube_material} (existing)</option>
@@ -422,7 +442,9 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
         </div>
         <div>
           <label className="label">Tube Diameter (mm) <span className="text-red-500">*</span></label>
-          <select className="input" value={f.tube_diameter} onChange={set('tube_diameter')}>
+          <select className="input disabled:bg-gray-100 disabled:text-gray-500"
+            disabled={reusing && reuseTubeLocked}
+            value={f.tube_diameter} onChange={set('tube_diameter')}>
             <option value="">— Select diameter —</option>
             <option value="8">8mm</option>
             <option value="11">11mm</option>
