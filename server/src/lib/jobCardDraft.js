@@ -99,6 +99,16 @@ async function buildDraft(db, orderItemId, answers = {}) {
   const tubeLabel = tube ? tube.name : (item.tube_material || '');
   const tubeLabelGu = tube ? [tube.name_gu, tube.item_code].filter(Boolean).join(' · ') : '';
 
+  // The tube ITEM should agree with the diameter field. They are set at
+  // different times by different people, and a mismatch is the one mistake
+  // that produces a plausible wrong card: the wrong draw bands, the wrong wire
+  // sheet, the wrong mandrel, all internally consistent and all wrong. Cheap
+  // to check, because the tube's own name says which bore it is.
+  const tubeSaysDia = tube
+    ? (/\b1\/2\b|11\s*mm/i.test(tube.name || '') ? 11
+      : /\b3\/8\b|\b8\s*mm/i.test(tube.name || '') ? 8 : null)
+    : null;
+
   const customer = order.customer_id
     ? await db.get('SELECT customer_code, name FROM customers WHERE id=$1', [order.customer_id])
     : null;
@@ -133,6 +143,9 @@ async function buildDraft(db, orderItemId, answers = {}) {
   // Head-level overrides are noted the same way the engine notes its own, so
   // the review screen shows everything a person changed in one list.
   const notes = [];
+  if (tubeSaysDia && Number(item.tube_diameter) && tubeSaysDia !== Number(item.tube_diameter)) {
+    notes.push(`The item is set to ${item.tube_diameter} mm but its tube is ${tube.item_code} — "${tube.name}", which is ${tubeSaysDia} mm. One of the two is wrong, and the whole card follows the diameter.`);
+  }
   const derivedPunching = derivePunching(item.wattage, item.voltage);
   const punching = (answers.punching != null && String(answers.punching).trim())
     ? String(answers.punching).trim() : derivedPunching;
