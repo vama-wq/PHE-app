@@ -264,7 +264,7 @@ function TodayTab({ picks, canManage, onUnpick, onChecklist, onPickMore }) {
                   {jc.replacement_query_id && (
                     <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 align-middle">REPLACEMENT</span>
                   )}
-                  <StatusBadge status={jc.status} />
+                  <StatusBadge jc={jc} />
                   {stageLabel && !isOnHold && (
                     <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium">
                       {stageLabel}
@@ -407,7 +407,7 @@ function AllCardsTab({ cards, todayPickIds, canManage, onPick, onUnpick, onCheck
                   </div>
                 </td>
                 <td className="table-cell">
-                  <StatusBadge status={jc.status} />
+                  <StatusBadge jc={jc} />
                   {stageLabel && jc.status === 'in_progress' && (
                     <div className="text-xs text-gray-400 mt-0.5">{stageLabel}</div>
                   )}
@@ -534,7 +534,7 @@ function PickModal({ cards, todayPickIds, onPick, onUnpick, onClose }) {
                   {days < 0 ? ` · ${Math.abs(days)}d overdue` : days === 0 ? ' · Today!' : ` · ${days}d left`}
                 </div>
               </div>
-              <StatusBadge status={jc.status} />
+              <StatusBadge jc={jc} />
             </div>
           );
         })}
@@ -642,7 +642,7 @@ function ChecklistModal({ card, onClose, onSave }) {
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-3">
             <h3 className="text-lg font-bold text-gray-900">{card.job_card_no}</h3>
-            <StatusBadge status={card.status} />
+            <StatusBadge jc={card} />
             {isOverdue ? (
               <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">{Math.abs(days)}d overdue</span>
             ) : days !== null && days <= 3 ? (

@@ -823,7 +823,7 @@ export default function OrderDetail() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-sm text-gray-600">{jc.job_card_no}</span>
-                          <StatusBadge status={jc.status} />
+                          <StatusBadge jc={jc} />
                         </div>
                         <div className="text-xs text-gray-500 mt-0.5">
                           {jc.qty && `Qty: ${jc.qty} · `}Dispatch: {fmtDate(jc.dispatch_date)}
@@ -929,7 +929,7 @@ export default function OrderDetail() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-sm text-gray-600">{jc.job_card_no}</span>
-                        <StatusBadge status={jc.status} />
+                        <StatusBadge jc={jc} />
                       </div>
                       <div className="text-xs text-gray-500 mt-0.5">
                         {jc.qty && `Qty: ${jc.qty} · `}Dispatch: {fmtDate(jc.dispatch_date)} · From Finished Goods stock

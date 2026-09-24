@@ -81,7 +81,7 @@ export default function JobCardDetail() {
         <div className="flex-1">
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-bold text-gray-900">{jc.job_card_no}</h1>
-            <StatusBadge status={jc.status} />
+            <StatusBadge jc={jc} />
             {jc.replacement_query_id && (
               <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
                 Replacement{jc.replacement_query_no ? ` — ${jc.replacement_query_no}` : ''}
@@ -1534,7 +1534,7 @@ function DispatchTab({ jc, userRole, onReload }) {
           </div>
           <div>
             <div className="text-xs text-gray-500 uppercase font-medium">Status</div>
-            <div className="mt-0.5"><StatusBadge status={jc.status} /></div>
+            <div className="mt-0.5"><StatusBadge jc={jc} /></div>
           </div>
         </div>
       </div>

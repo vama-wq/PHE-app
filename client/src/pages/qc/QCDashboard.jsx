@@ -234,7 +234,7 @@ export default function QCDashboard() {
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className="font-bold text-gray-900 text-base">{jc.job_card_no}</span>
-                        <StatusBadge status={jc.status} />
+                        <StatusBadge jc={jc} />
                         {isOverdue && (
                           <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
                             <AlertTriangle size={11} /> Overdue

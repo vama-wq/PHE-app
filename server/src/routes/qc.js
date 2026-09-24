@@ -39,25 +39,13 @@ async function settleAfterQC(db, jc, userId) {
   } catch (e) { console.error('[qc] settle inventory failed:', e.message); }
 }
 
-// Recompute order status from all its job cards
-async function syncOrderStatus(db, orderId, userId) {
-  const cards = await db.all('SELECT status FROM job_cards WHERE order_id=$1', [orderId]);
-  if (!cards.length) return;
-  const statuses = cards.map(c => c.status);
-  let newOrderStatus;
-  if (statuses.every(s => s === 'dispatched'))                          newOrderStatus = 'dispatched';
-  else if (statuses.some(s => s === 'qc_approved'))                     newOrderStatus = 'qc_approved';
-  else if (statuses.some(s => s === 'qc_pending'))                      newOrderStatus = 'qc_pending';
-  else if (statuses.some(s => s === 'in_progress' || s === 'on_hold'))  newOrderStatus = 'in_progress';
-  else                                                                   newOrderStatus = 'job_card_created';
-  const order = await db.get('SELECT status FROM orders WHERE id=$1', [orderId]);
-  if (!order || order.status === newOrderStatus) return;
-  const locked = ['pending_approval', 'approved', 'rejected', 'customer_query', 'product_return', 'resolved_dispatched'];
-  if (locked.includes(order.status)) return;
-  await db.run('UPDATE orders SET status=$1 WHERE id=$2', [newOrderStatus, orderId]);
-  await logActivity(orderId, null, 'status_changed',
-    `Order status updated to ${newOrderStatus.replace(/_/g, ' ')}`, userId);
-}
+// One rule for an order's status, and it lives in jobCards.js. This file used
+// to carry its own copy from before Finished Goods and partial dispatch
+// existed: no FG awareness, no 'partially_dispatched', and 'qc_approved'
+// ranked above 'dispatched' — so every QC approval here could flip an order
+// with one card shipped and one still at QC back to "QC Approved". Five live
+// orders drifted that way.
+const { syncOrderStatus } = require('./jobCards');
 
 router.get('/', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
   const canSeeNames = withCustomerVisibility(req);
