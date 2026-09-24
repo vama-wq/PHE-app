@@ -18,7 +18,15 @@
 // The wire draw depends on the gauge, and the gauge depends on the wire draw,
 // so selection is a fixed-point search rather than a formula (see chooseWire).
 
-const WIRE_TABLE = require('../data/wireGauge.json');
+// Two wire tables that must NEVER be mixed. The spools coincide almost
+// exactly, but the MANDREL does not — 11 mm winds on 2.0 throughout, while
+// 8 mm carries one 2.1 row and three at 1.8 — and the mandrel sets the spring
+// length. Picking from the wrong table gives a plausible, wrong coil.
+const WIRE_TABLES = {
+  8: require('../data/wireGauge.json'),
+  11: require('../data/wireGauge11.json'),
+};
+const SUPPORTED_DIAMETERS = [8, 11];
 
 const INCH_MM = 25.4;
 // The workbook uses 3.14 rather than Math.PI throughout. Keep it: changing it
@@ -26,25 +34,46 @@ const INCH_MM = 25.4;
 const PI = 3.14;
 
 // Policy Step 5 — tube draw, by material and total length (inches). 8 mm only.
-const TUBE_DRAW_8MM = {
-  steel:  [ { maxTL: 43, pct: 0.20 }, { maxTL: 50, pct: 0.197 }, { maxTL: Infinity, pct: 0.19 } ],
-  copper: [ { maxTL: Infinity, pct: 0.23 } ],
+const TUBE_DRAW = {
+  8: {
+    steel:  [ { maxTL: 43, pct: 0.20 }, { maxTL: 50, pct: 0.197 }, { maxTL: Infinity, pct: 0.19 } ],
+    copper: [ { maxTL: Infinity, pct: 0.23 } ],
+  },
+  11: {
+    steel:  [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.13 } ],
+    copper: [ { maxTL: Infinity, pct: 0.16 } ],
+  },
 };
 
 // Policy Step 7 — wire draw, by gauge. 8 mm only.
 // The 25-28 band takes 33% instead of 31% on a 1 kW heater.
-const WIRE_DRAW_8MM = {
-  steel: [
-    { minG: 20, maxG: 24, pct: 0.23 },
-    { minG: 25, maxG: 28, pct: 0.31, pctWhen1kW: 0.33 },
-    { minG: 29, maxG: 29, pct: 0.41 },
-    { minG: 30, maxG: Infinity, pct: 0.455 },
-  ],
-  copper: [
-    { minG: 20, maxG: 24, pct: 0.15 },
-    { minG: 25, maxG: 29, pct: 0.26 },
-    { minG: 30, maxG: Infinity, pct: 0.29 },
-  ],
+const WIRE_DRAW = {
+  8: {
+    steel: [
+      { minG: 20, maxG: 24, pct: 0.23 },
+      { minG: 25, maxG: 28, pct: 0.31, pctWhen1kW: 0.33 },
+      { minG: 29, maxG: 29, pct: 0.41 },
+      { minG: 30, maxG: Infinity, pct: 0.455 },
+    ],
+    copper: [
+      { minG: 20, maxG: 24, pct: 0.15 },
+      { minG: 25, maxG: 29, pct: 0.26 },
+      { minG: 30, maxG: Infinity, pct: 0.29 },
+    ],
+  },
+  // 11 mm has no 1 kW special case.
+  11: {
+    steel: [
+      { minG: 20, maxG: 24, pct: 0.12 },
+      { minG: 25, maxG: 30, pct: 0.17 },
+      { minG: 31, maxG: Infinity, pct: 0.21 },
+    ],
+    copper: [
+      { minG: 20, maxG: 24, pct: 0.08 },
+      { minG: 25, maxG: 30, pct: 0.12 },
+      { minG: 31, maxG: Infinity, pct: 0.17 },
+    ],
+  },
 };
 
 // Spring-window divisors, per material. The low divisor is the binding one —
@@ -52,8 +81,10 @@ const WIRE_DRAW_8MM = {
 // Taken from the two live SS cards (/3, /2.2) and the copper card (/2.5, /2);
 // the blank SS template still carries a stale /2.5 ceiling.
 const SPRING_DIVISORS = {
-  steel:  { low: 3,   high: 2.2 },
-  copper: { low: 2.5, high: 2 },
+  8:  { steel: { low: 3, high: 2.2 }, copper: { low: 2.5, high: 2 } },
+  // 11 mm does not split by material — its three blank templates all carry the
+  // same pair. Owner chose the 2.2 ceiling over the templates' 2.5, 24 Sep 2026.
+  11: { steel: { low: 3, high: 2.2 }, copper: { low: 3, high: 2.2 } },
 };
 
 // Which self-consistent gauge wins when more than one is valid. The owner's
@@ -65,16 +96,27 @@ const TIE_BREAK = 'coarsest-gauge';
 const TOTAL_LENGTH_ALLOWANCE_IN = 0.7;
 
 // Row 19 of the card prints three lengths in mm, right to left: the total, then
-// 10 less, then 5 less again. Owner confirmed 22 Sep 2026 that these deductions
-// are fixed — the −18 on one old copper card was a one-off, not a rule.
-const ROW19_STEP_DOWN_MM = [10, 5];
+// a step down, then 5 less again. The first step depends on the tube: 10 mm on
+// 8 mm tube (owner confirmed 22 Sep 2026; the −18 on one old 8 mm copper card
+// was a one-off), 18 mm on 11 mm tube, which all three 11 mm templates carry.
+const ROW19_STEP_DOWN_MM = { 8: [10, 5], 11: [18, 5] };
 
 // Policy Step 6 — cold zone and terminal pin, by total length. Standard only;
 // the planner may override (a 46.3" flameproof card shipped with a 3" zone).
-const COLD_ZONE_STANDARD = [
-  { maxTL: 50, coldZoneIn: 2, terminalPinIn: 3 },
-  { maxTL: Infinity, coldZoneIn: 3, terminalPinIn: 4 },
-];
+const COLD_ZONE_STANDARD = {
+  8:  [ { maxTL: 50, coldZoneIn: 2, terminalPinIn: 3 }, { maxTL: Infinity, coldZoneIn: 3, terminalPinIn: 4 } ],
+  // 11 mm: owner's rule, 24 Sep 2026 — 3" up to 48.5", 4" above, overridden
+  // per card. Nothing in the workbook derives it; the samples show 3", 16"
+  // and 26", so an override is routine here rather than exceptional.
+  11: [ { maxTL: 48.5, coldZoneIn: 3, terminalPinIn: 3 }, { maxTL: Infinity, coldZoneIn: 4, terminalPinIn: 4 } ],
+};
+
+// What the terminal pin divides the cold zone by. 8 mm uses 1.215 throughout;
+// 11 mm uses 1.15 for SS and Incoloy and 1.215 for copper, per its templates.
+const PIN_DIVISOR = { 8: { steel: 1.215, copper: 1.215 }, 11: { steel: 1.15, copper: 1.215 } };
+
+// The stud the card names. 8 mm takes M4, 11 mm takes M5.
+const STUD = { 8: 'M4-SS', 11: 'M5-SS' };
 
 // ── Material ────────────────────────────────────────────────────────────────
 // Everything in the policy splits two ways only: copper, or steel (SS/Incoloy).
@@ -88,14 +130,14 @@ function materialClass(tubeMaterial) {
 }
 
 // ── Policy lookups ──────────────────────────────────────────────────────────
-function tubeDrawPct(material, totalLengthIn) {
-  const bands = TUBE_DRAW_8MM[material];
+function tubeDrawPct(material, totalLengthIn, dia = 8) {
+  const bands = TUBE_DRAW[dia] && TUBE_DRAW[dia][material];
   if (!bands) return null;
   return bands.find(b => totalLengthIn <= b.maxTL).pct;
 }
 
-function wireDrawPct(material, gauge, wattage) {
-  const bands = WIRE_DRAW_8MM[material];
+function wireDrawPct(material, gauge, wattage, dia = 8) {
+  const bands = WIRE_DRAW[dia] && WIRE_DRAW[dia][material];
   if (!bands) return null;
   const band = bands.find(b => gauge >= b.minG && gauge <= b.maxG);
   if (!band) return null;
@@ -103,8 +145,8 @@ function wireDrawPct(material, gauge, wattage) {
   return band.pct;
 }
 
-function standardColdZone(totalLengthIn) {
-  return COLD_ZONE_STANDARD.find(b => totalLengthIn <= b.maxTL);
+function standardColdZone(totalLengthIn, dia = 8) {
+  return (COLD_ZONE_STANDARD[dia] || COLD_ZONE_STANDARD[8]).find(b => totalLengthIn <= b.maxTL);
 }
 
 // ── Wattage: "3in1" means three elements sharing the stated total ───────────
@@ -154,8 +196,8 @@ function springLengthIn(requiredOhms, wire) {
 // empty result means no wire in the table reaches the required coil length.
 function chooseWire(opts) {
   const {
-    material, ohmsAfterDraw, wattage, springWindow,
-    wireTable = WIRE_TABLE.rows, includeExcluded = false,
+    material, ohmsAfterDraw, wattage, springWindow, dia = 8,
+    wireTable = (WIRE_TABLES[dia] || WIRE_TABLES[8]).rows, includeExcluded = false,
   } = opts;
 
   // A row carrying an `excluded` reason is on the rack but not eligible — today
@@ -163,7 +205,7 @@ function chooseWire(opts) {
   const candidates = wireTable.filter(w => includeExcluded || !w.excluded);
   const excluded = wireTable.length - candidates.length;
 
-  const bands = WIRE_DRAW_8MM[material] || [];
+  const bands = (WIRE_DRAW[dia] && WIRE_DRAW[dia][material]) || [];
   // Distinct percentages this material can use, including the 1 kW variant.
   const pcts = [...new Set(bands.flatMap(b => [b.pct, b.pctWhen1kW]).filter(p => p != null))];
 
@@ -177,7 +219,7 @@ function chooseWire(opts) {
     // then vetoing the whole band silently threw away valid coarser gauges — and,
     // worse, sometimes reported that no wire fitted when one plainly did.
     const inWindow = candidates
-      .filter(w => wireDrawPct(material, w.gauge, wattage) === pct)
+      .filter(w => wireDrawPct(material, w.gauge, wattage, dia) === pct)
       .map(w => ({ wire: w, springIn: springLengthIn(requiredOhms, w) }))
       .filter(c => c.springIn >= springWindow.lowIn && c.springIn <= springWindow.highIn)
       .sort((a, b) => a.springIn - b.springIn); // "least coil length" — policy Step 8
@@ -259,7 +301,9 @@ function buildJobCard(input) {
   const material = materialClass(tubeMaterial);
   if (!material) return { ok: false, error: `Cannot classify tube material "${tubeMaterial}" as copper or steel. Say which it is before the card can be built.` };
   const dia = requiredNumber(tubeDiameterMm, 'Tube diameter', errors);
-  if (dia != null && dia !== 8) return { ok: false, error: `This engine covers 8 mm tube only (got ${dia} mm).` };
+  if (dia != null && !SUPPORTED_DIAMETERS.includes(dia)) {
+    return { ok: false, error: `This engine covers ${SUPPORTED_DIAMETERS.join(' and ')} mm tube (got ${dia} mm).` };
+  }
   const drawingLen = requiredNumber(drawingTotalLengthIn, 'Drawing total length', errors);
   const volts = requiredNumber(voltage, 'Voltage', errors);
   const watts = requiredNumber(statedWattage, 'Wattage', errors);
@@ -284,29 +328,31 @@ function buildJobCard(input) {
   // Step 4 — split the stated wattage across a 2in1 / 3in1 assembly.
   const { elements, wattage, source: elementsSource } =
     perElementWattage(watts, `${drawingNumber || ''} ${productCode || ''}`, elementsPerAssembly);
+  // Everything below is read out of the tables for THIS diameter.
+  const D = dia;
   if (elements > 1) {
     warnings.push(`Built as a ${elements}-in-1: ${watts} W split to ${round(wattage, 2)} W per element (${elementsSource}).`);
   }
 
   // Step 5 — the card's length is the drawing's plus the standard allowance.
   const totalLengthIn = round(drawingLen + TOTAL_LENGTH_ALLOWANCE_IN, 4);
-  const tubeDraw = tubeDrawPct(material, totalLengthIn);
+  const tubeDraw = tubeDrawPct(material, totalLengthIn, D);
   // The policy's steel bands read "below 43", "between 44 and 50", "above 51",
   // so 43-44 and 50-51 are simply unwritten. The engine has to resolve them to
   // something; it says which way it went rather than letting a hundredth of an
   // inch move the cutting length by 6 mm in silence.
-  if (material === 'steel' && ((totalLengthIn > 43 && totalLengthIn < 44) || (totalLengthIn > 50 && totalLengthIn < 51))) {
+  if (D === 8 && material === 'steel' && ((totalLengthIn > 43 && totalLengthIn < 44) || (totalLengthIn > 50 && totalLengthIn < 51))) {
     warnings.push(`Total length ${totalLengthIn}" falls in a range the policy does not cover; ${(tubeDraw * 100).toFixed(1)}% tube draw was used. Confirm before cutting.`);
   }
 
   // Row 19, as printed: total in mm, then each step-down applied in turn.
   const totalLengthMm = round(totalLengthIn * INCH_MM, 2);
-  const row19LengthsMm = ROW19_STEP_DOWN_MM.reduce(
+  const row19LengthsMm = (ROW19_STEP_DOWN_MM[D] || ROW19_STEP_DOWN_MM[8]).reduce(
     (acc, step) => [...acc, round(acc[acc.length - 1] - step, 2)], [totalLengthMm]);
   const cuttingLengthIn = totalLengthIn / (1 + tubeDraw);
 
   // Step 6 — cold zone: policy standard unless the planner overrides.
-  const std = standardColdZone(totalLengthIn);
+  const std = standardColdZone(totalLengthIn, D);
   const czBig = czBigIn != null ? czBigIn : std.coldZoneIn;
   const czSmall = czSmallIn != null ? czSmallIn : std.coldZoneIn;
   for (const [label, given, used] of [['big', czBigIn, czBig], ['small', czSmallIn, czSmall]]) {
@@ -318,12 +364,12 @@ function buildJobCard(input) {
   // element with a different cold zone and terminal pin at each end. Legitimate
   // sometimes, scrap when it was an oversight — so it never passes unremarked.
   if (czBig !== czSmall) {
-    warnings.push(`Ends differ: ${czBig}" cold zone with a ${terminalPin(czBig).studs}" pin at the big end, ${czSmall}" with a ${terminalPin(czSmall).studs}" pin at the small end. Confirm this is intended.`);
+    warnings.push(`Ends differ: ${czBig}" cold zone with a ${terminalPin(czBig, D, material).studs}" pin at the big end, ${czSmall}" with a ${terminalPin(czSmall, D, material).studs}" pin at the small end. Confirm this is intended.`);
   }
 
   for (const [label, given, cz] of [['big', pinBigIn, czBig], ['small', pinSmallIn, czSmall]]) {
-    if (given != null && given !== terminalPin(cz).studs) {
-      warnings.push(`Terminal pin ${label} forced to ${given}" — a ${cz}" cold zone gives ${terminalPin(cz).studs}".`);
+    if (given != null && given !== terminalPin(cz, D, material).studs) {
+      warnings.push(`Terminal pin ${label} forced to ${given}" — a ${cz}" cold zone gives ${terminalPin(cz, D, material).studs}".`);
     }
   }
 
@@ -331,7 +377,7 @@ function buildJobCard(input) {
   const ohmsAfterDraw = (volts * volts) / wattage;
 
   // The coil is wound long and stretched, so it is wound to a HIGHER resistance.
-  const divisors = SPRING_DIVISORS[material];
+  const divisors = (SPRING_DIVISORS[D] || SPRING_DIVISORS[8])[material];
   const springWindow = {
     lowIn:  (cuttingLengthIn - czBig * 2) / divisors.low,
     highIn: (cuttingLengthIn - czBig * 2) / divisors.high,
@@ -340,7 +386,7 @@ function buildJobCard(input) {
   let selection;
   if (drawOverride != null) {
     const requiredOhms = ohmsAfterDraw * (1 + drawOverride);
-    const inWindow = WIRE_TABLE.rows.filter(w => !w.excluded)
+    const inWindow = (WIRE_TABLES[D] || WIRE_TABLES[8]).rows.filter(w => !w.excluded)
       .map(w => ({ wire: w, springIn: springLengthIn(requiredOhms, w) }))
       .filter(c => c.springIn >= springWindow.lowIn && c.springIn <= springWindow.highIn)
       .sort((a, b) => a.springIn - b.springIn);
@@ -357,7 +403,7 @@ function buildJobCard(input) {
     };
     warnings.push(`Wire draw ${(drawOverride * 100).toFixed(1)}% set by hand, overriding the policy band.`);
   } else {
-    selection = chooseWire({ material, ohmsAfterDraw, wattage, springWindow });
+    selection = chooseWire({ material, ohmsAfterDraw, wattage, springWindow, dia: D });
   }
 
   if (selection.resolution === 'none') {
@@ -403,9 +449,10 @@ function buildJobCard(input) {
     // own — a different flange, a customer's fitting, what is on the shelf —
     // and when it is, the card says so rather than showing a pin its own cold
     // zone would never produce.
-    terminalPinBig: pinFor(czBig, pinBigIn),
-    terminalPinSmall: pinFor(czSmall, pinSmallIn),
+    terminalPinBig: pinFor(czBig, pinBigIn, D, material),
+    terminalPinSmall: pinFor(czSmall, pinSmallIn, D, material),
     standardTerminalPinIn: std.terminalPinIn,
+    studLabel: STUD[D] || STUD[8],
 
     springWindowLowIn: round(springWindow.lowIn, 4),
     springWindowHighIn: round(springWindow.highIn, 4),
@@ -434,15 +481,16 @@ function buildJobCard(input) {
 // H26 = D26*2-2 is a second, unrounded figure the workbook carries alongside it;
 // it is mirrored here at full precision. It used to be rounded, which turned the
 // cards' 4.938271605 into 5 — an invented number matching no cell and no policy.
-function terminalPin(coldZoneIn) {
-  const raw = coldZoneIn / 121.5 * 100 + 1;
+function terminalPin(coldZoneIn, dia = 8, material = 'steel') {
+  const div = (PIN_DIVISOR[dia] || PIN_DIVISOR[8])[material] || 1.215;
+  const raw = coldZoneIn / (div * 100) * 100 + 1;
   return { raw: round(raw, 6), studs: Math.ceil(raw), h26: round(raw * 2 - 2, 6) };
 }
 
 // The pin a cold zone gives, unless one was forced. `derivedStuds` keeps what
 // the policy would have said, so the card and the review screen can show both.
-function pinFor(coldZoneIn, forcedStuds) {
-  const derived = terminalPin(coldZoneIn);
+function pinFor(coldZoneIn, forcedStuds, dia = 8, material = 'steel') {
+  const derived = terminalPin(coldZoneIn, dia, material);
   if (forcedStuds == null) return { ...derived, derivedStuds: derived.studs, overridden: false };
   return { ...derived, studs: forcedStuds, derivedStuds: derived.studs, overridden: true };
 }
@@ -452,5 +500,6 @@ function round(n, dp) { const f = 10 ** dp; return Math.round(n * f) / f; }
 module.exports = {
   buildJobCard, chooseWire, springLengthIn,
   materialClass, tubeDrawPct, wireDrawPct, standardColdZone, perElementWattage, terminalPin, pinFor,
-  TUBE_DRAW_8MM, WIRE_DRAW_8MM, SPRING_DIVISORS, TOTAL_LENGTH_ALLOWANCE_IN, ROW19_STEP_DOWN_MM, TIE_BREAK, WIRE_TABLE,
+  TUBE_DRAW, WIRE_DRAW, SPRING_DIVISORS, TOTAL_LENGTH_ALLOWANCE_IN, ROW19_STEP_DOWN_MM, TIE_BREAK,
+  WIRE_TABLES, SUPPORTED_DIAMETERS, PIN_DIVISOR, STUD, COLD_ZONE_STANDARD,
 };

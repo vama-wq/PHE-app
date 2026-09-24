@@ -253,7 +253,7 @@ const REGRESSIONS = [
   ['the returned wire is a copy, not the shared row', () => {
     const o = E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 55.38 });
     o.wire.ohms_per_m = -1;
-    return E.WIRE_TABLE.rows.some(r => r.ohms_per_m === -1);
+    return E.WIRE_TABLES[8].rows.some(r => r.ohms_per_m === -1);
   }, poisoned => poisoned === false],
 ];
 
@@ -263,6 +263,42 @@ for (const [name, run, check] of REGRESSIONS) {
   catch (e) { detail = ` -> threw ${e.message}`; }
   if (!pass) failures++;
   console.log(`  ${pass ? G('pass') : R('FAIL')}  ${name}${detail}`);
+}
+
+// ── The 8 mm and 11 mm wire tables must stay apart ──────────────────────────
+console.log(`\n${'═'.repeat(88)}\nWire tables stay separate\n${'═'.repeat(88)}`);
+const TABLE_CHECKS = [
+  ['8 mm and 11 mm are different objects', () => E.WIRE_TABLES[8] !== E.WIRE_TABLES[11], true],
+  ['11 mm winds on a 2.0 mandrel throughout',
+    () => [...new Set(E.WIRE_TABLES[11].rows.map(r => r.mandrel_mm))].join(','), '2'],
+  ['8 mm keeps its 2.1 and 1.8 rows',
+    () => [...new Set(E.WIRE_TABLES[8].rows.map(r => r.mandrel_mm))].sort().join(','), '1.8,2,2.1'],
+  ['an 8 mm card never draws from the 11 mm table', () => {
+    const o = E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 34 });
+    return o.wire == null || E.WIRE_TABLES[8].rows.some(r => r.row === o.wire.row && r.mandrel_mm === o.wire.mandrel_mm);
+  }, true],
+  ['an 11 mm card never draws from the 8 mm table', () => {
+    const o = E.buildJobCard({ tubeMaterial: 'SS304', tubeDiameterMm: 11, wattage: 1500, voltage: 230, drawingTotalLengthIn: 46 });
+    return o.wire == null || o.wire.mandrel_mm === 2;
+  }, true],
+  ['the same heater in 8 mm and 11 mm does not give the same coil', () => {
+    const a = E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1500, voltage: 230, drawingTotalLengthIn: 46 });
+    const b = E.buildJobCard({ tubeMaterial: 'SS304', tubeDiameterMm: 11, wattage: 1500, voltage: 230, drawingTotalLengthIn: 46 });
+    return a.springLengthIn !== b.springLengthIn || a.gauge !== b.gauge;
+  }, true],
+  ['11 mm names the M5 stud, 8 mm the M4', () => {
+    const a = E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 34 });
+    const b = E.buildJobCard({ tubeMaterial: 'SS304', tubeDiameterMm: 11, wattage: 1500, voltage: 230, drawingTotalLengthIn: 46 });
+    return `${a.studLabel}/${b.studLabel}`;
+  }, 'M4-SS/M5-SS'],
+  ['an unsupported diameter is refused',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', tubeDiameterMm: 9.5, wattage: 750, voltage: 230, drawingTotalLengthIn: 34 }).ok, false],
+];
+for (const [name, run, want] of TABLE_CHECKS) {
+  let got, pass = false;
+  try { got = run(); pass = got === want; } catch (e) { got = `threw ${e.message}`; }
+  if (!pass) failures++;
+  console.log(`  ${pass ? G('pass') : R('FAIL')}  ${name}${pass ? '' : ` -> got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`);
 }
 
 console.log(`\n${'═'.repeat(88)}`);

@@ -42,6 +42,11 @@ const L = {
 // coloured dashes that read like marks on the sheet. Not reproduced.
 const box = (v, kind) => `<span class="box box--${kind}">${v}</span>`;
 
+// The stud in Gujarati. 8 mm takes M4, 11 mm M5, and the card names both.
+const GU_DIGIT = { 0: '૦', 1: '૧', 2: '૨', 3: '૩', 4: '૪', 5: '૫', 6: '૬', 7: '૭', 8: '૮', 9: '૯' };
+const studGu = (label) => String(label || 'M4-SS')
+  .replace(/^M(\d)-SS$/, (_, d) => `એમ ${GU_DIGIT[d] || d}-એસએસ`);
+
 // Numbered 1..N in the order they appear. The workbook's own numbering runs
 // 1,2,3,3,4,…,10,12,15,16 — two rows share a 3, and 11, 13 and 14 are missing
 // (13 and 14 were the bending rollers, now read off the drawing). Carrying
@@ -81,10 +86,10 @@ function specRows(c, head) {
     [['ઠંડા ઝોનની મોટી લંબાઈ', 'Cold Zone Big', 'बड़ा कोल्ड ज़ोन'], `${n(c.coldZoneBigIn, 0)}"`, ''],
     [['ઠંડા ઝોનની નાની લંબાઈ', 'Cold Zone Small', 'छोटा कोल्ड ज़ोन'], `${n(c.coldZoneSmallIn, 0)}"`, ''],
     [['ટર્મિનલ પિન મોટો સ્ટડ', 'Terminal Pin — Big Stud', 'टर्मिनल पिन बड़ा स्टड'],
-      `એમ ૪-એસએસ &nbsp;·&nbsp; M4-SS &nbsp;·&nbsp; ${box(`${c.terminalPinBig.studs}"`, 'pin')}`,
+      `${esc(studGu(c.studLabel))} &nbsp;·&nbsp; ${esc(c.studLabel || 'M4-SS')} &nbsp;·&nbsp; ${box(`${c.terminalPinBig.studs}"`, 'pin')}`,
       c.terminalPinBig.overridden ? `set by hand — a ${n(c.coldZoneBigIn, 0)}" cold zone gives ${c.terminalPinBig.derivedStuds}"` : ''],
     [['ટર્મિનલ પિન નાનો સ્ટડ', 'Terminal Pin — Small Stud', 'टर्मिनल पिन छोटा स्टड'],
-      `એમ ૪-એસએસ &nbsp;·&nbsp; M4-SS &nbsp;·&nbsp; ${box(`${c.terminalPinSmall.studs}"`, 'pin')}`,
+      `${esc(studGu(c.studLabel))} &nbsp;·&nbsp; ${esc(c.studLabel || 'M4-SS')} &nbsp;·&nbsp; ${box(`${c.terminalPinSmall.studs}"`, 'pin')}`,
       c.terminalPinSmall.overridden ? `set by hand — a ${n(c.coldZoneSmallIn, 0)}" cold zone gives ${c.terminalPinSmall.derivedStuds}"` : ''],
     [['ડ્રોઇંગ પછી પ્રતિકાર', 'Ω Ohms After Draw', 'ड्रॉ के बाद प्रतिरोध'],
       `${n(c.ohmsAfterDrawMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsAfterDraw, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsAfterDrawMax, 3)}`,
@@ -144,7 +149,7 @@ function renderParts(card, heads, provenance) {
     <div class="sheet-head">
       <div>
         <div class="sheet-title">Heating Element Job Card</div>
-        <div class="sheet-sub">${esc(h.company)} &nbsp;·&nbsp; 8 mm tube${headList.length > 1 ? ` &nbsp;·&nbsp; sheet ${i + 1} of ${headList.length}` : ''}</div>
+        <div class="sheet-sub">${esc(h.company)} &nbsp;·&nbsp; ${c.tubeDiameterMm} mm tube${headList.length > 1 ? ` &nbsp;·&nbsp; sheet ${i + 1} of ${headList.length}` : ''}</div>
       </div>
       <div class="asmbly"><span>ASMBLY</span><b>${esc(h.asmbly)}</b></div>
     </div>
