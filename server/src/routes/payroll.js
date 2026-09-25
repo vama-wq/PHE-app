@@ -194,6 +194,20 @@ function visibleLine(line, owner) {
 }
 
 // ── Employees ─────────────────────────────────────────────────────────────────
+// Names of the people who actually work the floor, for the production
+// checklist's worker dropdown. Any signed-in role may read it: it carries
+// nothing but id, name and group — no rates, no balances, no bank details.
+// Admin staff are left out; inactive workers are left out so a name that has
+// left cannot be picked on a new card (what was recorded under it stays).
+router.get('/workers', authenticate, async (req, res) => {
+  const rows = await getDB().all(`
+    SELECT id, TRIM(name) AS name, worker_group
+      FROM employees
+     WHERE active = TRUE AND worker_group <> 'fixed_admin'
+     ORDER BY TRIM(name)`);
+  res.json(rows);
+});
+
 router.get('/employees', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const rows = await getDB().all('SELECT * FROM employees ORDER BY worker_group, name');

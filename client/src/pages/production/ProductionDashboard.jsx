@@ -1152,9 +1152,27 @@ function QtyMismatchModal({ originalQty, netQty, breakdown, onConfirm, onCancel 
   );
 }
 
+// The worker dropdown applies only to cards that are new or still being made.
+// Cards already through QC or dispatched keep the plain text field exactly as
+// it was, so nothing recorded on them is touched or re-validated.
+const WORKER_PICK_STATUSES = new Set(['pending', 'in_progress', 'on_hold', 'repair_in_progress']);
+// Fetched once per page load and shared by every stage form — the list is
+// small and changes only when payroll adds or retires someone.
+let WORKERS_CACHE = null;
+function useWorkers() {
+  const [workers, setWorkers] = useState(WORKERS_CACHE || []);
+  useEffect(() => {
+    if (WORKERS_CACHE) return;
+    api.get('/payroll/workers').then(r => { WORKERS_CACHE = r.data; setWorkers(r.data); }).catch(() => {});
+  }, []);
+  return workers;
+}
+
 // ── Stage Detail View (inline within ChecklistModal) ──────────────────────────
 function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved }) {
   const { user } = useAuthStore();
+  const workers = useWorkers();
+  const pickWorker = WORKER_PICK_STATUSES.has(card?.status);
   const [value1, setValue1] = useState(stageData.value1 || '');
   const [value2, setValue2] = useState(stageData.value2 || '');
   const [coilWeight, setCoilWeight] = useState(stageData.coil_weight != null ? String(stageData.coil_weight) : '');
@@ -1616,6 +1634,21 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
             <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
               {stageData.worker_name}
             </div>
+          ) : pickWorker ? (
+            <select
+              className="input w-full"
+              value={workerName}
+              onChange={e => setWorkerName(e.target.value)}
+              disabled={isDone}
+            >
+              <option value="">— Select worker —</option>
+              {/* A name typed before the dropdown existed stays selectable so
+                  the stage still saves; it just is not offered on other stages. */}
+              {workerName && !workers.some(w => w.name === workerName) && (
+                <option value={workerName}>{workerName} (as typed earlier)</option>
+              )}
+              {workers.map(w => <option key={w.id} value={w.name}>{w.name}</option>)}
+            </select>
           ) : (
             <input
               className="input w-full"
