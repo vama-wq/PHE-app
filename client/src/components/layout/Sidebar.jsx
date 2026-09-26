@@ -10,26 +10,26 @@ import {
 , Wallet, Banknote } from 'lucide-react';
 
 const NAV = [
-  { id: 'dashboard',     to: '/',              icon: LayoutDashboard, label: 'Dashboard',      roles: null, badge: 'unreadNotifs' },
-  { id: 'orders',        to: '/orders',        icon: ClipboardList,   label: 'Orders',          roles: null },
-  { id: 'drawings',      to: '/drawings',      icon: PenLine,         label: 'Drawings',        roles: ['owner','admin','design'], badge: 'drawingsPending' },
-  { id: 'job-cards',     to: '/job-cards',     icon: FileText,        label: 'Job Cards',       roles: null },
-  { id: 'production',    to: '/production',    icon: Wrench,          label: 'Production',      roles: null },
-  { id: 'manufacturing-plan', to: '/manufacturing-plan', icon: Calendar, label: 'Mfg Plan', roles: ['owner','production'] },
-  { id: 'qc',            to: '/qc',            icon: FlaskConical,    label: 'Quality Check',   roles: ['design','owner','admin'] },
-  { id: 'dispatch',      to: '/dispatch',      icon: Truck,           label: 'Dispatch',        roles: null },
-  { id: 'customer-queries', to: '/customer-queries', icon: HelpCircle,   label: 'Customer Queries', roles: null, badge: 'openQueries' },
-  { id: 'finished-goods',to: '/finished-goods',icon: Warehouse,       label: 'Finished Goods',  roles: ['owner','admin','production'] },
-  { id: 'inventory',     to: '/inventory',     icon: Package,         label: 'Inventory',       roles: ['owner','admin','design'] },
-  { id: 'purchases',     to: '/purchases',     icon: ShoppingCart,    label: 'Purchases',       roles: ['owner','admin','accounts'] },
-  { id: 'petty-cash',    to: '/petty-cash',    icon: Wallet,          label: 'Account Statement', roles: ['owner','accounts'] },
-  { id: 'payroll',       to: '/payroll',       icon: Banknote,        label: 'Payroll',         roles: ['owner','accounts'] },
-  { id: 'suppliers',     to: '/suppliers',     icon: Building2,       label: 'Suppliers',       roles: ['owner','admin','accounts'] },
-  { id: 'customers',     to: '/customers',     icon: Users,           label: 'Customers',       roles: ['admin','owner'] },
-  { id: 'prospecting',   to: '/prospecting',   icon: Target,          label: 'Prospecting',     roles: ['owner','admin','accounts'] },
-  { id: 'products',      to: '/products',      icon: Box,             label: 'Products',        roles: null },
-  { id: 'reports',       to: '/reports',       icon: BarChart2,       label: 'Reports',         roles: null },
-  { id: 'policy',        to: '/policy',        icon: BookOpen,        label: 'Policy of PHE',   roles: null },
+  { id: 'dashboard',     to: '/',              icon: LayoutDashboard, label: 'Dashboard',      roles: null, badge: 'dashboard' },
+  { id: 'orders',        to: '/orders',        icon: ClipboardList,   label: 'Orders',          roles: null, badge: 'orders' },
+  { id: 'drawings',      to: '/drawings',      icon: PenLine,         label: 'Drawings',        roles: ['owner','admin','design'], badge: 'drawings' },
+  { id: 'job-cards',     to: '/job-cards',     icon: FileText,        label: 'Job Cards',       roles: null, badge: 'job-cards' },
+  { id: 'production',    to: '/production',    icon: Wrench,          label: 'Production',      roles: null, badge: 'production' },
+  { id: 'manufacturing-plan', to: '/manufacturing-plan', icon: Calendar, label: 'Mfg Plan', roles: ['owner','production'], badge: 'manufacturing-plan' },
+  { id: 'qc',            to: '/qc',            icon: FlaskConical,    label: 'Quality Check',   roles: ['design','owner','admin'], badge: 'qc' },
+  { id: 'dispatch',      to: '/dispatch',      icon: Truck,           label: 'Dispatch',        roles: null, badge: 'dispatch' },
+  { id: 'customer-queries', to: '/customer-queries', icon: HelpCircle,   label: 'Customer Queries', roles: null, badge: 'customer-queries' },
+  { id: 'finished-goods',to: '/finished-goods',icon: Warehouse,       label: 'Finished Goods',  roles: ['owner','admin','production'], badge: 'finished-goods' },
+  { id: 'inventory',     to: '/inventory',     icon: Package,         label: 'Inventory',       roles: ['owner','admin','design'], badge: 'inventory' },
+  { id: 'purchases',     to: '/purchases',     icon: ShoppingCart,    label: 'Purchases',       roles: ['owner','admin','accounts'], badge: 'purchases' },
+  { id: 'petty-cash',    to: '/petty-cash',    icon: Wallet,          label: 'Account Statement', roles: ['owner','accounts'], badge: 'petty-cash' },
+  { id: 'payroll',       to: '/payroll',       icon: Banknote,        label: 'Payroll',         roles: ['owner','accounts'], badge: 'payroll' },
+  { id: 'suppliers',     to: '/suppliers',     icon: Building2,       label: 'Suppliers',       roles: ['owner','admin','accounts'], badge: 'suppliers' },
+  { id: 'customers',     to: '/customers',     icon: Users,           label: 'Customers',       roles: ['admin','owner'], badge: 'customers' },
+  { id: 'prospecting',   to: '/prospecting',   icon: Target,          label: 'Prospecting',     roles: ['owner','admin','accounts'], badge: 'prospecting' },
+  { id: 'products',      to: '/products',      icon: Box,             label: 'Products',        roles: null, badge: 'products' },
+  { id: 'reports',       to: '/reports',       icon: BarChart2,       label: 'Reports',         roles: null, badge: 'reports' },
+  { id: 'policy',        to: '/policy',        icon: BookOpen,        label: 'Policy of PHE',   roles: null, badge: 'policy' },
 ];
 
 const ROLE_DOT = {
@@ -43,51 +43,18 @@ const ROLE_DOT = {
 export default function Sidebar() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
-  const [drawingsPending, setDrawingsPending] = useState(0);
-  const [openQueries, setOpenQueries] = useState(0);
-  const [unreadNotifs, setUnreadNotifs] = useState(0);
-
-  // Fetch pending drawings count for badge (design/admin/owner only)
+  // Everything waiting on this person, one count per nav item, worked out
+  // server-side for their role (GET /work/pending). Replaces three separate
+  // polls that pilled only Dashboard, Drawings and Customer Queries.
+  const [work, setWork] = useState({ counts: {}, detail: {} });
   useEffect(() => {
-    if (!['owner', 'admin', 'design'].includes(user?.role)) return;
-    const fetch = () =>
-      api.get('/orders/drawings/pending')
-        .then(r => {
-          // Badge shows: orders needing drawing + orders awaiting owner review + rejected
-          const actionable = r.data.filter(o =>
-            !o.drawing_status || o.drawing_status === 'pending_review' || o.drawing_status === 'rejected'
-          ).length;
-          setDrawingsPending(actionable);
-        })
-        .catch(() => {});
-    fetch();
-    const t = setInterval(fetch, 60000); // refresh every minute
+    const fetchWork = () => api.get('/work/pending').then(r => setWork(r.data)).catch(() => {});
+    fetchWork();
+    const t = setInterval(fetchWork, 30000);
     return () => clearInterval(t);
-  }, [user?.role]);
-
-  // Fetch open customer queries count for badge
-  useEffect(() => {
-    const fetchQ = () =>
-      api.get('/customer-queries?status=open')
-        .then(r => setOpenQueries(r.data.length))
-        .catch(() => {});
-    fetchQ();
-    const t = setInterval(fetchQ, 60000);
-    return () => clearInterval(t);
-  }, []);
-
-  // Fetch unread notifications count
-  useEffect(() => {
-    const fetchN = () =>
-      api.get('/notifications/unread-count')
-        .then(r => setUnreadNotifs(r.data.count || 0))
-        .catch(() => {});
-    fetchN();
-    const t = setInterval(fetchN, 10000);
-    return () => clearInterval(t);
-  }, []);
-
-  const badges = { drawingsPending, openQueries, unreadNotifs };
+  }, [user?.id]);
+  const badges = work.counts;
+  const badgeTitle = (id) => (work.detail[id] || []).map(([label, n]) => `${n} ${label}`).join('\n');
 
   const handleLogout = async () => {
     await logout();
@@ -132,7 +99,7 @@ export default function Sidebar() {
             } catch (e) {}
           }
           return true;
-        }).map(({ to, icon: Icon, label, badge }) => {
+        }).map(({ id, to, icon: Icon, label, badge }) => {
           const badgeCount = badge ? (badges[badge] || 0) : 0;
           return (
             <NavLink
@@ -152,7 +119,7 @@ export default function Sidebar() {
                   <Icon size={17} className={isActive ? 'text-phe-400' : ''} />
                   <span className="flex-1">{label}</span>
                   {badgeCount > 0 && (
-                    <span className="ml-auto text-xs font-bold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center leading-none">
+                    <span className="ml-auto text-xs font-bold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center leading-none" title={badgeTitle(id)}>
                       {badgeCount}
                     </span>
                   )}
