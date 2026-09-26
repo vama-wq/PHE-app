@@ -9,6 +9,20 @@ const { authenticate } = require('../middleware/auth');
 
 const CLOSED = `('dispatched','in_finished_goods','resolved_dispatched','cancelled','closed','completed','rejected')`;
 
+// An @mention counts only while it is a live conversation: within this many
+// days, and the person mentioned has not written on that thread since. Before
+// this, every unread mention since June counted — 40 to 60 a head — and a pill
+// that never goes down tells nobody anything. Owner's call, 26 Sep 2026.
+const MENTION_DAYS = 14;
+// One clause per thread type: the mention row, the messages table it lives
+// in, and the column both share.
+const mentionSql = (mentions, messages, key) => `
+  SELECT COUNT(*)::int n FROM ${mentions} mm
+   WHERE mm.mentioned_user_id=$1 AND mm.is_read=0
+     AND mm.created_at > NOW() - INTERVAL '${MENTION_DAYS} days'
+     AND NOT EXISTS (SELECT 1 FROM ${messages} r
+                      WHERE r.${key}=mm.${key} AND r.user_id=mm.mentioned_user_id AND r.created_at > mm.created_at)`;
+
 // A count is [label, sql, params]. Labels feed the tooltip so a "24" on
 // Purchases says what the 24 are.
 function rules(role, uid) {
@@ -21,7 +35,7 @@ function rules(role, uid) {
   add('dashboard', 'unread notifications', `SELECT COUNT(*)::int n FROM notifications WHERE user_id=$1 AND is_read=0`, [uid]);
 
   // ── Orders ──
-  if (all) add('orders', 'messages mentioning you', `SELECT COUNT(*)::int n FROM message_mentions WHERE mentioned_user_id=$1 AND is_read=0`, [uid]);
+  if (all) add('orders', 'unanswered mentions of you', mentionSql('message_mentions', 'order_messages', 'order_id'), [uid]);
   if (is('owner')) add('orders', 'orders awaiting your approval', `SELECT COUNT(*)::int n FROM orders WHERE status='pending_approval'`);
   if (is('design')) add('orders', 'carried inventory to check', `SELECT COUNT(*)::int n FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE oi.bom_review='needed' AND o.status NOT IN ${CLOSED}`);
 
@@ -62,7 +76,7 @@ function rules(role, uid) {
   if (is('accounts', 'owner')) add('dispatch', 'cards ready to dispatch', `SELECT COUNT(*)::int n FROM job_cards WHERE status='qc_approved' AND COALESCE(qc_dispatch_qty,0)>0`);
 
   // ── Customer Queries ──
-  if (all) add('customer-queries', 'query messages mentioning you', `SELECT COUNT(*)::int n FROM customer_query_mentions WHERE mentioned_user_id=$1 AND is_read=0`, [uid]);
+  if (all) add('customer-queries', 'unanswered mentions of you', mentionSql('customer_query_mentions', 'customer_query_messages', 'query_id'), [uid]);
   if (is('owner')) {
     add('customer-queries', 'open queries', `SELECT COUNT(*)::int n FROM customer_queries WHERE status IN ('open','in_progress')`);
     add('customer-queries', 'returns needing a return type', `SELECT COUNT(*)::int n FROM customer_queries WHERE status='product_return' AND return_status='pending_return' AND return_type IS NULL`);
@@ -79,7 +93,7 @@ function rules(role, uid) {
 
   // ── Purchases ──
   if (is('owner', 'admin', 'accounts')) {
-    add('purchases', 'PO messages mentioning you', `SELECT COUNT(*)::int n FROM purchase_order_message_mentions WHERE mentioned_user_id=$1 AND is_read=0`, [uid]);
+    add('purchases', 'unanswered mentions of you', mentionSql('purchase_order_message_mentions', 'purchase_order_messages', 'po_id'), [uid]);
     add('purchases', 'draft POs to approve', `SELECT COUNT(*)::int n FROM purchase_orders WHERE status='draft'`);
     add('purchases', 'approved POs to send', `SELECT COUNT(*)::int n FROM purchase_orders WHERE status='approved'`);
     add('purchases', 'sent POs awaiting receipt', `SELECT COUNT(*)::int n FROM purchase_orders WHERE status='sent'`);
