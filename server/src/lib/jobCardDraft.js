@@ -163,9 +163,16 @@ async function buildDraft(db, orderItemId, answers = {}) {
   // a sheet headed PT-X-S1 told the floor to build 100 on a card the system
   // runs at 50. The parenthetical says where this batch sits in the run, so
   // nobody reads 50 against a 100-piece order as a short delivery.
+  // A 3in1 / 2in1 item is N heaters per piece, and the floor counts heaters.
+  // So the number printed first is HEATERS — 12 pcs of a 3in1 reads
+  // "36 Nos (12 nos 3in1)" — with the piece count and the in-1 in brackets.
+  // Single-element items read as they always did.
+  const el = Math.max(1, Number(card.elements) || 1);
+  const heaters = (n) => el > 1 ? `${n * el} Nos (${n} nos ${el}in1` : `${n} Nos`;
   const qtyLine = (i) => parts.length > 1
-    ? `${parts[i]} Nos (${i + 1} of ${parts.length} · item ${item.quantity})`
-    : `${item.quantity} Nos`;
+    ? (el > 1 ? `${heaters(parts[i])} · ${i + 1} of ${parts.length} · item ${item.quantity})`
+              : `${parts[i]} Nos (${i + 1} of ${parts.length} · item ${item.quantity})`)
+    : (el > 1 ? `${heaters(item.quantity)})` : `${item.quantity} Nos`);
 
   // "Where each figure came from", printed on the page below the sheet (screen
   // only). Derived rather than written by hand, so it always describes what the
