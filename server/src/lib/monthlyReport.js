@@ -71,8 +71,11 @@ async function buildMonth(db, startISO, endISO) {
       const rq = parseInt(r.rejection_qty,10)||0; rejects += rq;
       if (r.stage_no !== 29) remades += parseInt(r.remade_qty,10)||0;
       if (rq > 0) stageRejects[r.stage_no] = (stageRejects[r.stage_no]||0) + rq;
-      if (r.worker_name && r.worker_name.trim()) {
-        const w = r.worker_name.trim(); wset.add(w);
+      // A stage can carry more than one worker, joined with ", " (since 26 Sep
+      // 2026). Credit the card and its rejects to each of them, so a shared
+      // stage never shows up as a phantom worker called "A, B".
+      for (const w of String(r.worker_name || '').split(',').map(x => x.trim()).filter(Boolean)) {
+        wset.add(w);
         (workers[w] ||= { items:new Set(), rejects:0 }); workers[w].items.add(c.id); workers[w].rejects += rq;
       }
     });

@@ -1168,6 +1168,12 @@ function useWorkers() {
   return workers;
 }
 
+function selected_hint(joined) {
+  const names = joined.split(',').map(x => x.trim()).filter(Boolean);
+  if (!names.length) return <div className="col-span-2 text-xs text-gray-400 pt-1">Tick everyone who worked this stage</div>;
+  return <div className="col-span-2 text-xs text-gray-600 pt-1 border-t border-gray-100 mt-1">{names.length} selected: {names.join(', ')}</div>;
+}
+
 // ── Stage Detail View (inline within ChecklistModal) ──────────────────────────
 function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved }) {
   const { user } = useAuthStore();
@@ -1635,20 +1641,33 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               {stageData.worker_name}
             </div>
           ) : pickWorker ? (
-            <select
-              className="input w-full"
-              value={workerName}
-              onChange={e => setWorkerName(e.target.value)}
-              disabled={isDone}
-            >
-              <option value="">— Select worker —</option>
-              {/* A name typed before the dropdown existed stays selectable so
-                  the stage still saves; it just is not offered on other stages. */}
-              {workerName && !workers.some(w => w.name === workerName) && (
-                <option value={workerName}>{workerName} (as typed earlier)</option>
-              )}
-              {workers.map(w => <option key={w.id} value={w.name}>{w.name}</option>)}
-            </select>
+            // More than one person can work a stage, so this is a tick list.
+            // The names are stored joined with ", " in the same text column, so
+            // every reader of worker_name — the card, dispatch, CAPA, export —
+            // sees them exactly as before, just more than one.
+            <div className={`border border-gray-200 rounded-lg p-2 grid grid-cols-2 gap-x-3 gap-y-1 ${isDone ? 'bg-gray-50 opacity-70' : 'bg-white'}`}>
+              {(() => {
+                const selected = workerName.split(',').map(x => x.trim()).filter(Boolean);
+                const toggle = (name) => {
+                  const next = selected.includes(name) ? selected.filter(n => n !== name) : [...selected, name];
+                  setWorkerName(next.join(', '));
+                };
+                // A name typed before the list existed stays ticked so the
+                // stage still saves; it is not offered on other stages.
+                const extras = selected.filter(n => !workers.some(w => w.name === n));
+                return [
+                  ...extras.map(n => ({ id: `typed:${n}`, name: n, typed: true })),
+                  ...workers,
+                ].map(w => (
+                  <label key={w.id} className="flex items-center gap-2 text-sm text-gray-800 py-0.5 cursor-pointer">
+                    <input type="checkbox" className="rounded" checked={selected.includes(w.name)}
+                      onChange={() => toggle(w.name)} disabled={isDone} />
+                    <span>{w.name}{w.typed && <span className="text-xs text-gray-400"> (as typed earlier)</span>}</span>
+                  </label>
+                ));
+              })()}
+              {selected_hint(workerName)}
+            </div>
           ) : (
             <input
               className="input w-full"
