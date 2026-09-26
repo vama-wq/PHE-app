@@ -3,13 +3,14 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { ROLE_LABELS } from '../../lib/utils';
 import api from '../../lib/api';
+import { useWorkStore } from '../../store/workStore';
 import {
   LayoutDashboard, ClipboardList, FileText, Package,
   Users, Box, Wrench, Truck, LogOut, FlaskConical,
   Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse, PenLine, HelpCircle, Bell, BookOpen, Calendar, Target
 , Wallet, Banknote } from 'lucide-react';
 
-const NAV = [
+export const NAV_ITEMS = [
   { id: 'dashboard',     to: '/',              icon: LayoutDashboard, label: 'Dashboard',      roles: null, badge: 'dashboard' },
   { id: 'orders',        to: '/orders',        icon: ClipboardList,   label: 'Orders',          roles: null, badge: 'orders' },
   { id: 'drawings',      to: '/drawings',      icon: PenLine,         label: 'Drawings',        roles: ['owner','admin','design'], badge: 'drawings' },
@@ -43,16 +44,11 @@ const ROLE_DOT = {
 export default function Sidebar() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
-  // Everything waiting on this person, one count per nav item, worked out
-  // server-side for their role (GET /work/pending). Replaces three separate
-  // polls that pilled only Dashboard, Drawings and Customer Queries.
-  const [work, setWork] = useState({ counts: {}, detail: {} });
-  useEffect(() => {
-    const fetchWork = () => api.get('/work/pending').then(r => setWork(r.data)).catch(() => {});
-    fetchWork();
-    const t = setInterval(fetchWork, 30000);
-    return () => clearInterval(t);
-  }, [user?.id]);
+  // Everything waiting on this person, one count per nav item, from the
+  // shared work store (GET /work/pending) — the same numbers the strip at the
+  // top of each page breaks down.
+  const work = useWorkStore();
+  useEffect(() => { work.start(); }, []);
   const badges = work.counts;
   const badgeTitle = (id) => (work.detail[id] || []).map(([label, n]) => `${n} ${label}`).join('\n');
 
@@ -87,7 +83,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-2 space-y-0.5 overflow-y-auto pb-2">
-        {NAV.filter(item => {
+        {NAV_ITEMS.filter(item => {
           // Role-based filter (existing)
           if (item.roles && !item.roles.includes(user?.role)) return false;
           // Module-level permission filter (owner always gets everything)

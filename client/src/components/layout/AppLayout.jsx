@@ -2,6 +2,7 @@ import { Outlet, useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import { useAuthStore } from '../../store/authStore';
 import Sidebar from './Sidebar';
+import PendingWorkBar from './PendingWorkBar';
 
 export default function AppLayout() {
   const { user, loading } = useAuthStore();
@@ -28,6 +29,7 @@ export default function AppLayout() {
     <div className="flex min-h-screen bg-slate-50">
       <Sidebar />
       <main className="flex-1 overflow-y-auto min-w-0">
+        <PendingWorkBar />
         <Outlet />
       </main>
     </div>
