@@ -760,10 +760,17 @@ export default function OrderDetail() {
                   // A job card belongs to THIS item only if it links to its id.
                   // (Two items can share a drawing number — never match on that,
                   // except as a fallback for legacy cards with no linked item id.)
-                  const hasJC = (order.job_cards || []).some(jc =>
+                  // Cards cover an item by QUANTITY. A 2-piece item with one card
+                  // for 1 piece still needs a card — and if that card is deleted, the
+                  // item is open again. Keying this on "any card exists" hid the
+                  // button on exactly the items that still had pieces to make.
+                  const itemCards = (order.job_cards || []).filter(jc =>
                     jc.order_item_id === item.id
                     || (jc.order_item_id == null && item.drawing_number && jc.drawing_no === item.drawing_number)
                   );
+                  const coveredQty = itemCards.reduce((n, jc) => n + (Number(jc.qty) || 0), 0);
+                  const hasJC = itemCards.length > 0 && coveredQty >= (Number(item.quantity) || 0);
+                  const partlyCovered = itemCards.length > 0 && !hasJC;
                   const rowColor = hasJC
                     ? 'border-gray-200 bg-gray-50'
                     : drawingStatus === 'approved'
@@ -784,10 +791,15 @@ export default function OrderDetail() {
                           <CheckCircle2 size={11} className="text-green-500" /> Job Card Uploaded
                         </span>
                       ) : drawingStatus === 'approved' || order.drawing_bypassed ? (
-                        <button className="btn-primary btn-sm py-1 px-2 text-xs"
-                          onClick={() => { setJobCardItemId(item.id); setShowJobCardModal(true); }}>
-                          <Upload size={12} /> Upload Job Card
-                        </button>
+                        <span className="flex items-center gap-2">
+                          {partlyCovered && (
+                            <span className="text-xs text-amber-700 font-medium">{coveredQty} of {item.quantity} pcs on cards</span>
+                          )}
+                          <button className="btn-primary btn-sm py-1 px-2 text-xs"
+                            onClick={() => { setJobCardItemId(item.id); setShowJobCardModal(true); }}>
+                            <Upload size={12} /> {partlyCovered ? `Job Card for remaining ${(Number(item.quantity) || 0) - coveredQty}` : 'Upload Job Card'}
+                          </button>
+                        </span>
                       ) : drawingStatus === 'pending_review' ? (
                         <span className="text-xs text-blue-600 font-medium flex items-center gap-1">
                           <Clock size={11} /> Drawing awaiting approval
@@ -890,7 +902,9 @@ export default function OrderDetail() {
                   const drawingStatus = itemDrawingStatus[item.id]
                     ?? (itemDrawings.some(d => d.drawing_status === 'approved') ? 'approved'
                       : itemDrawings.length > 0 ? 'pending_review' : null);
-                  const hasJC = (order.job_cards || []).some(jc => jc.order_item_id === item.id);
+                  const fgCards = (order.job_cards || []).filter(jc => jc.order_item_id === item.id);
+                  const fgCovered = fgCards.reduce((n, jc) => n + (Number(jc.qty) || 0), 0);
+                  const hasJC = fgCards.length > 0 && fgCovered >= (Number(item.quantity) || 0);
                   return (
                     <div key={item.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${
                       hasJC ? 'border-gray-200 bg-gray-50' : drawingStatus === 'approved' ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'

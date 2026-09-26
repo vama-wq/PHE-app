@@ -708,6 +708,29 @@ router.delete('/:id', authenticate, authorize('admin', 'owner'), async (req, res
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.id]);
   if (!jc) return res.status(404).json({ error: 'Not found' });
 
+  // Three things a card can carry that make deleting it wrong, each said
+  // plainly. Before this the route cascaded a fixed list and let any other
+  // foreign key throw — the owner saw "Failed to delete" and nothing else.
+  const fg = await db.get('SELECT COUNT(*)::int AS n, COALESCE(SUM(qty_available),0)::float AS avail FROM finished_goods WHERE job_card_id=$1', [jc.id]);
+  if (fg.n > 0) {
+    return res.status(400).json({ error: `Cannot delete ${jc.job_card_no}: ${fg.avail} pcs of it are booked in Finished Goods stock. Take the stock out first.` });
+  }
+  const cq = await db.get('SELECT query_no FROM customer_queries WHERE job_card_id=$1 ORDER BY id DESC LIMIT 1', [jc.id]);
+  if (cq) {
+    return res.status(400).json({ error: `Cannot delete ${jc.job_card_no}: customer query ${cq.query_no} is raised against it.` });
+  }
+  const kids = await db.all(
+    `SELECT job_card_no FROM job_cards WHERE parent_job_card_id=$1
+      UNION SELECT c.job_card_no FROM job_card_split_requests r JOIN job_cards c ON c.id=r.child_job_card_id WHERE r.job_card_id=$1`, [jc.id]);
+  if (kids.length) {
+    return res.status(400).json({ error: `Cannot delete ${jc.job_card_no}: it was split into ${kids.map(k => k.job_card_no).join(', ')}. Delete those first.` });
+  }
+
+  // A card that IS a split child is pointed at by the request that made it.
+  // Release the pointer and keep the request: the split happened and its
+  // reason is history; only the card is going.
+  await db.run('UPDATE job_card_split_requests SET child_job_card_id=NULL WHERE child_job_card_id=$1', [jc.id]);
+
   await db.run('DELETE FROM production_day_picks WHERE job_card_id=$1', [jc.id]);
   await db.run('DELETE FROM job_card_holds WHERE job_card_id=$1', [jc.id]);
   await db.run('DELETE FROM qc_reports WHERE job_card_id=$1', [jc.id]);
@@ -726,7 +749,16 @@ router.delete('/:id', authenticate, authorize('admin', 'owner'), async (req, res
       [jc.file_path, jc.id]);
     if (!shared) await deleteFromStorage(jc.file_path);
   }
-  await db.run('DELETE FROM job_cards WHERE id=$1', [req.params.id]);
+  try {
+    await db.run('DELETE FROM job_cards WHERE id=$1', [req.params.id]);
+  } catch (e) {
+    if (e.code === '23503') {
+      return res.status(400).json({ error: `Cannot delete ${jc.job_card_no}: another record still refers to it (${e.table || e.constraint}).` });
+    }
+    throw e;
+  }
+  await logActivity(jc.order_id, null, 'job_card_deleted',
+    `Job card ${jc.job_card_no} deleted (qty ${jc.qty}, was ${String(jc.status || '').replace(/_/g, ' ')})${jc.parent_job_card_id ? ' — was a split child' : ''}`, req.user.id);
   res.json({ message: 'Deleted' });
 });
 
