@@ -806,7 +806,8 @@ export default function OrderDetail() {
                         </span>
                       ) : drawingStatus === 'rejected' ? (
                         <span className="text-xs text-red-600 font-medium flex items-center gap-1">
-                          <XCircle size={11} /> Drawing rejected — needs revision
+                          {partlyCovered && <span className="text-amber-700">{coveredQty} of {item.quantity} pcs on cards ·</span>}
+                          <XCircle size={11} /> Drawing rejected — needs revision before the remaining {partlyCovered ? (Number(item.quantity) || 0) - coveredQty : ''} can be carded
                         </span>
                       ) : (
                         <span className="text-xs text-amber-600 font-medium flex items-center gap-1">

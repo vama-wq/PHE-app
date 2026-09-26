@@ -1493,7 +1493,12 @@ router.get('/:id/split-requests', authenticate, async (req, res) => {
      LEFT JOIN users u ON u.id = sr.created_by
      LEFT JOIN users a ON a.id = sr.approved_by
      LEFT JOIN job_cards ch ON ch.id = sr.child_job_card_id
-     WHERE sr.job_card_id=$1 ORDER BY sr.created_at DESC`,
+     WHERE sr.job_card_id=$1
+       -- An approved split whose card was later deleted has nothing left to
+       -- track: the piece goes back to the item and gets a fresh card there.
+       -- The request row stays as history; it just no longer shows on the card.
+       AND NOT (sr.status = 'approved' AND sr.child_job_card_id IS NULL)
+     ORDER BY sr.created_at DESC`,
     [req.params.id]
   );
   res.json(rows);
