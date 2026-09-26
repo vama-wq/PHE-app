@@ -188,7 +188,7 @@ async function buildDraft(db, orderItemId, answers = {}) {
     ['Tube draw', `${pct(card.tubeDrawPct)} — ${dia} mm ${card.material === 'copper' ? 'copper' : 'SS / Incoloy'} at ${card.totalLengthIn}"`],
     ['Wire gauge', card.gauge == null
       ? 'no wire on the sheet reaches the required coil length — choose by hand'
-      : `${card.gauge} SWG at ${pct(card.wireDrawPct)} wire draw, ${card.gaugeResolution === 'unique' ? 'the only self-consistent answer' : 'the coarsest of several'}; ${card.spoolOptions.length} spool(s) of it fit the spring window`],
+      : `${card.gauge} SWG at ${pct(card.wireDrawPct)} wire draw, ${card.gaugeResolution === 'unique' ? 'the only gauge that fits' : 'the best stocked of several'}; ${card.spoolOptions.length} spool(s) of it fit the spring window`],
     ['Cold zone', card.coldZoneBigIn === std.coldZoneIn
       ? `${card.coldZoneBigIn}" — the ${dia} mm standard for a ${card.totalLengthIn}" element`
       : `${card.coldZoneBigIn}" set by hand; the ${dia} mm standard here is ${std.coldZoneIn}"`],

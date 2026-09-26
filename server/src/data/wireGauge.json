@@ -457,28 +457,32 @@
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 10.7,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "lastResort": "Odd for 24 SWG: 0.56 mm at 10.4-10.8 ohm/m where the other 24 SWG spools read 5.6-5.9. Rarely on the rack. Chosen only when no other gauge fits the window — owner, 26 Sep 2026"
   },
   {
    "row": 68,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 10.8,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "lastResort": "Odd for 24 SWG: 0.56 mm at 10.4-10.8 ohm/m where the other 24 SWG spools read 5.6-5.9. Rarely on the rack. Chosen only when no other gauge fits the window — owner, 26 Sep 2026"
   },
   {
    "row": 69,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 10.6,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "lastResort": "Odd for 24 SWG: 0.56 mm at 10.4-10.8 ohm/m where the other 24 SWG spools read 5.6-5.9. Rarely on the rack. Chosen only when no other gauge fits the window — owner, 26 Sep 2026"
   },
   {
    "row": 70,
    "gauge": 24,
    "dia_mm": 0.56,
    "ohms_per_m": 10.4,
-   "mandrel_mm": 2
+   "mandrel_mm": 2,
+   "lastResort": "Odd for 24 SWG: 0.56 mm at 10.4-10.8 ohm/m where the other 24 SWG spools read 5.6-5.9. Rarely on the rack. Chosen only when no other gauge fits the window — owner, 26 Sep 2026"
   },
   {
    "row": 71,

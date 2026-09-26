@@ -94,9 +94,14 @@ const SPRING_DIVISORS = {
 };
 
 // Which self-consistent gauge wins when more than one is valid. The owner's
-// rule is 'coarsest-gauge'; the written policy's Step 8 reads as 'least-coil'.
+// rule since 26 Sep 2026 is 'most-spools': the gauge with the most spools
+// inside the window — the one most likely to be on the rack — with the
+// shortest coil breaking ties. In his words: "if the range is 10 to 14, 12
+// will also work if the gauge has more probability". 'coarsest-gauge' was the
+// rule before that; the written policy's Step 8 reads as 'least-coil'. All
+// three live here by name and every tie still reports the alternatives.
 // They disagree often enough to matter, so the choice is named, not buried.
-const TIE_BREAK = 'coarsest-gauge';
+const TIE_BREAK = 'most-spools';
 
 // Policy Step 5: the job-card length is always the drawing length plus this.
 const TOTAL_LENGTH_ALLOWANCE_IN = 0.7;
@@ -208,48 +213,66 @@ function chooseWire(opts) {
 
   // A row carrying an `excluded` reason is on the rack but not eligible — today
   // that means the 80/20 alloy spools, which the owner ruled out of selection.
-  const candidates = wireTable.filter(w => includeExcluded || !w.excluded);
-  const excluded = wireTable.length - candidates.length;
+  const eligible = wireTable.filter(w => includeExcluded || !w.excluded);
+  const excluded = wireTable.length - eligible.length;
 
   const bands = (WIRE_DRAW[dia] && WIRE_DRAW[dia][material]) || [];
   // Distinct percentages this material can use, including the 1 kW variant.
   const pcts = [...new Set(bands.flatMap(b => [b.pct, b.pctWhen1kW]).filter(p => p != null))];
 
-  const fixedPoints = [];
-  for (const pct of pcts) {
-    const requiredOhms = ohmsAfterDraw * (1 + pct);
-    // Self-consistency is a property of each candidate, not of the band's winner.
-    // A wire whose own policy band disagrees with the assumed pct is simply not
-    // buildable under that assumption, so it must be filtered out BEFORE Step 8's
-    // "least coil length" is applied. Testing only the globally shortest wire and
-    // then vetoing the whole band silently threw away valid coarser gauges — and,
-    // worse, sometimes reported that no wire fitted when one plainly did.
-    const inWindow = candidates
-      .filter(w => wireDrawPct(material, w.gauge, wattage, dia) === pct)
-      .map(w => ({ wire: w, springIn: springLengthIn(requiredOhms, w) }))
-      .filter(c => c.springIn >= springWindow.lowIn && c.springIn <= springWindow.highIn)
-      .sort((a, b) => a.springIn - b.springIn); // "least coil length" — policy Step 8
-    if (!inWindow.length) continue;
-    const winner = inWindow[0];
-    fixedPoints.push({
-      wireDrawPct: pct,
-      requiredOhms: round(requiredOhms, 4),
-      gauge: winner.wire.gauge,
-      wire: { ...winner.wire }, // a copy: never hand a caller a live row of the shared table
-      springLengthIn: round(winner.springIn, 4),
-      // Every spool of the winning gauge that also fits — the planner picks the
-      // one actually on the rack, and its measured ohms/m goes on the card.
-      spools: inWindow.filter(c => c.wire.gauge === winner.wire.gauge)
-        .map(c => ({ ...c.wire, springLengthIn: round(c.springIn, 4) })),
-      alternativeGauges: [...new Set(inWindow.map(c => c.wire.gauge))].filter(g => g !== winner.wire.gauge),
-    });
-  }
+  // One pass of the fixed-point search over a set of rows.
+  const search = (candidates) => {
+    const fixedPoints = [];
+    for (const pct of pcts) {
+      const requiredOhms = ohmsAfterDraw * (1 + pct);
+      // Self-consistency is a property of each candidate, not of the band's
+      // winner. A wire whose own policy band disagrees with the assumed pct is
+      // simply not buildable under that assumption, so it must be filtered out
+      // BEFORE anything is ranked. Testing only the globally shortest wire and
+      // then vetoing the whole band silently threw away valid coarser gauges —
+      // and, worse, sometimes reported that no wire fitted when one plainly did.
+      const inWindow = candidates
+        .filter(w => wireDrawPct(material, w.gauge, wattage, dia) === pct)
+        .map(w => ({ wire: w, springIn: springLengthIn(requiredOhms, w) }))
+        .filter(c => c.springIn >= springWindow.lowIn && c.springIn <= springWindow.highIn)
+        .sort((a, b) => a.springIn - b.springIn);
+      if (!inWindow.length) continue;
+      // Within the band, the gauge with the MOST spools inside the window wins —
+      // that is the gauge most likely to be on the rack — and only then the
+      // shortest coil. Before 26 Sep 2026 the shortest coil won outright, which
+      // on one card offered 27 SWG with three spools that fit, hugging the
+      // floor, over 26 SWG with nine.
+      const byGauge = new Map();
+      for (const c of inWindow) { if (!byGauge.has(c.wire.gauge)) byGauge.set(c.wire.gauge, []); byGauge.get(c.wire.gauge).push(c); }
+      const ranked = [...byGauge.entries()]
+        .map(([gauge, cs]) => ({ gauge, spools: cs, shortest: cs[0] }))
+        .sort((a, b) => b.spools.length - a.spools.length || a.shortest.springIn - b.shortest.springIn);
+      const win = ranked[0];
+      fixedPoints.push({
+        wireDrawPct: pct,
+        requiredOhms: round(requiredOhms, 4),
+        gauge: win.gauge,
+        wire: { ...win.shortest.wire }, // a copy: never hand a caller a live row of the shared table
+        springLengthIn: round(win.shortest.springIn, 4),
+        // Every spool of the winning gauge that also fits — the planner picks the
+        // one actually on the rack, and its measured ohms/m goes on the card.
+        spools: win.spools.map(c => ({ ...c.wire, springLengthIn: round(c.springIn, 4) })),
+        alternativeGauges: ranked.slice(1).map(r => r.gauge),
+      });
+    }
+    return fixedPoints;
+  };
 
-  // On a tie the owner's rule is the coarsest gauge — thicker wire, longer life,
-  // and where the existing cards sit. Policy Step 8's "least coil length" would
-  // sometimes choose differently, so both orderings live here by name and every
-  // tie reports the alternative rather than burying it.
+  // Rows flagged `lastResort` — the four odd 24 SWG spools reading 10.4-10.8
+  // ohm/m where every other 24 SWG spool reads 5.6-5.9 — are rarely on the rack.
+  // They are tried only when nothing else in the table reaches the window
+  // (owner, 26 Sep 2026); before that they won ties on ordinary terms.
+  let fixedPoints = search(eligible.filter(w => !w.lastResort));
+  let usedLastResort = false;
+  if (!fixedPoints.length) { fixedPoints = search(eligible); usedLastResort = fixedPoints.length > 0; }
+
   const TIE_BREAKS = {
+    'most-spools': (a, b) => b.spools.length - a.spools.length || a.springLengthIn - b.springLengthIn,
     'coarsest-gauge': (a, b) => a.gauge - b.gauge,
     'least-coil': (a, b) => a.springLengthIn - b.springLengthIn,
   };
@@ -260,6 +283,7 @@ function chooseWire(opts) {
     alternatives: fixedPoints.slice(1),
     leastCoil: leastCoil || null,
     tieBreak: TIE_BREAK,
+    usedLastResort,
     resolution: fixedPoints.length === 0 ? 'none' : fixedPoints.length === 1 ? 'unique' : 'multiple',
     excludedRows: excluded,
   };
@@ -412,13 +436,16 @@ function buildJobCard(input) {
     selection = chooseWire({ material, ohmsAfterDraw, wattage, springWindow, dia: D });
   }
 
+  if (selection.usedLastResort && selection.chosen) {
+    warnings.push(`Only the odd 24 SWG spools (10.4-10.8 ohm/m) reach the window — check the rack before cutting; ${selection.chosen.spools.length} of them fit.`);
+  }
   if (selection.resolution === 'none') {
     warnings.push('No wire in the table reaches the required coil length — the gauge must be chosen by hand.');
   } else if (selection.resolution === 'multiple') {
-    const others = selection.alternatives.map(a => `${a.gauge} SWG @ ${(a.wireDrawPct * 100).toFixed(1)}%`).join(', ');
-    warnings.push(`${selection.alternatives.length + 1} gauges are self-consistent; the coarsest (${selection.chosen.gauge} SWG) was taken over ${others}.`);
+    const others = selection.alternatives.map(a => `${a.gauge} SWG @ ${(a.wireDrawPct * 100).toFixed(1)}% (${a.spools.length} spool${a.spools.length === 1 ? '' : 's'} fit)`).join(', ');
+    warnings.push(`${selection.alternatives.length + 1} gauges fit; ${selection.chosen.gauge} SWG was taken as the best stocked — ${selection.chosen.spools.length} spools of it fit the window, against ${others}.`);
     if (selection.leastCoil && selection.leastCoil.gauge !== selection.chosen.gauge) {
-      warnings.push(`Policy Step 8's least coil length would instead give ${selection.leastCoil.gauge} SWG @ ${(selection.leastCoil.wireDrawPct * 100).toFixed(1)}%, ohms ${selection.leastCoil.requiredOhms} (coil ${selection.leastCoil.springLengthIn}" against ${selection.chosen.springLengthIn}").`);
+      warnings.push(`The shortest coil would instead be ${selection.leastCoil.gauge} SWG @ ${(selection.leastCoil.wireDrawPct * 100).toFixed(1)}%, ohms ${selection.leastCoil.requiredOhms} (coil ${selection.leastCoil.springLengthIn}" against ${selection.chosen.springLengthIn}").`);
     }
   }
 
@@ -473,6 +500,7 @@ function buildJobCard(input) {
     leastCoilOption: selection.leastCoil && selection.chosen && selection.leastCoil.gauge !== selection.chosen.gauge
       ? { gauge: selection.leastCoil.gauge, wireDrawPct: selection.leastCoil.wireDrawPct, springLengthIn: selection.leastCoil.springLengthIn, ohmsRangeMid: selection.leastCoil.requiredOhms }
       : null,
+    usedLastResort: selection.usedLastResort,
     gaugeAlternatives: selection.alternatives.map(a => ({
       gauge: a.gauge, wireDrawPct: a.wireDrawPct, springLengthIn: a.springLengthIn,
     })),

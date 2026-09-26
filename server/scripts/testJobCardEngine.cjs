@@ -223,17 +223,18 @@ const REGRESSIONS = [
   ['band filter: 1 kW SS 35.7" resolves at all',
     () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1000, voltage: 230, drawingTotalLengthIn: 35.0 }),
     o => o.gauge != null && o.gaugeResolution !== 'none'],
-  // These two pinned 26 SWG @ 31% when 8 mm ran on the 19.7 / 19% bands. The
-  // flat 20.7% shortens the cutting length, moves the spring window down, and
-  // both now resolve on 24 SWG @ 23%. The defect they guard is unchanged — the
-  // band filter must never report "no wire fits" here — so the invariant is
-  // asserted first and the landing gauge re-pinned behind it.
+  // These two have moved twice with policy: 26 SWG @ 31% on the old tube-draw
+  // bands, 24 SWG @ 23% under the flat 20.7% (via the odd 24 SWG spools), and
+  // now 26 SWG again under "most spools fit" (26 Sep 2026), since the odd
+  // spools are last resort only. The defect they guard is unchanged — the band
+  // filter must never report "no wire fits" here — so the invariant is asserted
+  // first and the landing gauge re-pinned behind it.
   ['band filter: 3 kW SS 25.4" is not "no wire fits"',
     () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 3000, voltage: 230, drawingTotalLengthIn: 24.7 }),
-    o => o.gauge != null && o.gaugeResolution !== 'none' && o.gauge === 24 && o.wireDrawPct === 0.23],
+    o => o.gauge != null && o.gaugeResolution !== 'none' && o.gauge === 26 && o.wireDrawPct === 0.31],
   ['band filter: 1.2 kW SS 58.2" is not "no wire fits"',
     () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1200, voltage: 230, drawingTotalLengthIn: 57.5 }),
-    o => o.gauge != null && o.gaugeResolution !== 'none' && o.gauge === 24],
+    o => o.gauge != null && o.gaugeResolution !== 'none' && o.gauge === 26],
   ['band filter: 1.5 kW SS 46.7" is not "no wire fits"',
     () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1500, voltage: 230, drawingTotalLengthIn: 46 }),
     o => o.gauge === 26],
@@ -291,9 +292,33 @@ const REGRESSIONS = [
     o => o.warnings.some(w => /does not cover/.test(w))],
 
   // A tie must never hide the alternative the written policy would pick.
-  ['a tie reports the least-coil alternative',
-    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 4000, voltage: 230, drawingTotalLengthIn: 16.8 }),
-    o => o.gaugeResolution !== 'multiple' || o.leastCoilOption == null || o.warnings.some(w => /Step 8/.test(w))],
+  ['a tie reports the shortest-coil alternative',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1000, voltage: 230, drawingTotalLengthIn: 35.0 }),
+    o => o.gaugeResolution !== 'multiple' || o.leastCoilOption == null || o.warnings.some(w => /shortest coil/.test(w))],
+
+  // ── "Most spools fit" — owner's rule, 26 Sep 2026 ─────────────────────────
+  // The gauge with the most spools inside the window wins, in its band and
+  // across bands; ties go to the shortest coil. The owner's own card for
+  // PT-MTYPECURVE-1.5KW-NIPPLE is the reference: 24 SWG fitted only through
+  // the four odd spools, 27 SWG through three hugging the floor, 26 SWG
+  // through nine. He wanted 26.
+  ['NIPPLE card: 26 SWG, the best-stocked gauge, not 24 or 27',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 1500, voltage: 230, drawingTotalLengthIn: 43.95 - E.TOTAL_LENGTH_ALLOWANCE_IN, coldZoneBigIn: 4, coldZoneSmallIn: 4 }),
+    o => o.gauge === 26 && o.wireDrawPct === 0.31 && o.spoolOptions.length === 9 && !o.usedLastResort],
+  ['the rule is named most-spools',
+    () => E.TIE_BREAK, t => t === 'most-spools'],
+  // The four odd 24 SWG spools (rows 67-70) are last resort in BOTH tables.
+  ['rows 67-70 are flagged last resort in both tables',
+    () => [8, 11].flatMap(d => E.WIRE_TABLES[d].rows.filter(r => r.row >= 67 && r.row <= 70).map(r => !!r.lastResort)),
+    flags => flags.length === 8 && flags.every(Boolean)],
+  ['the odd 24 SWG spools never win while another gauge fits',
+    () => { let n = 0; for (let tl = 15; tl <= 100; tl += 5) for (let w = 250; w <= 5000; w += 250) {
+      const o = E.buildJobCard({ tubeMaterial: 'SS304', wattage: w, voltage: 230, drawingTotalLengthIn: tl - E.TOTAL_LENGTH_ALLOWANCE_IN });
+      if (o.ok && o.wire && o.wire.row >= 67 && o.wire.row <= 70 && !o.usedLastResort) n++; } return n; },
+    n => n === 0],
+  ['...but still save a card nothing else reaches (copper 2 kW 27")',
+    () => E.buildJobCard({ tubeMaterial: 'Copper', wattage: 2000, voltage: 230, drawingTotalLengthIn: 27 - E.TOTAL_LENGTH_ALLOWANCE_IN }),
+    o => o.gauge === 24 && o.usedLastResort === true && o.warnings.some(w => /odd 24 SWG/.test(w))],
 
   // The returned wire must not be a live row of the shared table.
   ['the returned wire is a copy, not the shared row', () => {
