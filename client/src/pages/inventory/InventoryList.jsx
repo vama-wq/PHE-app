@@ -159,6 +159,7 @@ export default function InventoryList() {
                   <td className="table-cell text-gray-500">{item.category || '—'}</td>
                   <td className={`table-cell text-right font-semibold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
                     {item.current_stock} <span className="font-normal text-gray-400">{item.unit}</span>
+                    {Number(item.rework_qty) > 0 && <span className="ml-1.5 text-[10px] font-semibold bg-sky-100 text-sky-800 rounded px-1.5 py-0.5" title={`${item.rework_free} free in the rework bin`}>+{item.rework_qty} rework</span>}
                   </td>
                   <td className="table-cell text-right text-gray-500">{item.reorder_level} {item.unit}</td>
                   {showCost && <td className="table-cell text-right text-gray-700">{Number(item.unit_cost) > 0 ? `₹${Number(item.unit_cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}</td>}

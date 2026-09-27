@@ -117,6 +117,25 @@ export default function InventoryDetail() {
               {item.category && <div className="text-xs text-gray-500 mt-1">Category: <span className="font-medium text-gray-700">{item.category}</span></div>}
             </div>
           </div>
+          {Number(item.rework?.qty) > 0 && (
+            <div className="border-t border-gray-100 pt-3">
+              <div className="text-xs text-sky-700 uppercase tracking-wide mb-1 font-semibold">Rework bin</div>
+              <div className="text-2xl font-bold text-sky-800">{item.rework.qty} <span className="text-sm font-normal text-gray-500">{item.unit}</span></div>
+              <div className="text-xs text-gray-500 mt-0.5">{item.rework.free} free · {Math.max(0, Number(item.rework.qty) - Number(item.rework.free))} claimed by open orders</div>
+              <div className="text-[11px] text-gray-400 mt-1">Recovered at QC, reusable after rework. Not counted in stock.</div>
+              {user.role === 'owner' && (
+                <button className="mt-2 text-xs text-red-600 hover:underline"
+                  onClick={async () => {
+                    const qty = window.prompt(`Scrap how many from the rework bin? (${item.rework.free} free)`);
+                    if (!qty) return;
+                    const reason = window.prompt('Reason for scrapping — goes on the record');
+                    if (!reason) return;
+                    try { await api.post(`/inventory/${id}/rework/scrap`, { qty: Number(qty), reason }); load(); }
+                    catch (e) { alert(e.response?.data?.error || 'Failed'); }
+                  }}>Scrap from rework…</button>
+              )}
+            </div>
+          )}
           <div className="border-t border-gray-100 pt-3">
             <div className="text-xs text-gray-500 uppercase tracking-wide mb-2 flex items-center justify-between gap-1">
               <span className="flex items-center gap-1"><FileText size={11} /> Drawing in use</span>
@@ -235,6 +254,43 @@ export default function InventoryDetail() {
           </div>
         </div>
       </div>
+
+      {item.rework?.moves?.length > 0 && (
+        <div className="card overflow-hidden mb-6">
+          <div className="px-5 py-4 border-b border-gray-100">
+            <h2 className="section-title text-sm">Rework Bin — History</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Kept apart from the stock ledger. Deposits come from QC approvals; draws go to the orders that claimed them.</p>
+          </div>
+          <div className="overflow-x-auto max-h-72 overflow-y-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                <tr>
+                  <th className="table-header text-left">Date</th>
+                  <th className="table-header text-left">Move</th>
+                  <th className="table-header text-right">Qty</th>
+                  <th className="table-header text-right">Bin after</th>
+                  <th className="table-header text-left">Order / Card</th>
+                  <th className="table-header text-left">Notes</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {item.rework.moves.map(m => (
+                  <tr key={m.id}>
+                    <td className="table-cell text-xs">{fmtDate(m.created_at)}</td>
+                    <td className="table-cell text-xs capitalize">{m.kind}</td>
+                    <td className={`table-cell text-right font-medium ${['deposit','return'].includes(m.kind) ? 'text-green-700' : 'text-red-700'}`}>
+                      {['deposit','return'].includes(m.kind) ? '+' : '−'}{m.qty}
+                    </td>
+                    <td className="table-cell text-right">{m.bin_after}</td>
+                    <td className="table-cell text-xs">{m.order_code || ''}{m.job_card_no ? ` · ${m.job_card_no}` : ''}{m.drawing_number ? ` · ${m.drawing_number}` : ''}</td>
+                    <td className="table-cell text-xs text-gray-500">{m.notes || ''}{m.created_by_name ? ` — ${m.created_by_name}` : ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {showCost && item.fifo_lots?.length > 0 && (
         <div className="card overflow-hidden mb-6">

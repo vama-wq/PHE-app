@@ -469,7 +469,7 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
   const item = await db.get('SELECT * FROM order_items WHERE id=$1', [itemId]);
 
   const lines = await db.all(
-    `SELECT ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty
+    `SELECT ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty, COALESCE(oii.rework_qty,0) AS rework_qty
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
       WHERE oii.order_item_id=$1 ORDER BY ii.category, ii.item_code`, [itemId]);
   if (!lines.length) return res.status(400).json({ error: 'This item has no inventory BOM attached — nothing to issue' });

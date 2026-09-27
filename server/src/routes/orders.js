@@ -10,6 +10,7 @@ const { createNotification } = require('./notifications');
 // job card) or when a partially-dispatched item is fully dispatched (see qc.js /
 // dispatch.js). These helpers stay imported for the inventory-edit reconcile path.
 const { deductItemInventory, restoreItemInventory, replayDeductions } = require('../lib/inventoryDeduction');
+const rework = require('../lib/rework');
 
 // Which of these inventory ids are Fins? Fins BOM lines carry no qty — they
 // deduct by tube length at QC approval (see lib/inventoryDeduction).
@@ -187,7 +188,7 @@ router.get('/customer/:customerId/previous-items', authenticate, async (req, res
   // Attach inventory selections so the form can pre-fill them too
   for (const it of items) {
     it.inventory_items = await db.all(
-      `SELECT ii.id, ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty
+      `SELECT ii.id, ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty, COALESCE(oii.rework_qty,0) AS rework_qty
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
        WHERE oii.order_item_id = $1`,
       [it.id]
@@ -271,7 +272,7 @@ router.get('/:id', authenticate, async (req, res) => {
     ...item,
     images: await db.all('SELECT * FROM order_item_images WHERE item_id = $1 ORDER BY created_at ASC', [item.id]),
     inventory_items: await db.all(
-      `SELECT ii.id, ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty
+      `SELECT ii.id, ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty, COALESCE(oii.rework_qty,0) AS rework_qty
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
        WHERE oii.order_item_id = $1 ORDER BY ii.item_code`, [item.id]),
   })));
@@ -396,7 +397,7 @@ router.get('/:id/items', authenticate, async (req, res) => {
   // Attach inventory selections to each item
   for (const item of items) {
     item.inventory_items = await getDB().all(
-      `SELECT ii.id, ii.item_code, ii.name, ii.unit, ii.category, oii.qty
+      `SELECT ii.id, ii.item_code, ii.name, ii.unit, ii.category, oii.qty, COALESCE(oii.rework_qty,0) AS rework_qty
        FROM order_item_inventory oii
        JOIN inventory_items ii ON ii.id = oii.inventory_item_id
        WHERE oii.order_item_id = $1`,
@@ -671,13 +672,40 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
 });
 
 router.delete('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), async (req, res) => {
-  await getDB().run('DELETE FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
+  const db = getDB();
+  // Anything this item had already taken — from stock or a rework bin — goes
+  // back before its BOM rows cascade away with it. Until now the rows simply
+  // vanished and whatever they had consumed stayed consumed.
+  const it = await db.get('SELECT id FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
+  if (!it) return res.status(404).json({ error: 'Item not found' });
+  const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
+  await restoreItemInventory(db, it.id, ord?.order_code || `Order #${req.params.id}`, req.user.id, 'Item deleted');
+  await db.run('DELETE FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   res.json({ message: 'Deleted' });
 });
 
 // Edit an item's inventory selection (design or owner). If the item's drawing is
 // already approved (stock deducted), the old selection is reversed and the new
 // one re-deducted so stock stays accurate.
+// A BOM line may draw part of its total from the part's rework bin. That
+// portion is reserved the moment the BOM is saved: it cannot exceed the line,
+// and cannot exceed what the bin has left after other open items' claims
+// (this item's own old lines are about to be replaced, so they do not count).
+async function checkReworkPortions(db, sels, excludeItemId) {
+  for (const sel of sels) {
+    const rw = Number(sel.rework_qty || 0);
+    if (!(rw > 0)) continue;
+    const id = parseInt(sel.id, 10), qty = Number(sel.qty || 0);
+    const inv = await db.get('SELECT item_code, unit FROM inventory_items WHERE id=$1', [id]);
+    if (!rework.isPieceUnit(inv?.unit)) return `${inv?.item_code || id}: rework applies to counted parts only.`;
+    if (!Number.isInteger(rw)) return `${inv?.item_code || id}: rework portion must be a whole number of pieces.`;
+    if (rw > qty + 1e-9) return `${inv?.item_code || id}: rework portion ${rw} is more than the line's ${qty}.`;
+    const free = await rework.freeQty(db, id, excludeItemId);
+    if (rw > free + 1e-9) return `${inv?.item_code || id}: only ${free} free in the rework bin, ${rw} asked.`;
+  }
+  return null;
+}
+
 router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
   const db = getDB();
   const raw = (req.body.inventory_item_ids || []).filter(s => s && s.id);
@@ -711,10 +739,13 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
   const wasDeducted = !!item.inventory_deducted || !!partly;
   if (wasDeducted) await restoreItemInventory(db, item.id, orderCode, req.user.id, 'Inventory edited');
 
+  const reworkErr = await checkReworkPortions(db, sels, item.id);
+  if (reworkErr) return res.status(400).json({ error: reworkErr });
+
   await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
   for (const sel of sels) {
-    await db.run('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
-      [item.id, parseInt(sel.id), parseFloat(sel.qty) || 0]);
+    await db.run('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty, rework_qty) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+      [item.id, parseInt(sel.id), parseFloat(sel.qty) || 0, Number(sel.rework_qty) || 0]);
   }
 
   // Re-take against the new BOM, to the progress the cards have actually made
@@ -807,11 +838,13 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     );
 
     // Replace this item's inventory selection with what design just chose.
+    const reworkErr = await checkReworkPortions(db, invSelections, parseInt(item_id));
+    if (reworkErr) return res.status(400).json({ error: reworkErr });
     await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [parseInt(item_id)]);
     for (const sel of invSelections) {
       await db.run(
-        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
-        [parseInt(item_id), parseInt(sel.id), parseFloat(sel.qty) || 0]
+        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty, rework_qty) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+        [parseInt(item_id), parseInt(sel.id), parseFloat(sel.qty) || 0, Number(sel.rework_qty) || 0]
       );
     }
 

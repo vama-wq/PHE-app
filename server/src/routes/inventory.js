@@ -4,6 +4,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { uploadItemDrawing, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { gujaratiName } = require('../lib/gujarati');
+const rework = require('../lib/rework');
 
 // QC (design) can manage stock but must not see unit cost — strip it for them.
 const stripCost = (req, data) => {
@@ -17,7 +18,13 @@ const stripCost = (req, data) => {
 // the Inventory page passes ?include_pending=1 to show them with a badge.
 router.get('/', authenticate, async (req, res) => {
   const where = req.query.include_pending === '1' ? '' : "WHERE COALESCE(approval_status,'approved')='approved'";
-  res.json(stripCost(req, await getDB().all(`SELECT * FROM inventory_items ${where} ORDER BY category, item_code`)));
+  const db = getDB();
+  const items = await db.all(`SELECT * FROM inventory_items ${where} ORDER BY category, item_code`);
+  // Rework bins ride along as two extra figures — the bin and what is free to
+  // claim — so pickers can offer them. current_stock is untouched.
+  const bins = Object.fromEntries((await rework.binsWithFree(db)).map(b => [b.item_id, b]));
+  for (const it of items) { const b = bins[it.id]; it.rework_qty = b ? Number(b.qty) : 0; it.rework_free = b ? Number(b.free) : 0; }
+  res.json(stripCost(req, items));
 });
 
 router.get('/low-stock', authenticate, async (req, res) => {
@@ -105,6 +112,16 @@ router.get('/:id', authenticate, async (req, res) => {
   const db = getDB();
   const item = await db.get('SELECT * FROM inventory_items WHERE id=$1', [req.params.id]);
   if (!item) return res.status(404).json({ error: 'Not found' });
+
+  // The rework bin, if one is open: count, free, and its own history — kept
+  // apart from the stock ledger below so 'ledger total = current stock' holds.
+  item.rework = {
+    qty: await rework.binQty(db, item.id),
+    free: await rework.freeQty(db, item.id),
+    moves: await db.all(
+      `SELECT m.*, u.name AS created_by_name FROM inventory_rework_moves m LEFT JOIN users u ON u.id = m.created_by
+        WHERE m.item_id=$1 ORDER BY m.created_at DESC LIMIT 100`, [item.id]),
+  };
 
   item.transactions = await db.all(
     `SELECT t.*, u.name as created_by_name, jc.job_card_no
@@ -393,6 +410,22 @@ router.delete('/:id/fifo-lots/:lotId', authenticate, authorize('owner'), async (
   res.json({ message: 'Lot removed — stock and average cost updated' });
 });
 
+// Owner writes pieces off a rework bin — the only way out other than an order
+// drawing them or a reversal. Refused past what is free (claimed pieces stay).
+router.post('/:id/rework/scrap', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const item = await db.get('SELECT id, item_code FROM inventory_items WHERE id=$1', [req.params.id]);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const qty = Number(req.body.qty), reason = String(req.body.reason || '').trim();
+  if (!(qty > 0)) return res.status(400).json({ error: 'Quantity must be more than zero' });
+  if (!reason) return res.status(400).json({ error: 'Say why these are being scrapped — it goes on the record.' });
+  const free = await rework.freeQty(db, item.id);
+  if (qty > free + 1e-9) return res.status(400).json({ error: `Only ${free} free in the rework bin (the rest is claimed by open orders).` });
+  await rework.move(db, { itemId: item.id, kind: 'scrap', qty, notes: reason, userId: req.user.id });
+  await logActivity(null, null, 'rework_scrapped', `${qty} ${item.item_code} scrapped from the rework bin — ${reason}`, req.user.id);
+  res.json({ message: 'Scrapped from rework', remaining: await rework.binQty(db, item.id) });
+});
+
 router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res) => {
   const db = getDB();
   const item = await db.get('SELECT id, item_code, name, current_stock, drawing_file FROM inventory_items WHERE id=$1', [req.params.id]);
@@ -401,6 +434,10 @@ router.delete('/:id', authenticate, authorize('owner', 'admin'), async (req, res
   // Say what is holding it BEFORE trying. The FK would refuse anyway, but
   // "still referenced by an order" sends the owner hunting through 36 orders;
   // naming them is the difference between a dead end and a to-do list.
+  const bin = await rework.binQty(db, item.id);
+  if (bin > 0) {
+    return res.status(400).json({ error: `Cannot delete: ${item.item_code} still has ${bin} in its rework bin. Draw or scrap those first.` });
+  }
   const holders = await db.all(
     `SELECT DISTINCT o.order_code FROM order_item_inventory oii
        JOIN order_items oi ON oi.id = oii.order_item_id JOIN orders o ON o.id = oi.order_id

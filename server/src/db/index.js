@@ -2153,6 +2153,40 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bom_review_by INTEGER REFERENCES users(id)`);
       await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bom_review_at TIMESTAMPTZ`);
 
+      // Rework inventory (owner, 27 Sep 2026). One bin per inventory item —
+      // pieces recovered at QC that are reusable after rework — kept BESIDE
+      // normal stock so nothing that reads current_stock counts them. The bin
+      // row exists only while its count is above zero; its moves keep the
+      // history. A BOM line's rework_qty is the portion of its total drawn from
+      // the bin; rework_deducted is how much of that has actually been taken.
+      // The stock ledger and its type CHECK are deliberately untouched: rework
+      // moves have their own table, so 'ledger total = current stock' holds.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS inventory_rework_bins (
+          item_id INTEGER PRIMARY KEY REFERENCES inventory_items(id) ON DELETE CASCADE,
+          qty NUMERIC NOT NULL DEFAULT 0 CHECK (qty >= 0),
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS inventory_rework_moves (
+          id SERIAL PRIMARY KEY,
+          item_id INTEGER NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK (kind IN ('deposit','draw','return','reversal','scrap')),
+          qty NUMERIC NOT NULL CHECK (qty > 0),
+          bin_after NUMERIC NOT NULL,
+          order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+          order_item_id INTEGER REFERENCES order_items(id) ON DELETE SET NULL,
+          job_card_id INTEGER REFERENCES job_cards(id) ON DELETE SET NULL,
+          order_code TEXT, job_card_no TEXT, drawing_number TEXT, notes TEXT,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_rework_moves_item ON inventory_rework_moves(item_id, created_at DESC)`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_rework_moves_card ON inventory_rework_moves(job_card_id)`);
+      await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS rework_qty NUMERIC NOT NULL DEFAULT 0`);
+      await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS rework_deducted NUMERIC NOT NULL DEFAULT 0`);
+
       // Enable Row-Level Security on every public table. The app connects as a
       // BYPASSRLS role so this changes nothing for it — it only blocks Supabase's
       // auto-generated public REST API (anon key), which this app doesn't use.

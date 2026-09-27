@@ -506,6 +506,7 @@ export default function OrderDetail() {
                                     title={per != null ? `${per} per piece` : ''}>
                                     <span className="font-mono font-medium">{inv.item_code}</span>
                                     <span className={odd ? 'text-amber-700' : 'text-gray-400'}>× {inv.qty} {inv.unit}</span>
+                                    {Number(inv.rework_qty) > 0 && <span className="text-sky-700">({inv.rework_qty} from rework)</span>}
                                     {per != null && <span className={odd ? 'text-amber-600' : 'text-gray-400'}>({+per.toFixed(3)}/pc)</span>}
                                   </span>
                                 );

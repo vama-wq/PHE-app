@@ -10,6 +10,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   const [file, setFile] = useState(null);
   const [inventoryItems, setInventoryItems] = useState([]);
   const [selected, setSelected] = useState({}); // { [id]: qty }
+  const [reworkOf, setReworkOf] = useState({}); // { [id]: portion of qty drawn from the part's rework bin }
   const [invSearch, setInvSearch] = useState('');
   const [showInvDropdown, setShowInvDropdown] = useState(false);
   const [notes, setNotes] = useState('');
@@ -26,6 +27,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
           const found = (r.data || []).find(it => String(it.id) === String(item.id));
           if (found?.inventory_items?.length) {
             setSelected(Object.fromEntries(found.inventory_items.map(i => [i.id, i.qty || ''])));
+            setReworkOf(Object.fromEntries(found.inventory_items.filter(i => Number(i.rework_qty) > 0).map(i => [i.id, i.rework_qty])));
           }
         }).catch(() => {});
     }
@@ -38,9 +40,12 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   ).slice(0, 10);
 
   const toggle = (id) => setSelected(prev => {
-    if (id in prev) { const n = { ...prev }; delete n[id]; return n; }
+    if (id in prev) { const n = { ...prev }; delete n[id]; setReworkOf(r => { const c = { ...r }; delete c[id]; return c; }); return n; }
     return { ...prev, [id]: '' };
   });
+  // What this item may claim from the bin: what is free, plus what its own
+  // line already holds (re-uploading a rejected drawing keeps the claim).
+  const reworkMax = (i) => (Number(i.rework_free) || 0) + (Number(reworkOf[i.id]) || 0);
   const setQty = (id, qty) => setSelected(prev => ({ ...prev, [id]: qty }));
   const selectedList = inventoryItems.filter(i => i.id in selected);
   // Fins need no qty — they deduct automatically by tube length at QC approval
@@ -66,7 +71,8 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
         : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory.');
     }
 
-    const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : parseFloat(selected[id]) }));
+    const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : parseFloat(selected[id]),
+      rework_qty: parseInt(reworkOf[id], 10) || 0 }));
     const fd = new FormData();
     if (file) fd.append('file', file);
     fd.append('item_id', item.id);
@@ -149,7 +155,8 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
                   <button key={i.id} type="button"
                     className="w-full text-left px-3 py-2 text-sm hover:bg-brand-50 flex items-center justify-between"
                     onMouseDown={() => { toggle(i.id); setInvSearch(''); }}>
-                    <span><span className="font-mono">{i.item_code}</span> — {i.name}</span>
+                    <span><span className="font-mono">{i.item_code}</span> — {i.name}
+                    {Number(i.rework_free) > 0 && <span className="ml-1.5 text-[10px] font-semibold bg-sky-100 text-sky-800 rounded px-1.5 py-0.5">REWORK {i.rework_qty} · {i.rework_free} free</span>}</span>
                     {i.id in selected && <span className="text-xs text-green-600">added</span>}
                   </button>
                 ))}
@@ -172,6 +179,13 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
                       <input className="input w-24 text-sm py-1" type="number" min="0" step="any" placeholder="Qty"
                         value={selected[i.id]} onChange={e => setQty(i.id, e.target.value)} />
                       <span className="text-xs text-gray-400 w-8">{i.unit}</span>
+                      {reworkMax(i) > 0 && (
+                        <span className="flex items-center gap-1" title={`${i.rework_free} free in the rework bin`}>
+                          <input className="input w-20 text-sm py-1 border-sky-300" type="number" min="0" max={reworkMax(i)} step="1" placeholder="0"
+                            value={reworkOf[i.id] || ''} onChange={e => setReworkOf(r => ({ ...r, [i.id]: e.target.value }))} />
+                          <span className="text-[10px] text-sky-700 whitespace-nowrap">from rework · {reworkMax(i)} free</span>
+                        </span>
+                      )}
                     </>
                   )}
                   <button type="button" className="p-1 text-gray-400 hover:text-red-600" onClick={() => toggle(i.id)}>

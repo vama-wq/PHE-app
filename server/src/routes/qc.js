@@ -2,7 +2,8 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQC, uploadChecklistPhoto } = require('../middleware/upload');
-const { settleItemInventory, resolveJobCardItemId, applyRemakeExtras, deductPartialAtQC, deductFinsByLength, buildOnlyOnFg } = require('../lib/inventoryDeduction');
+const { settleItemInventory, resolveJobCardItemId, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, buildOnlyOnFg, FINS_CODES } = require('../lib/inventoryDeduction');
+const rework = require('../lib/rework');
 
 // Stage names, for readable activity-log lines when work is sent back to a
 // particular stage. Mirrors PRODUCTION_STAGES in client/src/lib/utils.js.
@@ -22,6 +23,9 @@ const STAGE_NAMES = {
 // not yet fully settled or already deducted.
 async function settleAfterQC(db, jc, userId) {
   try {
+    // Pieces recovered at this approval go into the rework bin first (validated
+    // in the route before any write), then everything else as before.
+    if (jc._reworkItems?.length) await applyReworkDeposit(db, jc, jc._reworkItems, userId);
     // Extra inventory recorded for remade pieces (stashed on jc by the approve route)
     if (jc._remakeExtras?.length) await applyRemakeExtras(db, jc, jc._remakeExtras, userId);
     // Fins consume by this card's stage-8 tube length, not by BOM qty
@@ -179,6 +183,34 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   // Extra inventory consumed for remade pieces, entered by QC in the approval
   // modal. Deducted in settleAfterQC (runs on every success path exactly once).
   try { jc._remakeExtras = JSON.parse(req.body.remake_extras || '[]'); } catch { jc._remakeExtras = []; }
+
+  // Rework pieces recovered from this card, one figure per BOM line. Checked
+  // here, before anything is written, so a bad figure refuses the approval
+  // outright rather than vanishing: the line must be on the item's BOM, count
+  // in pieces, be a whole number, and not exceed this card's share of the line
+  // (plus any extra typed for it above).
+  try { jc._reworkItems = JSON.parse(req.body.rework_items || '[]'); } catch { jc._reworkItems = []; }
+  jc._reworkItems = (jc._reworkItems || []).filter(x => x && Number(x.qty) > 0);
+  if (jc._reworkItems.length) {
+    const itemIdR = await resolveJobCardItemId(db, jc);
+    const itemR = itemIdR ? await db.get('SELECT quantity FROM order_items WHERE id=$1', [itemIdR]) : null;
+    const share = itemR && Number(itemR.quantity) > 0 ? Math.min(1, (Number(jc.qty) || 0) / Number(itemR.quantity)) : 1;
+    const lines = itemIdR ? await db.all(
+      `SELECT oii.inventory_item_id, oii.qty, ii.item_code, ii.unit FROM order_item_inventory oii
+         JOIN inventory_items ii ON ii.id = oii.inventory_item_id WHERE oii.order_item_id=$1`, [itemIdR]) : [];
+    const extraFor = (id) => (jc._remakeExtras || []).filter(e => parseInt(e.inventory_item_id, 10) === id).reduce((n, e) => n + (Number(e.qty) || 0), 0);
+    for (const r of jc._reworkItems) {
+      const id = parseInt(r.inventory_item_id, 10), qty = Number(r.qty);
+      const line = lines.find(l => l.inventory_item_id === id);
+      if (!line) return res.status(400).json({ error: `Rework: item #${id} is not on this item's inventory.` });
+      if (FINS_CODES.includes(line.item_code) || !rework.isPieceUnit(line.unit)) {
+        return res.status(400).json({ error: `Rework: ${line.item_code} is measured in ${line.unit || 'a non-piece unit'} — only counted parts can be reworked.` });
+      }
+      if (!Number.isInteger(qty)) return res.status(400).json({ error: `Rework: ${line.item_code} must be a whole number of pieces (got ${qty}).` });
+      const cap = Math.floor(Number(line.qty) * share + extraFor(id) + 1e-9);
+      if (qty > cap) return res.status(400).json({ error: `Rework: ${line.item_code} — ${qty} is more than this card used (${cap}).` });
+    }
+  }
 
   // Calculate net finished qty from production (original qty - total rejections + remade)
   const prodRow = await db.get(`
@@ -391,6 +423,13 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
     return res.status(400).json({ error: 'This job card is already dispatched' });
   }
 
+  // A reversal takes back what this card deposited into rework bins; refused
+  // if another order has already claimed those pieces (nothing written yet).
+  if (isReversal) {
+    try { await reverseReworkDeposit(db, jc, req.user.id); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+  }
+
   // Where the rejected card goes. 'production' (the default, and the only
   // behaviour until 24 Sep 2026) re-opens the checklist from return_to_stage
   // and hands the card back to the floor. 'qc' keeps the work as it is and
@@ -466,11 +505,17 @@ router.get('/:id/bom', authenticate, authorize('design', 'owner', 'admin'), asyn
   }
   const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
   const inventory_items = await db.all(
-    `SELECT ii.id, ii.item_code, ii.name, ii.unit, TRIM(ii.category) AS category, oii.qty, COALESCE(oii.qty_deducted,0) AS qty_deducted
+    `SELECT ii.id, ii.item_code, ii.name, ii.unit, TRIM(ii.category) AS category, oii.qty, COALESCE(oii.qty_deducted,0) AS qty_deducted,
+            COALESCE(oii.rework_qty,0) AS rework_qty, COALESCE(oii.rework_deducted,0) AS rework_deducted,
+            COALESCE((SELECT b.qty FROM inventory_rework_bins b WHERE b.item_id = ii.id), 0) AS rework_bin
      FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
      WHERE oii.order_item_id=$1 ORDER BY ii.item_code`,
     [itemId]
   );
+  // Has this card already deposited? Then the block shows read-only.
+  const deposited = await db.all(
+    `SELECT item_id AS inventory_item_id, SUM(qty) AS qty FROM inventory_rework_moves WHERE job_card_id=$1 AND kind='deposit' GROUP BY item_id`,
+    [req.params.id]);
   const cardCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE order_item_id=$1', [itemId]);
   // A finished-goods card fits parts onto a heater that already exists, so its
   // BOM should only carry what is genuinely put on during prep. If a build-only
@@ -489,6 +534,7 @@ router.get('/:id/bom', authenticate, authorize('design', 'owner', 'admin'), asyn
     is_split: parseInt(cardCount.n, 10) > 1,
     is_fg: !!card?.is_fg,
     fg_build_only: fgBuildOnly, // non-empty → warn before approving
+    rework_deposited: deposited,
   });
 });
 

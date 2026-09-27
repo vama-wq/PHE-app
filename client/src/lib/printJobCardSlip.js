@@ -51,7 +51,19 @@ export async function printJobCardSlip(jc) {
   }
 
   const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  // A line with a rework portion prints as two rows — the stock row and a
+  // REWORK row — so the store issues from the right bin. The rework portion is
+  // apportioned across the item's cards the same way, and the stock row is what
+  // is left of the card's share, so the card's total never changes.
   const shares = d.lines.map(r => apportion(r.qty, d.quantities));
+  const reworkShares = d.lines.map(r => Number(r.rework_qty) > 0 ? apportion(r.rework_qty, d.quantities) : null);
+  const rows = [];
+  d.lines.forEach((r, i) => {
+    const total = shares[i][d.cardIndex];
+    const rw = reworkShares[i] ? Math.min(reworkShares[i][d.cardIndex], total) : 0;
+    if (total - rw > 0 || rw === 0) rows.push({ ...r, share: total - rw, rework: false });
+    if (rw > 0) rows.push({ ...r, share: rw, rework: true });
+  });
   const dwg = d.item.drawing_number || '';
   const partOfItem = d.cardCount > 1;
 
@@ -97,11 +109,12 @@ export async function printJobCardSlip(jc) {
     <table>
       <tr><th>#</th><th>Code</th><th>Name</th><th>ગુજરાતી</th><th>हिंदी</th><th>Qty</th>
           <th>Issued / આપ્યું</th><th>Scrap / સ્ક્રેપ</th><th>Sign / સહી</th></tr>
-      ${d.lines.map((r, i) => `<tr>
-        <td>${i + 1}</td><td><b>${r.item_code}</b></td><td>${r.name || ''}</td>
-        <td>${r.name_gu || transliterateGujarati(r.name || '')}</td>
-        <td>${transliterateHindi(r.name || '')}</td>
-        <td class="num">${shares[i][d.cardIndex]} ${(r.unit || '').trim()}${partOfItem ? ` <span class="of">of ${r.qty}</span>` : ''}</td>
+      ${rows.map((r, i) => `<tr${r.rework ? ' style="background:#eff6ff"' : ''}>
+        <td>${i + 1}</td><td><b>${r.item_code}</b>${r.rework ? '<br><span style="font-size:10px;color:#1d4ed8;font-weight:bold">REWORK</span>' : ''}</td>
+        <td>${r.name || ''}${r.rework ? ' <span style="color:#1d4ed8">— from rework bin</span>' : ''}</td>
+        <td>${r.name_gu || transliterateGujarati(r.name || '')}${r.rework ? ' — રિવર્ક બિનમાંથી' : ''}</td>
+        <td>${transliterateHindi(r.name || '')}${r.rework ? ' — रिवर्क बिन से' : ''}</td>
+        <td class="num">${r.share} ${(r.unit || '').trim()}${partOfItem ? ` <span class="of">of ${r.rework ? r.rework_qty : r.qty}</span>` : ''}</td>
         <td class="blank"></td><td class="blank"></td><td class="sign"></td>
       </tr>`).join('')}
     </table>

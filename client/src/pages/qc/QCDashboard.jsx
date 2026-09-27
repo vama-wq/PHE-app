@@ -746,6 +746,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   const [fgLocation,   setFgLocation]  = useState('');   // storage location for FG intake
   const [locations,    setLocations]   = useState([]);
   const [remakeExtras, setRemakeExtras] = useState({});  // inventory_item_id -> extra qty for remade pcs
+  const [reworkItems,  setReworkItems]  = useState({});  // inventory_item_id -> pieces recovered into the rework bin
 
   const loadBom = () => api.get(`/qc/${card.id}/bom`).then(r => setBom(r.data)).catch(() => setBom(null));
   useEffect(() => { loadBom(); }, [card.id]);
@@ -772,6 +773,10 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
         .map(([id, q]) => ({ inventory_item_id: parseInt(id), qty: parseFloat(q) }))
         .filter(x => x.qty > 0);
       if (extras.length) fd.append('remake_extras', JSON.stringify(extras));
+      const rw = Object.entries(reworkItems)
+        .map(([id, q]) => ({ inventory_item_id: parseInt(id), qty: parseInt(q, 10) }))
+        .filter(x => x.qty > 0);
+      if (rw.length) fd.append('rework_items', JSON.stringify(rw));
       await api.put(`/qc/${card.id}/approve`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSaved();
     } catch (e) {
@@ -907,6 +912,49 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
             </ul>
           </div>
         )}
+
+        {/* Rework pieces — recovered from this card into the part's rework bin */}
+        {bom?.inventory_items?.length > 0 && (() => {
+          const PIECE = new Set(['pcs','pc','nos','no','piece','pieces','set','sets','box','boxes']);
+          const isPiece = (u) => PIECE.has(String(u || '').trim().toLowerCase().replace(/\.$/, ''));
+          const share = bom.item_qty > 0 ? Math.min(1, (Number(card.qty) || 0) / Number(bom.item_qty)) : 1;
+          const lines = bom.inventory_items.filter(i => isPiece(i.unit) && (i.category || '').trim().toLowerCase() !== 'finns');
+          const already = Object.fromEntries((bom.rework_deposited || []).map(d => [d.inventory_item_id, Number(d.qty)]));
+          const readOnly = Object.keys(already).length > 0;
+          if (!lines.length) return null;
+          return (
+            <div className="border border-sky-200 bg-sky-50/40 rounded-lg p-3">
+              <span className="text-sm font-medium text-gray-700">Rework pieces recovered from this card <span className="text-gray-400 font-normal">(if any)</span></span>
+              <p className="text-[11px] text-gray-500 mt-0.5 mb-2">
+                Parts pulled from this card that can be reused after rework. They go into that part's <b>rework bin</b> — kept apart from stock — and a later order can draw on them.
+                {readOnly && <span className="text-sky-700"> Already deposited from this card.</span>}
+              </p>
+              <ul className="space-y-1.5">
+                {lines.map(i => {
+                  const extra = parseFloat(remakeExtras[i.id]) || 0;
+                  const cap = Math.floor(Number(i.qty) * share + extra + 1e-9);
+                  return (
+                    <li key={i.id} className="flex items-center justify-between gap-2 text-xs text-gray-700">
+                      <span className="truncate"><span className="font-mono">{i.item_code}</span> — {i.name}
+                        {Number(i.rework_bin) > 0 && <span className="ml-1.5 text-sky-700">(bin: {i.rework_bin})</span>}</span>
+                      <span className="flex items-center gap-1 flex-shrink-0">
+                        {readOnly ? (
+                          <span className="w-20 text-right font-medium">{already[i.id] || 0}</span>
+                        ) : (
+                          <input type="number" min="0" max={cap} step="1" placeholder="0"
+                            className="input w-20 text-xs py-1 text-right"
+                            value={reworkItems[i.id] || ''}
+                            onChange={e => setReworkItems(p => ({ ...p, [i.id]: e.target.value }))} />
+                        )}
+                        <span className="text-gray-400 w-14">max {cap}</span>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })()}
 
         {/* Destination selector — FG-order inventory cards always go to dispatch */}
         {card.order_type !== 'finished_goods' && <div>

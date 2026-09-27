@@ -9,6 +9,8 @@
 // consumed so far (stage triggers prorate by job-card qty / item qty), and
 // order_items.inventory_deducted marks the item fully settled.
 
+const rework = require('./rework');
+
 const STAGE_CATEGORY_MAP = {
   15: ['Flange', 'Flange Cap', 'Flange Spare', 'Brazing EQ'],
   21: ['Nipple Fastner', 'Nipple Washer', 'Nipple Nut+Washer'],
@@ -43,17 +45,54 @@ const FINS_WEIGHT_PER_BASE = {
 };
 const FINS_CODES = Object.keys(FINS_WEIGHT_PER_BASE);
 
+// The one place a BOM line leaves stock. A line may carry a rework portion
+// (rework_qty): that part is taken from the item's rework bin first, and only
+// the remainder from normal stock — so nothing is ever counted in both. If the
+// bin turns out short, the rest comes from stock with a note and the line's
+// rework portion shrinks to what was really taken, so no phantom reservation
+// lingers. Production is never blocked here.
 async function deductLine(db, sel, dedQty, note, userId) {
   const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
   if (!inv || !(dedQty > 0)) return;
-  const newStock = (inv.current_stock || 0) - dedQty; // allow negative so shortages are visible
-  await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+
+  let fromRework = 0;
+  const wantRework = Math.max(0, Number(sel.rework_qty || 0) - Number(sel.rework_deducted || 0));
+  if (wantRework > 0) {
+    const available = await rework.binQty(db, sel.inventory_item_id);
+    fromRework = Math.min(dedQty, wantRework, available);
+    if (fromRework > 0) {
+      await rework.move(db, { itemId: sel.inventory_item_id, kind: 'draw', qty: fromRework,
+        ref: await lineRef(db, sel), notes: note, userId });
+      await db.run('UPDATE order_item_inventory SET rework_deducted = COALESCE(rework_deducted,0) + $1 WHERE id=$2',
+        [fromRework, sel.id]);
+    }
+    const short = Math.min(dedQty, wantRework) - fromRework;
+    if (short > 0) {
+      // Bin short: the rest comes from stock, and the reservation is released.
+      await db.run('UPDATE order_item_inventory SET rework_qty = COALESCE(rework_deducted,0) WHERE id=$1', [sel.id]);
+      note = `${note} | rework bin short by ${short} — taken from stock`;
+    }
+  }
+
+  const fromStock = dedQty - fromRework;
+  if (fromStock > 0) {
+    const newStock = (inv.current_stock || 0) - fromStock; // allow negative so shortages are visible
+    await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+    await db.insert(
+      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+       VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
+      [sel.inventory_item_id, fromStock, newStock, fromRework > 0 ? `${note} | ${fromRework} from rework bin` : note, userId]
+    );
+  }
   await db.run('UPDATE order_item_inventory SET qty_deducted = COALESCE(qty_deducted,0) + $1 WHERE id=$2', [dedQty, sel.id]);
-  await db.insert(
-    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-     VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
-    [sel.inventory_item_id, dedQty, newStock, note, userId]
-  );
+}
+
+// Where a line's rework pieces went, for the bin's history.
+async function lineRef(db, sel) {
+  const r = await db.get(
+    `SELECT oi.id AS order_item_id, oi.order_id, oi.drawing_number, o.order_code
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id=$1`, [sel.order_item_id]);
+  return r || { order_item_id: sel.order_item_id };
 }
 
 // Stage-triggered deduction: when a job card completes stage 15 or 21, deduct
@@ -224,6 +263,48 @@ async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = '
   if (sels.length) await db.run('UPDATE order_items SET inventory_deducted=TRUE WHERE id=$1', [itemId]);
 }
 
+// Pieces recovered at QC go into the part's rework bin. Idempotent per card:
+// a second call for the same card deposits nothing, so a card can never
+// deposit twice however many times the approval path runs.
+async function applyReworkDeposit(db, jc, items, userId) {
+  if (!Array.isArray(items) || !items.length) return;
+  const done = await db.get(`SELECT 1 AS x FROM inventory_rework_moves WHERE job_card_id=$1 AND kind='deposit' LIMIT 1`, [jc.id]);
+  if (done) return;
+  const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
+  const itemId = await resolveJobCardItemId(db, jc);
+  const item = itemId ? await db.get('SELECT drawing_number FROM order_items WHERE id=$1', [itemId]) : null;
+  for (const it of items) {
+    const qty = Number(it?.qty), invId = parseInt(it?.inventory_item_id, 10);
+    if (!(qty > 0) || !invId) continue;
+    await rework.move(db, { itemId: invId, kind: 'deposit', qty,
+      ref: { order_id: jc.order_id, order_item_id: itemId, job_card_id: jc.id, order_code: o?.order_code,
+             job_card_no: jc.job_card_no, drawing_number: item?.drawing_number },
+      notes: `Recovered at QC approval of ${jc.job_card_no}`, userId });
+  }
+}
+
+// Owner reversed an approval: the pieces that card deposited come back out.
+// Refused (throws) if another order has already claimed or drawn them.
+async function reverseReworkDeposit(db, jc, userId) {
+  const deps = await db.all(
+    `SELECT item_id, SUM(qty) AS q FROM inventory_rework_moves WHERE job_card_id=$1 AND kind='deposit' GROUP BY item_id`, [jc.id]);
+  const back = await db.all(
+    `SELECT item_id, SUM(qty) AS q FROM inventory_rework_moves WHERE job_card_id=$1 AND kind='reversal' GROUP BY item_id`, [jc.id]);
+  const already = Object.fromEntries(back.map(b => [b.item_id, Number(b.q)]));
+  for (const d of deps) {
+    const qty = Number(d.q) - (already[d.item_id] || 0);
+    if (!(qty > 0)) continue;
+    const free = await rework.freeQty(db, d.item_id);
+    if (free + 1e-9 < qty) {
+      const inv = await db.get('SELECT item_code FROM inventory_items WHERE id=$1', [d.item_id]);
+      throw new Error(`Cannot reverse: ${qty} ${inv?.item_code || ''} from this card's rework deposit are already claimed by another order (${free} free).`);
+    }
+    await rework.move(db, { itemId: d.item_id, kind: 'reversal', qty,
+      ref: { order_id: jc.order_id, job_card_id: jc.id, job_card_no: jc.job_card_no },
+      notes: `QC approval of ${jc.job_card_no} reversed`, userId });
+  }
+}
+
 // Extra consumption entered by QC for remade pieces — deducts immediately.
 async function applyRemakeExtras(db, jc, extras, userId) {
   if (!Array.isArray(extras) || !extras.length) return;
@@ -252,16 +333,27 @@ async function restoreItemInventory(db, itemId, orderCode, userId, reasonNote) {
   for (const sel of sels) {
     const deducted = parseFloat(sel.qty_deducted || 0); // restore only what actually went out
     if (deducted <= 0) continue;
-    const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
-    if (!inv) continue;
-    const newStock = (inv.current_stock || 0) + deducted;
-    await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
-    await db.run('UPDATE order_item_inventory SET qty_deducted = 0 WHERE id=$1', [sel.id]);
-    await db.insert(
-      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-       VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
-      [sel.inventory_item_id, deducted, newStock, `${reasonNote} — ${orderCode}`, userId]
-    );
+    // The rework portion goes back to the bin (re-creating it if it had been
+    // deleted at zero); only the stock portion returns to stock.
+    const rw = Math.min(deducted, parseFloat(sel.rework_deducted || 0));
+    if (rw > 0) {
+      await rework.move(db, { itemId: sel.inventory_item_id, kind: 'return', qty: rw,
+        ref: await lineRef(db, sel), notes: `${reasonNote} — ${orderCode}`, userId });
+    }
+    const toStock = deducted - rw;
+    if (toStock > 0) {
+      const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
+      if (inv) {
+        const newStock = (inv.current_stock || 0) + toStock;
+        await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+        await db.insert(
+          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
+           VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
+          [sel.inventory_item_id, toStock, newStock, `${reasonNote} — ${orderCode}`, userId]
+        );
+      }
+    }
+    await db.run('UPDATE order_item_inventory SET qty_deducted = 0, rework_deducted = 0 WHERE id=$1', [sel.id]);
   }
   await db.run('UPDATE order_items SET inventory_deducted=FALSE WHERE id=$1', [itemId]);
 }
@@ -338,4 +430,4 @@ async function settleItemInventory(db, orderItemId, userId, orderCode) {
   if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)');
 }
 
-module.exports = { buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, deductPartialAtQC, deductFinsByLength, replayDeductions };
+module.exports = { buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, replayDeductions, FINS_CODES };
