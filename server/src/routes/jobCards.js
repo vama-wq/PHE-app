@@ -1372,8 +1372,9 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
         code: 'MEGGER_VALUE_REQUIRED'
       });
     }
-    // HV + Light stages require the ohms reading (same rule as the JSON route)
-    if (markDone) {
+    // HV + Light stages require the ohms reading (same rule as the JSON route).
+    // Only stages that can be an HV stage on some card type need the lookup.
+    if (markDone && (HV_LIGHT_STAGES.has(stageNo) || stageNo === 2)) {
       const fgRow = await db.get('SELECT is_fg FROM job_cards WHERE id=$1', [jobCardId]);
       if (hvOhmsMissing(!!fgRow?.is_fg, stageNo, value1)) {
         return res.status(400).json({

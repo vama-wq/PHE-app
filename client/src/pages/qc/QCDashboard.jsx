@@ -5,7 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import InventoryEditModal from '../../components/InventoryEditModal';
-import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES } from '../../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, stagesFor } from '../../lib/utils';
 import { compressImage } from '../../lib/compressImage';
 import { downloadExcel } from '../../lib/utils';
 import {
@@ -521,10 +521,14 @@ function RejectModal({ card, onClose, onSaved }) {
   // Where it goes: back to the QC queue for a re-check (nothing on the
   // checklist moves), or back to the floor from a chosen stage.
   const [sendTo, setSendTo] = useState('production');
-  const [returnToStage, setReturnToStage] = useState(29);
+  // A finished-goods card runs the short 4-stage checklist, so its "ready"
+  // stage is 4, not 29 — offering it the 29 production stages re-opened
+  // nothing on the server and left the card off both queues.
+  const readyStage = card.is_fg ? 4 : 29;
+  const [returnToStage, setReturnToStage] = useState(readyStage);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const stages = PRODUCTION_STAGES.filter(s => s.no <= 29);
+  const stages = stagesFor(card).filter(s => s.no <= 29);
 
   const handleReject = async () => {
     setSaving(true);

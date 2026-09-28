@@ -537,7 +537,7 @@ function RejectQCModal({ jc, onClose, onSave }) {
   const redone = stages.filter(s => s.no >= stageNo && s.no < 30);
 
   const submit = async () => {
-    if (!notes.trim()) return setError('Say why it is being rejected — production needs the reason.');
+    if (!notes.trim()) return setError(sendTo === 'qc' ? 'Say why it is being rejected — QC needs the reason.' : 'Say why it is being rejected — production needs the reason.');
     setSaving(true); setError('');
     try {
       await api.put(`/qc/${jc.id}/reject`, { notes: notes.trim(), send_to: sendTo, return_to_stage: stageNo });
@@ -567,9 +567,7 @@ function RejectQCModal({ jc, onClose, onSave }) {
         )}
         <div className="space-y-2">
           <label className="label">Send the work back to</label>
-          {choice('qc', 'QC only — re-check',
-            'Nothing on the checklist moves. The card returns to the QC queue with your notes for a fresh inspection or a re-done report.')}
-          {choice('production', 'Production',
+          {choice('production', 'Back to production',
             'Re-opens the checklist from the stage you pick; the floor reworks it and re-submits to QC.')}
           {sendTo === 'production' && (
             <>
@@ -584,11 +582,13 @@ function RejectQCModal({ jc, onClose, onSave }) {
               </p>
             </>
           )}
+          {choice('qc', 'Back to QC for re-check',
+            'Nothing on the checklist moves. The card returns to the QC queue with your notes for a fresh inspection or a re-done report.')}
         </div>
         <div>
           <label className="label">Reason <span className="text-red-500">*</span></label>
           <textarea className="input" rows={3} value={notes} onChange={e => setNotes(e.target.value)}
-            placeholder="What was wrong — production sees this on the card" />
+            placeholder={sendTo === 'qc' ? 'What was wrong — QC sees this on the card' : 'What was wrong — production sees this on the card'} />
         </div>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex justify-end gap-2 pt-1">
