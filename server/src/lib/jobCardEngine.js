@@ -64,7 +64,10 @@ const WIRE_DRAW = {
     copper: [
       { minG: 20, maxG: 24, pct: 0.15 },
       { minG: 25, maxG: 29, pct: 0.26 },
-      { minG: 30, maxG: Infinity, pct: 0.29 },
+      // 30 and above moved 29% -> 21% (owner, 28 Sep 2026): a 1 kW 31 SWG card
+      // wound to 68.24 ohm on 29% landed at 57-58 ohm after draw, i.e. a real
+      // draw of 18-20%. Cards already made keep their 29% (frozen figures).
+      { minG: 30, maxG: Infinity, pct: 0.21 },
     ],
   },
   // 11 mm has no 1 kW special case.
