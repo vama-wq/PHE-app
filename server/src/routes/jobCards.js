@@ -1190,6 +1190,14 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     });
   }
 
+  // HV + Light stages require the ohms reading
+  if (done && hvOhmsMissing(isFg, stageNo, value1)) {
+    return res.status(400).json({
+      error: 'Ohms value is required before marking this stage done.',
+      code: 'OHMS_VALUE_REQUIRED'
+    });
+  }
+
   // Stage 3 (Ohms) requires the total weight of all coils produced for this job card
   const coilWeightNum = (coil_weight === '' || coil_weight == null) ? null : Number(coil_weight);
   if (!isFg && stageNo === 3 && done && !(coilWeightNum > 0)) {
@@ -1284,6 +1292,18 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   res.json({ message: 'Stage updated' });
 });
 
+// HV + Light stages must record the ohms reading (owner, 28 Sep 2026). The
+// stage's value1 is the JSON the floor form writes ({hv, light, ohms, ...});
+// an empty ohms there means the test was ticked without the measurement.
+// Production cards test at 7, 9, 20, 24 and 27; a finished-goods card at 2.
+const HV_LIGHT_STAGES = new Set([7, 9, 20, 24, 27]);
+function hvOhmsMissing(isFg, stageNo, value1) {
+  if (!((!isFg && HV_LIGHT_STAGES.has(stageNo)) || (isFg && stageNo === 2))) return false;
+  let hv = {};
+  try { hv = JSON.parse(value1 || '{}'); } catch { hv = {}; }
+  return !String(hv?.ohms ?? '').trim();
+}
+
 // ── POST upload rejection photo for a stage ───────────────────────────────────
 router.post('/:id/checklist/:stage/rejection-photo', authenticate, authorize('production', 'owner', 'admin'),
   ...uploadRejectionPhoto, async (req, res) => {
@@ -1351,6 +1371,16 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
         error: 'Megger value is required before marking this stage done.',
         code: 'MEGGER_VALUE_REQUIRED'
       });
+    }
+    // HV + Light stages require the ohms reading (same rule as the JSON route)
+    if (markDone) {
+      const fgRow = await db.get('SELECT is_fg FROM job_cards WHERE id=$1', [jobCardId]);
+      if (hvOhmsMissing(!!fgRow?.is_fg, stageNo, value1)) {
+        return res.status(400).json({
+          error: 'Ohms value is required before marking this stage done.',
+          code: 'OHMS_VALUE_REQUIRED'
+        });
+      }
     }
 
     // Stage 29 = Dispatch — stores dispatched_qty before QC.

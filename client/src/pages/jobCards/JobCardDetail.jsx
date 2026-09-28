@@ -523,11 +523,13 @@ export default function JobCardDetail() {
   );
 }
 
-// Owner-only: undo a QC decision and put the work back on the floor, optionally
-// at an earlier stage so everything from there is redone.
+// Owner-only: undo a QC decision. The work either goes straight back into the
+// QC queue for a re-check (nothing on the checklist moves) or back to the
+// floor, optionally at an earlier stage so everything from there is redone.
 function RejectQCModal({ jc, onClose, onSave }) {
   const stages = stagesFor(jc);
   const readyStage = jc.is_fg ? 4 : 29;
+  const [sendTo, setSendTo] = useState('production');
   const [stageNo, setStageNo] = useState(readyStage);
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -538,7 +540,7 @@ function RejectQCModal({ jc, onClose, onSave }) {
     if (!notes.trim()) return setError('Say why it is being rejected — production needs the reason.');
     setSaving(true); setError('');
     try {
-      await api.put(`/qc/${jc.id}/reject`, { notes: notes.trim(), return_to_stage: stageNo });
+      await api.put(`/qc/${jc.id}/reject`, { notes: notes.trim(), send_to: sendTo, return_to_stage: stageNo });
       onSave();
     } catch (e) {
       setError(e.response?.data?.error || 'Failed to reject');
@@ -546,25 +548,42 @@ function RejectQCModal({ jc, onClose, onSave }) {
     }
   };
 
+  const choice = (value, title, body) => (
+    <button type="button" onClick={() => setSendTo(value)}
+      className={`w-full text-left p-3 rounded-xl border-2 ${sendTo === value ? 'border-red-500 bg-red-50' : 'border-gray-200 hover:border-gray-300'}`}>
+      <div className="font-semibold text-sm">{title}</div>
+      <div className="text-xs text-gray-500 mt-0.5">{body}</div>
+    </button>
+  );
+
   return (
     <Modal open title="Reject QC" onClose={onClose} size="md">
       <div className="space-y-3">
         {jc.status === 'qc_approved' && (
           <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-            This card is already <b>QC Approved</b>. Rejecting it undoes that approval and puts the work back into production.
+            This card is already <b>QC Approved</b>. Rejecting it undoes that approval
+            {sendTo === 'qc' ? ' and puts the card back in the QC queue for a fresh check.' : ' and puts the work back into production.'}
           </p>
         )}
-        <div>
+        <div className="space-y-2">
           <label className="label">Send the work back to</label>
-          <select className="input" value={stageNo} onChange={e => setStageNo(parseInt(e.target.value, 10))}>
-            {stages.filter(s => s.no < 30).map(s => (
-              <option key={s.no} value={s.no}>Stage {s.no}: {s.name}</option>
-            ))}
-          </select>
-          <p className="text-[11px] text-gray-500 mt-1">
-            {redone.length} stage{redone.length === 1 ? '' : 's'} will re-open and must be done again
-            {stageNo !== readyStage && <> — starting from <b>{stages.find(s => s.no === stageNo)?.name}</b></>}.
-          </p>
+          {choice('qc', 'QC only — re-check',
+            'Nothing on the checklist moves. The card returns to the QC queue with your notes for a fresh inspection or a re-done report.')}
+          {choice('production', 'Production',
+            'Re-opens the checklist from the stage you pick; the floor reworks it and re-submits to QC.')}
+          {sendTo === 'production' && (
+            <>
+              <select className="input" value={stageNo} onChange={e => setStageNo(parseInt(e.target.value, 10))}>
+                {stages.filter(s => s.no < 30).map(s => (
+                  <option key={s.no} value={s.no}>Redo from stage {s.no}: {s.name}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-gray-500">
+                {redone.length} stage{redone.length === 1 ? '' : 's'} will re-open and must be done again
+                {stageNo !== readyStage && <> — starting from <b>{stages.find(s => s.no === stageNo)?.name}</b></>}.
+              </p>
+            </>
+          )}
         </div>
         <div>
           <label className="label">Reason <span className="text-red-500">*</span></label>
@@ -575,7 +594,7 @@ function RejectQCModal({ jc, onClose, onSave }) {
         <div className="flex justify-end gap-2 pt-1">
           <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
           <button className="btn-danger" onClick={submit} disabled={saving}>
-            {saving ? 'Rejecting…' : 'Reject QC'}
+            {saving ? 'Rejecting…' : sendTo === 'qc' ? 'Reject & Send Back to QC' : 'Reject & Return to Production'}
           </button>
         </div>
       </div>

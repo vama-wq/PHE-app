@@ -1316,10 +1316,13 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (!hvTestResult || !hvLightResult) return false;
       if (hvTestResult === 'fail' && (!hvTestFailCount || !hvTestFailReason.trim())) return false;
       if (hvLightResult === 'fail' && (!hvLightFailCount || !hvLightFailReason.trim())) return false;
+      // The ohms reading is compulsory on every HV + Light stage (owner, 28 Sep 2026)
+      if (!String(hvOhms).trim()) return false;
     }
     if (isFgHvOhms) {
       if (!fgHvResult) return false;
       if (fgHvResult === 'fail' && !(parseInt(fgHvFailCount, 10) > 0)) return false;
+      if (!String(fgOhms).trim()) return false;
     }
     if (isPressure) {
       if (!pressureResult) return false;
@@ -1716,14 +1719,14 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
           {/* Ohms / Remark */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Ohms Value <span className="text-xs text-gray-400 font-normal">(remark)</span>
+              Ohms Value <span className="text-red-500">*</span>
             </label>
             {isDone ? (
               <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
                 {hvData.ohms || '—'}
               </div>
             ) : (
-              <input className="input w-full" placeholder="Enter ohms value or remark"
+              <input className="input w-full" placeholder="Measured ohms — required"
                 value={hvOhms} onChange={e => setHvOhms(e.target.value)} />
             )}
           </div>
@@ -1789,14 +1792,14 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Ohms Value <span className="text-xs text-gray-400 font-normal">(remark)</span>
+              Ohms Value <span className="text-red-500">*</span>
             </label>
             {isDone ? (
               <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
                 {fgHvData.ohms || '—'}
               </div>
             ) : (
-              <input className="input w-full" placeholder="Enter ohms value or remark"
+              <input className="input w-full" placeholder="Measured ohms — required"
                 value={fgOhms} onChange={e => setFgOhms(e.target.value)} />
             )}
           </div>
