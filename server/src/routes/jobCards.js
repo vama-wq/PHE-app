@@ -499,7 +499,7 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
       const built = cardFromSpec(spec);
       if (built.ok) {
         const parts_ = renderParts(built, [spec.sheet], spec.provenance || []);
-        card = { styles: parts_.styles, fontLink: parts_.fontLink, sheets: parts_.sheets, title: parts_.title };
+        card = { styles: parts_.styles, fontLink: parts_.fontLink, fitScript: parts_.fitScript, sheets: parts_.sheets, title: parts_.title };
       }
     } catch (e) { console.error('[slip] could not re-render card:', e.message); }
   }

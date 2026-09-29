@@ -76,6 +76,7 @@ export async function printJobCardSlip(jc) {
   w.document.write(`<!doctype html><html><head><title>${merged ? d.card.title : `Material Slip — ${d.jobCard.job_card_no}`}</title>
     ${merged ? d.card.fontLink : ''}
     ${merged ? d.card.styles : ''}
+    ${merged ? (d.card.fitScript || '') : ''}
     <style>
       /* EVERY rule here is scoped to .slip-page. Unscoped, the slip's own
          body/table/th/td rules landed on the job card sheet printed above it —
@@ -123,8 +124,20 @@ export async function printJobCardSlip(jc) {
     </body></html>`);
   w.document.close();
   // Let the fonts and the card's stylesheet settle before the print dialog,
-  // or the first page comes out in a fallback face.
-  setTimeout(() => w.print(), merged ? 400 : 0);
+  // or the first page comes out in a fallback face — and the card's
+  // fit-to-page measurement (jobCardRender.js) would be taken in it too.
+  // Never wait on a font that will not load for longer than a few seconds.
+  let printed = false;
+  const go = () => { if (printed) return; printed = true; w.print(); };
+  if (merged) {
+    setTimeout(() => {
+      const ready = w.document.fonts && w.document.fonts.ready;
+      (ready || Promise.resolve()).then(() => setTimeout(go, 50));
+    }, 400);
+    setTimeout(go, 4000);
+  } else {
+    setTimeout(go, 0);
+  }
 
   // Only an uploaded card needs a second tab — a generated one is already in
   // the document above.

@@ -440,6 +440,19 @@ const REGRESSIONS = [
   ['a hand-set wire draw also falls back to a double coil, still printing its own ohms',
     () => E.buildJobCard({ ...DOUBLE_COIL_CARD, wireDrawPctOverride: 0.12 }),
     o => !!o.doubleCoil && o.ohmsRangeMid === 14.812 && o.wireDrawPct === 0.12],
+  // Print (29 Sep 2026): PT-UTYPE-68U-4KW ran 4% past one A4 page. The card
+  // now fixes its own page box and zooms each sheet to fit just before
+  // printing, measuring an UNZOOMED copy — a copy that kept the last zoom
+  // measured small in print media and reset the sheet to 100%.
+  ['print: the card fixes an A4 page box and zooms each sheet to fit',
+    () => { const o = E.buildJobCard(DOUBLE_COIL_CARD); const head = require('./sampleCardBPE.json').head;
+            return renderParts({ ...o, tubeMaterialLabel: head.tubeMaterialLabel }, [head], []); },
+    p => /@page \{ size: A4; margin: 10mm 8mm; \}/.test(p.styles) && /zoom: var\(--fit, 1\)/.test(p.styles)
+      && p.fitScript.includes("addEventListener('beforeprint'") && p.fitScript.includes("copy.style.setProperty('--fit', '1')")],
+  ['print: the View page carries the fit script',
+    () => require('../src/lib/jobCardRender').render(E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 55.38 }),
+      [require('./sampleCardBPE.json').head], []),
+    html => html.includes('__fitJobCardSheets') && html.indexOf('__fitJobCardSheets') < html.indexOf('</head>')],
   ['nothing fits even doubled: the card stays blank and says a double coil was tried',
     () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 250, voltage: 230, drawingTotalLengthIn: 8, tubeDiameterMm: 8 }),
     o => o.ok && o.gauge == null && o.doubleCoil === null && o.warnings.some(w => /even as a double coil/.test(w))],

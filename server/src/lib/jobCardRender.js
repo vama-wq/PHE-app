@@ -321,11 +321,22 @@ function renderParts(card, heads, provenance) {
     .sign { grid-template-columns: 1fr; gap: 18px; }
   }
   @page { size: A4; margin: 8mm; }
+  /* One card, one A4 page. The page box is fixed here rather than left to the
+     browser, so the printed width is always known: that is what lets the fit
+     script below measure a sheet exactly as it will print. 10 mm top and
+     bottom keep room for the browser's own header and footer; the Print +
+     Slip window narrows it to 8 mm, which only leaves more room. */
+  @page { size: A4; margin: 10mm 8mm; }
   @media print {
-    body { background: #fff; }
-    .wrap { padding: 0; }
+    body { background: #fff; margin: 0; }
+    /* Block, not flex: a flex gap between batch sheets can land at the top of
+       the next page and eat into it. */
+    .wrap { padding: 0; display: block; }
     .aside { display: none; }
-    .sheet { box-shadow: none; border: 1.5px solid #000; max-width: none; page-break-after: always; }
+    /* --fit is set by the fit script just before printing: 1 when the sheet
+       fits, a little less when a long tube name, remark or fixture would push
+       it onto a second page. Screen view never zooms. */
+    .sheet { box-shadow: none; border: 1.5px solid #000; max-width: none; page-break-after: always; zoom: var(--fit, 1); }
     .sheet:last-of-type { page-break-after: auto; }
     /* The sheet must land on ONE page — the floor works from a single sheet —
        so the writing box gets what is left rather than a fixed height. */
@@ -364,8 +375,49 @@ function renderParts(card, heads, provenance) {
   </aside>
 `;
 
-  return { title, fontLink, styles, sheets: headList.map(sheet).join(''), body };
+  return { title, fontLink, styles, fitScript: FIT_SCRIPT, sheets: headList.map(sheet).join(''), body };
 }
+
+// Fit each sheet on one printed page. The browser lays a page out for print
+// only after `beforeprint`, so the sheet is measured as a hidden copy at the
+// printed width (A4 less the @page side margins) in the same fonts, and the
+// printed sheet is zoomed down just enough to fit the page height. A card that
+// already fits prints at 100%; this card (PT-UTYPE-68U-4KW: long tube name,
+// double coil, two-line remark) was 4% over. Runs again on font load and on
+// every print, so the figure is always for the fonts actually on the page.
+const FIT_SCRIPT = `<script>
+(function () {
+  var PAGE_W_MM = 194, PAGE_H_MM = 277, SAFETY = 0.98;
+  function fitSheets() {
+    var sheets = document.querySelectorAll('.sheet');
+    if (!sheets.length || !document.body) return;
+    var box = document.createElement('div');
+    box.setAttribute('aria-hidden', 'true');
+    box.style.cssText = 'position:absolute;left:-10000px;top:0;visibility:hidden;width:' + PAGE_W_MM + 'mm';
+    document.body.appendChild(box);
+    var pageH = PAGE_H_MM * 96 / 25.4 * SAFETY;
+    for (var i = 0; i < sheets.length; i++) {
+      var copy = sheets[i].cloneNode(true);
+      // Measure the sheet at full size. The copy would otherwise carry the
+      // zoom from the last run, and printing re-runs this in print media,
+      // where that zoom applies: it then measured small, reset the sheet to
+      // 100% and left the bottom edge on a second page.
+      copy.style.setProperty('--fit', '1');
+      box.appendChild(copy);
+      var h = copy.getBoundingClientRect().height;
+      box.removeChild(copy);
+      var f = h > pageH ? Math.floor(pageH / h * 1000) / 1000 : 1;
+      sheets[i].style.setProperty('--fit', String(f));
+    }
+    document.body.removeChild(box);
+  }
+  window.__fitJobCardSheets = fitSheets;
+  window.addEventListener('beforeprint', fitSheets);
+  window.addEventListener('load', fitSheets);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fitSheets); else fitSheets();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitSheets);
+})();
+</script>`;
 
 // The whole page, as stored on the order and opened from it.
 //
@@ -375,11 +427,11 @@ function renderParts(card, heads, provenance) {
 // skeleton (the Artifact tool does).
 function render(card, heads, provenance, { standalone = true } = {}) {
   const p = renderParts(card, heads, provenance);
-  const inner = `<title>${p.title}</title>\n${p.fontLink}\n${p.styles}\n<div class="wrap">${p.body}</div>\n`;
+  const inner = `<title>${p.title}</title>\n${p.fontLink}\n${p.styles}\n${p.fitScript}\n<div class="wrap">${p.body}</div>\n`;
   if (!standalone) return inner;
   return `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n`
        + `<meta name="viewport" content="width=device-width, initial-scale=1">\n`
-       + `<title>${p.title}</title>\n${p.fontLink}\n${p.styles}\n</head>\n`
+       + `<title>${p.title}</title>\n${p.fontLink}\n${p.styles}\n${p.fitScript}\n</head>\n`
        + `<body>\n<div class="wrap">${p.body}</div>\n</body>\n</html>\n`;
 }
 
