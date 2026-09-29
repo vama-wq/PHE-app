@@ -2257,7 +2257,8 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
                 {[
                   ['Wire gauge', preview.card.gauge == null
                     ? 'none fits — will print blank'
-                    : `${preview.card.gauge} SWG · ${preview.card.wire?.ohms_per_m} Ω/mtr · ${preview.card.wire?.mandrel_mm} mandrel`],
+                    : `${preview.card.gauge} SWG · ${preview.card.wire?.ohms_per_m} Ω/mtr · ${preview.card.wire?.mandrel_mm} mandrel`
+                      + (preview.card.doubleCoil ? ' · DOUBLE COIL' : '')],
                   ['Ohms range', preview.card.ohmsRangeMid == null ? '—'
                     : `${preview.card.ohmsRangeMin} – ${preview.card.ohmsRangeMid} – ${preview.card.ohmsRangeMax}`],
                   ['Ohms after draw', `${preview.card.ohmsAfterDrawMin} – ${preview.card.ohmsAfterDraw} – ${preview.card.ohmsAfterDrawMax}`],

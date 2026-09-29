@@ -188,7 +188,9 @@ async function buildDraft(db, orderItemId, answers = {}) {
     ['Tube draw', `${pct(card.tubeDrawPct)} — ${dia} mm ${card.material === 'copper' ? 'copper' : 'SS / Incoloy'} at ${card.totalLengthIn}"`],
     ['Wire gauge', card.gauge == null
       ? 'no wire on the sheet reaches the required coil length — choose by hand'
-      : `${card.gauge} SWG at ${pct(card.wireDrawPct)} wire draw, ${card.gaugeResolution === 'unique' ? 'the only gauge that fits' : 'the best stocked of several'}; ${card.spoolOptions.length} spool(s) of it fit the spring window`],
+      : card.doubleCoil
+        ? `${card.gauge} SWG at ${pct(card.wireDrawPct)} wire draw, DOUBLE COIL — no single wire reaches the wire length, so the ohms after draw were doubled to ${card.doubleCoil.ohmsAfterDraw} Ω (${card.doubleCoil.ohmsPerWire} Ω wound) and checked against ${card.doubleCoil.widened ? `half the wire length widened to /2 (only ${card.doubleCoil.beforeWidening.spools} spool(s) of ${card.doubleCoil.beforeWidening.gauge} SWG fitted at /2.2)` : 'half the wire length'}, ${round(card.doubleCoil.windowLowIn, 3)}" to ${round(card.doubleCoil.windowHighIn, 3)}"; ${card.spoolOptions.length} spool(s) of it fit. The card prints the element's own ohms range and its normal wire length`
+        : `${card.gauge} SWG at ${pct(card.wireDrawPct)} wire draw, ${card.gaugeResolution === 'unique' ? 'the only gauge that fits' : 'the best stocked of several'}; ${card.spoolOptions.length} spool(s) of it fit the spring window`],
     ['Cold zone', card.coldZoneBigIn === std.coldZoneIn
       ? `${card.coldZoneBigIn}" — the ${dia} mm standard for a ${card.totalLengthIn}" element`
       : `${card.coldZoneBigIn}" set by hand; the ${dia} mm standard here is ${std.coldZoneIn}"`],

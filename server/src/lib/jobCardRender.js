@@ -72,11 +72,13 @@ function specRows(c, head) {
       `${(c.tubeDrawPct * 100).toFixed(1)}% draw`],
     [['વાયર ગેજ Ω/મીટર', 'Wire Gauge Ω/mtr', 'तार गेज Ω/मीटर'],
       c.gauge == null ? '<span class="blank">to be chosen by hand</span>'
-        : `${box(c.gauge, 'key')} SWG &nbsp; ${box(`${n(wire.ohms_per_m, 3)} Ω/mtr &nbsp; ${wire.mandrel_mm} Mandrel`, 'key')}`,
+        : `${box(c.gauge, 'key')} SWG &nbsp; ${box(`${n(wire.ohms_per_m, 3)} Ω/mtr &nbsp; ${wire.mandrel_mm} Mandrel`, 'key')}`
+          + (c.doubleCoil ? ` &nbsp; ${box('DOUBLE COIL', 'key')}` : ''),
       c.spoolOptions.length > 1 ? `${c.spoolOptions.length} spools of this gauge fit` : ''],
     [['સ્પ્રિંગની સીમા', 'Wire Length', 'स्प्रिंग की सीमा'],
       `${n(c.springWindowLowIn, 3)}" &nbsp;<span class="to">TO</span>&nbsp; ${n(c.springWindowHighIn, 3)}"`,
-      c.springLengthIn ? `wound ${n(c.springLengthIn, 3)}"` : ''],
+      // A double coil's per-wire length is background working, not the element's.
+      c.springLengthIn && !c.doubleCoil ? `wound ${n(c.springLengthIn, 3)}"` : ''],
     [['ઓહ્મ પ્રતિકાર', 'Ohms Range', 'ओम प्रतिरोध'],
       c.ohmsRangeMid == null ? '<span class="blank">—</span>'
         : `${n(c.ohmsRangeMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsRangeMid, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsRangeMax, 3)} &nbsp; ${box(`${(c.wireDrawPct * 100).toFixed(1).replace(/\.0$/, '')}%`, 'key')}`,

@@ -49,6 +49,11 @@ const TUBE_DRAW = {
   },
 };
 
+// Double coil (owner, 29 Sep 2026): a double-coil pick with this many spools
+// or fewer gets a second look with the top of the wire length at /2.
+const DOUBLE_COIL_THIN_SPOOLS = 2;
+const DOUBLE_COIL_WIDE_DIVISOR = 2;
+
 // Policy Step 7 — wire draw, by gauge. 8 mm only.
 // The 25-28 band takes 33% instead of 31% on a 1 kW heater.
 const WIRE_DRAW = {
@@ -292,6 +297,27 @@ function chooseWire(opts) {
   };
 }
 
+// The planner's forced wire draw, applied to every gauge: the shortest coil
+// that fits wins, and every spool of that gauge that fits is offered.
+function overrideSelection(ohmsAfterDraw, springWindow, pct, dia) {
+  const requiredOhms = ohmsAfterDraw * (1 + pct);
+  const inWindow = (WIRE_TABLES[dia] || WIRE_TABLES[8]).rows.filter(w => !w.excluded)
+    .map(w => ({ wire: w, springIn: springLengthIn(requiredOhms, w) }))
+    .filter(c => c.springIn >= springWindow.lowIn && c.springIn <= springWindow.highIn)
+    .sort((a, b) => a.springIn - b.springIn);
+  return {
+    chosen: inWindow.length ? {
+      wireDrawPct: pct, requiredOhms: round(requiredOhms, 4),
+      gauge: inWindow[0].wire.gauge, wire: { ...inWindow[0].wire },
+      springLengthIn: round(inWindow[0].springIn, 4),
+      spools: inWindow.filter(c => c.wire.gauge === inWindow[0].wire.gauge)
+        .map(c => ({ ...c.wire, springLengthIn: round(c.springIn, 4) })),
+      alternativeGauges: [],
+    } : null,
+    alternatives: [], resolution: inWindow.length ? 'override' : 'none', excludedRows: 0,
+  };
+}
+
 // ── Reading inputs off a form ───────────────────────────────────────────────
 // Everything here arrives from an HTTP body, where an untouched optional box is
 // '' and not undefined. `'' != null` is true and `Number('')` is 0, so the naive
@@ -416,44 +442,82 @@ function buildJobCard(input) {
     highIn: (cuttingLengthIn - czBig * 2) / divisors.high,
   };
 
-  let selection;
+  // One selection pass for a given resistance and window — the policy bands,
+  // or the planner's forced wire draw applied to every gauge.
+  const pickWire = (ohms, win) => drawOverride != null
+    ? overrideSelection(ohms, win, drawOverride, D)
+    : chooseWire({ material, ohmsAfterDraw: ohms, wattage, springWindow: win, dia: D });
+
+  let selection = pickWire(ohmsAfterDraw, springWindow);
   if (drawOverride != null) {
-    const requiredOhms = ohmsAfterDraw * (1 + drawOverride);
-    const inWindow = (WIRE_TABLES[D] || WIRE_TABLES[8]).rows.filter(w => !w.excluded)
-      .map(w => ({ wire: w, springIn: springLengthIn(requiredOhms, w) }))
-      .filter(c => c.springIn >= springWindow.lowIn && c.springIn <= springWindow.highIn)
-      .sort((a, b) => a.springIn - b.springIn);
-    selection = {
-      chosen: inWindow.length ? {
-        wireDrawPct: drawOverride, requiredOhms: round(requiredOhms, 4),
-        gauge: inWindow[0].wire.gauge, wire: { ...inWindow[0].wire },
-        springLengthIn: round(inWindow[0].springIn, 4),
-        spools: inWindow.filter(c => c.wire.gauge === inWindow[0].wire.gauge)
-          .map(c => ({ ...c.wire, springLengthIn: round(c.springIn, 4) })),
-        alternativeGauges: [],
-      } : null,
-      alternatives: [], resolution: inWindow.length ? 'override' : 'none', excludedRows: 0,
-    };
     warnings.push(`Wire draw ${(drawOverride * 100).toFixed(1)}% set by hand, overriding the policy band.`);
-  } else {
-    selection = chooseWire({ material, ohmsAfterDraw, wattage, springWindow, dia: D });
+  }
+
+  // Double coil (owner, 29 Sep 2026). When no single wire reaches the wire
+  // length, the element is built as a double coil: in the background the ohms
+  // after draw are doubled and the wire length halved, and the gauge sheet is
+  // checked again — with the gauge's normal wire draw, exactly as a single
+  // coil is checked. If that finds only 1 or 2 spools, the top of the wire
+  // length is widened from /2.2 to /2 and the wider pick is taken when more
+  // spools fit (double coils only; 8 mm copper already tops out at /2). The
+  // card keeps the element's own figures — its ohms range and its normal wire
+  // length print exactly as for a single coil — and only the spool row adds
+  // DOUBLE COIL. The doubled / halved working is kept for the screen notes;
+  // it never reaches the printed sheet.
+  let doubleCoil = null;
+  if (!selection.chosen) {
+    const base = cuttingLengthIn - czBig * 2;
+    const half = { lowIn: springWindow.lowIn / 2, highIn: springWindow.highIn / 2 };
+    let dbl = pickWire(ohmsAfterDraw * 2, half);
+    let used = half, spoolsBeforeWidening = null;
+    if (dbl.chosen && dbl.chosen.spools.length <= DOUBLE_COIL_THIN_SPOOLS && divisors.high > DOUBLE_COIL_WIDE_DIVISOR) {
+      const wide = { lowIn: half.lowIn, highIn: base / DOUBLE_COIL_WIDE_DIVISOR / 2 };
+      const w = pickWire(ohmsAfterDraw * 2, wide);
+      if (w.chosen && w.chosen.spools.length > dbl.chosen.spools.length) {
+        spoolsBeforeWidening = { gauge: dbl.chosen.gauge, spools: dbl.chosen.spools.length };
+        dbl = w; used = wide;
+      }
+    }
+    if (dbl.chosen) {
+      selection = dbl;
+      doubleCoil = {
+        ohmsAfterDraw: round(ohmsAfterDraw * 2, 4),
+        ohmsPerWire: dbl.chosen.requiredOhms,
+        windowLowIn: round(used.lowIn, 4),
+        windowHighIn: round(used.highIn, 4),
+        lengthPerWireIn: dbl.chosen.springLengthIn,
+        widened: spoolsBeforeWidening != null,
+        beforeWidening: spoolsBeforeWidening,
+      };
+    }
   }
 
   if (selection.usedLastResort && selection.chosen) {
     warnings.push(`Only the odd 24 SWG spools (10.4-10.8 ohm/m) reach the window — check the rack before cutting; ${selection.chosen.spools.length} of them fit.`);
   }
+  if (doubleCoil) {
+    const halfNormal = `${round(springWindow.lowIn / 2, 3)}" to ${round(springWindow.highIn / 2, 3)}"`;
+    const widenedNote = doubleCoil.widened
+      ? ` Against half the normal wire length (${halfNormal}) only ${doubleCoil.beforeWidening.spools} spool${doubleCoil.beforeWidening.spools === 1 ? '' : 's'} of ${doubleCoil.beforeWidening.gauge} SWG fitted, so the top was widened from /${divisors.high} to /${DOUBLE_COIL_WIDE_DIVISOR}: half of that is ${round(doubleCoil.windowLowIn, 3)}" to ${round(doubleCoil.windowHighIn, 3)}", where ${selection.chosen.spools.length} spools of ${selection.chosen.gauge} SWG fit.`
+      : ` It was checked against half the wire length, ${halfNormal}.`;
+    warnings.push(`No single wire reaches the wire length, so this is a DOUBLE COIL: the ohms after draw were doubled to ${doubleCoil.ohmsAfterDraw} Ω, ${doubleCoil.ohmsPerWire} Ω wound at ${(selection.chosen.wireDrawPct * 100).toFixed(1)}%.${widenedNote} The card prints the element's own ohms range and its normal wire length; only the spool row says DOUBLE COIL.`);
+  }
   if (selection.resolution === 'none') {
-    warnings.push('No wire in the table reaches the required coil length — the gauge must be chosen by hand.');
+    warnings.push('No wire in the table reaches the required coil length, even as a double coil — the gauge must be chosen by hand.');
   } else if (selection.resolution === 'multiple') {
     const others = selection.alternatives.map(a => `${a.gauge} SWG @ ${(a.wireDrawPct * 100).toFixed(1)}% (${a.spools.length} spool${a.spools.length === 1 ? '' : 's'} fit)`).join(', ');
-    warnings.push(`${selection.alternatives.length + 1} gauges fit; ${selection.chosen.gauge} SWG was taken as the best stocked — ${selection.chosen.spools.length} spools of it fit the window, against ${others}.`);
-    if (selection.leastCoil && selection.leastCoil.gauge !== selection.chosen.gauge) {
+    warnings.push(`${selection.alternatives.length + 1} gauges fit${doubleCoil ? ' as a double coil' : ''}; ${selection.chosen.gauge} SWG was taken as the best stocked — ${selection.chosen.spools.length} spools of it fit the window, against ${others}.`);
+    // The shortest-coil comparison quotes wound ohms and coil lengths; on a
+    // double coil those are the background figures, so it is left out.
+    if (!doubleCoil && selection.leastCoil && selection.leastCoil.gauge !== selection.chosen.gauge) {
       warnings.push(`The shortest coil would instead be ${selection.leastCoil.gauge} SWG @ ${(selection.leastCoil.wireDrawPct * 100).toFixed(1)}%, ohms ${selection.leastCoil.requiredOhms} (coil ${selection.leastCoil.springLengthIn}" against ${selection.chosen.springLengthIn}").`);
     }
   }
 
   const c = selection.chosen;
-  const ohmsRangeMid = c ? c.requiredOhms : null;
+  // A double coil prints the element's own wound ohms (ohms after draw at the
+  // chosen gauge's draw), not the doubled figure the gauge was checked with.
+  const ohmsRangeMid = c ? (doubleCoil ? ohmsAfterDraw * (1 + c.wireDrawPct) : c.requiredOhms) : null;
 
   return {
     ok: true,
@@ -496,11 +560,14 @@ function buildJobCard(input) {
     wireDrawPct: c ? c.wireDrawPct : null,
     gauge: c ? c.gauge : null,
     wire: c ? c.wire : null,
+    // On a double coil this is the background per-wire length (checked against
+    // half the wire length); the card does not print it.
     springLengthIn: c ? c.springLengthIn : null,
     spoolOptions: c ? c.spools : [],
+    doubleCoil,
     gaugeResolution: selection.resolution,
     tieBreak: selection.tieBreak,
-    leastCoilOption: selection.leastCoil && selection.chosen && selection.leastCoil.gauge !== selection.chosen.gauge
+    leastCoilOption: !doubleCoil && selection.leastCoil && selection.chosen && selection.leastCoil.gauge !== selection.chosen.gauge
       ? { gauge: selection.leastCoil.gauge, wireDrawPct: selection.leastCoil.wireDrawPct, springLengthIn: selection.leastCoil.springLengthIn, ohmsRangeMid: selection.leastCoil.requiredOhms }
       : null,
     usedLastResort: selection.usedLastResort,
@@ -539,4 +606,5 @@ module.exports = {
   materialClass, tubeDrawPct, wireDrawPct, standardColdZone, perElementWattage, terminalPin, pinFor,
   TUBE_DRAW, WIRE_DRAW, SPRING_DIVISORS, TOTAL_LENGTH_ALLOWANCE_IN, ROW19_STEP_DOWN_MM, TIE_BREAK,
   WIRE_TABLES, SUPPORTED_DIAMETERS, PIN_DIVISOR, STUD, COLD_ZONE_STANDARD,
+  DOUBLE_COIL_THIN_SPOOLS, DOUBLE_COIL_WIDE_DIVISOR,
 };

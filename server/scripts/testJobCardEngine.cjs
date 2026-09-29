@@ -7,6 +7,7 @@
 // two of them, dispatched. A mismatch means either the engine is wrong or the
 // card was — both worth knowing, so nothing here is fudged to make it pass.
 const E = require('../src/lib/jobCardEngine');
+const { renderParts } = require('../src/lib/jobCardRender');
 
 // drawingTotalLengthIn is back-computed as the card's F19 minus the 0.7"
 // the policy adds, since the drawings themselves aren't in the workbook.
@@ -217,6 +218,18 @@ for (const card of CARDS) {
 // which is exactly why they survived the first pass.
 console.log(`\n${'═'.repeat(88)}\nRegressions — defects found by the 22 Sep 2026 audit\n${'═'.repeat(88)}`);
 
+// The owner's PT-UTYPE-68U-4KW, the card that brought in the double-coil rule.
+const DOUBLE_COIL_CARD = {
+  tubeMaterial: 'SS304', wattage: 4000, voltage: 230, tubeDiameterMm: 11,
+  drawingTotalLengthIn: 136.7 - E.TOTAL_LENGTH_ALLOWANCE_IN, coldZoneBigIn: 3, coldZoneSmallIn: 3,
+  drawingNumber: 'PT-UTYPE-68U-4KW',
+};
+// The printed sheet only — what the floor gets, without the screen notes.
+function sheetFor(card) {
+  const head = require('./sampleCardBPE.json').head;
+  return renderParts({ ...card, tubeMaterialLabel: head.tubeMaterialLabel }, [head], []).sheets;
+}
+
 const REGRESSIONS = [
   // The fixed-point search used to test only the globally shortest in-window
   // wire per band, then veto the whole band if that one wire belonged to a
@@ -372,6 +385,64 @@ const REGRESSIONS = [
   ['11 mm wire draw did not move with the 8 mm revision',
     () => [22, 27, 33].map(g => E.WIRE_DRAW[11].steel.find(b => g >= b.minG && g <= b.maxG).pct),
     ([a, b, c]) => a === 0.12 && b === 0.17 && c === 0.21],
+
+  // ── Double coil (owner, 29 Sep 2026) ────────────────────────────────────
+  // When no single wire reaches the wire length: double the ohms after draw,
+  // add the gauge's normal wire draw, and check the same sheet against half
+  // the wire length. If only 1 or 2 spools fit, widen the top from /2.2 to /2
+  // and take that if more spools fit. The card prints the element's own ohms
+  // range and its normal wire length; only the spool row says DOUBLE COIL.
+  // Reference: the owner's PT-UTYPE-68U-4KW — 11 mm SS, 4 kW 230 V, 136.7",
+  // cold zones 3"/3". At /2.2 only one 23 SWG spool fits; at /2 fourteen 22s do.
+  ['double coil: the 4 kW 11 mm card is a double coil of 22 SWG at 12%, 14 spools',
+    () => E.buildJobCard(DOUBLE_COIL_CARD),
+    o => o.ok && o.gauge === 22 && o.wireDrawPct === 0.12 && o.spoolOptions.length === 14 && o.wire.ohms_per_m === 3.74 && !!o.doubleCoil],
+  ['double coil: 13.225 is doubled to 26.45 and wound at the gauge draw, 29.624',
+    () => E.buildJobCard(DOUBLE_COIL_CARD).doubleCoil,
+    d => d.ohmsAfterDraw === 26.45 && d.ohmsPerWire === 29.624],
+  ['double coil: one 23 SWG spool at /2.2 was thin, so the top widened to /2',
+    () => E.buildJobCard(DOUBLE_COIL_CARD).doubleCoil,
+    d => d.widened === true && d.beforeWidening.gauge === 23 && d.beforeWidening.spools === 1
+      && Math.abs(d.windowLowIn - 37.6232 / 2) < 0.0001 && Math.abs(d.windowHighIn - (118.8696 - 6) / 2 / 2) < 0.0001],
+  ['double coil: each wire really sits inside the window it was checked against',
+    () => { const o = E.buildJobCard(DOUBLE_COIL_CARD); return o.spoolOptions.map(w => E.springLengthIn(o.doubleCoil.ohmsPerWire, w)); },
+    ls => ls.length === 14 && ls.every(L => L >= 37.6232 / 2 - 1e-9 && L <= (118.8696 - 6) / 4 + 1e-9)],
+  ['double coil: the card keeps the element\'s own ohms range and its normal wire length',
+    () => E.buildJobCard(DOUBLE_COIL_CARD),
+    o => o.ohmsRangeMid === 14.812 && o.ohmsRangeMin === 14.6639 && o.ohmsRangeMax === 14.9601
+      && o.springWindowLowIn === 37.6232 && o.springWindowHighIn === 51.3043],
+  ['double coil: the printed sheet says DOUBLE COIL and none of the background figures',
+    () => sheetFor(E.buildJobCard(DOUBLE_COIL_CARD)),
+    html => html.includes('DOUBLE COIL') && html.includes('51.304') && html.includes('14.812')
+      && !/26\.45|29\.62|18\.81|28\.21|28\.22|26\.019|wound/.test(html)],
+  ['a single-coil card never prints DOUBLE COIL and keeps its wound length',
+    () => sheetFor(E.buildJobCard({ tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 55.38 })),
+    html => !html.includes('DOUBLE COIL') && html.includes('wound')],
+  ['double coil is only a fallback: cards a single wire fits are not double coils',
+    () => [
+      { tubeMaterial: 'SS304', wattage: 750, voltage: 230, drawingTotalLengthIn: 55.38 },
+      { tubeMaterial: 'Copper', wattage: 400, voltage: 230, drawingTotalLengthIn: 21.2 - E.TOTAL_LENGTH_ALLOWANCE_IN, coldZoneBigIn: 2 },
+      { tubeMaterial: 'Copper', wattage: 2000, voltage: 230, drawingTotalLengthIn: 27 - E.TOTAL_LENGTH_ALLOWANCE_IN },
+      { tubeMaterial: 'SS304', wattage: 1000, voltage: 230, drawingTotalLengthIn: 108.2 - E.TOTAL_LENGTH_ALLOWANCE_IN, coldZoneBigIn: 10, coldZoneSmallIn: 10, tubeDiameterMm: 11 },
+    ].map(i => E.buildJobCard(i)),
+    os => os.every(o => o.ok && o.gauge != null && o.doubleCoil === null)],
+  ['widening is for double coils only: a single coil with one spool keeps /2.2',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 250, voltage: 230, drawingTotalLengthIn: 63, tubeDiameterMm: 11 }),
+    o => o.gauge === 31 && o.spoolOptions.length === 1 && o.doubleCoil === null && o.springWindowHighIn === 21.5415],
+  ['a double coil with more than 2 spools is not widened',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 3000, voltage: 230, drawingTotalLengthIn: 150.5, tubeDiameterMm: 8 }),
+    o => o.gauge === 23 && o.spoolOptions.length === 16 && o.doubleCoil && o.doubleCoil.widened === false
+      && Math.abs(o.doubleCoil.windowHighIn - o.springWindowHighIn / 2) < 0.0001],
+  ['8 mm copper already tops out at /2, so its double coil checks plain half length',
+    () => E.buildJobCard({ tubeMaterial: 'Copper', wattage: 250, voltage: 230, drawingTotalLengthIn: 138, tubeDiameterMm: 8 }),
+    o => E.SPRING_DIVISORS[8].copper.high === E.DOUBLE_COIL_WIDE_DIVISOR && o.doubleCoil && o.doubleCoil.widened === false
+      && Math.abs(o.doubleCoil.windowHighIn - o.springWindowHighIn / 2) < 0.0001],
+  ['a hand-set wire draw also falls back to a double coil, still printing its own ohms',
+    () => E.buildJobCard({ ...DOUBLE_COIL_CARD, wireDrawPctOverride: 0.12 }),
+    o => !!o.doubleCoil && o.ohmsRangeMid === 14.812 && o.wireDrawPct === 0.12],
+  ['nothing fits even doubled: the card stays blank and says a double coil was tried',
+    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 250, voltage: 230, drawingTotalLengthIn: 8, tubeDiameterMm: 8 }),
+    o => o.ok && o.gauge == null && o.doubleCoil === null && o.warnings.some(w => /even as a double coil/.test(w))],
 ];
 
 for (const [name, run, check] of REGRESSIONS) {
