@@ -1508,8 +1508,13 @@ async function initDB(retries = 20, delayMs = 10000) {
           // 4. Eleven statement lines had never been entered. Categories are the
           //    owner's own (Aug 2026); Lalji Mulji's 21-Aug ₹4,720 is deliberately
           //    left uncategorised pending confirmation from their accountant.
-          //    Guard matches date+amount+type+payee+description, so re-dated rows
-          //    (e.g. Omega's 4,042 now also on 19-Aug) can never suppress a row.
+          //    The guard matches only what a later correction can't change: date,
+          //    type, amount, bank. It used to match payee + description too, so
+          //    correcting a row made the next boot add the original back as a
+          //    duplicate (30 Sep 2026: the 19-Aug ₹6,050 re-filed from RAMESHKUMAR
+          //    RAT to A S Plating came back as #1438), and the 19-Aug rent row was
+          //    re-added and deleted again on every boot. All ten exist, so this only
+          //    adds a line on a database restored from before 23 Aug 2026.
           const add = [
             ['2026-08-18', 'expense', 46020,    'MIscellenious',  'AUSTENITE TUBE INDUSTRIES PRIVATE LIMITED', 'NEFT — tube purchase (P PHE 24)'],
             ['2026-08-19', 'expense', 6050,     'MIscellenious',  'RAMESHKUMAR RAT',        'UPI — payment details to be updated'],
@@ -1530,9 +1535,7 @@ async function initDB(retries = 20, delayMs = 10000) {
                 WHERE NOT EXISTS (
                   SELECT 1 FROM petty_cash_entries
                    WHERE entry_date=$1 AND entry_type=$2 AND amount=$6
-                     AND payment_method='paid_bank' AND bank_account_id=$7
-                     AND COALESCE(paid_to,'')=COALESCE($5,'')
-                     AND COALESCE(description,'')=COALESCE($4,''))`,
+                     AND payment_method='paid_bank' AND bank_account_id=$7)`,
               [date, type, cat, desc, payee, amt, kotak]);
           }
 
