@@ -3,6 +3,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import { ROLE_LABELS, ROLE_COLORS } from '../../lib/utils';
 import { User, Lock, CheckCircle, Settings } from 'lucide-react';
+import WhatsAppAlerts from './WhatsAppAlerts';
 
 export default function AccountSettings() {
   const { user, init } = useAuthStore();
@@ -149,6 +150,9 @@ export default function AccountSettings() {
           </form>
         </div>
       </div>
+
+      {/* WhatsApp copies of approvals and @mentions — the owner's own alerts */}
+      {user?.role === 'owner' && <WhatsAppAlerts />}
     </div>
   );
 }

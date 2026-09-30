@@ -20,7 +20,10 @@ app.use(cors({
   ],
   credentials: true
 }));
-app.use(express.json());
+// The WhatsApp webhook's signature is over the raw bytes, so keep them for it.
+app.use(express.json({
+  verify: (req, _res, buf) => { if (req.originalUrl.startsWith('/api/whatsapp/webhook')) req.rawBody = buf; },
+}));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
@@ -87,6 +90,7 @@ app.use('/api/petty-cash',       require('./routes/pettyCash'));
 app.use('/api/payroll',          require('./routes/payroll'));
 app.use('/api/plating',          require('./routes/plating'));
 app.use('/api/capa',             require('./routes/capa'));
+app.use('/api/whatsapp',         require('./routes/whatsapp'));
 
 // Serve React client in production
 if (process.env.NODE_ENV === 'production') {
@@ -117,9 +121,14 @@ server.on('error', (err) => {
   } else throw err;
 });
 
+// WhatsApp alerts: normally started once migrations finish; the fallback timer
+// starts it anyway if a migration hangs (it makes sure of its own tables).
+const { startWhatsAppWorker } = require('./lib/whatsapp');
 initDB()
   .then(() => console.log('Database migrations complete'))
-  .catch((err) => console.error('initDB failed (server still running, will work once DB is reachable):', err.message));
+  .catch((err) => console.error('initDB failed (server still running, will work once DB is reachable):', err.message))
+  .finally(() => startWhatsAppWorker());
+setTimeout(startWhatsAppWorker, 60000).unref();
 
 // Async route handlers here mostly lack try/catch; without these handlers a
 // single rejected promise (e.g. a transient DB error mid-request) kills the

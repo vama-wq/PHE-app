@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { getDB } = require('../db');
 const { authenticate } = require('../middleware/auth');
+const { queueWhatsApp } = require('../lib/whatsapp');
 
 router.get('/unread-count', authenticate, async (req, res) => {
   const r = await getDB().get(
@@ -40,10 +41,14 @@ router.put('/read-all', authenticate, async (req, res) => {
 });
 
 async function createNotification(db, { userId, type, title, body, link, sourceUserId }) {
-  await db.insert(
+  const r = await db.insert(
     'INSERT INTO notifications (user_id, type, title, body, link, source_user_id) VALUES ($1,$2,$3,$4,$5,$6)',
     [userId, type, title, body || null, link || null, sourceUserId || null]
   );
+  // A WhatsApp copy for a user who switched WhatsApp alerts on for this kind.
+  // queueWhatsApp never throws and uses its own connection, so the dashboard
+  // notification above is never affected by it.
+  await queueWhatsApp({ notificationId: r?.lastInsertRowid, userId, type, title, body, link });
 }
 
 async function notifyAllExcept(db, excludeUserId, payload) {
