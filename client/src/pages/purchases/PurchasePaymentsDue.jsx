@@ -99,11 +99,11 @@ export default function PurchasePaymentsDue() {
       <h3>${esc(g.label)} <span class="muted">· received · ${g.bills.length} bill${g.bills.length > 1 ? 's' : ''} · outstanding ${inr(g.total)}</span></h3>
       <table>
         <thead><tr><th>Supplier</th><th>PO #</th><th>Received</th>
-          <th class="r">Material</th><th class="r">GST %</th><th class="r">Payable</th>
+          <th class="r">Material</th><th class="r">P&amp;F</th><th class="r">GST %</th><th class="r">Payable</th>
           <th class="r">Paid</th><th class="r">Pending</th><th class="r">Remaining</th><th class="r">Proposed</th></tr></thead>
         <tbody>${g.bills.map(b => `<tr>
           <td>${esc(b.supplier_name)}</td><td>${esc(b.po_number)}</td><td>${fmtDate(b.received_at)}</td>
-          <td class="r">${inr(b.material_value)}</td><td class="r">${b.igst_percent}%</td><td class="r">${inr(b.received_value)}</td>
+          <td class="r">${inr(b.material_value)}</td><td class="r">${b.packaging_forwarding > 0 ? inr(b.packaging_forwarding) : '—'}</td><td class="r">${b.igst_percent}%</td><td class="r">${inr(b.received_value)}</td>
           <td class="r">${b.paid_cleared > 0 ? inr(b.paid_cleared) : '—'}</td>
           <td class="r">${b.paid_pending > 0 ? inr(b.paid_pending) : '—'}</td><td class="r">${inr(b.remaining)}</td>
           <td class="r">${sel[b.id] != null ? inr(parseFloat(sel[b.id]) || 0) : '—'}</td></tr>`).join('')}</tbody>
@@ -191,7 +191,7 @@ export default function PurchasePaymentsDue() {
                     <th className="table-header text-left">Supplier</th>
                     <th className="table-header text-left">PO #</th>
                     <th className="table-header text-left">Received</th>
-                    <th className="table-header text-right" title="Material (rate × received qty) + PO's IGST %, rounded to the nearest rupee">Payable (incl. GST)</th>
+                    <th className="table-header text-right" title="Material (rate × received qty) + the PO's Packaging & Forwarding + the PO's IGST %, rounded to the nearest rupee">Payable (incl. GST)</th>
                     <th className="table-header text-right">Paid</th>
                     <th className="table-header text-right">Pending</th>
                     <th className="table-header text-right">Remaining</th>
@@ -211,7 +211,7 @@ export default function PurchasePaymentsDue() {
                         <td className="table-cell text-sm font-medium text-gray-800">{b.supplier_name}</td>
                         <td className="table-cell text-sm"><Link to={`/purchases/${b.id}`} className="text-brand-600 hover:underline">{b.po_number}</Link></td>
                         <td className="table-cell text-xs text-gray-500">{fmtDate(b.received_at)}</td>
-                        <td className="table-cell text-right text-sm" title={`Material ${inr(b.material_value)} + ${b.igst_percent}% GST`}>{inr(b.received_value)}</td>
+                        <td className="table-cell text-right text-sm" title={`Material ${inr(b.material_value)}${b.packaging_forwarding > 0 ? ` + P&F ${inr(b.packaging_forwarding)}` : ''} + ${b.igst_percent}% GST`}>{inr(b.received_value)}</td>
                         <td className="table-cell text-right text-sm text-green-700">{b.paid_cleared > 0 ? inr(b.paid_cleared) : '—'}</td>
                         <td className="table-cell text-right text-sm text-amber-700">{b.paid_pending > 0 ? inr(b.paid_pending) : '—'}</td>
                         <td className="table-cell text-right text-sm font-bold text-red-700">{inr(b.remaining)}</td>

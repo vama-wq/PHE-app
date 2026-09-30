@@ -183,8 +183,10 @@ router.get('/pending-material-qc', authenticate, authorize('design', 'owner', 'a
 
 // ── Purchase payments: monthly "payments due" planning ────────────────────────
 // A purchase is payable for the value of goods actually received & QC-approved:
-// material (rate × qc_received_qty) PLUS the PO's IGST %, rounded to the nearest
-// rupee. Note the stored grand_total is on ORDERED qty, so we recompute here on
+// material (rate × qc_received_qty) plus the PO's Packaging & Forwarding, PLUS
+// the PO's IGST %, rounded to the nearest rupee. P&F is on the supplier's bill
+// with the goods, so it counts once anything has been received (owner, 30 Sep
+// 2026: it used to be left out, so a P&F order showed less than its bill). Note the stored grand_total is on ORDERED qty, so we recompute here on
 // received qty. Allocated = Σ of its linked Account-Statement entries (pending
 // unpaid-bank + cleared paid-bank). Remaining = payable − allocated; only bills
 // with a positive remaining show up. Grouped later by the RECEIVED month. Must
@@ -197,7 +199,7 @@ const receivedPayable = (material, igstPercent) =>
 router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const db = getDB();
   const rows = await db.all(`
-    SELECT po.id, po.po_number, po.igst_percent, po.created_at, s.name AS supplier_name,
+    SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.created_at, s.name AS supplier_name,
       COALESCE(po.received_at, (SELECT MAX(COALESCE(poi.received_at, poi.qc_at))
                FROM purchase_order_items poi WHERE poi.po_id = po.id AND poi.qc_status = 'approved')) AS received_at,
       COALESCE((SELECT SUM(poi.rate * poi.qc_received_qty) FROM purchase_order_items poi
@@ -212,13 +214,14 @@ router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'
     ORDER BY received_at DESC NULLS LAST`);
   const bills = rows.map(r => {
     const material = Math.round(Number(r.material_value) * 100) / 100;
+    const pf = material > 0 ? Math.round(Number(r.transport_charges || 0) * 100) / 100 : 0;
     const igst_percent = Number(r.igst_percent || 0);
-    const received_value = receivedPayable(material, igst_percent);   // GST-incl, rounded
+    const received_value = receivedPayable(material + pf, igst_percent);   // GST-incl, rounded
     const paid_cleared = Number(r.paid_cleared), paid_pending = Number(r.paid_pending);
     const remaining = Math.round((received_value - paid_cleared - paid_pending) * 100) / 100;
     return {
       id: r.id, po_number: r.po_number, supplier_name: r.supplier_name,
-      received_at: r.received_at, igst_percent, material_value: material,
+      received_at: r.received_at, igst_percent, material_value: material, packaging_forwarding: pf,
       received_value, paid_cleared, paid_pending, remaining,
     };
   }).filter(b => b.material_value > 0 && b.remaining > 0.009);
@@ -244,7 +247,7 @@ router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'acco
         const amount = Math.round(Number(p.amount) * 100) / 100;
         if (!Number.isInteger(poId) || !(amount > 0)) { errors.push('Invalid payment row skipped'); continue; }
         const po = await client.query(
-          `SELECT po.po_number, po.igst_percent, s.name AS supplier_name,
+          `SELECT po.po_number, po.igst_percent, po.transport_charges, s.name AS supplier_name,
              COALESCE((SELECT SUM(poi.rate * poi.qc_received_qty) FROM purchase_order_items poi
                        WHERE poi.po_id = po.id AND poi.qc_status='approved' AND poi.qc_received_qty IS NOT NULL),0) AS material_value,
              COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
@@ -253,7 +256,9 @@ router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'acco
            FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id=$1`, [poId]);
         const row = po.rows[0];
         if (!row) { errors.push(`PO ${poId} not found`); continue; }
-        const receivedValue = receivedPayable(row.material_value, row.igst_percent); // GST-incl, rounded
+        const mat = Number(row.material_value) || 0;
+        const pf = mat > 0 ? Number(row.transport_charges) || 0 : 0;   // P&F rides with the goods
+        const receivedValue = receivedPayable(mat + pf, row.igst_percent); // GST-incl, rounded
         const remaining = Math.round((receivedValue - Number(row.allocated)) * 100) / 100;
         if (remaining <= 0) { errors.push(`${row.po_number}: already fully allocated`); continue; }
         if (amount > remaining + 0.009) { errors.push(`${row.po_number}: ₹${amount} exceeds remaining ₹${remaining}`); continue; }
