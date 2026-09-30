@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
-import { fmtDate, fmtDateTime, ROLE_COLORS, ROLE_LABELS } from '../../lib/utils';
+import { fmtDate, fmtDateTime, ROLE_COLORS, ROLE_LABELS, istTodayInput } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import {
@@ -74,11 +74,12 @@ export default function PurchaseOrderDetail() {
   const [banks, setBanks] = useState([]);
   useEffect(() => { api.get('/petty-cash/bank-accounts').then(r => setBanks(r.data || [])).catch(() => setBanks([])); }, []);
   const [payingAdvance, setPayingAdvance] = useState(null);
+  const [advancePaidOn, setAdvancePaidOn] = useState(istTodayInput());
 
-  const markAdvancePaid = (p) => setPayingAdvance(p);
+  const markAdvancePaid = (p) => { setAdvancePaidOn(istTodayInput()); setPayingAdvance(p); };
   const confirmAdvancePaid = async (p, bankAccountId) => {
     try {
-      await api.put(`/petty-cash/${p.id}/mark-paid`, { bank_account_id: bankAccountId });
+      await api.put(`/petty-cash/${p.id}/mark-paid`, { bank_account_id: bankAccountId, paid_on: advancePaidOn });
       setPayingAdvance(null); load();
     } catch (e) { alert(e.response?.data?.error || 'Failed'); }
   };
@@ -671,6 +672,11 @@ export default function PurchaseOrderDetail() {
             <p className="text-sm text-gray-600">
               ₹{Number(payingAdvance.amount).toLocaleString('en-IN')} — {po.supplier_name}
             </p>
+            <label className="block text-sm">
+              <span className="text-gray-600">Paid on</span>
+              <input type="date" className="input mt-1" value={advancePaidOn} max={istTodayInput()}
+                onChange={ev => setAdvancePaidOn(ev.target.value)} required />
+            </label>
             {banks.length === 0 ? (
               <p className="text-sm text-red-600">No bank accounts set up yet.</p>
             ) : (

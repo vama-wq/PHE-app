@@ -5,7 +5,7 @@ import Modal from '../../components/ui/Modal';
 import SupplierModal from '../../components/SupplierModal';
 import InventoryItemModal from '../../components/InventoryItemModal';
 import CategorySelect from '../../components/CategorySelect';
-import { fmtDate, downloadExcel } from '../../lib/utils';
+import { fmtDate, downloadExcel, toDateInput, istTodayInput } from '../../lib/utils';
 import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets, ChevronDown, ChevronRight, Printer, Paperclip, Search } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -42,6 +42,7 @@ export default function PettyCashLedger() {
   const [approving, setApproving] = useState(null); // sample being approved
   const [banks, setBanks] = useState([]); // bank accounts (Kotak / Kalupur / …)
   const [payingEntry, setPayingEntry] = useState(null);
+  const [payingOn, setPayingOn] = useState(istTodayInput());
   const [attachTo, setAttachTo] = useState(null); // entry gaining an extra document // unpaid entry awaiting "paid from which bank?"
   const [search, setSearch] = useState('');       // what was typed
   const [query, setQuery] = useState('');         // what was actually sent
@@ -100,12 +101,18 @@ export default function PettyCashLedger() {
 
   // Marking paid is the moment the money leaves a real bank, so it has to say
   // WHICH bank — otherwise neither account can be reconciled afterwards.
-  const handleMarkPaid = (e) => setPayingEntry(e);
+  const handleMarkPaid = (e) => { setPayingOn(istTodayInput()); setPayingEntry(e); };
   const confirmMarkPaid = async (entry, bankAccountId) => {
     try {
-      await api.put(`/petty-cash/${entry.id}/mark-paid`, { bank_account_id: bankAccountId });
+      await api.put(`/petty-cash/${entry.id}/mark-paid`, { bank_account_id: bankAccountId, paid_on: payingOn });
       setPayingEntry(null); load(); loadLedgers();
     } catch (err) { alert(err.response?.data?.error || 'Failed'); }
+  };
+  // Owner corrects the day a Paid Bank entry moved through the bank. The entry
+  // keeps its own date; only the bank ledgers follow Paid On.
+  const handlePaidOn = async (e, value) => {
+    try { await api.put(`/petty-cash/${e.id}/paid-on`, { paid_on: value || null }); load(); }
+    catch (err) { alert(err.response?.data?.error || 'Failed'); }
   };
   const handleRetag = async (e, bankAccountId) => {
     try { await api.put(`/petty-cash/${e.id}/bank-account`, { bank_account_id: bankAccountId }); load(); }
@@ -117,6 +124,11 @@ export default function PettyCashLedger() {
   // everything else (category, company, Unpaid Bank) runs as cumulative spend.
   // A single bank account's ledger is a balance ledger too.
   const methodIsBalance = filter?.method === 'paid_bank' || filter?.method === 'cash' || !!filter?.bank_account;
+  // A bank ledger runs on Paid On (the day the money moved), like the bank's
+  // own statement; everything else runs on the entry date.
+  const isBankView = filter?.method === 'paid_bank' || !!filter?.bank_account;
+  const rowDate = (e) => (isBankView ? (e.bank_date || e.entry_date) : e.entry_date);
+  const paidOnDiffers = (e) => e.payment_method === 'paid_bank' && e.paid_on && fmtDate(e.paid_on) !== fmtDate(e.entry_date);
   const runLabel = methodIsBalance ? 'Balance' : 'Cumulative';
   // Running columns: main view = Cash + Bank balances per payment method;
   // ledger view = cumulative spend (or running balance) in that account.
@@ -164,7 +176,7 @@ export default function PettyCashLedger() {
     const credits = rows.filter(e => e.entry_type === 'top_up').reduce((a, e) => a + Number(e.amount), 0);
     const debits = rows.filter(e => e.entry_type === 'expense').reduce((a, e) => a + Number(e.amount), 0);
     const bodyRows = rows.map(e => `<tr>
-        <td>${fmtDate(e.entry_date)}</td>
+        <td>${fmtDate(rowDate(e))}${isBankView && paidOnDiffers(e) ? `<br><span style="font-size:10px;color:#888">entered ${fmtDate(e.entry_date)}</span>` : ''}</td>
         <td>${e.entry_type === 'top_up' ? 'Top-up' : esc(e.category || '—')}</td>
         <td>${esc(e.paid_to || '—')}</td>
         <td>${esc(e.description || '')}</td>
@@ -608,7 +620,14 @@ export default function PettyCashLedger() {
                   const badge = METHOD_BADGES[e.payment_method] || METHOD_BADGES.cash;
                   return (
                     <tr key={e.id} className="hover:bg-gray-50">
-                      <td className="table-cell text-sm whitespace-nowrap">{fmtDate(e.entry_date)}</td>
+                      <td className="table-cell text-sm whitespace-nowrap">
+                        {fmtDate(rowDate(e))}
+                        {paidOnDiffers(e) && (
+                          <span className="block text-[10px] text-gray-400">
+                            {isBankView ? `entered ${fmtDate(e.entry_date)}` : `paid ${fmtDate(e.paid_on)}`}
+                          </span>
+                        )}
+                      </td>
                       <td className="table-cell text-sm">
                         {e.entry_type === 'top_up'
                           ? <span className="text-xs font-medium bg-green-100 text-green-700 rounded-full px-2 py-0.5">Top-up</span>
@@ -634,6 +653,16 @@ export default function PettyCashLedger() {
                           ) : (
                             <span className="block mt-0.5 text-[10px] text-gray-400">{e.bank_account_name || ''}</span>
                           )
+                        )}
+                        {/* Paid On — the day it went through the bank. Owner only;
+                            blank falls back to the entry date. */}
+                        {e.payment_method === 'paid_bank' && isOwner && (
+                          <label className="block mt-0.5 text-[10px] text-gray-500 whitespace-nowrap" title="The day this went through the bank">
+                            paid on{' '}
+                            <input type="date" className="text-[10px] rounded border border-gray-200 px-1 py-0 bg-white"
+                              value={toDateInput(e.paid_on || e.entry_date)} max={istTodayInput()}
+                              onChange={ev => ev.target.value && handlePaidOn(e, ev.target.value)} />
+                          </label>
                         )}
                       </td>
                       <td className="table-cell text-right text-sm font-semibold text-green-700">
@@ -710,6 +739,11 @@ export default function PettyCashLedger() {
             <p className="text-sm text-gray-600">
               {inr(payingEntry.amount)} — {payingEntry.paid_to || payingEntry.category}
             </p>
+            <label className="block text-sm">
+              <span className="text-gray-600">Paid on</span>
+              <input type="date" className="input mt-1" value={payingOn} max={istTodayInput()}
+                onChange={ev => setPayingOn(ev.target.value)} required />
+            </label>
             {banks.length === 0 ? (
               <p className="text-sm text-red-600">No bank accounts set up yet.</p>
             ) : (
@@ -722,7 +756,7 @@ export default function PettyCashLedger() {
                 ))}
               </div>
             )}
-            <p className="text-[11px] text-gray-400">This reduces that account's balance from today.</p>
+            <p className="text-[11px] text-gray-400">This reduces that account's balance from the day it was paid. The entry keeps its own date.</p>
           </div>
         </Modal>
       )}

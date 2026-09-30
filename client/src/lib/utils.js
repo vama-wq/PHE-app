@@ -82,6 +82,17 @@ export function fmtDate(d) {
   catch { return d; }
 }
 
+// A date as a date-input value (YYYY-MM-DD), in the viewer's local time.
+export function toDateInput(d) {
+  if (!d) return '';
+  try { return format(typeof d === 'string' ? parseISO(d) : d, 'yyyy-MM-dd'); }
+  catch { return ''; }
+}
+// Today in India as YYYY-MM-DD — the default Paid On for a payment made today.
+export function istTodayInput() {
+  return new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+}
+
 export function fmtDateTime(d) {
   if (!d) return '—';
   try { return format(typeof d === 'string' ? parseISO(d) : d, 'dd MMM yyyy, h:mm a'); }

@@ -57,9 +57,15 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
   const q = (req.query.q || '').trim();
   const isSearch = q.length > 0;
 
+  // A bank ledger (one account, untagged, or all Paid Bank) runs on the day the
+  // money moved — Paid On, or the entry date when none is set — so it lines up
+  // with the bank's own statement. Every other view stays on the entry date.
+  const bankView = bankAccount !== null || method === 'paid_bank';
+  const dateCol = bankView ? 'COALESCE(paid_on, entry_date)' : 'entry_date';
+
   const conds = [];
   const params = [];
-  if (month && !isSearch) { params.push(month); conds.push(`to_char(entry_date, 'YYYY-MM') = $${params.length}`); }
+  if (month && !isSearch) { params.push(month); conds.push(`to_char(${dateCol}, 'YYYY-MM') = $${params.length}`); }
   if (isSearch) {
     params.push(`%${q}%`);
     const n = params.length;
@@ -76,6 +82,7 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
 
   const entries = await db.all(`
     SELECT e.*, u.name AS created_by_name, ba.name AS bank_account_name,
+           COALESCE(e.paid_on, e.entry_date) AS bank_date,
            COALESCE((SELECT json_agg(json_build_object('id', a.id, 'file_path', a.file_path,
                        'original_name', a.original_name, 'label', a.label) ORDER BY a.id)
                        FROM petty_cash_attachments a WHERE a.entry_id = e.id), '[]'::json) AS attachments
@@ -83,7 +90,7 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
     LEFT JOIN users u ON u.id = e.created_by
     LEFT JOIN bank_accounts ba ON ba.id = e.bank_account_id
     ${where}
-    ORDER BY e.entry_date ${isSearch ? 'DESC' : 'ASC'}, e.id ${isSearch ? 'DESC' : 'ASC'}
+    ORDER BY ${bankView ? 'COALESCE(e.paid_on, e.entry_date)' : 'e.entry_date'} ${isSearch ? 'DESC' : 'ASC'}, e.id ${isSearch ? 'DESC' : 'ASC'}
     ${isSearch ? 'LIMIT 300' : ''}`, params);
 
   // Two live balances (all entries, not filtered) driven by payment_method:
@@ -110,20 +117,20 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
     } else if (bankAccount === 'none') {
       const o = await db.get(
         `SELECT ${acctSum('paid_bank')} AS t FROM petty_cash_entries
-          WHERE to_char(entry_date,'YYYY-MM') < $1 AND bank_account_id IS NULL`, [month]);
+          WHERE to_char(COALESCE(paid_on, entry_date),'YYYY-MM') < $1 AND bank_account_id IS NULL`, [month]);
       opening = Number(o.t);
     } else if (bankAccount) {
       // One bank account's own running balance before this month.
       const o = await db.get(
         `SELECT ${acctSum('paid_bank')} AS t FROM petty_cash_entries
-          WHERE to_char(entry_date,'YYYY-MM') < $1 AND bank_account_id = $2`, [month, bankAccount]);
+          WHERE to_char(COALESCE(paid_on, entry_date),'YYYY-MM') < $1 AND bank_account_id = $2`, [month, bankAccount]);
       opening = Number(o.t);
     } else if (method) {
       // Bank / Cash carry a running balance (top-up − expense); Unpaid Bank a
       // cumulative pending total.
       const o = method === 'unpaid_bank'
         ? await db.get(`SELECT COALESCE(SUM(amount),0) AS t FROM petty_cash_entries WHERE to_char(entry_date,'YYYY-MM') < $1 AND entry_type='expense' AND payment_method='unpaid_bank'`, [month])
-        : await db.get(`SELECT ${acctSum(method)} AS t FROM petty_cash_entries WHERE to_char(entry_date,'YYYY-MM') < $1`, [month]);
+        : await db.get(`SELECT ${acctSum(method)} AS t FROM petty_cash_entries WHERE to_char(${dateCol},'YYYY-MM') < $1`, [month]);
       opening = Number(o.t);
     } else {
       const o = await db.get(`
@@ -701,6 +708,42 @@ router.put('/samples/:id/reject', authenticate, authorize('owner'), async (req, 
   }
 });
 
+// Today's date in India, as YYYY-MM-DD.
+function istToday() { return new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10); }
+// A Paid On date from a form: a real calendar date, not after today (IST).
+function parsePaidOn(v) {
+  const s = String(v || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(s + 'T00:00:00Z');
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) return null;
+  if (s > istToday()) return null;
+  return s;
+}
+
+// Owner sets (or clears) the day a Paid Bank entry actually moved through the
+// bank. Clearing it falls back to the entry date. The entry's own date never
+// changes — a bill keeps the day it was entered.
+router.put('/:id/paid-on', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid entry id' });
+    const db = getDB();
+    const e = await db.get('SELECT id, amount, paid_to, category, payment_method, entry_date::text AS d, paid_on::text AS p FROM petty_cash_entries WHERE id=$1', [id]);
+    if (!e) return res.status(404).json({ error: 'Entry not found' });
+    if (e.payment_method !== 'paid_bank') return res.status(400).json({ error: 'Only a Paid Bank entry has a Paid On date' });
+    const raw = req.body?.paid_on;
+    const paidOn = raw === null || raw === '' ? null : parsePaidOn(raw);
+    if (raw !== null && raw !== '' && !paidOn) return res.status(400).json({ error: 'Paid On must be a real date, not in the future' });
+    await db.run('UPDATE petty_cash_entries SET paid_on=$1 WHERE id=$2', [paidOn, id]);
+    await logActivity(null, null, 'petty_cash_paid_on',
+      `₹${e.amount}${e.paid_to ? ` (${e.paid_to})` : ''}: Paid On ${e.p || e.d} → ${paidOn || `${e.d} (entry date)`}`, req.user.id);
+    res.json({ message: 'Paid On updated', paid_on: paidOn });
+  } catch (err) {
+    console.error('paid-on error:', err);
+    res.status(500).json({ error: 'Failed to update Paid On' });
+  }
+});
+
 // Owner marks an Unpaid Bank expense as Paid — it then hits the Bank balance.
 // For an auto-posted Salary entry, this ALSO marks the worker paid in Payroll
 // (and flips the whole run to 'paid' once every worker is settled).
@@ -722,10 +765,13 @@ router.put('/:id/mark-paid', authenticate, authorize('owner'), async (req, res) 
     }
     const acct = await db.get('SELECT id, name FROM bank_accounts WHERE id=$1 AND active', [bankAccountId]);
     if (!acct) return res.status(400).json({ error: 'Select a valid bank account' });
+    // The day the money actually left the bank — today unless said otherwise.
+    const paidOn = req.body?.paid_on ? parsePaidOn(req.body.paid_on) : istToday();
+    if (!paidOn) return res.status(400).json({ error: 'Paid On must be a real date, not in the future' });
     await db.withTransaction(async (client) => {
       await client.query(
-        "UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE, bank_account_id=$2 WHERE id=$1",
-        [id, bankAccountId]);
+        "UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE, bank_account_id=$2, paid_on=$3 WHERE id=$1",
+        [id, bankAccountId, paidOn]);
       if (e.payroll_line_id) {
         await client.query('UPDATE payroll_lines SET paid=TRUE WHERE id=$1', [e.payroll_line_id]);
         const { rows: r } = await client.query('SELECT run_id FROM payroll_lines WHERE id=$1', [e.payroll_line_id]);
@@ -749,7 +795,7 @@ router.put('/:id/mark-paid', authenticate, authorize('owner'), async (req, res) 
         type: 'unpaid_bank_cleared',
         title: `Unpaid bank cleared: ${inr(e.amount)}`,
         body: [e.category, e.paid_to, e.description].filter(Boolean).join(' · ')
-          + ` · entry of ${istDay(e.entry_date)} · paid from ${acct.name}`,
+          + ` · entry of ${istDay(e.entry_date)} · paid from ${acct.name} on ${istDay(paidOn + 'T00:00:00+05:30')}`,
         link: '/petty-cash', sourceUserId: req.user.id,
       });
     } catch (err) { console.error('unpaid-bank cleared notify failed:', err.message); }

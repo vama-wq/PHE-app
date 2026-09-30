@@ -1060,6 +1060,12 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`INSERT INTO bank_accounts (name, is_primary) VALUES ('Kotak', TRUE) ON CONFLICT DO NOTHING`);
       await pool.query(`INSERT INTO bank_accounts (name, is_primary) VALUES ('Kalupur', FALSE) ON CONFLICT DO NOTHING`);
       await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS bank_account_id INTEGER REFERENCES bank_accounts(id) ON DELETE SET NULL`);
+      // Paid On (owner, 30 Sep 2026): the day the money actually left or reached
+      // the bank. A bill is entered on its own date and often paid days later;
+      // the bank ledgers run on this so they line up with the bank statement.
+      // NULL means "same as the entry date", so every existing entry keeps
+      // exactly the balance it had.
+      await pool.query(`ALTER TABLE petty_cash_entries ADD COLUMN IF NOT EXISTS paid_on DATE`);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_pce_bank_account ON petty_cash_entries(bank_account_id)`);
       {
         // One-time backfill: every existing bank entry is Kotak except the
