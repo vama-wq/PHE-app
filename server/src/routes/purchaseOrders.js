@@ -133,17 +133,9 @@ const VALID_DELIVERY_STATUSES = [
   'purchase_accepted', 'order_cancelled', 'qc_pending'
 ];
 
-// Totals carry paise up to the tax line, then the payable is rounded to the
-// nearest rupee the way a supplier bill does — the difference is kept as
-// round_off so the arithmetic on the printed PO still adds up.
-function calcTotals(items, transportCharges, igstPercent) {
-  const subtotal = items.reduce((s, i) => s + i.amount, 0) + Number(transportCharges || 0);
-  const igstAmount = Math.round(subtotal * (igstPercent / 100) * 100) / 100;
-  const beforeRounding = Math.round((subtotal + igstAmount) * 100) / 100;
-  const grandTotal = Math.round(beforeRounding);
-  const roundOff = Math.round((grandTotal - beforeRounding) * 100) / 100;
-  return { subtotal, igstAmount, grandTotal, roundOff };
-}
+// Totals (and a PO's standing) live in lib/poSettle.js, shared with the
+// startup correction: a short-closed line never counts toward the total.
+const { calcTotals, recomputePoTotals, settlePoStatus } = require('../lib/poSettle');
 
 async function nextPoNumber(db) {
   const last = await db.get('SELECT po_number FROM purchase_orders ORDER BY id DESC LIMIT 1');
@@ -493,8 +485,9 @@ router.put('/:id/packaging-forwarding', authenticate, authorize('owner', 'admin'
     });
   }
 
-  // Recompute exactly as the PO form does, from the items as they stand.
-  const items = await db.all('SELECT amount FROM purchase_order_items WHERE po_id=$1', [po.id]);
+  // Recompute exactly as the PO form does, from the items as they stand — a
+  // short-closed balance is not coming, so it does not count.
+  const items = await db.all('SELECT amount FROM purchase_order_items WHERE po_id=$1 AND NOT short_closed', [po.id]);
   const { subtotal, igstAmount, grandTotal, roundOff } =
     calcTotals(items.map(i => ({ amount: Number(i.amount) || 0 })), amount, Number(po.igst_percent) || 0);
 
@@ -624,12 +617,7 @@ router.put('/:id/items/:itemId/over-qty', authenticate, authorize('owner'), asyn
           WHERE id=$4`,
         [qty, Math.round(qty * (Number(item.rate) || 0) * 100) / 100, req.user.id, item.id]);
       // The PO is worth more now — recompute its totals from the lines.
-      const lines = await db.all('SELECT amount FROM purchase_order_items WHERE po_id=$1', [po.id]);
-      const { subtotal, igstAmount, grandTotal, roundOff } =
-        calcTotals(lines.map(l => ({ amount: Number(l.amount) || 0 })), po.transport_charges, po.igst_percent);
-      await db.run(
-        'UPDATE purchase_orders SET subtotal=$1, igst_amount=$2, round_off=$3, grand_total=$4 WHERE id=$5',
-        [subtotal, igstAmount, roundOff, grandTotal, po.id]);
+      const { grandTotal } = await recomputePoTotals(db, po.id);
       await logActivity(null, null, 'po_over_qty_approved',
         `${po.po_number}: "${item.description}" over-receipt approved — ${item.qty} ordered, ${qty} accepted. PO now ₹${grandTotal}`, req.user.id);
       return res.json({ message: `Extra accepted — PO updated to ₹${grandTotal}` });
@@ -645,10 +633,12 @@ router.put('/:id/items/:itemId/over-qty', authenticate, authorize('owner'), asyn
   }
 });
 
-// Short-close an open balance the supplier never delivered. Owner only. The
-// line stops asking to be received and drops out of the receiving list; it was
-// never received, so it never reaches QC and is never payable.
-router.put('/:id/items/:itemId/short-close', authenticate, authorize('owner'), async (req, res) => {
+// Short-close an open balance the supplier never delivered. Owner or accounts
+// (accounts since 30 Sep 2026 — the owner is notified when they do). The line
+// stays on the QC view with its reason, but the PO changes to the actual
+// numbers as final: the balance leaves the total, and once nothing else is
+// outstanding the PO closes — received, or cancelled when nothing came at all.
+router.put('/:id/items/:itemId/short-close', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const db = getDB();
     const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
@@ -660,12 +650,54 @@ router.put('/:id/items/:itemId/short-close', authenticate, authorize('owner'), a
     const reason = (req.body?.reason || '').trim();
     if (!reason) return res.status(400).json({ error: 'Give a reason — it goes on the PO record' });
     await db.run('UPDATE purchase_order_items SET short_closed=TRUE, short_close_reason=$1 WHERE id=$2', [reason, item.id]);
+    const { grandTotal } = await recomputePoTotals(db, po.id);
+    const state = await settlePoStatus(db, po.id);
+    const outcome = state === 'cancelled' ? ' Nothing is left on the PO, so it is cancelled.'
+      : state === 'received' ? ' Nothing else is outstanding, so the PO is closed as received.' : '';
     await logActivity(null, null, 'po_short_closed',
-      `${po.po_number}: "${item.description}" balance of ${item.qty} short-closed — ${reason}`, req.user.id);
-    res.json({ message: 'Balance short-closed' });
+      `${po.po_number}: "${item.description}" balance of ${item.qty} short-closed by ${req.user.name} — ${reason}. PO total now ₹${grandTotal}.${outcome}`,
+      req.user.id);
+    if (req.user.role !== 'owner') {
+      try {
+        const owners = await db.all("SELECT id FROM users WHERE role='owner'");
+        for (const o of owners) {
+          await createNotification(db, {
+            userId: o.id, type: 'po_short_closed',
+            title: `Short-closed on ${po.po_number}`,
+            body: `${req.user.name} short-closed ${item.qty} of "${item.description}" — ${reason}. PO total now ₹${grandTotal}.${outcome}`,
+            link: `/purchases/${po.id}`, sourceUserId: req.user.id,
+          });
+        }
+      } catch (e) { console.error('short-close notify failed:', e.message); }
+    }
+    res.json({ message: `Balance short-closed — PO total now ₹${grandTotal}.${outcome}`, grand_total: grandTotal, state });
   } catch (e) {
     console.error('short-close error:', e);
     res.status(500).json({ error: 'Failed to short-close the balance' });
+  }
+});
+
+// Reopen a short-closed balance — a mistake, or the supplier is sending it
+// after all. Owner only. The line counts toward the PO again and the PO goes
+// back to waiting for it.
+router.put('/:id/items/:itemId/reopen', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const db = getDB();
+    const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+    if (!po) return res.status(404).json({ error: 'Not found' });
+    const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    if (!item.short_closed) return res.status(400).json({ error: 'This line is not short-closed' });
+    await db.run('UPDATE purchase_order_items SET short_closed=FALSE, short_close_reason=NULL WHERE id=$1', [item.id]);
+    const { grandTotal } = await recomputePoTotals(db, po.id);
+    await settlePoStatus(db, po.id);
+    await logActivity(null, null, 'po_short_close_reopened',
+      `${po.po_number}: "${item.description}" balance of ${item.qty} reopened (was short-closed — ${item.short_close_reason || 'no reason'}). PO total now ₹${grandTotal}.`,
+      req.user.id);
+    res.json({ message: `Balance reopened — PO total now ₹${grandTotal}`, grand_total: grandTotal });
+  } catch (e) {
+    console.error('reopen error:', e);
+    res.status(500).json({ error: 'Failed to reopen the balance' });
   }
 });
 
@@ -1013,18 +1045,12 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
       } catch (e) { console.error('debit-note notify failed:', e.message); }
     }
 
-    // Finalise the PO once every item has been QC-resolved.
-    const items = await db.all('SELECT qc_status FROM purchase_order_items WHERE po_id=$1', [po.id]);
-    const allResolved = items.every(i => ['approved', 'rejected', 'partial'].includes(i.qc_status));
-    if (allResolved) {
-      // Fully-rejected POs flag as material_rejected; partials received (their
-      // accepted stock is in — the rejection lives on in the debit note).
-      const anyFullReject = items.some(i => i.qc_status === 'rejected');
-      await db.run(
-        "UPDATE purchase_orders SET status='received', received_at=NOW(), delivery_status=$1 WHERE id=$2",
-        [anyFullReject ? 'material_rejected' : 'received', po.id]
-      );
-    }
+    // Finalise the PO once every line still expected has been QC-resolved. A
+    // short-closed balance is not expected, so it no longer holds the PO open
+    // (it did until 30 Sep 2026 — P PHE 22 sat at QC pending with nothing to
+    // check). Fully-rejected POs flag as material_rejected; partials received
+    // (their accepted stock is in — the rejection lives on in the debit note).
+    const allResolved = (await settlePoStatus(db, po.id, { receivedAt: 'now' })) === 'received';
     await logActivity(null, null, 'purchase_qc',
       `PO ${po.po_number}: item QC ${result}${rejectedQty > 0 ? ` (${rejectedQty} rejected → debit note pending)` : ''}`, req.user.id);
     res.json({ message: result === 'approved' ? 'Item QC approved — stock added'

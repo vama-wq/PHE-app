@@ -168,6 +168,7 @@ export default function PurchaseOrderDetail() {
     );
   }
   const drawingItems = po.items.filter(i => i.drawing_file);
+  const poLines = po.items.filter(i => !i.short_closed);
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -223,7 +224,7 @@ export default function PurchaseOrderDetail() {
               </button>
             </>
           )}
-          {po.status === 'approved' && canManagePO && po.delivery_status !== 'order_cancelled' && po.items.some(i => !i.received) && (
+          {po.status === 'approved' && canManagePO && po.delivery_status !== 'order_cancelled' && po.items.some(i => !i.received && !i.short_closed) && (
             <button className="btn-primary btn-sm flex items-center gap-1.5 bg-teal-600 hover:bg-teal-700 border-teal-600"
               onClick={() => setShowReceiveModal(true)}>
               <PackageCheck size={13} /> Receive an Item
@@ -307,7 +308,8 @@ export default function PurchaseOrderDetail() {
       )}
 
       {/* ── Item Receiving & QC panel (approved POs, screen only) ── */}
-      {((po.status === 'approved' && po.delivery_status !== 'order_cancelled') || po.status === 'received') && (
+      {((po.status === 'approved' && po.delivery_status !== 'order_cancelled') || po.status === 'received'
+        || po.items.some(i => i.short_closed)) && (
         <div className="card p-5 mb-5 no-print">
           <h3 className="font-semibold text-gray-900 mb-1 flex items-center gap-2">
             <PackageCheck size={16} className="text-teal-600" /> Item Receiving & QC
@@ -317,7 +319,8 @@ export default function PurchaseOrderDetail() {
           </p>
           <div className="space-y-2.5">
             {po.items.map(item => (
-              <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} showCosts isOwner={user.role === 'owner'} igstPercent={po.igst_percent} />
+              <ItemQCRow key={item.id} poId={id} item={item} canQC={canQC} onDone={load} showCosts isOwner={user.role === 'owner'}
+                canShortClose={['owner', 'accounts'].includes(user.role)} igstPercent={po.igst_percent} />
             ))}
           </div>
         </div>
@@ -435,7 +438,9 @@ export default function PurchaseOrderDetail() {
             </tr>
           </thead>
           <tbody>
-            {po.items.map((item, i) => (
+            {/* The PO document shows the final lines only: a short-closed balance
+                is off the order (its reason stays on the QC view below). */}
+            {poLines.map((item, i) => (
               <tr key={item.id}>
                 <td style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'center' }}>{i + 1}</td>
                 <td style={{ border: '1px solid #ccc', padding: '4px 8px' }}>
@@ -452,7 +457,7 @@ export default function PurchaseOrderDetail() {
                 <td style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right' }}>{fmt(item.amount)}</td>
               </tr>
             ))}
-            {Array.from({ length: Math.max(0, 12 - po.items.length) }).map((_, i) => (
+            {Array.from({ length: Math.max(0, 12 - poLines.length) }).map((_, i) => (
               <tr key={`blank-${i}`} style={{ height: '22px' }}>
                 <td style={{ border: '1px solid #ccc' }}></td>
                 <td style={{ border: '1px solid #ccc' }}></td>
@@ -653,7 +658,7 @@ export default function PurchaseOrderDetail() {
       {showReceiveModal && (
         <ReceiveItemModal
           poId={id}
-          items={po.items.filter(i => !i.received)}
+          items={po.items.filter(i => !i.received && !i.short_closed)}
           allItems={po.items}
           onClose={() => setShowReceiveModal(false)}
           onDone={() => { setShowReceiveModal(false); load(); }}
@@ -1037,7 +1042,7 @@ function PackagingForwarding({ po, onSaved }) {
   );
 }
 
-function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, igstPercent = 0 }) {
+function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClose = isOwner, igstPercent = 0 }) {
   const transport = Number(item.receive_transport_cost) || 0;
   const localTransport = Number(item.receive_local_transport_cost) || 0;
   const other = Number(item.receive_other_cost) || 0;
@@ -1102,9 +1107,23 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, igstPercent 
   if (!item.received) {
     if (item.short_closed) {
       return (
-        <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 flex items-center justify-between">
+        <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 flex items-center justify-between gap-3">
           <span className="text-sm text-gray-500">{item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span></span>
-          <span className="text-xs text-gray-500">Short-closed{item.short_close_reason ? ` — ${item.short_close_reason}` : ''}</span>
+          <span className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">Short-closed{item.short_close_reason ? ` — ${item.short_close_reason}` : ''}</span>
+            {/* Owner only: a mistaken short close, or the supplier sends it after
+                all. The balance counts toward the PO again. */}
+            {isOwner && (
+              <button className="btn-ghost btn-sm text-xs text-brand-600"
+                onClick={async () => {
+                  if (!window.confirm(`Reopen the ${item.qty} of "${item.description}"?\n\nIt goes back on the PO and its total, and the PO waits for it again.`)) return;
+                  try { await api.put(`/purchase-orders/${poId}/items/${item.id}/reopen`); onDone(); }
+                  catch (e) { alert(e.response?.data?.error || 'Failed'); }
+                }}>
+                Reopen
+              </button>
+            )}
+          </span>
         </div>
       );
     }
@@ -1118,10 +1137,10 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, igstPercent 
           {/* A balance the supplier never sent can be closed off so it stops
               sitting on the receiving list. It was never received, so it never
               reaches QC and is never payable. */}
-          {isOwner && (
+          {canShortClose && (
             <button className="btn-ghost btn-sm text-xs text-gray-500 hover:text-red-600"
               onClick={async () => {
-                const reason = window.prompt(`Short-close the outstanding ${item.qty} of "${item.description}"?\n\nReason (goes on the PO record):`);
+                const reason = window.prompt(`Short-close the outstanding ${item.qty} of "${item.description}"?\n\nIt comes off the PO and its total. Reason (goes on the PO record):`);
                 if (!reason?.trim()) return;
                 try { await api.put(`/purchase-orders/${poId}/items/${item.id}/short-close`, { reason: reason.trim() }); onDone(); }
                 catch (e) { alert(e.response?.data?.error || 'Failed'); }

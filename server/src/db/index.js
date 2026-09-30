@@ -2198,6 +2198,35 @@ async function initDB(retries = 20, delayMs = 10000) {
       }
       if (rlsOff.rows.length) console.log(`RLS enabled on ${rlsOff.rows.length} table(s)`);
 
+      // Short close, once (owner, 30 Sep 2026): a PO short-closed before the
+      // short-closed balance left its total kept the full ordered value and sat
+      // at QC pending with nothing left to check (P PHE 22). Settle every such
+      // PO with the same code the app now uses. Its own try, and the flag is
+      // written only after it succeeds, so a failure retries next start and can
+      // never stop anything else here.
+      try {
+        const done = await pool.query(`SELECT 1 FROM app_flags WHERE key='po_short_close_settled_v1'`);
+        if (!done.rowCount) {
+          const { recomputePoTotals, settlePoStatus } = require('../lib/poSettle');
+          const scDb = getDB();
+          const { rows: scPos } = await pool.query(
+            `SELECT DISTINCT po.id, po.po_number, po.grand_total, po.delivery_status
+               FROM purchase_orders po JOIN purchase_order_items poi ON poi.po_id = po.id
+              WHERE poi.short_closed`);
+          for (const p of scPos) {
+            const { grandTotal } = await recomputePoTotals(scDb, p.id);
+            const state = await settlePoStatus(scDb, p.id);
+            await pool.query(
+              `INSERT INTO activity_log (activity_type, description) VALUES ('po_short_close_settled', $1)`,
+              [`${p.po_number}: short-closed balance taken off the PO — total ₹${p.grand_total} → ₹${grandTotal}; ${p.delivery_status} → ${state}.`]);
+            console.log(`[short-close] ${p.po_number}: ₹${p.grand_total} -> ₹${grandTotal}, now ${state}`);
+          }
+          await pool.query(`INSERT INTO app_flags (key) VALUES ('po_short_close_settled_v1') ON CONFLICT DO NOTHING`);
+        }
+      } catch (e) {
+        console.error('[short-close] one-time settle failed (will retry next start):', e.message);
+      }
+
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
       if (parseInt(rows[0].c, 10) === 0) {
