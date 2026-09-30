@@ -196,7 +196,7 @@ export default function PayrollRun() {
                 onChange={e => { const f = e.target.files[0]; e.target.value = ''; if (f || run.essl_file) reparseEssl(f); }} />
             </label>
           )}
-          {canWork && editable && (
+          {isOwner && editable && (
             <button className="btn-secondary btn-sm flex items-center gap-1.5 text-xs text-red-500" onClick={deleteRun} title="Delete this draft run">
               <Trash2 size={13} /> Delete
             </button>

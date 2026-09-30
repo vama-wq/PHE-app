@@ -23,6 +23,7 @@ const STATUS_BADGES = {
 export default function PayrollList() {
   const { user } = useAuthStore();
   const isOwner = user.role === 'owner' || user.role === 'accounts'; // accounts has full payroll access (owner decision, Sep 2026)
+  const canDelete = user.role === 'owner'; // deleting a worker stays with the owner (30 Sep 2026)
   const [tab, setTab] = useState('runs');
   const [runs, setRuns] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -186,7 +187,7 @@ export default function PayrollList() {
                     <button className="p-1 text-gray-400 hover:text-brand-600" title="Edit worker" onClick={() => setEditEmp(e)}>
                       <Pencil size={14} />
                     </button>
-                    {isOwner && (
+                    {canDelete && (
                       <button className="p-1 text-gray-300 hover:text-red-600" title="Delete worker (only if no payroll history)" onClick={() => handleDeleteEmp(e)}>
                         <Trash2 size={14} />
                       </button>

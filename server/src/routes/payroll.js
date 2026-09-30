@@ -50,6 +50,10 @@ const MAX_CARRYFORWARD = 5;  // leaves carried into a new year
 const MAX_TOGETHER = 7;      // more than this together → flag, excess unpaid
 
 const isOwner = (req) => req.user.role === 'owner';
+// Owner's decision (2 Sep 2026): accounts works the whole payroll and sees the
+// same pay figures as the owner. Approve, mark-paid, carried-leave edits and
+// deleting runs or workers stay owner-only (deletes confirmed 30 Sep 2026).
+const seesPay = (req) => req.user.role === 'owner' || req.user.role === 'accounts';
 const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
 
 // Salary maths — single source of truth. `holidays` = paid festival holidays in
@@ -186,7 +190,9 @@ async function applyAttendanceUpdates(client, runId, updates, holidays = 0) {
   }
 }
 
-// Strip pay/bank fields for non-owner responses
+// Strip pay/bank fields for any role without payroll access. Owner and accounts
+// both see everything; they are the only roles the payroll routes admit, so
+// this is a safety net for a role added later, not a filter on accounts.
 const ATTENDANCE_FIELDS = ['id', 'run_id', 'employee_id', 'worker_group', 'present_days', 'absent_days',
   'ot_hours', 'late_stay_days', 'late_days', 'long_leave_flag', 'remarks', 'name', 'active'];
 function visibleLine(line, owner) {
@@ -212,7 +218,7 @@ router.get('/workers', authenticate, async (req, res) => {
 router.get('/employees', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   try {
     const rows = await getDB().all('SELECT * FROM employees ORDER BY worker_group, name');
-    if (isOwner(req)) {
+    if (seesPay(req)) {
       const balances = await getDB().all(
         'SELECT employee_id, COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger GROUP BY employee_id');
       const balMap = Object.fromEntries(balances.map(b => [b.employee_id, Number(b.bal)]));
@@ -298,7 +304,7 @@ router.put('/employees/:id', authenticate, authorize('owner', 'accounts'), async
 // Hard-delete a worker (owner) — only when they carry NO payroll history
 // (never appeared in a run, no advances, no leave ledger). Leavers should be
 // deactivated instead so their salary records survive.
-router.delete('/employees/:id', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+router.delete('/employees/:id', authenticate, authorize('owner'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid employee id' });
@@ -449,7 +455,7 @@ router.get('/runs', authenticate, authorize('owner', 'accounts'), async (req, re
     const rows = await getDB().all(`
       SELECT r.*, p.name AS prepared_by_name, a.name AS approved_by_name,
         (SELECT COUNT(*) FROM payroll_lines pl WHERE pl.run_id = r.id) AS line_count,
-        ${isOwner(req) ? '(SELECT COALESCE(SUM(total_payable),0) FROM payroll_lines pl WHERE pl.run_id = r.id)' : 'NULL'} AS total_payable
+        ${seesPay(req) ? '(SELECT COALESCE(SUM(total_payable),0) FROM payroll_lines pl WHERE pl.run_id = r.id)' : 'NULL'} AS total_payable
       FROM payroll_runs r
       LEFT JOIN users p ON p.id = r.prepared_by
       LEFT JOIN users a ON a.id = r.approved_by
@@ -564,7 +570,7 @@ router.get('/runs/:id', authenticate, authorize('owner', 'accounts'), async (req
     const db = getDB();
     const run = await db.get('SELECT * FROM payroll_runs WHERE id=$1', [id]);
     if (!run) return res.status(404).json({ error: 'Run not found' });
-    const owner = isOwner(req);
+    const full = seesPay(req);
     const lines = await db.all(`
       SELECT pl.*, e.name, e.active, e.petrol_monthly, e.advance_balance,
              e.bank_ac_no, e.ifsc_code, e.ac_holder_name
@@ -573,7 +579,7 @@ router.get('/runs/:id', authenticate, authorize('owner', 'accounts'), async (req
       ORDER BY CASE pl.worker_group WHEN 'labour' THEN 0 ELSE 1 END, e.name`, [id]);
 
     let leaveBalances = null;
-    if (owner) {
+    if (full) {
       const bals = await db.all(
         `SELECT employee_id, COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger
          WHERE employee_id IN (SELECT employee_id FROM payroll_lines WHERE run_id=$1)
@@ -582,7 +588,7 @@ router.get('/runs/:id', authenticate, authorize('owner', 'accounts'), async (req
     }
     res.json({
       run,
-      lines: lines.map(l => visibleLine(l, owner)),
+      lines: lines.map(l => visibleLine(l, full)),
       leave_balances: leaveBalances,
       paid_holidays: await paidHolidaysInMonth(db, run.month),
       policy: { month_basis_days: MONTH_BASIS_DAYS, ot_divisor: OT_DIVISOR, max_carryforward: MAX_CARRYFORWARD, max_together: MAX_TOGETHER },
@@ -981,7 +987,7 @@ router.post('/runs/:id/add-employee', authenticate, authorize('owner', 'accounts
 
 // Delete a draft/submitted run (owner) — before approval, e.g. to recreate it
 // with a corrected ESSL or roster. Lines cascade. Approved/paid runs are kept.
-router.delete('/runs/:id', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+router.delete('/runs/:id', authenticate, authorize('owner'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid run id' });
