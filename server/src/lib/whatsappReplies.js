@@ -49,6 +49,10 @@ const NO_WORDS = new Set(['no', 'n', 'nope', 'nah', 'reject', 'rejected', 'decli
   'nahi', 'nai', 'na', 'mat', 'nathi', 'nako']);
 const FILLER = new Set(['please', 'pls', 'plz', 'sir', 'ji', 'hai', 'he', 'che', 'chhe', 'it', 'this', 'bhai', 'boss']);
 const CANCEL = /^\s*(cancel|stop|wait|leave( it)?|skip|undo|never ?mind|rehne do|chhodo|ruko)\b/i;
+// A question back ("which one is this") is not a reason either.
+const QUESTION = /^\s*(which|what|who|why|when|where|how|kaun|kaunsa|konsa|kya|kyu|kyun|kyon|kab|kahan|kaise|kayu|shu)\b/i;
+// Putting it off is not a reason — it cancels the question.
+const DEFER = /\b(not now|later|hold on|abhi nahi|ek min|one min|wait|baad me|baad mein|kal|ruk|ruko)\b/i;
 
 function words(s) {
   return String(s || '').toLowerCase().split(/\s+/).map(w => w.replace(/[^\p{L}\p{N}']/gu, '')).filter(Boolean);
@@ -184,7 +188,10 @@ const ageMs = (row) => Date.now() - new Date(row.created_at).getTime();
 function closedReason(row) {
   if (row.action_state === 'superseded') return { result: 'superseded', text: `A newer alert about this replaced that one — please answer the latest alert.${openLink(row)}` };
   if (row.action_state === 'done') return { result: 'already answered', text: `You already answered this alert: ${row.action_note || 'done'}.` };
-  if (row.action_state === 'acting') return { result: 'still acting', text: 'Your earlier answer to this alert is still being handled — nothing more was done.' };
+  // A claim older than 10 minutes was interrupted (a restart) — the alert is open again.
+  if (row.action_state === 'acting' && !(row.acted_at && Date.now() - new Date(row.acted_at).getTime() > 10 * 60e3)) {
+    return { result: 'still acting', text: 'Your earlier answer to this alert is still being handled — nothing more was done.' };
+  }
   return null;
 }
 
@@ -201,12 +208,13 @@ async function act(db, user, m, row, fn, done) {
     await reply(db, user, c.text, m.id);
     return done(c.result, row.id);
   }
-  const release = () => db.run(`UPDATE whatsapp_outbox SET action_state=NULL WHERE id=$1 AND action_state='acting'`, [row.id]);
-  let r;
-  try { r = await fn(); } catch (e) { await release().catch(() => {}); throw e; }
-  const out = await finish(db, user, m, row, r, done);
-  await release();   // not finished (refused, invalid…) → the alert can be answered again
-  return out;
+  // Not finished (refused, invalid, an error) → the alert can be answered again.
+  // Only 'acting' is cleared, so a 'done' or 'superseded' set meanwhile stays.
+  try {
+    return await finish(db, user, m, row, await fn(), done);
+  } finally {
+    await db.run(`UPDATE whatsapp_outbox SET action_state=NULL WHERE id=$1 AND action_state='acting'`, [row.id]).catch(() => {});
+  }
 }
 
 // ── storing what Meta sends ───────────────────────────────────────────────────
@@ -389,7 +397,9 @@ async function handleStored(db, ins) {
   // "₹12,500 each") — "will check in 10 min" is not a price.
   if (replyKind === 'price') {
     const said = String(text).trim();
-    if (!/^(₹|rs\.?|inr)?\s*\d[\d,]*(\.\d+)?/i.test(said)) {
+    const amount = /^(₹|rs\.?|inr)?\s*\d[\d,]*(\.\d+)?/i;
+    const timeNotPrice = /^(₹|rs\.?|inr)?\s*\d[\d,]*(\.\d+)?\s*(min|mins|minute|minutes|hr|hrs|hour|hours|ghanta|ghante|day|days|din|week|weeks|baje|am|pm|o'?clock)\b/i;
+    if (!amount.test(said) || timeNotPrice.test(said)) {
       await reply(db, user, /\d/.test(said)
         ? 'Nothing was saved. To add the price, swipe-reply starting with the amount, e.g. 12500 per pc.'
         : 'I did not see a price. Swipe-reply to the alert with the amount, e.g. 12500 per pc.', m.id);
@@ -448,8 +458,8 @@ async function answerPrompt(db, user, m, prompt, text, loose, actor, done) {
   if (!row) return done('prompt without alert', prompt.id);
   const said = String(text).trim();
   const it = intentOf(said);
-  // "cancel", "wait", "no", "nahi" — stop.
-  if (CANCEL.test(said) || (it.intent === 'no' && !it.rest)) {
+  // "cancel", "wait", "no", "nahi", "later", "not now", "abhi nahi" — stop.
+  if (CANCEL.test(said) || (it.intent === 'no' && !it.rest) || DEFER.test(said)) {
     await db.run(`UPDATE whatsapp_outbox SET action_state='cancelled' WHERE id=$1`, [prompt.id]);
     await reply(db, user, 'Cancelled — nothing was changed.', m.id);
     return done('cancelled', row.id);
@@ -457,11 +467,16 @@ async function answerPrompt(db, user, m, prompt, text, loose, actor, done) {
   let saved = {};
   try { saved = JSON.parse(prompt.action_note || '{}') || {}; } catch (_) { saved = {}; }
   let reason;
-  if (it.intent === 'yes' && saved.reason) {
-    reason = saved.reason;                     // "yes" confirms the reason already given
-  } else if (it.intent === 'yes' || startsLikeYes(said)) {
-    // "ok" / "Ok send it" is not a reason — likely meant for something else.
-    await reply(db, user, `That needs ${saved.reason ? 'a plain yes' : 'the reason in a few words'}, or reply cancel. Nothing was done.`, m.id);
+  if (saved.reason) {
+    // "Reply yes to confirm": only a plain yes confirms.
+    if (it.intent !== 'yes') {
+      await reply(db, user, 'Nothing was done. Reply yes to confirm, or cancel.', m.id);
+      return done('prompt: not confirmed', row.id);
+    }
+    reason = saved.reason;
+  } else if (it.intent === 'yes' || startsLikeYes(said) || said.includes('?') || QUESTION.test(said)) {
+    // "ok" / "Ok send it" / "which one?" is not a reason — likely meant for something else.
+    await reply(db, user, 'That needs the reason in a few words, or reply cancel. Nothing was done.', m.id);
     return done('prompt: not a reason', row.id);
   } else {
     reason = said;

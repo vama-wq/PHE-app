@@ -298,7 +298,7 @@ async function queueWhatsApp({ notificationId, userId, type, title, body, link, 
             SET action_state='superseded', action_note='A newer alert replaced this one',
                 status = CASE WHEN status='pending' THEN 'expired' ELSE status END,
                 last_error = CASE WHEN status='pending' THEN 'Replaced by a newer alert' ELSE last_error END
-          WHERE user_id=$1 AND ref_type=$2 AND ref_id=$3 AND id < $4 AND action_state IS NULL`,
+          WHERE user_id=$1 AND ref_type=$2 AND ref_id=$3 AND id < $4 AND (action_state IS NULL OR action_state='acting')`,
         [userId, ref.type, refId, row.id]);
     }
   } catch (e) {
@@ -486,6 +486,9 @@ async function tick() {
     // A send interrupted by a restart is released after 10 minutes.
     await db.run(`UPDATE whatsapp_outbox SET status='pending'
                    WHERE status='sending' AND claimed_at < NOW() - INTERVAL '10 minutes'`);
+    // A replaced alert still waiting (put back after a failed try) is not sent.
+    await db.run(`UPDATE whatsapp_outbox SET status='expired', last_error=COALESCE(last_error, 'Replaced by a newer alert')
+                   WHERE status='pending' AND action_state='superseded'`);
     // An alert that could not go out for a day is stale — the dashboard has it.
     await db.run(`UPDATE whatsapp_outbox SET status='expired',
                      last_error=COALESCE(last_error, 'Not sent within ${STALE_HOURS} hours')
@@ -497,6 +500,7 @@ async function tick() {
         UPDATE whatsapp_outbox SET status='sending', attempts=attempts+1, claimed_at=NOW()
          WHERE id IN (SELECT id FROM whatsapp_outbox
                        WHERE status='pending' AND next_attempt_at <= NOW()
+                         AND action_state IS DISTINCT FROM 'superseded'
                        ORDER BY (type = ANY($1::text[]) OR COALESCE(ref_type,'') = ANY($2::text[])) DESC, id
                        LIMIT ${BATCH} FOR UPDATE SKIP LOCKED)
         RETURNING *`, [APPROVAL_TYPES, DECIDE_REFS]);
@@ -562,7 +566,10 @@ async function applyStatuses(payload) {
     if (!row) continue;
     if (s.status === 'failed') {
       if (row.status === 'failed') continue;
-      await db.run(`UPDATE whatsapp_outbox SET status='failed', last_error=$2 WHERE id=$1`,
+      // A question that never arrived stops waiting for an answer.
+      await db.run(`UPDATE whatsapp_outbox SET status='failed', last_error=$2,
+                       action_state = CASE WHEN type='prompt' AND action_state='awaiting' THEN 'unsent' ELSE action_state END
+                     WHERE id=$1`,
         [row.id, explain(s.errors?.[0] || {}, null)]);
       n++;
     } else if (RANK[s.status] != null && row.status !== 'failed' && (RANK[s.status] > (RANK[row.status] ?? 0))) {
