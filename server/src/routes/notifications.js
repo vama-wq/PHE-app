@@ -53,6 +53,15 @@ async function notifyAllExcept(db, excludeUserId, payload) {
   }
 }
 
+// Everyone holding a role, e.g. all accounts users.
+async function notifyRole(db, role, payload) {
+  const users = await db.all('SELECT id FROM users WHERE role=$1', [role]);
+  for (const u of users) {
+    await createNotification(db, { ...payload, userId: u.id });
+  }
+}
+
 module.exports = router;
 module.exports.createNotification = createNotification;
 module.exports.notifyAllExcept = notifyAllExcept;
+module.exports.notifyRole = notifyRole;

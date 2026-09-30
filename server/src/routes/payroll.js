@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
+const { notifyRole } = require('./notifications');
 const { uploadEsslReport, deleteFromStorage, downloadFromStorage } = require('../middleware/upload');
 const { parseEssl, matchEmployees, esslOtHours, lateInfo } = require('../lib/esslParser');
 
@@ -1016,20 +1017,24 @@ router.put('/runs/:id/mark-paid', authenticate, authorize('owner'), async (req, 
     // Salaries always go out of the primary bank account (Kotak), so the
     // entries are tagged with it here — otherwise a bulk mark-paid would leave
     // every salary untagged and neither account would reconcile.
-    const primaryBank = await db.get('SELECT id FROM bank_accounts WHERE active AND is_primary ORDER BY id LIMIT 1');
+    const primaryBank = await db.get('SELECT id, name FROM bank_accounts WHERE active AND is_primary ORDER BY id LIMIT 1');
     const bankId = primaryBank?.id || null;
+    // The salary entries that move off Unpaid Bank, kept so accounts can be told.
+    let cleared = [];
     const remainingN = await db.withTransaction(async (client) => {
       if (Array.isArray(req.body.line_ids) && req.body.line_ids.length) {
         const ids = req.body.line_ids.map(n => parseInt(n, 10)).filter(Number.isInteger);
         await client.query(`UPDATE payroll_lines SET paid=TRUE WHERE run_id=$1 AND id = ANY($2)`, [id, ids]);
-        await client.query(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE,
+        ({ rows: cleared } = await client.query(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE,
                              bank_account_id=COALESCE(bank_account_id, $2)
-                      WHERE payment_method='unpaid_bank' AND payroll_line_id = ANY($1)`, [ids, bankId]);
+                      WHERE payment_method='unpaid_bank' AND payroll_line_id = ANY($1)
+                      RETURNING amount, paid_to`, [ids, bankId]));
       } else {
         await client.query('UPDATE payroll_lines SET paid=TRUE WHERE run_id=$1', [id]);
-        await client.query(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE,
+        ({ rows: cleared } = await client.query(`UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE,
                              bank_account_id=COALESCE(bank_account_id, $2)
-                      WHERE payment_method='unpaid_bank' AND payroll_line_id IN (SELECT id FROM payroll_lines WHERE run_id=$1)`, [id, bankId]);
+                      WHERE payment_method='unpaid_bank' AND payroll_line_id IN (SELECT id FROM payroll_lines WHERE run_id=$1)
+                      RETURNING amount, paid_to`, [id, bankId]));
       }
       const { rows } = await client.query(
         'SELECT COUNT(*)::int AS n FROM payroll_lines WHERE run_id=$1 AND paid=FALSE', [id]);
@@ -1040,6 +1045,23 @@ router.put('/runs/:id/mark-paid', authenticate, authorize('owner'), async (req, 
     });
     if (remainingN === 0 && run.status !== 'paid') {
       await logActivity(null, null, 'payroll_paid', `Payroll ${run.month} fully paid`, req.user.id);
+    }
+    // Accounts hears when the owner clears Unpaid Bank salary entries — one
+    // notification per action, so paying a whole month is one message, not one
+    // per worker (owner, 30 Sep 2026). Never undoes the payment if it fails.
+    if (cleared.length) {
+      try {
+        const total = cleared.reduce((t, r) => t + Number(r.amount || 0), 0);
+        const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
+        const from = primaryBank?.name ? ` · paid from ${primaryBank.name}` : '';
+        await notifyRole(db, 'accounts', cleared.length === 1
+          ? { type: 'unpaid_bank_cleared', title: `Unpaid bank cleared: ${inr(total)}`,
+              body: `Salary · ${cleared[0].paid_to || 'worker'} · payroll ${run.month}${from}`,
+              link: '/petty-cash', sourceUserId: req.user.id }
+          : { type: 'unpaid_bank_cleared', title: `Unpaid bank cleared: ${inr(total)} in salaries`,
+              body: `${cleared.length} salary entries for payroll ${run.month}${from}`,
+              link: '/petty-cash', sourceUserId: req.user.id });
+      } catch (err) { console.error('salary cleared notify failed:', err.message); }
     }
     res.json({ message: 'Marked paid', all_paid: remainingN === 0 });
   } catch (e) {

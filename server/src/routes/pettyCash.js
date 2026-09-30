@@ -2,7 +2,12 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadPettyCashReceipt, deleteFromStorage } = require('../middleware/upload');
-const { createNotification } = require('./notifications');
+const { createNotification, notifyRole } = require('./notifications');
+
+// ₹ with Indian digit grouping, and a date as the ledger shows it (IST).
+const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const istDay = (d) => { const t = new Date(new Date(d).getTime() + 5.5 * 3600e3); return `${t.getUTCDate()} ${MONTHS[t.getUTCMonth()]}`; };
 const { statusAfterTrip, PLATING_COMPANIES } = require('../lib/plating');
 
 // Office Expense — Petty Cash ledger.
@@ -736,6 +741,18 @@ router.put('/:id/mark-paid', authenticate, authorize('owner'), async (req, res) 
     });
     await logActivity(null, null, 'petty_cash_marked_paid',
       `${e.category === 'Salary' ? 'Salary' : 'Unpaid bank expense'} marked paid: ₹${e.amount}${e.paid_to ? ` (${e.paid_to})` : ''}`, req.user.id);
+    // Accounts keeps these books, so they hear whenever the owner clears an
+    // Unpaid Bank entry (owner, 30 Sep 2026). A failed notification never
+    // undoes the payment.
+    try {
+      await notifyRole(db, 'accounts', {
+        type: 'unpaid_bank_cleared',
+        title: `Unpaid bank cleared: ${inr(e.amount)}`,
+        body: [e.category, e.paid_to, e.description].filter(Boolean).join(' · ')
+          + ` · entry of ${istDay(e.entry_date)} · paid from ${acct.name}`,
+        link: '/petty-cash', sourceUserId: req.user.id,
+      });
+    } catch (err) { console.error('unpaid-bank cleared notify failed:', err.message); }
     res.json({ message: 'Marked as paid' });
   } catch (e) {
     console.error('petty cash mark-paid error:', e);
