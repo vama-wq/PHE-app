@@ -101,17 +101,30 @@ export default function PayrollRun() {
       const revFields = ['leave_credit_used', 'sick_credit_earned', 'petrol', 'advance_deduction', 'remarks'];
       const att = payload.map(u => Object.fromEntries(Object.entries(u).filter(([k]) => k === 'id' || attFields.includes(k)))).filter(u => Object.keys(u).length > 1);
       const rev = payload.map(u => Object.fromEntries(Object.entries(u).filter(([k]) => k === 'id' || revFields.includes(k)))).filter(u => Object.keys(u).length > 1);
-      if (att.length) await api.put(`/payroll/runs/${id}/attendance`, { lines: att });
-      if (canWork && rev.length) {
-        let changeRemark = null;
-        if (!isOwner) {
-          changeRemark = (window.prompt('Reason for these changes (required — the owner sees this with each change):') || '').trim();
-          if (!changeRemark) { setSaving(false); return alert('A remark is required to change pay fields.'); }
+      // Owner's rule (30 Sep 2026): accounts writes, in each changed worker's
+      // Remarks box, what was changed and why — one open remark per worker. A
+      // worker whose only edit is the remark itself needs nothing more.
+      if (!isOwner) {
+        const missing = payload
+          .filter(u => Object.keys(u).some(k => k !== 'id' && k !== 'remarks'))
+          .map(u => lines.find(x => String(x.id) === String(u.id)))
+          .filter(l => l && !String(val(l, 'remarks') || '').trim())
+          .map(l => l.name);
+        if (missing.length) {
+          setSaving(false);
+          return alert(`Write a remark for each worker you changed: ${missing.join(', ')}.\n\nUse the Remarks box on their row to say what you changed and why.`);
         }
-        const r = await api.put(`/payroll/runs/${id}/review`,
-          { lines: rev.map(u => ({ ...u, change_remark: changeRemark })) });
-        if (r.data.warnings?.length) setWarnings(r.data.warnings);
       }
+      const warn = [];
+      if (att.length) {
+        const r = await api.put(`/payroll/runs/${id}/attendance`, { lines: att });
+        if (r.data.warnings?.length) warn.push(...r.data.warnings);
+      }
+      if (canWork && rev.length) {
+        const r = await api.put(`/payroll/runs/${id}/review`, { lines: rev });
+        if (r.data.warnings?.length) warn.push(...r.data.warnings);
+      }
+      if (warn.length) setWarnings(warn);
       await load();
     } catch (err) {
       alert(err.response?.data?.error || 'Failed to save');
@@ -267,7 +280,7 @@ export default function PayrollRun() {
                     <th className="table-header text-center">Paid</th>
                   </>
                 )}
-                <th className="table-header text-left">Remarks</th>
+                <th className="table-header text-left" title="What was changed for this worker and why. Accounts must fill it for every worker they change.">Remarks</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -302,7 +315,7 @@ export default function PayrollRun() {
                   )}
                   <td className="table-cell">
                     {editable ? (
-                      <input className="input text-sm py-1 px-1.5 w-32" value={val(l, 'remarks') || ''} onChange={setVal(l, 'remarks')} />
+                      <input className="input text-sm py-1 px-1.5 w-48" placeholder="What changed and why" value={val(l, 'remarks') || ''} onChange={setVal(l, 'remarks')} />
                     ) : <span className="text-xs text-gray-500">{l.remarks || '—'}</span>}
                   </td>
                 </tr>
@@ -340,6 +353,7 @@ export default function PayrollRun() {
                     <th className="table-header text-center">Paid</th>
                   </>
                 )}
+                <th className="table-header text-left" title="What was changed for this worker and why. Accounts must fill it for every worker they change.">Remarks</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -449,6 +463,11 @@ export default function PayrollRun() {
                       </td>
                     </>
                   )}
+                  <td className="table-cell">
+                    {editable ? (
+                      <input className="input text-sm py-1 px-1.5 w-48" placeholder="What changed and why" value={val(l, 'remarks') || ''} onChange={setVal(l, 'remarks')} />
+                    ) : <span className="text-xs text-gray-500">{l.remarks || '—'}</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>

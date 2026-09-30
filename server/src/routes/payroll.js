@@ -599,6 +599,29 @@ router.get('/runs/:id', authenticate, authorize('owner', 'accounts'), async (req
   }
 });
 
+// Preserve the untouched run exactly once: the first edit (attendance or pay)
+// freezes what the ESSL parse produced, so "Print Original" always shows the
+// pre-change numbers.
+async function freezeOriginal(db, run) {
+  if (run.original_snapshot) return;
+  const orig = await db.all(
+    `SELECT pl.*, e.name AS employee_name, e.worker_group AS eg
+       FROM payroll_lines pl JOIN employees e ON e.id = pl.employee_id
+      WHERE pl.run_id=$1 ORDER BY e.name`, [run.id]);
+  await db.run('UPDATE payroll_runs SET original_snapshot=$1::jsonb WHERE id=$2 AND original_snapshot IS NULL',
+    [JSON.stringify(orig), run.id]);
+}
+
+// Owner's rule (30 Sep 2026): when accounts changes anything for a worker,
+// the worker's Remarks box must say what was changed and why — one open
+// remark per worker covering all of it. That remark is the reason logged with
+// the change. An explicit change_remark (from an older page) still counts.
+function changeReason(u, line) {
+  const explicit = String(u.change_remark || '').trim();
+  if (explicit) return explicit;
+  return String((u.remarks !== undefined ? u.remarks : line.remarks) || '').trim();
+}
+
 // Attendance entry (accounts + owner) while draft/submitted:
 // present/absent/OT hours/6:30-stays/remarks per line. Recomputes pay fields.
 router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'), async (req, res) => {
@@ -614,6 +637,11 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
     const updates = Array.isArray(req.body.lines) ? req.body.lines : [];
     if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
     const holidays = await paidHolidaysInMonth(db, run.month);
+    await freezeOriginal(db, run);
+    const isAccounts = req.user.role === 'accounts';
+    const ATT_TRACKED = [['present_days', 'Present'], ['absent_days', 'Absent'], ['ot_hours', 'OT hours'],
+      ['late_stay_days', '6:30 stays'], ['leave_credit_used', 'Leave credit']];
+    const errors = [];
 
     await db.withTransaction(async (client) => {
       for (const u of updates) {
@@ -621,7 +649,7 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
         if (!Number.isInteger(lineId)) continue;
         const { rows } = await client.query(
           `SELECT pl.*, e.worker_group AS eg, e.daily_rate AS e_rate, e.monthly_salary AS e_salary,
-                  e.petrol_monthly AS e_petrol
+                  e.petrol_monthly AS e_petrol, e.name
            FROM payroll_lines pl JOIN employees e ON e.id = pl.employee_id
            WHERE pl.id=$1 AND pl.run_id=$2`, [lineId, id]);
         const line = rows[0];
@@ -640,6 +668,16 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
           leave_credit_used: clampedCredit,
           // late_cut_minutes flows from the row (auto-computed at parse time)
         };
+        const finalRemark = u.remarks !== undefined ? ((u.remarks || '').trim() || null) : line.remarks;
+        const diffs = ATT_TRACKED
+          .map(([f, label]) => ({ label, from: line[f], to: merged[f] }))
+          .filter(d => Number(d.from ?? 0) !== Number(d.to ?? 0));
+        const remarkChanged = String(line.remarks ?? '') !== String(finalRemark ?? '');
+        const reason = changeReason(u, line);
+        if (diffs.length && isAccounts && !reason) {
+          errors.push(`${line.name}: write in the Remarks box what was changed and why`);
+          continue; // nothing applied to this worker without a remark
+        }
         const emp = { worker_group: line.worker_group, daily_rate: line.eg === 'labour' ? line.e_rate : null,
                       monthly_salary: line.e_salary, petrol_monthly: line.e_petrol };
         const pay = computeLine(emp, merged, holidays, run.month);
@@ -653,9 +691,17 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
            LEAVE_GROUPS.includes(line.worker_group) && Number(merged.absent_days) > MAX_TOGETHER,
            pay.late_deduction,
            pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.total_payable, lineId]);
+        if (diffs.length || remarkChanged) {
+          const logged = diffs.map(d => ({ field: d.label, from: d.from, to: d.to }));
+          if (remarkChanged) logged.push({ field: 'Remarks', from: line.remarks, to: finalRemark });
+          await client.query(
+            `INSERT INTO payroll_change_log (run_id, line_id, employee_name, changes, remark, changed_by)
+             VALUES ($1,$2,$3,$4::jsonb,$5,$6)`,
+            [id, lineId, line.name, JSON.stringify(logged), reason || null, req.user.id]);
+        }
       }
     });
-    res.json({ message: 'Attendance saved' });
+    res.json({ message: 'Attendance saved', warnings: errors });
   } catch (e) {
     console.error('attendance save error:', e);
     res.status(500).json({ error: 'Failed to save attendance' });
@@ -696,19 +742,11 @@ router.put('/runs/:id/review', authenticate, authorize('owner', 'accounts'), asy
     if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
     const holidays = await paidHolidaysInMonth(db, run.month);
 
-    // Preserve the untouched run exactly once: the first edit freezes what the
-    // ESSL parse produced, so "Print Original" always shows pre-change numbers.
-    if (!run.original_snapshot) {
-      const orig = await db.all(
-        `SELECT pl.*, e.name AS employee_name, e.worker_group AS eg
-           FROM payroll_lines pl JOIN employees e ON e.id = pl.employee_id
-          WHERE pl.run_id=$1 ORDER BY e.name`, [id]);
-      await db.run('UPDATE payroll_runs SET original_snapshot=$1::jsonb WHERE id=$2',
-        [JSON.stringify(orig), id]);
-    }
+    await freezeOriginal(db, run);
 
-    // Accounts edits must say why — each changed line needs a remark, and every
-    // change lands in the log the owner reviews before approving.
+    // Accounts edits must say why — the worker's Remarks box must have text for
+    // any worker whose pay fields change, and every change lands in the log the
+    // owner reviews before approving.
     const isAccounts = req.user.role === 'accounts';
     const TRACKED = [['leave_credit_used','Leave credit'], ['sick_credit_earned','Sick credit'],
       ['petrol','Petrol'], ['advance_deduction','Advance deduction'], ['remarks','Line remark']];
@@ -760,8 +798,9 @@ router.put('/runs/:id/review', authenticate, authorize('owner', 'accounts'), asy
         const diffs = TRACKED
           .map(([f, label]) => ({ f, label, from: line[f], to: finalVals[f] }))
           .filter(d => String(d.from ?? '') !== String(d.to ?? ''));
-        if (diffs.length && isAccounts && !(u.change_remark || '').trim()) {
-          errors.push(`${line.name}: remark required — say why the change was made`);
+        const reason = changeReason(u, line);
+        if (diffs.some(d => d.f !== 'remarks') && isAccounts && !reason) {
+          errors.push(`${line.name}: write in the Remarks box what was changed and why`);
           continue; // skip this line entirely; nothing applied without a reason
         }
 
@@ -783,7 +822,7 @@ router.put('/runs/:id/review', authenticate, authorize('owner', 'accounts'), asy
              VALUES ($1,$2,$3,$4::jsonb,$5,$6)`,
             [id, lineId, line.name,
              JSON.stringify(diffs.map(d => ({ field: d.label, from: d.from, to: d.to }))),
-             (u.change_remark || '').trim() || null, req.user.id]);
+             reason || null, req.user.id]);
         }
       }
     });
