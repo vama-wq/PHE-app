@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import SupplierModal from '../../components/SupplierModal';
 import InventoryItemModal from '../../components/InventoryItemModal';
+import StockExistingPartModal from './StockExistingPartModal';
 import CategorySelect from '../../components/CategorySelect';
 import { fmtDate, downloadExcel, toDateInput, istTodayInput } from '../../lib/utils';
 import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets, ChevronDown, ChevronRight, Printer, Paperclip, Search } from 'lucide-react';
@@ -1028,6 +1029,10 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
   const [showInvModal, setShowInvModal] = useState(false);
   const [partsAdded, setPartsAdded] = useState(0);   // how many parts stocked so far
   const [betweenParts, setBetweenParts] = useState(false); // "add another?" step
+  // Each part first asks: an item already in inventory, or a new one? (null =
+  // asking). The saved expense's id links the stock entry back to it.
+  const [partMode, setPartMode] = useState(null);
+  const [savedEntryId, setSavedEntryId] = useState(null);
   // Plating Transportation: pick which Nickel/Electropolish/Teflon items this trip
   // carries (send out or bring back) — one cash bill shared across them.
   const [platingDir, setPlatingDir] = useState('sent');   // 'sent' | 'returned'
@@ -1149,9 +1154,10 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
       }
       if (f.description && !isEmpExpense) fd.append('description', f.description);
       if (receipt) fd.append('receipt', receipt);
-      await api.post('/petty-cash', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const created = await api.post('/petty-cash', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setSavedEntryId(created.data?.id ?? null);
       // Machinery + "add to inventory" checked → keep the flow open and hand off
-      // to the full inventory form; otherwise finish as usual.
+      // to the parts step (an existing item or a new one); otherwise finish.
       if (isMachinery && addToInv) { setShowInvModal(true); setSaving(false); }
       else onSaved();
     } catch (err) {
@@ -1178,7 +1184,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
           <div className="flex gap-3 pt-1">
             <button type="button" className="btn-secondary flex-1" onClick={onSaved}>Done</button>
             <button type="button" className="btn-primary flex-1"
-              onClick={() => { setBetweenParts(false); setShowInvModal(true); }}>
+              onClick={() => { setBetweenParts(false); setPartMode(null); setShowInvModal(true); }}>
               <Boxes size={15} /> Add another part
             </button>
           </div>
@@ -1188,8 +1194,53 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
   }
 
   if (showInvModal) {
-    // First part is prefilled from the expense; extra parts start blank (the
-    // amount covers the whole purchase, so per-part price/qty is entered fresh).
+    const partNote = `Adding part ${partsAdded + 1} for this machinery purchase${partsAdded > 0 ? ` (${partsAdded} already added)` : ''}. After you add it, you can add another part or finish.`;
+    const partDone = () => { setPartsAdded(n => n + 1); setShowInvModal(false); setPartMode(null); setBetweenParts(true); };
+    const stopAdding = () => {
+      setPartMode(null);
+      if (partsAdded > 0) { setShowInvModal(false); setBetweenParts(true); } else onSaved();
+    };
+
+    // Each part: the same part bought again goes into the item it already has;
+    // only a part not yet in inventory becomes a new item.
+    if (partMode === null) {
+      return (
+        <Modal open title={`Add part ${partsAdded + 1} to inventory`} onClose={stopAdding}>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">Is this part already an item in inventory?</p>
+            <button type="button" disabled={!savedEntryId} onClick={() => setPartMode('existing')}
+              className="w-full text-left border border-emerald-200 hover:border-emerald-400 hover:bg-emerald-50 rounded-xl px-4 py-3 disabled:opacity-50">
+              <div className="font-medium text-gray-900 flex items-center gap-2"><Boxes size={15} className="text-emerald-600" /> Add to an existing item</div>
+              <div className="text-xs text-gray-500 mt-0.5">The same part bought again. Pick the item and enter the quantity; its stock goes up.</div>
+            </button>
+            <button type="button" onClick={() => setPartMode('new')}
+              className="w-full text-left border border-gray-200 hover:border-brand-400 hover:bg-gray-50 rounded-xl px-4 py-3">
+              <div className="font-medium text-gray-900 flex items-center gap-2"><Plus size={15} className="text-brand-600" /> Create a new item</div>
+              <div className="text-xs text-gray-500 mt-0.5">A part not in inventory yet, with its item code, drawing and full details.</div>
+            </button>
+            <div className="flex justify-end pt-1">
+              <button type="button" className="btn-secondary" onClick={stopAdding}>{partsAdded > 0 ? 'Done' : 'Skip adding parts'}</button>
+            </div>
+          </div>
+        </Modal>
+      );
+    }
+    if (partMode === 'existing') {
+      return (
+        <StockExistingPartModal
+          key={`existing-${partsAdded}`}
+          entryId={savedEntryId}
+          initialSearch={partsAdded === 0 ? f.description.trim() : ''}
+          note={partNote}
+          onBack={() => setPartMode(null)}
+          onClose={stopAdding}
+          onSaved={partDone}
+        />
+      );
+    }
+    // A new item: the full inventory form. The first part is prefilled from the
+    // expense; extra parts start blank (the amount covers the whole purchase,
+    // so per-part price/qty is entered fresh).
     const initial = partsAdded === 0
       ? { name: f.description.trim(), category: 'Machinery', unit: 'nos', current_stock: 1, unit_cost: f.amount, notes: invNotes }
       : { category: 'Machinery', unit: 'nos', current_stock: 1, notes: invNotes };
@@ -1197,10 +1248,10 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
       <InventoryItemModal
         key={partsAdded}
         initial={initial}
-        note={`Adding part ${partsAdded + 1} for this machinery purchase${partsAdded > 0 ? ` (${partsAdded} already added)` : ''}. After you add it, you can add another part or finish.`}
+        note={partNote}
         submitLabel="Add Part"
-        onSave={() => { setPartsAdded(n => n + 1); setShowInvModal(false); setBetweenParts(true); }}
-        onClose={() => { if (partsAdded > 0) setBetweenParts(true); else onSaved(); }}
+        onSave={partDone}
+        onClose={() => setPartMode(null)}
       />
     );
   }
@@ -1488,7 +1539,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
                   checked={addToInv} onChange={e => setAddToInv(e.target.checked)} />
                 <span className="text-sm text-emerald-800">
                   <span className="font-medium flex items-center gap-1"><Boxes size={14} /> Also add part(s) to inventory</span>
-                  <span className="block text-xs text-emerald-700 mt-0.5">After saving the expense, add one or more parts — each with the full inventory details (item code, unit, stock, price…).</span>
+                  <span className="block text-xs text-emerald-700 mt-0.5">After saving the expense, add each part to an item already in inventory, or create a new item with its full details.</span>
                 </span>
               </label>
             )}

@@ -744,6 +744,57 @@ router.put('/:id/paid-on', authenticate, authorize('owner'), async (req, res) =>
   }
 });
 
+// A Machinery expense's parts, stocked into an inventory item that already
+// exists. Owner's rule (30 Sep 2026): the same part bought again goes into the
+// item it already has, not a second item. The expense is saved first; this only
+// adds the pieces to stock, with a stock-history row naming the supplier and
+// the expense. It is an ordinary purchase_in row, so the owner can still delete
+// it from the item's history (which takes the pieces back out) if it was wrong.
+router.post('/:id/stock-in', authenticate, authorize('owner', 'accounts'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid entry id' });
+    const itemId = parseInt(req.body?.item_id, 10);
+    if (!Number.isInteger(itemId)) return res.status(400).json({ error: 'Pick the inventory item' });
+    const qty = Number(req.body?.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) return res.status(400).json({ error: 'Enter the quantity received' });
+    const rawPrice = req.body?.unit_price;
+    const price = rawPrice === undefined || rawPrice === null || rawPrice === '' ? null : Number(rawPrice);
+    if (price !== null && (!Number.isFinite(price) || price < 0)) return res.status(400).json({ error: 'Enter a valid price, or leave it blank' });
+
+    const db = getDB();
+    const e = await db.get('SELECT id, entry_type, category, paid_to, amount FROM petty_cash_entries WHERE id=$1', [id]);
+    if (!e) return res.status(404).json({ error: 'Expense not found' });
+    if (e.entry_type !== 'expense' || (e.category || '').trim() !== MACHINERY) {
+      return res.status(400).json({ error: 'Only a Machinery expense can add parts to inventory' });
+    }
+    const item = await db.get(
+      "SELECT id, item_code, name, unit FROM inventory_items WHERE id=$1 AND COALESCE(approval_status,'approved')='approved'", [itemId]);
+    if (!item) return res.status(400).json({ error: 'That inventory item was not found, or is still awaiting approval' });
+
+    const supplier = (e.paid_to || '').trim() || null;
+    const num = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const notes = `Machinery purchase${supplier ? ` from ${supplier}` : ''} — Account Statement expense #${e.id} (₹${num(e.amount)})`
+      + (price !== null ? ` · ₹${num(price)} per ${item.unit}` : '');
+    const newStock = await db.withTransaction(async (client) => {
+      const { rows } = await client.query(
+        'UPDATE inventory_items SET current_stock = current_stock + $1 WHERE id=$2 RETURNING current_stock', [qty, item.id]);
+      const balance = Number(rows[0].current_stock);
+      await client.query(
+        `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, supplier_name, notes, created_by)
+         VALUES ($1,'purchase_in',$2,$3,$4,$5,$6)`,
+        [item.id, qty, balance, supplier, notes, req.user.id]);
+      return balance;
+    });
+    await logActivity(null, null, 'machinery_stock_in',
+      `${num(qty)} ${item.unit} of ${item.name} (${item.item_code}) added to stock from Machinery expense #${e.id}${supplier ? ` — ${supplier}` : ''}, ₹${num(e.amount)}`, req.user.id);
+    res.status(201).json({ message: `Added ${num(qty)} ${item.unit} to ${item.name}`, item_id: item.id, new_stock: newStock });
+  } catch (err) {
+    console.error('machinery stock-in error:', err);
+    res.status(500).json({ error: 'Failed to add the parts to inventory' });
+  }
+});
+
 // Owner marks an Unpaid Bank expense as Paid — it then hits the Bank balance.
 // For an auto-posted Salary entry, this ALSO marks the worker paid in Payroll
 // (and flips the whole run to 'paid' once every worker is settled).
