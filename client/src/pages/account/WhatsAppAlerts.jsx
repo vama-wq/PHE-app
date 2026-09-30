@@ -200,6 +200,7 @@ export default function WhatsAppAlerts() {
                   <div className="min-w-0">
                     <div className="text-gray-800 truncate">{KIND_LABEL[r.type] ? <span className="text-gray-500">{KIND_LABEL[r.type]}: </span> : null}{r.title}</div>
                     {r.action_state === 'done' && r.action_note && <div className="text-xs text-green-700">Answered: {r.action_note}</div>}
+                    {r.action_state === 'superseded' && <div className="text-xs text-gray-500">Replaced by a newer alert about the same thing</div>}
                     {r.last_error && ['failed', 'pending', 'expired'].includes(r.status) && <div className="text-xs text-red-600">{r.last_error}</div>}
                   </div>
                   <span className="ml-auto text-xs text-gray-400 flex-shrink-0">{fmtDateTime(r.sent_at || r.created_at)}</span>

@@ -123,7 +123,7 @@ async function approveSplitRequest(db, { requestId, actor, via = 'app', refuseIf
       }
       if (!SPLIT_APPROVABLE.includes(jc.status)) {
         throw new Refusal({
-          ok: false, code: 'already_done',
+          ok: false, code: 'blocked',
           message: `${jc.job_card_no} is already ${statusWords(jc.status)}, so ${sr.qty} can no longer be split off it — reject this request instead.`,
           data: { reason: 'job_card_moved_on', status: jc.status },
         });

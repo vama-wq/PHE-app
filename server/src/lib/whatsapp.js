@@ -55,6 +55,11 @@ const BUTTON_LABELS = {
   capa: ['Approve', 'Send back'],
 };
 const DECIDE_REFS = Object.keys(REPLY_KIND).filter(k => ['decide', 'price'].includes(REPLY_KIND[k]));
+const TEMPLATE_BUTTON_MEANING = {
+  po_over: 'Approve keeps the extra quantity; Reject takes only the ordered quantity.',
+  po_rate: 'Reject asks the buyer to revise the rates.',
+  capa: 'Reject sends it back to the team.',
+};
 const replyHint = (refType) => ({
   decide: 'Tap a button, or swipe-reply yes or no.',
   price: 'Swipe-reply with the price, e.g. 12500 per pc.',
@@ -158,7 +163,7 @@ function ensureSchema() {
         // Which item the alert is about, and what has been done with a reply to it.
         for (const [col, t] of [['source_user_id', 'INTEGER'], ['ref_type', 'TEXT'], ['ref_id', 'INTEGER'],
                                 ['ref_parent', 'INTEGER'], ['parent_outbox_id', 'INTEGER'], ['action_state', 'TEXT'],
-                                ['action_note', 'TEXT'], ['acted_at', 'TIMESTAMPTZ']]) {
+                                ['action_note', 'TEXT'], ['acted_at', 'TIMESTAMPTZ'], ['ref_snapshot', 'TEXT']]) {
           await c.query(`ALTER TABLE whatsapp_outbox ADD COLUMN IF NOT EXISTS ${col} ${t}`);
         }
         // Every message received from WhatsApp, once each (Meta may deliver twice).
@@ -177,6 +182,10 @@ function ensureSchema() {
             outbox_id INTEGER,
             result TEXT
           )`);
+        // The whole message as received, stored before Meta is answered, so a
+        // restart cannot lose a reply between "received" and "acted on".
+        await c.query('ALTER TABLE whatsapp_inbox ADD COLUMN IF NOT EXISTS raw JSONB');
+        await c.query('ALTER TABLE whatsapp_inbox ADD COLUMN IF NOT EXISTS phone_number_id TEXT');
         await c.query('CREATE INDEX IF NOT EXISTS whatsapp_outbox_due ON whatsapp_outbox (status, next_attempt_at)');
         await c.query('CREATE INDEX IF NOT EXISTS whatsapp_outbox_wamid ON whatsapp_outbox (wa_message_id)');
         await c.query('CREATE INDEX IF NOT EXISTS whatsapp_outbox_user ON whatsapp_outbox (user_id, created_at)');
@@ -241,13 +250,23 @@ async function queueWhatsApp({ notificationId, userId, type, title, body, link, 
     const who = (await refreshRecipients()).get(Number(userId));
     if (!who || !who.types.has(type)) return;
     const db = dbmod.getDB();
+    const decision = DECIDE_REFS.includes(ref?.type) && Number.isInteger(Number(ref?.id));
+    const snap = ref?.snap != null ? String(ref.snap) : null;
     // The same alert already queued moments ago (a message re-posted, a double
-    // click) is not sent twice.
-    const dup = await db.get(
-      `SELECT 1 FROM whatsapp_outbox
-        WHERE user_id=$1 AND type=$2 AND COALESCE(link,'')=COALESCE($3,'') AND COALESCE(title,'')=COALESCE($4,'')
-          AND COALESCE(body,'')=COALESCE($5,'') AND created_at > NOW() - INTERVAL '10 minutes' LIMIT 1`,
-      [userId, type, link || null, title || '', body || null]);
+    // click) is not sent twice. For something to decide, only an unanswered
+    // copy from the last minute counts — a resubmission must reach the owner.
+    const dup = decision
+      ? await db.get(
+        `SELECT 1 FROM whatsapp_outbox
+          WHERE user_id=$1 AND ref_type=$2 AND ref_id=$3 AND COALESCE(ref_snapshot,'')=COALESCE($4,'')
+            AND COALESCE(title,'')=COALESCE($5,'') AND COALESCE(body,'')=COALESCE($6,'')
+            AND action_state IS NULL AND created_at > NOW() - INTERVAL '1 minute' LIMIT 1`,
+        [userId, ref.type, Number(ref.id), snap, title || '', body || null])
+      : await db.get(
+        `SELECT 1 FROM whatsapp_outbox
+          WHERE user_id=$1 AND type=$2 AND COALESCE(link,'')=COALESCE($3,'') AND COALESCE(title,'')=COALESCE($4,'')
+            AND COALESCE(body,'')=COALESCE($5,'') AND created_at > NOW() - INTERVAL '10 minutes' LIMIT 1`,
+        [userId, type, link || null, title || '', body || null]);
     if (dup) return;
     // Flood guard: a burst of @mentions cannot bury the owner's phone; the
     // dashboard still has every one of them. Approvals always go, and the
@@ -264,12 +283,24 @@ async function queueWhatsApp({ notificationId, userId, type, title, body, link, 
     }
     const refId = Number.isInteger(Number(ref?.id)) ? Number(ref.id) : null;
     const refParent = Number.isInteger(Number(ref?.parent)) ? Number(ref.parent) : null;
-    await db.run(
+    const row = await db.get(
       `INSERT INTO whatsapp_outbox (notification_id, user_id, to_number, type, title, body, link,
-                                    source_user_id, ref_type, ref_id, ref_parent)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+                                    source_user_id, ref_type, ref_id, ref_parent, ref_snapshot)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
       [notificationId || null, userId, who.number, type, title || '', body || null, link || null,
-       sourceUserId || null, ref?.type || null, refId, refParent]);
+       sourceUserId || null, ref?.type || null, refId, refParent, snap]);
+    // A newer alert about the same thing (resubmitted, re-received, asked
+    // again) replaces the older ones: they can no longer be answered, and any
+    // not yet sent are not sent.
+    if (decision && row) {
+      await db.run(
+        `UPDATE whatsapp_outbox
+            SET action_state='superseded', action_note='A newer alert replaced this one',
+                status = CASE WHEN status='pending' THEN 'expired' ELSE status END,
+                last_error = CASE WHEN status='pending' THEN 'Replaced by a newer alert' ELSE last_error END
+          WHERE user_id=$1 AND ref_type=$2 AND ref_id=$3 AND id < $4 AND action_state IS NULL`,
+        [userId, ref.type, refId, row.id]);
+    }
   } catch (e) {
     console.error('WhatsApp queue failed (dashboard notification unaffected):', e.message);
   }
@@ -322,9 +353,14 @@ async function sendMessage(to, msg) {
   const c = cfg();
   if (!c.token || !c.phoneId) return { ok: false, retryable: false, error: 'WhatsApp is not connected yet: WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID are not set on the server.' };
   const href = fullLink(link);
-  const hint = replyHint(msg.ref_type);
-  const details = [body, hint].filter(Boolean).join('\n\n');
   const decide = REPLY_KIND[msg.ref_type] === 'decide' && msg.id;
+  // The approval template already ends "Tap a button, or swipe-reply yes or
+  // no", and its buttons always read Approve / Reject — so say what they mean
+  // where that is not obvious. The plain template has no buttons.
+  const hint = decide && c.approvalTemplate ? (TEMPLATE_BUTTON_MEANING[msg.ref_type] || '')
+    : decide && c.template ? 'Swipe-reply yes or no.'
+      : replyHint(msg.ref_type);
+  const details = [body, hint].filter(Boolean).join('\n\n');
   const [yesLabel, noLabel] = BUTTON_LABELS[msg.ref_type] || ['Approve', 'Reject'];
   const bodyParams = [
     { type: 'text', text: param(title, 200) },
@@ -444,6 +480,9 @@ async function tick() {
     if (!isConfigured()) return;
     await ensureSchema();
     const db = dbmod.getDB();
+    // Replies stored but not acted on (a restart in between) are picked up.
+    try { await require('./whatsappReplies').processPending(); }
+    catch (e) { console.error('WhatsApp reply recovery:', e.message); }
     // A send interrupted by a restart is released after 10 minutes.
     await db.run(`UPDATE whatsapp_outbox SET status='pending'
                    WHERE status='sending' AND claimed_at < NOW() - INTERVAL '10 minutes'`);

@@ -143,14 +143,18 @@ router.get('/webhook', (req, res) => {
 });
 
 // POST: delivery statuses (accepted → sent → delivered → read, or failed) and
-// the owner's replies. Answered at once so Meta does not retry; the work
-// happens after, and each reply is acted on once (lib/whatsappReplies.js).
-router.post('/webhook', (req, res) => {
+// the owner's replies. Replies are stored first — if that fails Meta is told
+// so and sends them again — then Meta is answered, then the work happens.
+// Each reply is acted on once (lib/whatsappReplies.js); one stored just before
+// a restart is picked up by the worker afterwards.
+router.post('/webhook', async (req, res) => {
   if (!wa.verifySignature(req.rawBody, req.get('x-hub-signature-256'))) return res.sendStatus(401);
+  let ids = [];
+  try { ids = await replies.storeInbound(req.body); }
+  catch (e) { console.error('WhatsApp webhook: could not store the reply:', e.message); return res.sendStatus(500); }
   res.sendStatus(200);
-  wa.applyStatuses(req.body)
-    .then(() => replies.handleInbound(req.body))
-    .catch((e) => console.error('WhatsApp webhook:', e.message));
+  wa.applyStatuses(req.body).catch((e) => console.error('WhatsApp statuses:', e.message));
+  if (ids.length) replies.processStored(ids).catch((e) => console.error('WhatsApp replies:', e.message));
 });
 
 module.exports = router;

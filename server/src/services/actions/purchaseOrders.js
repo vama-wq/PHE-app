@@ -146,20 +146,35 @@ async function notifyMentions(db, { po, actor, text, fileCount, userIds }) {
   const preview = (text || '').slice(0, 100);
   const fileNote = fileCount > 0 ? ` [+${fileCount} file${fileCount > 1 ? 's' : ''}]` : '';
   for (const userId of userIds) {
-    await createNotification(db, {
-      userId,
-      type: 'po_message',
-      title: `${actor.name} in ${po.po_number}`,
-      body: preview ? preview + fileNote : `Sent${fileNote}`,
-      link: `/purchases/${po.id}`,
-      sourceUserId: actor.id,
-      ref: { type: 'po_thread', id: po.id },
-    });
+    // One failed alert must not stop the others (the message is already saved).
+    try {
+      await createNotification(db, {
+        userId,
+        type: 'po_message',
+        title: `${actor.name} in ${po.po_number}`,
+        body: preview ? preview + fileNote : `Sent${fileNote}`,
+        link: `/purchases/${po.id}`,
+        sourceUserId: actor.id,
+        ref: { type: 'po_thread', id: po.id },
+      });
+    } catch (e) { console.error('PO mention alert failed:', e.message); }
   }
 }
 
+// What the PO's lines were when a rate-increase alert went out. Lines are
+// re-inserted on every edit, so this uses their content, not their ids.
+async function rateSnapshot(db, poId) {
+  const r = await db.get(
+    `SELECT COALESCE(string_agg(COALESCE(description,'') || '|' || qty::text || '|' || rate::text, ';'
+              ORDER BY description, qty, rate), '') AS s
+       FROM purchase_order_items WHERE po_id=$1`, [poId]);
+  return r ? r.s : '';
+}
+
 // ── Owner approves a flagged rate increase — unlocks "Mark as Sent" ──────────
-async function approveRateIncrease(db, { poId, actor, via = 'app' } = {}) {
+// expectSnapshot (optional, WhatsApp): the lines as they were when the alert
+// went out — if they have changed since, the owner must look again in the app.
+async function approveRateIncrease(db, { poId, actor, via = 'app', expectSnapshot } = {}) {
   const denied = ownerOnly(actor, 'approve a rate increase');
   if (denied) return denied;
   const id = toId(poId);
@@ -169,6 +184,9 @@ async function approveRateIncrease(db, { poId, actor, via = 'app' } = {}) {
   if (!po) return poNotFound(id);
   if (!po.rate_increase_pending) {
     return { ok: false, code: 'already_done', message: rateNotWaiting(po), data: { status: po.status } };
+  }
+  if (expectSnapshot != null && (await rateSnapshot(db, id)) !== expectSnapshot) {
+    return { ok: false, code: 'invalid', message: `The lines on ${poLabel(po)} have changed since this alert was sent, so it was not approved. Open the app to see the new rates.`, data: { reason: 'rates_changed' } };
   }
 
   const won = await db.withTransaction(async (client) => {
@@ -406,6 +424,7 @@ async function postPoMessage(db, { poId, actor, message, mentionIds, via = 'app'
 }
 
 module.exports = {
+  rateSnapshot,
   approveRateIncrease,
   declineRateIncrease,
   decideOverReceipt,

@@ -129,13 +129,14 @@ async function flagRateIncrease(db, po, increases, byUserId) {
   await db.run('INSERT INTO purchase_order_messages (po_id, user_id, message) VALUES ($1,$2,$3)',
     [po.id, byUserId, `⚠️ Rate increase needs owner approval before this PO can be sent:\n${lines}`]);
   const recipients = await db.all(`SELECT id FROM users WHERE role IN ('owner','admin','accounts')`);
+  const snap = await poActions.rateSnapshot(db, po.id);
   for (const u of recipients) {
     await createNotification(db, {
       userId: u.id, type: 'po_rate_increase',
       title: `Rate increase on ${po.po_number}`,
       body: increases.map(i => `${i.description}: ₹${i.oldRate}→₹${i.newRate}`).join('; '),
       link: `/purchases/${po.id}`, sourceUserId: byUserId,
-      ref: { type: 'po_rate', id: po.id },
+      ref: { type: 'po_rate', id: po.id, snap },
     });
   }
 }
@@ -943,7 +944,7 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
             title: `More arrived than ordered on ${po.po_number}`,
             body: `${item.description}: ${overQty} received against ${orderedQty} ordered. Approve the extra before it can pass QC.`,
             link: `/purchases/${po.id}`, sourceUserId: req.user.id,
-            ref: { type: 'po_over', id: item.id, parent: po.id },
+            ref: { type: 'po_over', id: item.id, parent: po.id, snap: String(overQty) },
           });
         }
       } catch (_) { /* notifications are best-effort */ }
