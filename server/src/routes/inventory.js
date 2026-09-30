@@ -5,6 +5,7 @@ const { uploadItemDrawing, deleteFromStorage } = require('../middleware/upload')
 const { createNotification } = require('./notifications');
 const { gujaratiName } = require('../lib/gujarati');
 const rework = require('../lib/rework');
+const inventoryActions = require('../services/actions/inventory');
 
 // QC (design) can manage stock but must not see unit cost — strip it for them.
 const stripCost = (req, data) => {
@@ -222,7 +223,9 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), ...uploa
           await createNotification(db, {
             userId: o.id, type: 'inventory_approval', title: 'New inventory item awaits approval',
             body: `${req.user.name || 'Accounts'} added "${name}" (${item_code.toUpperCase()}) — approve it on the Inventory page.`,
+            // The list page is where Approve/Reject live; the WhatsApp copy knows the exact item from ref.
             link: '/inventory', sourceUserId: req.user.id,
+            ref: { type: 'inventory_item', id: r.lastInsertRowid },
           });
         }
       } catch (_) { /* notifications are best-effort */ }
@@ -235,47 +238,40 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), ...uploa
   }
 });
 
-// Owner approves an accounts-added item — it becomes visible to all pickers
+// Owner approves an accounts-added item — it becomes visible to all pickers.
+// The work lives in services/actions/inventory.js, shared with WhatsApp replies.
 router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) => {
-  const db = getDB();
-  const item = await db.get('SELECT * FROM inventory_items WHERE id=$1', [req.params.id]);
-  if (!item) return res.status(404).json({ error: 'Not found' });
-  if (item.approval_status !== 'pending_approval') return res.status(400).json({ error: 'Item is not pending approval' });
-  await db.run("UPDATE inventory_items SET approval_status='approved' WHERE id=$1", [req.params.id]);
-  if (item.created_by) {
-    try {
-      await createNotification(db, {
-        userId: item.created_by, type: 'inventory_approved', title: 'Inventory item approved',
-        body: `"${item.name}" (${item.item_code}) was approved and is now live.`,
-        link: `/inventory/${item.id}`, sourceUserId: req.user.id,
-      });
-    } catch (_) {}
+  try {
+    const r = await inventoryActions.approveInventoryItem(getDB(), { itemId: req.params.id, actor: req.user, via: 'app' });
+    if (r.ok) return res.json({ message: 'Item approved' });
+    return sendActionError(res, r);
+  } catch (e) {
+    console.error('inventory approve error:', e.message);
+    res.status(500).json({ error: 'Could not approve the item — please try again.' });
   }
-  res.json({ message: 'Item approved' });
 });
 
-// Owner rejects an accounts-added item — the pending entry is removed
+// Owner rejects an accounts-added item — the pending entry is removed. Refused
+// (nothing removed) while a purchase order or an order's BOM still uses it.
 router.put('/:id/reject', authenticate, authorize('owner'), async (req, res) => {
-  const db = getDB();
-  const item = await db.get('SELECT * FROM inventory_items WHERE id=$1', [req.params.id]);
-  if (!item) return res.status(404).json({ error: 'Not found' });
-  if (item.approval_status !== 'pending_approval') return res.status(400).json({ error: 'Item is not pending approval' });
-  const reason = (req.body?.reason || '').trim();
-  await db.run('DELETE FROM inventory_fifo_lots WHERE item_id=$1', [req.params.id]).catch(() => {});
-  await db.run('DELETE FROM inventory_transactions WHERE item_id=$1', [req.params.id]);
-  await db.run('DELETE FROM inventory_items WHERE id=$1', [req.params.id]);
-  await deleteFromStorage(item.drawing_file).catch(() => {});
-  if (item.created_by) {
-    try {
-      await createNotification(db, {
-        userId: item.created_by, type: 'inventory_rejected', title: 'Inventory item rejected',
-        body: `"${item.name}" (${item.item_code}) was rejected by the owner${reason ? `: ${reason}` : ''}. It has been removed.`,
-        link: '/inventory', sourceUserId: req.user.id,
-      });
-    } catch (_) {}
+  try {
+    const r = await inventoryActions.rejectInventoryItem(getDB(), {
+      itemId: req.params.id, actor: req.user, reason: req.body?.reason, via: 'app' });
+    if (r.ok) return res.json({ message: 'Item rejected and removed' });
+    return sendActionError(res, r);
+  } catch (e) {
+    console.error('inventory reject error:', e.message);
+    res.status(500).json({ error: 'Could not reject the item — please try again.' });
   }
-  res.json({ message: 'Item rejected and removed' });
 });
+
+// Same responses the approve/reject routes always gave for these cases.
+function sendActionError(res, r) {
+  if (r.code === 'not_found') return res.status(404).json({ error: 'Not found' });
+  if (r.code === 'forbidden') return res.status(403).json({ error: 'Access denied' });
+  if (r.code === 'already_done') return res.status(400).json({ error: 'Item is not pending approval' });
+  return res.status(400).json({ error: r.message });
+}
 
 router.put('/:id', authenticate, authorize('owner', 'admin'), ...uploadItemDrawing, async (req, res) => {
   const { item_code, name, name_gu, category, unit, reorder_level, unit_cost, min_order_qty, notes } = req.body;

@@ -193,6 +193,9 @@ router.post('/request-price', authenticate, authorize('accounts', 'owner'), asyn
       body: `${itemLabel} (${jc.customer_code}) — no quotation attached. Please add pricing.`,
       link: `/orders/${jc.order_id}`,
       sourceUserId: req.user.id,
+      // Which job card the price is for, so a WhatsApp reply adds it there
+      // (services/actions/orders.js addPriceNote).
+      ref: { type: 'price', id: Number(job_card_id), parent: jc.order_id },
     });
   }
 

@@ -3,16 +3,27 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
+const crypto = require('crypto');
 const wa = require('../lib/whatsapp');
+const replies = require('../lib/whatsappReplies');
 
 // What the settings card needs. The token itself is never sent to the browser.
 router.get('/settings', authenticate, authorize('owner'), async (req, res) => {
   try {
     await wa.ensureSchema();
     const u = await getDB().get(
-      'SELECT whatsapp_number, whatsapp_enabled, whatsapp_types FROM users WHERE id=$1', [req.user.id]);
+      `SELECT whatsapp_number, whatsapp_enabled, whatsapp_types, whatsapp_verified_at,
+              whatsapp_verify_code, whatsapp_verify_expires FROM users WHERE id=$1`, [req.user.id]);
     const c = wa.cfg();
+    const sender = wa.isConfigured() ? await wa.senderNumber() : null;
+    const codeLive = u?.whatsapp_verify_code && u.whatsapp_verify_expires && new Date(u.whatsapp_verify_expires) > new Date();
     res.json({
+      verified: !!u?.whatsapp_verified_at,
+      verified_at: u?.whatsapp_verified_at || null,
+      pending_code: codeLive ? u.whatsapp_verify_code : null,
+      sender_number: sender,
+      approval_template: c.approvalTemplate || null,
+      approval_template_body: wa.WHATSAPP_APPROVAL_TEMPLATE_BODY,
       number: u?.whatsapp_number || '',
       enabled: !!u?.whatsapp_enabled,
       types: Array.isArray(u?.whatsapp_types) ? u.whatsapp_types : wa.DEFAULT_TYPES,
@@ -41,8 +52,12 @@ router.put('/settings', authenticate, authorize('owner'), async (req, res) => {
     const types = Array.isArray(req.body?.types)
       ? [...new Set(req.body.types.map(String).filter(t => known.has(t)))]
       : wa.DEFAULT_TYPES;
+    // A new number has to be confirmed again before replies from it can act.
     await getDB().run(
-      'UPDATE users SET whatsapp_number=$1, whatsapp_enabled=$2, whatsapp_types=$3 WHERE id=$4',
+      `UPDATE users SET whatsapp_number=$1, whatsapp_enabled=$2, whatsapp_types=$3,
+              whatsapp_verified_at = CASE WHEN whatsapp_number IS NOT DISTINCT FROM $1 THEN whatsapp_verified_at END,
+              whatsapp_verify_code = CASE WHEN whatsapp_number IS NOT DISTINCT FROM $1 THEN whatsapp_verify_code END
+        WHERE id=$4`,
       [number, enabled, types, req.user.id]);
     await wa.refreshRecipients(true);
     await logActivity(null, null, 'whatsapp_settings',
@@ -84,12 +99,31 @@ router.post('/test', authenticate, authorize('owner'), async (req, res) => {
   }
 });
 
+// Confirm the number: the owner sends this code FROM their WhatsApp to the
+// business number. That proves they hold the number, so replies from it may act.
+router.post('/verify-code', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    await wa.ensureSchema();
+    const u = await getDB().get('SELECT whatsapp_number FROM users WHERE id=$1', [req.user.id]);
+    if (!u?.whatsapp_number) return res.status(400).json({ error: 'Save your WhatsApp number first' });
+    const code = 'PHE-' + String(crypto.randomInt(100000, 1000000));
+    await getDB().run(
+      `UPDATE users SET whatsapp_verify_code=$1, whatsapp_verify_expires=NOW() + INTERVAL '30 minutes' WHERE id=$2`,
+      [code, req.user.id]);
+    const sender = await wa.senderNumber();
+    res.json({ code, sender_number: sender, wa_link: sender ? `https://wa.me/${sender}?text=${encodeURIComponent(code)}` : null });
+  } catch (e) {
+    console.error('whatsapp verify-code:', e);
+    res.status(500).json({ error: 'Could not make a confirmation code' });
+  }
+});
+
 router.get('/log', authenticate, authorize('owner'), async (req, res) => {
   try {
     await wa.ensureSchema();
     const rows = await getDB().all(
-      `SELECT id, type, title, status, attempts, last_error, created_at, sent_at
-         FROM whatsapp_outbox WHERE user_id=$1 ORDER BY id DESC LIMIT 20`, [req.user.id]);
+      `SELECT id, type, title, status, attempts, last_error, created_at, sent_at, action_state, action_note
+         FROM whatsapp_outbox WHERE user_id=$1 ORDER BY id DESC LIMIT 25`, [req.user.id]);
     res.json(rows);
   } catch (e) {
     console.error('whatsapp log:', e);
@@ -108,12 +142,15 @@ router.get('/webhook', (req, res) => {
   res.sendStatus(403);
 });
 
-// POST: delivery statuses (accepted → sent → delivered → read, or failed).
-// Answered at once so Meta does not retry; the work happens after.
+// POST: delivery statuses (accepted → sent → delivered → read, or failed) and
+// the owner's replies. Answered at once so Meta does not retry; the work
+// happens after, and each reply is acted on once (lib/whatsappReplies.js).
 router.post('/webhook', (req, res) => {
   if (!wa.verifySignature(req.rawBody, req.get('x-hub-signature-256'))) return res.sendStatus(401);
   res.sendStatus(200);
-  wa.applyStatuses(req.body).catch((e) => console.error('WhatsApp webhook:', e.message));
+  wa.applyStatuses(req.body)
+    .then(() => replies.handleInbound(req.body))
+    .catch((e) => console.error('WhatsApp webhook:', e.message));
 });
 
 module.exports = router;

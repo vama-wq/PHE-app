@@ -40,7 +40,10 @@ router.put('/read-all', authenticate, async (req, res) => {
   res.json({ message: 'All marked as read' });
 });
 
-async function createNotification(db, { userId, type, title, body, link, sourceUserId }) {
+// `ref` (optional) says exactly which item the alert is about, e.g.
+// { type: 'inventory_item', id: 42 } — only used by the WhatsApp copy, so a
+// reply on WhatsApp acts on that item and nothing else. See lib/whatsapp.js.
+async function createNotification(db, { userId, type, title, body, link, sourceUserId, ref }) {
   const r = await db.insert(
     'INSERT INTO notifications (user_id, type, title, body, link, source_user_id) VALUES ($1,$2,$3,$4,$5,$6)',
     [userId, type, title, body || null, link || null, sourceUserId || null]
@@ -48,7 +51,7 @@ async function createNotification(db, { userId, type, title, body, link, sourceU
   // A WhatsApp copy for a user who switched WhatsApp alerts on for this kind.
   // queueWhatsApp never throws and uses its own connection, so the dashboard
   // notification above is never affected by it.
-  await queueWhatsApp({ notificationId: r?.lastInsertRowid, userId, type, title, body, link });
+  await queueWhatsApp({ notificationId: r?.lastInsertRowid, userId, type, title, body, link, sourceUserId, ref });
 }
 
 async function notifyAllExcept(db, excludeUserId, payload) {

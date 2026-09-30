@@ -34,6 +34,32 @@ const dbmod = require('../db');
 
 const WHATSAPP_TEMPLATE_BODY =
   'PHE app alert: {{1}}\n\n{{2}}\n\nOpen it here: {{3}}\n\nPeena Heat Elements';
+// The approval template: the same three variables, plus two QUICK REPLY
+// buttons, "Approve" then "Reject", in that order. Set its name in
+// WHATSAPP_TEMPLATE_APPROVAL once Meta approves it.
+const WHATSAPP_APPROVAL_TEMPLATE_BODY =
+  'PHE app approval needed: {{1}}\n\n{{2}}\n\nOpen it here: {{3}}\n\nTap a button, or swipe-reply yes or no.';
+
+// What a reply to each kind of alert can do (see lib/whatsappReplies.js).
+// 'decide' = yes/no buttons; 'price' = reply with a price; 'thread' = the reply
+// is posted in that chat.
+const REPLY_KIND = {
+  inventory_item: 'decide', split_request: 'decide', po_rate: 'decide', po_over: 'decide',
+  capa: 'decide', order_approval: 'decide',
+  price: 'price',
+  order_thread: 'thread', po_thread: 'thread', query_thread: 'thread',
+};
+const BUTTON_LABELS = {
+  po_over: ['Accept extra', 'Only ordered qty'],
+  po_rate: ['Approve', 'Decline'],
+  capa: ['Approve', 'Send back'],
+};
+const DECIDE_REFS = Object.keys(REPLY_KIND).filter(k => ['decide', 'price'].includes(REPLY_KIND[k]));
+const replyHint = (refType) => ({
+  decide: 'Tap a button, or swipe-reply yes or no.',
+  price: 'Swipe-reply with the price, e.g. 12500 per pc.',
+  thread: 'Swipe-reply to answer in the chat.',
+}[REPLY_KIND[refType]] || '');
 
 // The kinds of notification that can be copied to WhatsApp. `default` is what a
 // user gets before choosing: all approvals and @mentions (owner, 30 Sep 2026).
@@ -72,6 +98,7 @@ const cfg = () => ({
   token: (process.env.WHATSAPP_TOKEN || '').trim(),
   phoneId: (process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim(),
   template: (process.env.WHATSAPP_TEMPLATE || '').trim(),
+  approvalTemplate: (process.env.WHATSAPP_TEMPLATE_APPROVAL || '').trim(),
   lang: (process.env.WHATSAPP_TEMPLATE_LANG || 'en').trim(),
   version: (process.env.WHATSAPP_API_VERSION || 'v23.0').trim(),
   verifyToken: (process.env.WHATSAPP_VERIFY_TOKEN || '').trim(),
@@ -93,12 +120,19 @@ function ensureSchema() {
     schemaPromise = (async () => {
       const have = new Set((await dbmod.getDB().all(
         `SELECT column_name FROM information_schema.columns
-          WHERE table_name='users' AND column_name IN ('whatsapp_number','whatsapp_enabled','whatsapp_types')`))
+          WHERE table_name='users' AND column_name LIKE 'whatsapp%'`))
         .map(r => r.column_name));
-      const add = [];
-      if (!have.has('whatsapp_number')) add.push('ADD COLUMN IF NOT EXISTS whatsapp_number TEXT');
-      if (!have.has('whatsapp_enabled')) add.push('ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN NOT NULL DEFAULT FALSE');
-      if (!have.has('whatsapp_types')) add.push('ADD COLUMN IF NOT EXISTS whatsapp_types TEXT[]');
+      const USER_COLS = {
+        whatsapp_number: 'TEXT',
+        whatsapp_enabled: 'BOOLEAN NOT NULL DEFAULT FALSE',
+        whatsapp_types: 'TEXT[]',
+        // Replies act only from a number its owner has proved they hold.
+        whatsapp_verified_at: 'TIMESTAMPTZ',
+        whatsapp_verify_code: 'TEXT',
+        whatsapp_verify_expires: 'TIMESTAMPTZ',
+      };
+      const add = Object.entries(USER_COLS).filter(([c]) => !have.has(c))
+        .map(([c, t]) => `ADD COLUMN IF NOT EXISTS ${c} ${t}`);
       await dbmod.getDB().withTransaction(async (c) => {
         await c.query("SET LOCAL lock_timeout = '3s'");
         if (add.length) await c.query('ALTER TABLE users ' + add.join(', '));
@@ -120,6 +154,28 @@ function ensureSchema() {
             wa_message_id TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             sent_at TIMESTAMPTZ
+          )`);
+        // Which item the alert is about, and what has been done with a reply to it.
+        for (const [col, t] of [['source_user_id', 'INTEGER'], ['ref_type', 'TEXT'], ['ref_id', 'INTEGER'],
+                                ['ref_parent', 'INTEGER'], ['parent_outbox_id', 'INTEGER'], ['action_state', 'TEXT'],
+                                ['action_note', 'TEXT'], ['acted_at', 'TIMESTAMPTZ']]) {
+          await c.query(`ALTER TABLE whatsapp_outbox ADD COLUMN IF NOT EXISTS ${col} ${t}`);
+        }
+        // Every message received from WhatsApp, once each (Meta may deliver twice).
+        await c.query(`
+          CREATE TABLE IF NOT EXISTS whatsapp_inbox (
+            id SERIAL PRIMARY KEY,
+            wa_message_id TEXT NOT NULL UNIQUE,
+            from_number TEXT,
+            user_id INTEGER,
+            kind TEXT,
+            text TEXT,
+            context_id TEXT,
+            payload TEXT,
+            sent_at TIMESTAMPTZ,
+            received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            outbox_id INTEGER,
+            result TEXT
           )`);
         await c.query('CREATE INDEX IF NOT EXISTS whatsapp_outbox_due ON whatsapp_outbox (status, next_attempt_at)');
         await c.query('CREATE INDEX IF NOT EXISTS whatsapp_outbox_wamid ON whatsapp_outbox (wa_message_id)');
@@ -179,7 +235,7 @@ function refreshRecipients(force = false) {
 // Called by createNotification for every notification. Never throws, and uses
 // its own pool connection rather than the caller's, so it can never disturb
 // the caller's work or transaction.
-async function queueWhatsApp({ notificationId, userId, type, title, body, link }) {
+async function queueWhatsApp({ notificationId, userId, type, title, body, link, sourceUserId, ref }) {
   try {
     if (!isConfigured() || !KNOWN.has(type)) return;
     const who = (await refreshRecipients()).get(Number(userId));
@@ -194,18 +250,26 @@ async function queueWhatsApp({ notificationId, userId, type, title, body, link }
       [userId, type, link || null, title || '', body || null]);
     if (dup) return;
     // Flood guard: a burst of @mentions cannot bury the owner's phone; the
-    // dashboard still has every one of them. Approvals always go.
-    if (!APPROVAL_TYPES.includes(type)) {
+    // dashboard still has every one of them. Approvals always go, and the
+    // app's own answers to the owner's replies do not count.
+    const isApproval = APPROVAL_TYPES.includes(type) || ['decide', 'price'].includes(REPLY_KIND[ref?.type]);
+    if (!isApproval) {
       const recent = await db.get(
         `SELECT COUNT(*)::int AS n FROM whatsapp_outbox
-          WHERE user_id=$1 AND created_at > NOW() - INTERVAL '10 minutes' AND NOT (type = ANY($2::text[]))`,
-        [userId, APPROVAL_TYPES]);
+          WHERE user_id=$1 AND created_at > NOW() - INTERVAL '10 minutes' AND NOT (type = ANY($2::text[]))
+            AND NOT (COALESCE(ref_type,'') = ANY($3::text[]))
+            AND type NOT IN ('reply', 'prompt', 'test')`,
+        [userId, APPROVAL_TYPES, DECIDE_REFS]);
       if (recent && recent.n >= NON_APPROVAL_PER_10_MIN) return;
     }
+    const refId = Number.isInteger(Number(ref?.id)) ? Number(ref.id) : null;
+    const refParent = Number.isInteger(Number(ref?.parent)) ? Number(ref.parent) : null;
     await db.run(
-      `INSERT INTO whatsapp_outbox (notification_id, user_id, to_number, type, title, body, link)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [notificationId || null, userId, who.number, type, title || '', body || null, link || null]);
+      `INSERT INTO whatsapp_outbox (notification_id, user_id, to_number, type, title, body, link,
+                                    source_user_id, ref_type, ref_id, ref_parent)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [notificationId || null, userId, who.number, type, title || '', body || null, link || null,
+       sourceUserId || null, ref?.type || null, refId, refParent]);
   } catch (e) {
     console.error('WhatsApp queue failed (dashboard notification unaffected):', e.message);
   }
@@ -253,27 +317,77 @@ function explain(err, status) {
 }
 const RETRYABLE_CODES = new Set([1, 2, 4, 80007, 130429, 131000, 131016, 131048, 131056, 133004]);
 
-async function sendMessage(to, { title, body, link }) {
+async function sendMessage(to, msg) {
+  const { title, body, link } = msg;
   const c = cfg();
   if (!c.token || !c.phoneId) return { ok: false, retryable: false, error: 'WhatsApp is not connected yet: WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID are not set on the server.' };
-  const url = `${c.base}/${c.version}/${encodeURIComponent(c.phoneId)}/messages`;
   const href = fullLink(link);
-  const payload = c.template
-    ? {
-        messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'template',
-        template: {
-          name: c.template, language: { code: c.lang },
-          components: [{ type: 'body', parameters: [
-            { type: 'text', text: param(title, 200) },
-            { type: 'text', text: param(body, 600) },
-            { type: 'text', text: param(href, 300) },
-          ] }],
-        },
-      }
-    : {
-        messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text',
-        text: { preview_url: false, body: `*PHE app alert: ${String(title || '').slice(0, 300)}*\n\n${String(body || '').slice(0, 1500)}\n\nOpen it here: ${href}` },
-      };
+  const hint = replyHint(msg.ref_type);
+  const details = [body, hint].filter(Boolean).join('\n\n');
+  const decide = REPLY_KIND[msg.ref_type] === 'decide' && msg.id;
+  const [yesLabel, noLabel] = BUTTON_LABELS[msg.ref_type] || ['Approve', 'Reject'];
+  const bodyParams = [
+    { type: 'text', text: param(title, 200) },
+    { type: 'text', text: param(details, 600) },
+    { type: 'text', text: param(href, 300) },
+  ];
+  let payload;
+  if (decide && c.approvalTemplate) {
+    // Template with quick-reply buttons: each button carries which alert and which answer.
+    payload = {
+      messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'template',
+      template: {
+        name: c.approvalTemplate, language: { code: c.lang },
+        components: [
+          { type: 'body', parameters: bodyParams },
+          { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: `ob:${msg.id}:yes` }] },
+          { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: `ob:${msg.id}:no` }] },
+        ],
+      },
+    };
+  } else if (c.template) {
+    payload = {
+      messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'template',
+      template: { name: c.template, language: { code: c.lang }, components: [{ type: 'body', parameters: bodyParams }] },
+    };
+  } else if (decide) {
+    // No template yet: WhatsApp's own reply buttons (delivered within the 24-hour window).
+    payload = {
+      messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: `*PHE app approval needed: ${String(title || '').slice(0, 200)}*\n\n${String(details || '').slice(0, 700)}\n\nOpen it here: ${href}`.slice(0, 1024) },
+        action: { buttons: [
+          { type: 'reply', reply: { id: `ob:${msg.id}:yes`, title: yesLabel.slice(0, 20) } },
+          { type: 'reply', reply: { id: `ob:${msg.id}:no`, title: noLabel.slice(0, 20) } },
+        ] },
+      },
+    };
+  } else {
+    payload = {
+      messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text',
+      text: { preview_url: false, body: `*PHE app alert: ${String(title || '').slice(0, 300)}*\n\n${String(details || '').slice(0, 1500)}\n\nOpen it here: ${href}` },
+    };
+  }
+  return postToMeta(payload);
+}
+
+// A plain reply to the owner (confirmations, questions) — allowed because the
+// owner has just written to us, which opens WhatsApp's 24-hour window.
+async function sendText(to, text, replyToWamid) {
+  const c = cfg();
+  if (!c.token || !c.phoneId) return { ok: false, retryable: false, error: 'WhatsApp is not connected.' };
+  const payload = {
+    messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text',
+    text: { preview_url: false, body: String(text).slice(0, 4000) },
+  };
+  if (replyToWamid) payload.context = { message_id: replyToWamid };
+  return postToMeta(payload);
+}
+
+async function postToMeta(payload) {
+  const c = cfg();
+  const url = `${c.base}/${c.version}/${encodeURIComponent(c.phoneId)}/messages`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
@@ -296,6 +410,22 @@ async function sendMessage(to, { title, body, link }) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+// The business number's display form, for the "confirm my number" link.
+let senderCache = { at: 0, number: null };
+async function senderNumber() {
+  const c = cfg();
+  if (!c.token || !c.phoneId) return null;
+  if (senderCache.number && Date.now() - senderCache.at < 6 * 3600e3) return senderCache.number;
+  try {
+    const r = await fetch(`${c.base}/${c.version}/${encodeURIComponent(c.phoneId)}?fields=display_phone_number`,
+      { headers: { Authorization: `Bearer ${c.token}` } });
+    const j = await r.json().catch(() => ({}));
+    const n = String(j?.display_phone_number || '').replace(/\D/g, '');
+    if (n) senderCache = { at: Date.now(), number: n };
+    return n || null;
+  } catch (_) { return null; }
 }
 
 // ── The worker ────────────────────────────────────────────────────────────────
@@ -328,11 +458,12 @@ async function tick() {
         UPDATE whatsapp_outbox SET status='sending', attempts=attempts+1, claimed_at=NOW()
          WHERE id IN (SELECT id FROM whatsapp_outbox
                        WHERE status='pending' AND next_attempt_at <= NOW()
-                       ORDER BY (type = ANY($1::text[])) DESC, id
+                       ORDER BY (type = ANY($1::text[]) OR COALESCE(ref_type,'') = ANY($2::text[])) DESC, id
                        LIMIT ${BATCH} FOR UPDATE SKIP LOCKED)
-        RETURNING *`, [APPROVAL_TYPES]);
+        RETURNING *`, [APPROVAL_TYPES, DECIDE_REFS]);
       if (!rows.length) break;
-      rows.sort((a, b) => (APPROVAL_TYPES.includes(b.type) - APPROVAL_TYPES.includes(a.type)) || (a.id - b.id));
+      const first = (r) => APPROVAL_TYPES.includes(r.type) || DECIDE_REFS.includes(r.ref_type);
+      rows.sort((a, b) => (first(b) - first(a)) || (a.id - b.id));
       for (const row of rows) {
         let r;
         try {
@@ -418,7 +549,8 @@ function startWhatsAppWorker() {
 }
 
 module.exports = {
-  KINDS, DEFAULT_TYPES, APPROVAL_TYPES, WHATSAPP_TEMPLATE_BODY,
+  KINDS, DEFAULT_TYPES, APPROVAL_TYPES, WHATSAPP_TEMPLATE_BODY, WHATSAPP_APPROVAL_TEMPLATE_BODY,
+  REPLY_KIND, sendText, senderNumber,
   cfg, isConfigured, webhookReady, ensureSchema, normalizeNumber, refreshRecipients,
   queueWhatsApp, sendMessage, tick, startWhatsAppWorker, param, fullLink, explain,
   verifySignature, applyStatuses,

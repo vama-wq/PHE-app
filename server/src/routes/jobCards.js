@@ -8,6 +8,7 @@ const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventor
 const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit } = require('../lib/jobCardSplit');
 const { buildDraft, draftQuestions } = require('../lib/jobCardDraft');
 const { render: renderJobCard, renderParts } = require('../lib/jobCardRender');
+const { approveSplitRequest, rejectSplitRequest, SPLIT_REQUESTABLE } = require('../services/actions/splitRequests');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
 // Must match client MANDATORY_STAGE_NOS. Optional/excluded: 2, 13(Buffing), 15(Brazing),
@@ -1474,8 +1475,8 @@ router.put('/:id/hold/approve', authenticate, authorize('owner', 'admin'), async
 // Production asks to dispatch part of a job card early (qty + reason). Owner
 // approves → a child job card (qty = requested) is created at 'qc_pending' (it
 // skips production) and the parent's qty is reduced. Requestable any time while
-// the parent is still in production.
-const SPLIT_REQUESTABLE = ['pending', 'in_progress', 'on_hold'];
+// the parent is still in production. SPLIT_REQUESTABLE (pending / in_progress /
+// on_hold) lives in services/actions/splitRequests.js, which approval re-checks.
 
 router.post('/:id/split-request', authenticate, authorize('production', 'admin', 'owner'), async (req, res) => {
   const db = getDB();
@@ -1490,7 +1491,7 @@ router.post('/:id/split-request', authenticate, authorize('production', 'admin',
   const existing = await db.get("SELECT id FROM job_card_split_requests WHERE job_card_id=$1 AND status='pending'", [jc.id]);
   if (existing) return res.status(400).json({ error: 'A partial-dispatch request is already pending owner approval for this job card' });
 
-  await db.insert('INSERT INTO job_card_split_requests (job_card_id, qty, reason, created_by) VALUES ($1,$2,$3,$4)', [jc.id, qty, reason, req.user.id]);
+  const { lastInsertRowid: requestId } = await db.insert('INSERT INTO job_card_split_requests (job_card_id, qty, reason, created_by) VALUES ($1,$2,$3,$4)', [jc.id, qty, reason, req.user.id]);
   const recipients = await db.all(`SELECT id FROM users WHERE role IN ('owner','admin')`);
   for (const u of recipients) {
     await createNotification(db, {
@@ -1498,6 +1499,7 @@ router.post('/:id/split-request', authenticate, authorize('production', 'admin',
       title: `Partial dispatch request — ${jc.job_card_no}`,
       body: `Dispatch ${qty} of ${jc.qty} early. Reason: ${reason}`,
       link: `/job-cards/${jc.id}`, sourceUserId: req.user.id,
+      ref: { type: 'split_request', id: requestId, parent: jc.id },
     });
   }
   await logActivity(jc.order_id, jc.id, 'split_requested', `Partial dispatch requested: ${qty} of ${jc.qty} — ${reason}`, req.user.id);
@@ -1535,98 +1537,53 @@ router.get('/:id/split-requests', authenticate, async (req, res) => {
   res.json(rows);
 });
 
-router.put('/split-requests/:reqId/approve', authenticate, authorize('owner'), async (req, res) => {
-  const db = getDB();
-  const sr = await db.get("SELECT * FROM job_card_split_requests WHERE id=$1 AND status='pending'", [req.params.reqId]);
-  if (!sr) return res.status(404).json({ error: 'Pending request not found' });
-  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [sr.job_card_id]);
-  if (!jc) return res.status(404).json({ error: 'Job card not found' });
-  if (sr.qty >= jc.qty) return res.status(400).json({ error: `Job card qty is now ${jc.qty}; cannot split off ${sr.qty}` });
-
-  // Has the parent finished production? A finished split has nothing left to
-  // produce and goes straight to QC as before. A mid-production split instead
-  // gets its OWN checklist: it inherits the parent's completed stages and
-  // continues from the current stage to Ready-for-Dispatch, which then triggers
-  // QC exactly like any card. Inventory timing unchanged.
-  // Ready-for-Dispatch is stage 29 on a production card but stage 4 on an FG
-  // inventory card, which runs the short 4-stage checklist — asking about 29 on
-  // an FG card can only ever answer "not finished".
-  const readyStageNo = jc.is_fg ? 4 : 29;
-  const readyDone = await db.get(
-    'SELECT id FROM production_checklist WHERE job_card_id=$1 AND stage_no=$2 AND done=1',
-    [jc.id, readyStageNo]);
-  const childStatus = readyDone ? 'qc_pending' : 'in_progress';
-
-  const childCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE parent_job_card_id=$1', [jc.id]);
-  const childNo = `${jc.job_card_no}-P${parseInt(childCount.n, 10) + 1}`;
-  const childId = await db.withTransaction(async (client) => {
-    const { rows } = await client.query(
-      `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name, replacement_query_id, tube_deducted, coil_deducted, fill_deducted, is_fg, fg_source_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
-      [childNo, jc.order_id, sr.qty, jc.dispatch_date, jc.current_stage || 0, jc.punching, jc.drawing_no, jc.product_name,
-       childStatus,
-       `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id, jc.order_item_id,
-       // Carry the parent's job-card document so the shopfloor can open it on the child too
-       jc.file_path, jc.file_name, jc.original_name,
-       // Inherit the replacement link so a split replacement card stays invoice-exempt
-       jc.replacement_query_id || null,
-       // Inherit the material-deduction flags: the parent's stage 3/5/6 draws
-       // covered the whole batch (child pieces included), so re-ticking those
-       // stages on the child must NOT deduct tube/coil/filling a second time.
-       jc.tube_deducted || false, jc.coil_deducted || false, jc.fill_deducted || false,
-       // A split of a Finished Goods inventory card is still a Finished Goods
-       // card. Without these the child falls back to the full 29-stage
-       // production checklist for material it never produced — it was drawn
-       // from FG stock. fg_source_id keeps it pointing at the same FG row.
-       jc.is_fg || false, jc.fg_source_id || null]);
-    const newId = rows[0].id;
-    // The split pieces went through the parent's completed stages as part of the
-    // batch — copy those rows (values, worker, time, notes) so their records
-    // travel with them and the mandatory-stage gate sees them as done.
-    // Rejection/remade/dispatched/scrap quantities stay with the parent (its
-    // accounting); the Ready-for-Dispatch stage is never copied so the child's
-    // dispatch is its own — 29 on a production card, 4 on an FG card.
-    await client.query(
-      `INSERT INTO production_checklist (job_card_id, stage_no, done, value1, value2, worker_name, done_at, notes, coil_weight)
-       SELECT $1, stage_no, done, value1, value2, worker_name, done_at, notes, coil_weight
-       FROM production_checklist WHERE job_card_id=$2 AND done=1 AND stage_no <> $3`,
-      [newId, jc.id, readyStageNo]);
-    await client.query('UPDATE job_cards SET qty = qty - $1 WHERE id=$2', [sr.qty, jc.id]);
-    await client.query('UPDATE job_card_split_requests SET status=$1, child_job_card_id=$2, approved_by=$3, approved_at=NOW() WHERE id=$4',
-      ['approved', newId, req.user.id, sr.id]);
-    return newId;
-  });
-
-  if (sr.created_by) {
-    await createNotification(db, {
-      userId: sr.created_by, type: 'split_approved',
-      title: `Partial dispatch approved — ${childNo}`,
-      body: `${sr.qty} units split off as ${childNo} (${readyDone ? 'now in QC' : 'continue its checklist to Ready for Dispatch'}). ${jc.job_card_no} continues with ${jc.qty - sr.qty}.`,
-      link: `/job-cards/${childId}`, sourceUserId: req.user.id,
-    });
+// Approve / reject live in services/actions/splitRequests.js so the WhatsApp
+// reply dispatcher runs exactly the same, first-one-wins code. These routes map
+// the result back to the responses the app has always had.
+const SPLIT_ACTION_ERRORS = {
+  forbidden:           () => [403, 'Access denied'],
+  request_missing:     () => [404, 'Pending request not found'],
+  request_not_pending: () => [404, 'Pending request not found'],
+  job_card_missing:    () => [404, 'Job card not found'],
+  qty_too_large:       (d) => [400, `Job card qty is now ${d.jobCardQty}; cannot split off ${d.requestQty}`],
+  reason_required:     () => [400, 'A rejection reason is required'],
+};
+function sendSplitActionError(res, result) {
+  const map = SPLIT_ACTION_ERRORS[result.data?.reason];
+  if (map) {
+    const [status, error] = map(result.data);
+    return res.status(status).json({ error });
   }
-  await logActivity(jc.order_id, jc.id, 'split_approved', `Partial dispatch approved: ${sr.qty} → ${childNo}${readyDone ? ' (to QC)' : ' (continues production)'}; ${jc.job_card_no} now ${jc.qty - sr.qty}`, req.user.id);
-  res.json({ message: 'Approved', child_job_card_id: childId, child_job_card_no: childNo });
+  const status = result.code === 'not_found' ? 404 : result.code === 'forbidden' ? 403 : 400;
+  return res.status(status).json({ error: result.message });
+}
+
+router.put('/split-requests/:reqId/approve', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const result = await approveSplitRequest(getDB(), {
+      requestId: req.params.reqId, actor: req.user, via: 'app', refuseIfOnHold: false,
+    });
+    if (!result.ok) return sendSplitActionError(res, result);
+    res.json({ message: 'Approved', child_job_card_id: result.data.childJobCardId, child_job_card_no: result.data.childJobCardNo });
+  } catch (err) {
+    console.error('split approve error:', err);
+    res.status(500).json({ error: 'Could not approve the partial dispatch — please try again' });
+  }
 });
 
 router.put('/split-requests/:reqId/reject', authenticate, authorize('owner'), async (req, res) => {
-  const db = getDB();
   const reason = (req.body.reason || '').trim();
   if (!reason) return res.status(400).json({ error: 'A rejection reason is required' });
-  const sr = await db.get("SELECT * FROM job_card_split_requests WHERE id=$1 AND status='pending'", [req.params.reqId]);
-  if (!sr) return res.status(404).json({ error: 'Pending request not found' });
-  await db.run("UPDATE job_card_split_requests SET status='rejected', rejection_reason=$1, approved_by=$2, approved_at=NOW() WHERE id=$3",
-    [reason, req.user.id, sr.id]);
-  const jc = await db.get('SELECT order_id, job_card_no FROM job_cards WHERE id=$1', [sr.job_card_id]);
-  if (sr.created_by) {
-    await createNotification(db, {
-      userId: sr.created_by, type: 'split_rejected',
-      title: `Partial dispatch rejected — ${jc?.job_card_no || ''}`,
-      body: `Reason: ${reason}`, link: `/job-cards/${sr.job_card_id}`, sourceUserId: req.user.id,
+  try {
+    const result = await rejectSplitRequest(getDB(), {
+      requestId: req.params.reqId, actor: req.user, reason, via: 'app',
     });
+    if (!result.ok) return sendSplitActionError(res, result);
+    res.json({ message: 'Rejected' });
+  } catch (err) {
+    console.error('split reject error:', err);
+    res.status(500).json({ error: 'Could not reject the partial dispatch — please try again' });
   }
-  await logActivity(jc?.order_id, sr.job_card_id, 'split_rejected', `Partial dispatch rejected: ${reason}`, req.user.id);
-  res.json({ message: 'Rejected' });
 });
 
 // ── Finished-Goods inventory job card ─────────────────────────────────────────

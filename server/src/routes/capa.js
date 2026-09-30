@@ -5,6 +5,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { uploadCapaPhotos } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { runCapaTurn } = require('../lib/capaAI');
+const capaActions = require('../services/actions/capa');
 
 // Stage names for the checklist context — keep in sync with qc.js / client utils.
 const STAGE_NAMES = {
@@ -62,7 +63,10 @@ async function ensureCapa(db, { jobCardId, orderId, triggerType, customerQueryId
     if (triggerTotal <= parseInt(watermark?.t || 0, 10)) return null;
   }
 
-  const id = await db.insert(
+  // db.insert returns { lastInsertRowid } — take the number, or the link below
+  // reads '/capa/[object Object]'. Callers only test the result for truth
+  // (jobCards.js) or ignore it (customerQueries.js); both get the new id.
+  const { lastInsertRowid: id } = await db.insert(
     `INSERT INTO capa_reports (job_card_id, order_id, customer_query_id, trigger_type, trigger_total, created_by)
      VALUES ($1,$2,$3,$4,$5,$6)`,
     [jobCardId, orderId || null, customerQueryId, triggerType, triggerTotal, userId]);
@@ -78,6 +82,7 @@ async function ensureCapa(db, { jobCardId, orderId, triggerType, customerQueryId
       title: `CAPA required — ${jc?.job_card_no || 'job card'}`,
       body: `Work is locked (${reason}). Complete the CAPA report to continue.`,
       link: `/capa/${id}`, sourceUserId: userId,
+      ref: { type: 'capa_required', id },
     });
   }
   await logActivity(jc?.order_id || orderId || null, jobCardId, 'capa_created',
@@ -231,6 +236,7 @@ router.post('/:id/message', authenticate, authorize('production', 'admin', 'owne
         title: `CAPA ready for approval — ${jcNo}`,
         body: 'The CAPA report is complete. Review and approve to unlock the job card.',
         link: `/capa/${capa.id}`, sourceUserId: req.user.id,
+        ref: { type: 'capa', id: capa.id },
       });
     }
     await logActivity(capa.order_id, capa.job_card_id, 'capa_submitted',
@@ -243,114 +249,101 @@ router.post('/:id/message', authenticate, authorize('production', 'admin', 'owne
   res.json({ reply: result.reply, finalized: !!result.finalized });
 });
 
-// Lift the rejection lock (the on-hold status the trigger set). Query-CAPAs
-// don't hold the card — the repair-start endpoint checks CAPA state itself.
-// A rejection CAPA holds every card of the item, not just the one that tripped
-// it, so closing it has to release them together — otherwise the siblings stay
-// stopped with nothing on screen to explain why. Shared by approve and waive.
-async function releaseRejectionHold(db, capa, jc, userId, verb) {
-  if (capa.trigger_type !== 'rejections') return;
-  const released = await db.all(
-    `UPDATE job_cards SET status='in_progress'
-      WHERE status='on_hold'
-        AND (id = $1 OR (order_item_id IS NOT NULL AND order_item_id = $2))
-      RETURNING id, job_card_no`,
-    [capa.job_card_id, jc?.order_item_id || null]);
-  for (const c of released.filter(c => c.id !== capa.job_card_id)) {
-    await logActivity(jc?.order_id, c.id, 'status_changed',
-      `Job card ${c.job_card_no} released — CAPA on ${jc?.job_card_no || 'a sibling card'} ${verb}`, userId);
-  }
-}
-
 // ── Owner approves — unlocks the job card ────────────────────────────────────
+// The work lives in services/actions/capa.js so a WhatsApp reply runs exactly
+// the same checks; this route only maps its result onto the old responses.
 router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) => {
-  const db = getDB();
-  const capa = await db.get('SELECT * FROM capa_reports WHERE id=$1', [req.params.id]);
-  if (!capa) return res.status(404).json({ error: 'CAPA not found' });
-  if (capa.status !== 'awaiting_approval') return res.status(400).json({ error: 'CAPA is not awaiting approval.' });
-
-  await db.run(
-    "UPDATE capa_reports SET status='approved', approved_by=$1, approved_at=NOW(), updated_at=NOW() WHERE id=$2",
-    [req.user.id, capa.id]);
-
-  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [capa.job_card_id]);
-  await releaseRejectionHold(db, capa, jc, req.user.id, 'approved');
-
-  if (capa.created_by) {
-    await createNotification(db, {
-      userId: capa.created_by, type: 'capa_approved',
-      title: `CAPA approved — ${jc?.job_card_no || ''}`,
-      body: 'Work can continue on the job card.',
-      link: `/capa/${capa.id}`, sourceUserId: req.user.id,
-    });
+  try {
+    const r = await capaActions.approveCapa(getDB(), { capaId: req.params.id, actor: req.user, via: 'app' });
+    if (r.ok) return res.json({ message: 'CAPA approved — job card unlocked.' });
+    if (r.code === 'not_found') return res.status(404).json({ error: 'CAPA not found' });
+    if (r.code === 'forbidden') return res.status(403).json({ error: 'Access denied' });
+    if (r.code === 'already_done') return res.status(400).json({ error: 'CAPA is not awaiting approval.' });
+    return res.status(400).json({ error: r.message });
+  } catch (err) {
+    console.error('CAPA approve failed:', err.message);
+    res.status(500).json({ error: 'Could not approve the CAPA — please try again.' });
   }
-  await logActivity(capa.order_id, capa.job_card_id, 'capa_approved',
-    `CAPA on ${jc?.job_card_no || `card #${capa.job_card_id}`} approved — work unlocked`, req.user.id);
-  res.json({ message: 'CAPA approved — job card unlocked.' });
 });
 
 // ── Owner sends it back for more work ────────────────────────────────────────
 router.put('/:id/reopen', authenticate, authorize('owner'), async (req, res) => {
-  const db = getDB();
-  const note = (req.body.note || '').trim();
-  if (!note) return res.status(400).json({ error: 'Tell the team what is missing.' });
-  const capa = await db.get('SELECT * FROM capa_reports WHERE id=$1', [req.params.id]);
-  if (!capa) return res.status(404).json({ error: 'CAPA not found' });
-  if (capa.status !== 'awaiting_approval') return res.status(400).json({ error: 'CAPA is not awaiting approval.' });
-
-  const conversation = Array.isArray(capa.conversation) ? capa.conversation : [];
-  conversation.push({ role: 'user', text: `[Owner sent the report back]: ${note}`, by: req.user.name, at: new Date().toISOString() });
-
-  await db.run(
-    "UPDATE capa_reports SET status='open', reopen_note=$1, conversation=$2::jsonb, updated_at=NOW() WHERE id=$3",
-    [note, JSON.stringify(conversation), capa.id]);
-
-  if (capa.created_by) {
-    await createNotification(db, {
-      userId: capa.created_by, type: 'capa_reopened',
-      title: 'CAPA sent back by owner',
-      body: note, link: `/capa/${capa.id}`, sourceUserId: req.user.id,
-    });
+  try {
+    const note = (req.body.note || '').trim();
+    if (!note) return res.status(400).json({ error: 'Tell the team what is missing.' });
+    const r = await capaActions.sendBackCapa(getDB(), { capaId: req.params.id, actor: req.user, note, via: 'app' });
+    if (r.ok) return res.json({ message: 'CAPA reopened.' });
+    if (r.code === 'not_found') return res.status(404).json({ error: 'CAPA not found' });
+    if (r.code === 'forbidden') return res.status(403).json({ error: 'Access denied' });
+    if (r.code === 'already_done') return res.status(400).json({ error: 'CAPA is not awaiting approval.' });
+    return res.status(400).json({ error: r.message });
+  } catch (err) {
+    console.error('CAPA send-back failed:', err.message);
+    res.status(500).json({ error: 'Could not send the CAPA back — please try again.' });
   }
-  res.json({ message: 'CAPA reopened.' });
 });
 
 // ── Owner waives it — no report needed, work unlocks ─────────────────────────
 // For the case where the cause is already known and the fix already agreed off
 // the system: the owner says so in writing and the card is released. The report
 // is kept as a waived record, never deleted, so the decision is auditable.
+// Guarded like approve: the status change only lands while the CAPA is still
+// open/awaiting approval, and it commits together with the card release, so a
+// waive racing an approval cannot do both.
 router.put('/:id/waive', authenticate, authorize('owner'), async (req, res) => {
-  const db = getDB();
-  const reason = (req.body.reason || '').trim();
-  if (!reason) return res.status(400).json({ error: 'Write why this one does not need a CAPA — it goes on the record.' });
+  try {
+    const db = getDB();
+    const reason = (req.body.reason || '').trim();
+    if (!reason) return res.status(400).json({ error: 'Write why this one does not need a CAPA — it goes on the record.' });
 
-  const capa = await db.get('SELECT * FROM capa_reports WHERE id=$1', [req.params.id]);
-  if (!capa) return res.status(404).json({ error: 'CAPA not found' });
-  if (capa.status === 'approved') return res.status(400).json({ error: 'This CAPA is already approved — nothing to waive.' });
-  if (capa.status === 'waived') return res.status(400).json({ error: 'This CAPA is already waived.' });
+    const capa = await db.get('SELECT * FROM capa_reports WHERE id=$1', [req.params.id]);
+    if (!capa) return res.status(404).json({ error: 'CAPA not found' });
+    const refuse = (status) => {
+      if (status === 'approved') return res.status(400).json({ error: 'This CAPA is already approved — nothing to waive.' });
+      if (status === 'waived') return res.status(400).json({ error: 'This CAPA is already waived.' });
+      return null;
+    };
+    if (refuse(capa.status)) return;
 
-  const conversation = Array.isArray(capa.conversation) ? capa.conversation : [];
-  conversation.push({ role: 'user', text: `[Owner waived the CAPA]: ${reason}`, by: req.user.name, at: new Date().toISOString() });
-
-  await db.run(`
-    UPDATE capa_reports SET status='waived', waived_by=$1, waived_at=NOW(), waive_reason=$2,
-      conversation=$3::jsonb, updated_at=NOW() WHERE id=$4`,
-    [req.user.id, reason, JSON.stringify(conversation), capa.id]);
-
-  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [capa.job_card_id]);
-  await releaseRejectionHold(db, capa, jc, req.user.id, 'waived');
-
-  if (capa.created_by && capa.created_by !== req.user.id) {
-    await createNotification(db, {
-      userId: capa.created_by, type: 'capa_waived',
-      title: `CAPA waived — ${jc?.job_card_no || ''}`,
-      body: `No CAPA report needed: ${reason}`,
-      link: `/capa/${capa.id}`, sourceUserId: req.user.id,
+    const entry = { role: 'user', text: `[Owner waived the CAPA]: ${reason}`, by: req.user.name, at: new Date().toISOString() };
+    const done = await db.withTransaction(async (client) => {
+      const q = capaActions.clientDb(client);
+      const won = await q.get(`
+        UPDATE capa_reports SET status='waived', waived_by=$1, waived_at=NOW(), waive_reason=$2,
+          conversation=${capaActions.APPEND_CONVERSATION}$3::jsonb, updated_at=NOW()
+         WHERE id=$4 AND status IN ('open','awaiting_approval')
+         RETURNING *`,
+        [req.user.id, reason, JSON.stringify([entry]), capa.id]);
+      if (!won) return null;
+      const jc = await q.get('SELECT * FROM job_cards WHERE id=$1', [won.job_card_id]);
+      const released = await capaActions.releaseRejectionHold(q, won, jc);
+      return { jc, released };
     });
+    if (!done) {
+      // Someone else closed it between the read and the write.
+      const now = await db.get('SELECT status FROM capa_reports WHERE id=$1', [capa.id]);
+      if (!now) return res.status(404).json({ error: 'CAPA not found' });
+      if (refuse(now.status)) return;
+      return res.status(400).json({ error: 'This CAPA can no longer be waived.' });
+    }
+    const { jc, released } = done;
+    await capaActions.logReleased(released, capa, jc, req.user.id, 'waived');
+
+    if (capa.created_by && capa.created_by !== req.user.id) {
+      await createNotification(db, {
+        userId: capa.created_by, type: 'capa_waived',
+        title: `CAPA waived — ${jc?.job_card_no || ''}`,
+        body: `No CAPA report needed: ${reason}`,
+        link: `/capa/${capa.id}`, sourceUserId: req.user.id,
+      });
+    }
+    await logActivity(capa.order_id, capa.job_card_id, 'capa_waived',
+      `CAPA on ${jc?.job_card_no || `card #${capa.job_card_id}`} waived by owner — ${reason}`, req.user.id);
+    res.json({ message: 'CAPA waived — work unlocked.' });
+  } catch (err) {
+    console.error('CAPA waive failed:', err.message);
+    res.status(500).json({ error: 'Could not waive the CAPA — please try again.' });
   }
-  await logActivity(capa.order_id, capa.job_card_id, 'capa_waived',
-    `CAPA on ${jc?.job_card_no || `card #${capa.job_card_id}`} waived by owner — ${reason}`, req.user.id);
-  res.json({ message: 'CAPA waived — work unlocked.' });
 });
 
 module.exports = router;

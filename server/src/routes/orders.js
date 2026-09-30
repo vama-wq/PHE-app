@@ -11,6 +11,7 @@ const { createNotification } = require('./notifications');
 // dispatch.js). These helpers stay imported for the inventory-edit reconcile path.
 const { deductItemInventory, restoreItemInventory, replayDeductions } = require('../lib/inventoryDeduction');
 const rework = require('../lib/rework');
+const orderActions = require('../services/actions/orders');
 
 // Which of these inventory ids are Fins? Fins BOM lines carry no qty — they
 // deduct by tube length at QC approval (see lib/inventoryDeduction).
@@ -981,88 +982,69 @@ router.get('/:id/messages', authenticate, async (req, res) => {
   res.json(messages);
 });
 
+// Order chat, approve and reject run through the shared order actions
+// (services/actions/orders.js) — the same functions the WhatsApp reply
+// dispatcher calls — so both paths apply the same checks and the "first one
+// wins" guard. The routes only translate the result into the response they
+// have always given.
+function sendOrderActionFailure(res, r, { notFound, alreadyDoneStatus = 400 } = {}) {
+  if (r.code === 'not_found') return res.status(404).json({ error: notFound || r.message });
+  if (r.code === 'forbidden') return res.status(403).json({ error: 'Access denied' });
+  if (r.code === 'already_done') return res.status(alreadyDoneStatus).json({ error: r.message });
+  return res.status(400).json({ error: r.message });
+}
+
 router.post('/:id/messages', authenticate, ...uploadChatAttachments, async (req, res) => {
-  const { message } = req.body;
-  let mentionIds = req.body.mentionIds;
-  if (typeof mentionIds === 'string') try { mentionIds = JSON.parse(mentionIds); } catch { mentionIds = []; }
-  const hasFiles = req.files?.length > 0;
-  if (!message?.trim() && !hasFiles) return res.status(400).json({ error: 'Message or attachment required' });
-  const db = getDB();
-  const r = await db.insert(
-    'INSERT INTO order_messages (order_id, user_id, message) VALUES ($1,$2,$3)',
-    [req.params.id, req.user.id, (message || '').trim()]
-  );
-  const messageId = r.lastInsertRowid;
-
-  if (hasFiles) {
-    for (const f of req.files) {
-      await db.insert(
-        'INSERT INTO message_attachments (message_id, file_path, file_name, file_size, mime_type) VALUES ($1,$2,$3,$4,$5)',
-        [messageId, f.storagePath, f.originalname, f.size, f.mimetype]
-      );
-    }
+  try {
+    const { message } = req.body;
+    let mentionIds = req.body.mentionIds;
+    if (typeof mentionIds === 'string') try { mentionIds = JSON.parse(mentionIds); } catch { mentionIds = []; }
+    const hasFiles = req.files?.length > 0;
+    if (!message?.trim() && !hasFiles) return res.status(400).json({ error: 'Message or attachment required' });
+    const r = await orderActions.postOrderMessage(getDB(), {
+      orderId: req.params.id, actor: req.user, message, mentionIds, via: 'app',
+      attachments: hasFiles ? req.files : [],
+    });
+    if (!r.ok) return sendOrderActionFailure(res, r, { notFound: 'Order not found' });
+    res.status(201).json({ id: r.data.id });
+  } catch (e) {
+    console.error('[orders] post message failed:', e);
+    res.status(500).json({ error: 'Could not post the message — please try again.' });
   }
-
-  // Insert mentions using client-supplied user IDs (avoids regex parsing of names with spaces/slashes)
-  if (Array.isArray(mentionIds) && mentionIds.length) {
-    for (const userId of mentionIds) {
-      if (userId !== req.user.id) {
-        await db.run(
-          'INSERT INTO message_mentions (message_id, order_id, mentioned_user_id) VALUES ($1,$2,$3)',
-          [messageId, req.params.id, userId]
-        );
-      }
-    }
-  }
-
-  if (Array.isArray(mentionIds) && mentionIds.length) {
-    const order = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
-    const orderCode = order?.order_code || `Order #${req.params.id}`;
-    const preview = (message || '').trim().slice(0, 100);
-    const fileNote = hasFiles ? ` [+${req.files.length} file${req.files.length > 1 ? 's' : ''}]` : '';
-    for (const userId of mentionIds) {
-      if (userId !== req.user.id) {
-        await createNotification(db, {
-          userId,
-          type: 'order_message',
-          title: `${req.user.name} in ${orderCode}`,
-          body: preview ? preview + fileNote : `Sent${fileNote}`,
-          link: `/orders/${req.params.id}`,
-          sourceUserId: req.user.id,
-        });
-      }
-    }
-  }
-
-  res.status(201).json({ id: messageId });
 });
 
 router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) => {
-  const db = getDB();
-
-  // Guard: don't double-deduct if already approved
-  const order = await db.get('SELECT status FROM orders WHERE id=$1', [req.params.id]);
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-  if (order.status === 'approved') return res.status(409).json({ error: 'Order already approved' });
-
-  // No drawing gate here — order is approved first, then design uploads drawings per item.
-  // Inventory is NOT deducted here anymore: it deducts per item when that item's
-  // drawing is approved (see /drawings/:drawingId/approve).
-  await db.run(
-    "UPDATE orders SET status='approved', approved_by=$1, approved_at=NOW() WHERE id=$2",
-    [req.user.id, req.params.id]
-  );
-
-  await logActivity(req.params.id, null, 'order_approved', 'Order approved by owner', req.user.id);
-  res.json({ message: 'Order approved' });
+  try {
+    // Only an order waiting for approval can be approved (a late click can no
+    // longer rewind an order that has moved on). No drawing gate and no
+    // inventory deduction here — see services/actions/orders.js.
+    const r = await orderActions.approveOrder(getDB(), { orderId: req.params.id, actor: req.user, via: 'app' });
+    if (!r.ok) {
+      if (r.code === 'already_done' && r.data?.status === 'approved') {
+        return res.status(409).json({ error: 'Order already approved' });
+      }
+      return sendOrderActionFailure(res, r, { notFound: 'Order not found', alreadyDoneStatus: 409 });
+    }
+    res.json({ message: 'Order approved' });
+  } catch (e) {
+    console.error('[orders] approve failed:', e);
+    res.status(500).json({ error: 'Could not approve the order — please try again.' });
+  }
 });
 
 router.put('/:id/reject', authenticate, authorize('owner'), async (req, res) => {
-  const { reason } = req.body;
-  const db = getDB();
-  await db.run("UPDATE orders SET status='rejected', rejection_reason=$1 WHERE id=$2", [reason||null, req.params.id]);
-  await logActivity(req.params.id, null, 'order_rejected', `Order rejected: ${reason || 'No reason given'}`, req.user.id);
-  res.json({ message: 'Order rejected' });
+  try {
+    const { reason } = req.body;
+    // Only an order waiting for approval can be rejected.
+    const r = await orderActions.rejectOrder(getDB(), {
+      orderId: req.params.id, actor: req.user, reason: typeof reason === 'string' ? reason : undefined, via: 'app',
+    });
+    if (!r.ok) return sendOrderActionFailure(res, r, { notFound: 'Order not found' });
+    res.json({ message: 'Order rejected' });
+  } catch (e) {
+    console.error('[orders] reject failed:', e);
+    res.status(500).json({ error: 'Could not reject the order — please try again.' });
+  }
 });
 
 router.put('/:id', authenticate, authorize('admin', 'owner', 'accounts'), async (req, res) => {
@@ -1114,6 +1096,7 @@ router.put('/:id/resubmit', authenticate, authorize('admin', 'owner', 'accounts'
       body: `${req.user.name} resubmitted order for approval`,
       link: `/orders/${req.params.id}`,
       sourceUserId: req.user.id,
+      ref: { type: 'order_approval', id: order.id },
     });
   }
   res.json({ message: 'Order resubmitted for approval' });

@@ -4,6 +4,7 @@ const { syncOrderStatus } = require('./jobCards');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadToStorage, deleteFromStorage, uploadChatAttachments, uploadJobCard } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
+const { postQueryMessage } = require('../services/actions/customerQueries');
 const multer = require('multer');
 
 const memStorage = multer.memoryStorage();
@@ -240,64 +241,28 @@ router.get('/:id/messages', authenticate, async (req, res) => {
 });
 
 router.post('/:id/messages', authenticate, ...uploadChatAttachments, async (req, res) => {
-  const { message } = req.body;
-  let mentionIds = req.body.mentionIds;
-  if (typeof mentionIds === 'string') try { mentionIds = JSON.parse(mentionIds); } catch { mentionIds = []; }
-  const hasFiles = req.files?.length > 0;
-  if (!message?.trim() && !hasFiles) return res.status(400).json({ error: 'Message or attachment required' });
-  const db = getDB();
+  // The work itself lives in services/actions/customerQueries.js, shared with
+  // the WhatsApp reply dispatcher.
+  try {
+    const { message } = req.body;
+    let mentionIds = req.body.mentionIds;
+    if (typeof mentionIds === 'string') try { mentionIds = JSON.parse(mentionIds); } catch { mentionIds = []; }
+    const hasFiles = req.files?.length > 0;
+    const text = message == null ? '' : String(message);
+    if (!text.trim() && !hasFiles) return res.status(400).json({ error: 'Message or attachment required' });
 
-  const q = await db.get('SELECT id, query_no FROM customer_queries WHERE id=$1', [req.params.id]);
-  if (!q) return res.status(404).json({ error: 'Query not found' });
-
-  const r = await db.insert(
-    'INSERT INTO customer_query_messages (query_id, user_id, message) VALUES ($1,$2,$3)',
-    [req.params.id, req.user.id, (message || '').trim()]
-  );
-  const messageId = r.lastInsertRowid;
-
-  if (hasFiles) {
-    for (const f of req.files) {
-      await db.insert(
-        'INSERT INTO customer_query_message_attachments (message_id, file_path, file_name, file_size, mime_type) VALUES ($1,$2,$3,$4,$5)',
-        [messageId, f.storagePath, f.originalname, f.size, f.mimetype]
-      );
-    }
+    const result = await postQueryMessage(getDB(), {
+      queryId: req.params.id, actor: req.user, message: text, mentionIds,
+      attachments: req.files || [], via: 'app',
+    });
+    if (result.ok) return res.status(201).json({ id: result.data.id });
+    if (result.code === 'not_found') return res.status(404).json({ error: 'Query not found' });
+    if (result.code === 'forbidden') return res.status(403).json({ error: 'Access denied' });
+    return res.status(400).json({ error: result.message });
+  } catch (err) {
+    console.error('Customer query message failed:', err);
+    res.status(500).json({ error: 'Could not post the message — please try again' });
   }
-
-  // Insert mentions
-  if (Array.isArray(mentionIds) && mentionIds.length) {
-    for (const userId of mentionIds) {
-      if (userId !== req.user.id) {
-        await db.run(
-          'INSERT INTO customer_query_mentions (message_id, query_id, mentioned_user_id) VALUES ($1,$2,$3)',
-          [messageId, req.params.id, userId]
-        );
-      }
-    }
-  }
-
-  // Mark query as in_progress if it was open
-  await db.run("UPDATE customer_queries SET status='in_progress', updated_at=NOW() WHERE id=$1 AND status='open'", [req.params.id]);
-
-  if (Array.isArray(mentionIds) && mentionIds.length) {
-    const preview = (message || '').trim().slice(0, 100);
-    const fileNote = hasFiles ? ` [+${req.files.length} file${req.files.length > 1 ? 's' : ''}]` : '';
-    for (const userId of mentionIds) {
-      if (userId !== req.user.id) {
-        await createNotification(db, {
-          userId,
-          type: 'query_message',
-          title: `${req.user.name} in ${q.query_no}`,
-          body: preview ? preview + fileNote : `Sent${fileNote}`,
-          link: `/customer-queries/${req.params.id}`,
-          sourceUserId: req.user.id,
-        });
-      }
-    }
-  }
-
-  res.status(201).json({ id: messageId });
 });
 
 // mentions routes moved above /:id

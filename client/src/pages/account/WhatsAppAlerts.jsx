@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../../lib/api';
 import { fmtDateTime } from '../../lib/utils';
-import { MessageCircle, CheckCircle, AlertTriangle, Send } from 'lucide-react';
+import { MessageCircle, CheckCircle, AlertTriangle, Send, ShieldCheck, ExternalLink } from 'lucide-react';
 
 // Owner's WhatsApp alerts (30 Sep 2026): a WhatsApp copy of the dashboard
 // notifications the owner picks — approvals and @mentions by default.
@@ -17,6 +17,8 @@ const STATUS = {
   failed: 'text-red-700 bg-red-50', expired: 'text-gray-500 bg-gray-100',
 };
 const STATUS_LABEL = { accepted: 'accepted', pending: 'waiting', sending: 'sending' };
+// Rows the app sent back in answer to the owner's replies.
+const KIND_LABEL = { reply: 'App reply', prompt: 'App question' };
 
 export default function WhatsAppAlerts() {
   const [s, setS] = useState(null);
@@ -27,6 +29,7 @@ export default function WhatsAppAlerts() {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [verify, setVerify] = useState(null);   // { code, sender_number, wa_link }
 
   const load = async () => {
     try {
@@ -36,6 +39,19 @@ export default function WhatsAppAlerts() {
     } catch (e) { setErr(e.response?.data?.error || 'Could not load WhatsApp settings'); }
   };
   useEffect(() => { load(); }, []);
+  // While a confirmation code is out, check every few seconds for the reply.
+  useEffect(() => {
+    if (!verify || s?.verified) return undefined;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [verify, s?.verified]);
+
+  const confirmNumber = async () => {
+    setBusy(true); setMsg(''); setErr('');
+    try { const r = await api.post('/whatsapp/verify-code'); setVerify(r.data); }
+    catch (e2) { setErr(e2.response?.data?.error || 'Could not make a code'); }
+    finally { setBusy(false); }
+  };
 
   const toggleType = (t) => setTypes(p => p.includes(t) ? p.filter(x => x !== t) : [...p, t]);
 
@@ -132,6 +148,48 @@ export default function WhatsAppAlerts() {
           </div>
         </form>
 
+        <div className="border-t border-gray-100 pt-4">
+          <div className="flex items-center gap-2 mb-2">
+            <ShieldCheck size={15} className={s.verified ? 'text-green-600' : 'text-gray-400'} />
+            <span className="text-sm font-medium text-gray-900">Answer alerts from WhatsApp</span>
+            <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${s.verified ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+              {s.verified ? 'Number confirmed' : 'Not confirmed'}
+            </span>
+          </div>
+          {s.verified ? (
+            <p className="text-sm text-gray-600">
+              Tap Approve or Reject on an alert, or swipe-reply to it: yes / no, a price, or your answer to an @mention. The app does it and replies with what it did.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-gray-600">
+                Before your replies can approve anything, prove this number is yours: send a one-time code from your WhatsApp to the business number.
+              </p>
+              {verify?.code || s.pending_code ? (
+                <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2.5 text-sm space-y-1.5">
+                  <div>Send this from <b>+{s.number}</b>: <span className="font-mono font-semibold text-gray-900">{verify?.code || s.pending_code}</span></div>
+                  {(verify?.wa_link || s.sender_number) && (
+                    <a className="inline-flex items-center gap-1 text-green-700 font-medium hover:underline"
+                      href={verify?.wa_link || `https://wa.me/${s.sender_number}?text=${encodeURIComponent(verify?.code || s.pending_code)}`}
+                      target="_blank" rel="noreferrer">
+                      Open WhatsApp with the code filled in <ExternalLink size={13} />
+                    </a>
+                  )}
+                  <div className="text-xs text-gray-500">The code works for 30 minutes. This box turns green once it arrives.</div>
+                </div>
+              ) : null}
+              <button type="button" className="btn-secondary flex items-center gap-1.5" onClick={confirmNumber}
+                disabled={busy || !s.number || !s.connected || !s.webhook_ready}
+                title={!s.webhook_ready ? 'The webhook must be set up first' : ''}>
+                <ShieldCheck size={14} /> {verify || s.pending_code ? 'Make a new code' : 'Confirm my number'}
+              </button>
+              {!s.webhook_ready && s.connected && (
+                <div className="text-xs text-gray-500">Replies need the webhook set up in Meta first (WHATSAPP_VERIFY_TOKEN and WHATSAPP_APP_SECRET on the server).</div>
+              )}
+            </div>
+          )}
+        </div>
+
         {log.length > 0 && (
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Recent WhatsApp alerts</div>
@@ -140,7 +198,8 @@ export default function WhatsAppAlerts() {
                 <div key={r.id} className="px-3 py-2 text-sm flex items-start gap-3">
                   <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${STATUS[r.status] || 'bg-gray-100 text-gray-600'}`}>{STATUS_LABEL[r.status] || r.status}</span>
                   <div className="min-w-0">
-                    <div className="text-gray-800 truncate">{r.title}</div>
+                    <div className="text-gray-800 truncate">{KIND_LABEL[r.type] ? <span className="text-gray-500">{KIND_LABEL[r.type]}: </span> : null}{r.title}</div>
+                    {r.action_state === 'done' && r.action_note && <div className="text-xs text-green-700">Answered: {r.action_note}</div>}
                     {r.last_error && ['failed', 'pending', 'expired'].includes(r.status) && <div className="text-xs text-red-600">{r.last_error}</div>}
                   </div>
                   <span className="ml-auto text-xs text-gray-400 flex-shrink-0">{fmtDateTime(r.sent_at || r.created_at)}</span>

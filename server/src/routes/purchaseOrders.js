@@ -3,6 +3,17 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseReceive, uploadPurchaseItemQC, uploadPurchaseItemQCFields, uploadDebitNote, uploadChatAttachments } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
+// Owner actions shared with the WhatsApp reply dispatcher (same code, both paths).
+const poActions = require('../services/actions/purchaseOrders');
+
+// A shared action said no: answer the way the route always has — 404 for
+// something missing, 403 for the wrong role, 400 otherwise — using the route's
+// own old message where it had one.
+function sendActionError(res, result, oldMessages = {}) {
+  const status = result.code === 'not_found' ? 404 : result.code === 'forbidden' ? 403 : 400;
+  const fallback = result.code === 'forbidden' ? 'Access denied' : result.message;
+  res.status(status).json({ error: oldMessages[result.code] || fallback });
+}
 
 // Add a single received PO item's stock to inventory (FIFO lot + moving-average
 // cost + transaction). `qty` is the ACTUAL quantity received (entered at QC),
@@ -124,6 +135,7 @@ async function flagRateIncrease(db, po, increases, byUserId) {
       title: `Rate increase on ${po.po_number}`,
       body: increases.map(i => `${i.description}: ₹${i.oldRate}→₹${i.newRate}`).join('; '),
       link: `/purchases/${po.id}`, sourceUserId: byUserId,
+      ref: { type: 'po_rate', id: po.id },
     });
   }
 }
@@ -522,15 +534,32 @@ router.put('/:id/send', authenticate, authorize('owner', 'admin', 'accounts'), a
 });
 
 // Owner approves a flagged rate increase, unlocking "Mark as Sent".
+// The work lives in services/actions/purchaseOrders.js (shared with WhatsApp).
 router.put('/:id/approve-rate', authenticate, authorize('owner'), async (req, res) => {
-  const db = getDB();
-  const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
-  if (!po) return res.status(404).json({ error: 'Not found' });
-  if (!po.rate_increase_pending) return res.status(400).json({ error: 'No pending rate increase on this PO' });
-  await db.run('UPDATE purchase_orders SET rate_increase_pending=FALSE, rate_increase_approved_by=$1, rate_increase_approved_at=NOW() WHERE id=$2', [req.user.id, po.id]);
-  await db.run('INSERT INTO purchase_order_messages (po_id, user_id, message) VALUES ($1,$2,$3)',
-    [po.id, req.user.id, '✅ Owner approved the rate increase — this PO can now be marked as sent.']);
-  res.json({ message: 'Rate increase approved' });
+  try {
+    const r = await poActions.approveRateIncrease(getDB(), { poId: req.params.id, actor: req.user, via: 'app' });
+    if (!r.ok) return sendActionError(res, r, { not_found: 'Not found', already_done: 'No pending rate increase on this PO' });
+    res.json({ message: 'Rate increase approved' });
+  } catch (e) {
+    console.error('[po/approve-rate] error:', e);
+    res.status(500).json({ error: 'Failed to approve the rate increase' });
+  }
+});
+
+// Owner says no to a flagged rate increase (owner decision 30 Sep 2026): the
+// "no" (with the owner's note, if any) goes into the PO chat for the buyer and
+// the PO stays blocked until the rates are revised.
+router.put('/:id/decline-rate', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const r = await poActions.declineRateIncrease(getDB(), {
+      poId: req.params.id, actor: req.user, note: req.body?.note, via: 'app',
+    });
+    if (!r.ok) return sendActionError(res, r, { not_found: 'Not found', already_done: 'No pending rate increase on this PO' });
+    res.json({ message: 'Rate increase declined — the buyer has been asked to revise the rates' });
+  } catch (e) {
+    console.error('[po/decline-rate] error:', e);
+    res.status(500).json({ error: 'Failed to decline the rate increase' });
+  }
 });
 
 router.put('/:id/approve', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
@@ -604,33 +633,18 @@ router.put('/:id/delivery-status', authenticate, authorize('owner', 'admin', 'ac
 // actually arrived and recomputes the PO's totals, so the document, the stock
 // and the payable all agree. Rejecting keeps the line at the ordered quantity —
 // only that much is treated as received.
+// The work lives in services/actions/purchaseOrders.js (shared with WhatsApp).
 router.put('/:id/items/:itemId/over-qty', authenticate, authorize('owner'), async (req, res) => {
   try {
     const db = getDB();
     const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
     if (!po) return res.status(404).json({ error: 'Not found' });
-    const item = await db.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2', [req.params.itemId, po.id]);
-    if (!item) return res.status(404).json({ error: 'Item not found' });
-    if (item.over_qty_pending == null) return res.status(400).json({ error: 'Nothing pending on this item' });
     const approve = req.body?.approve !== false;
-
-    if (approve) {
-      const qty = Number(item.over_qty_pending);
-      await db.run(
-        `UPDATE purchase_order_items
-            SET qty=$1, amount=$2, over_qty_pending=NULL, over_qty_approved_by=$3, over_qty_approved_at=NOW()
-          WHERE id=$4`,
-        [qty, Math.round(qty * (Number(item.rate) || 0) * 100) / 100, req.user.id, item.id]);
-      // The PO is worth more now — recompute its totals from the lines.
-      const { grandTotal } = await recomputePoTotals(db, po.id);
-      await logActivity(null, null, 'po_over_qty_approved',
-        `${po.po_number}: "${item.description}" over-receipt approved — ${item.qty} ordered, ${qty} accepted. PO now ₹${grandTotal}`, req.user.id);
-      return res.json({ message: `Extra accepted — PO updated to ₹${grandTotal}` });
-    }
-
-    await db.run('UPDATE purchase_order_items SET over_qty_pending=NULL WHERE id=$1', [item.id]);
-    await logActivity(null, null, 'po_over_qty_rejected',
-      `${po.po_number}: "${item.description}" over-receipt declined — only the ordered ${item.qty} treated as received`, req.user.id);
+    const r = await poActions.decideOverReceipt(db, {
+      poItemId: req.params.itemId, poId: po.id, approve, actor: req.user, via: 'app',
+    });
+    if (!r.ok) return sendActionError(res, r, { not_found: 'Item not found', already_done: 'Nothing pending on this item' });
+    if (r.data.approved) return res.json({ message: `Extra accepted — PO updated to ₹${r.data.grandTotal}` });
     res.json({ message: 'Extra declined — only the ordered quantity stands' });
   } catch (e) {
     console.error('over-qty error:', e);
@@ -929,6 +943,7 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
             title: `More arrived than ordered on ${po.po_number}`,
             body: `${item.description}: ${overQty} received against ${orderedQty} ordered. Approve the extra before it can pass QC.`,
             link: `/purchases/${po.id}`, sourceUserId: req.user.id,
+            ref: { type: 'po_over', id: item.id, parent: po.id },
           });
         }
       } catch (_) { /* notifications are best-effort */ }
@@ -1165,57 +1180,26 @@ router.get('/:id/messages', authenticate, async (req, res) => {
   res.json(messages);
 });
 
+// The work lives in services/actions/purchaseOrders.js (shared with WhatsApp),
+// which also cleans the @mentions (whole numbers, once each, at most 25).
 router.post('/:id/messages', authenticate, ...uploadChatAttachments, async (req, res) => {
-  const { message } = req.body;
-  let mentionIds = req.body.mentionIds;
-  if (typeof mentionIds === 'string') try { mentionIds = JSON.parse(mentionIds); } catch { mentionIds = []; }
-  const hasFiles = req.files?.length > 0;
-  if (!message?.trim() && !hasFiles) return res.status(400).json({ error: 'Message or attachment required' });
+  try {
+    const { message } = req.body;
+    let mentionIds = req.body.mentionIds;
+    if (typeof mentionIds === 'string') try { mentionIds = JSON.parse(mentionIds); } catch { mentionIds = []; }
+    const hasFiles = req.files?.length > 0;
+    if (!message?.trim() && !hasFiles) return res.status(400).json({ error: 'Message or attachment required' });
 
-  const db = getDB();
-  const r = await db.insert(
-    'INSERT INTO purchase_order_messages (po_id, user_id, message) VALUES ($1,$2,$3)',
-    [req.params.id, req.user.id, (message || '').trim()]
-  );
-  const messageId = r.lastInsertRowid;
-
-  if (hasFiles) {
-    for (const f of req.files) {
-      await db.insert(
-        'INSERT INTO purchase_order_message_attachments (message_id, file_path, file_name, file_size, mime_type) VALUES ($1,$2,$3,$4,$5)',
-        [messageId, f.storagePath, f.originalname, f.size, f.mimetype]
-      );
-    }
+    const r = await poActions.postPoMessage(getDB(), {
+      poId: req.params.id, actor: req.user, message, mentionIds, via: 'app',
+      attachments: hasFiles ? req.files : [],
+    });
+    if (!r.ok) return sendActionError(res, r, { not_found: 'Not found' });
+    res.status(201).json({ id: r.data.id });
+  } catch (e) {
+    console.error('[po/messages] error:', e);
+    res.status(500).json({ error: 'Failed to send message' });
   }
-
-  if (Array.isArray(mentionIds) && mentionIds.length) {
-    for (const userId of mentionIds) {
-      if (userId !== req.user.id) {
-        await db.run(
-          'INSERT INTO purchase_order_message_mentions (message_id, po_id, mentioned_user_id) VALUES ($1,$2,$3)',
-          [messageId, req.params.id, userId]
-        );
-      }
-    }
-    const po = await db.get('SELECT po_number FROM purchase_orders WHERE id=$1', [req.params.id]);
-    const poNo = po?.po_number || `PO #${req.params.id}`;
-    const preview = (message || '').trim().slice(0, 100);
-    const fileNote = hasFiles ? ` [+${req.files.length} file${req.files.length > 1 ? 's' : ''}]` : '';
-    for (const userId of mentionIds) {
-      if (userId !== req.user.id) {
-        await createNotification(db, {
-          userId,
-          type: 'po_message',
-          title: `${req.user.name} in ${poNo}`,
-          body: preview ? preview + fileNote : `Sent${fileNote}`,
-          link: `/purchases/${req.params.id}`,
-          sourceUserId: req.user.id,
-        });
-      }
-    }
-  }
-
-  res.status(201).json({ id: messageId });
 });
 
 module.exports = router;
