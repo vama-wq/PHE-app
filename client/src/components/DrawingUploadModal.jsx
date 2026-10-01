@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import api, { uploadApi } from '../lib/api';
 import Modal from './ui/Modal';
+import StockTag, { StockNote } from './StockTag';
 import { Upload, Package, X, FileText } from 'lucide-react';
 
 // Design uploads a reference drawing for an order item AND selects the inventory
@@ -156,6 +157,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
                     className="w-full text-left px-3 py-2 text-sm hover:bg-brand-50 flex items-center justify-between"
                     onMouseDown={() => { toggle(i.id); setInvSearch(''); }}>
                     <span><span className="font-mono">{i.item_code}</span> — {i.name}
+                    <StockTag item={i} />
                     {Number(i.rework_free) > 0 && <span className="ml-1.5 text-[10px] font-semibold bg-sky-100 text-sky-800 rounded px-1.5 py-0.5">REWORK {i.rework_qty} · {i.rework_free} free</span>}</span>
                     {i.id in selected && <span className="text-xs text-green-600">added</span>}
                   </button>
@@ -169,6 +171,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
               {selectedList.map(i => (
                 <div key={i.id} className="flex items-center gap-2 bg-gray-50 rounded-lg px-2.5 py-1.5">
                   <span className="text-sm flex-1 truncate"><span className="font-mono">{i.item_code}</span> — {i.name}</span>
+                  <StockNote item={i} />
                   {isFins(i) ? (
                     <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 whitespace-nowrap"
                       title="Deducts automatically from the tube length at QC approval">
