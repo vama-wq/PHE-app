@@ -779,7 +779,12 @@ router.put('/runs/:id/review', authenticate, authorize('owner', 'accounts'), asy
           const { rows: balRows } = await client.query(
             'SELECT COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger WHERE employee_id=$1', [line.employee_id]);
           const bal = Number(balRows[0].bal);
-          if (creditUsed > bal) { errors.push(`${line.name}: only ${bal} leave credit available`); creditUsed = bal; }
+          // This month's leave can be used this month (owner, 2 Oct 2026):
+          // carried-in balance + this month's accrual + this month's 6:30 credits
+          const sickNow = line.worker_group === 'fixed_admin'
+            ? Math.max(u.sick_credit_earned != null ? Number(u.sick_credit_earned) : Number(line.sick_credit_earned), 0) : 0;
+          const usable = bal + (MONTHLY_ACCRUAL[line.worker_group] || 0) + sickNow;
+          if (creditUsed > usable) { errors.push(`${line.name}: only ${usable} leave credit available`); creditUsed = usable; }
           if (creditUsed > deductibleAbsent) creditUsed = deductibleAbsent;
           // No more than 7 paid leaves may be taken together — excess is unpaid
           if (creditUsed > MAX_TOGETHER) { errors.push(`${line.name}: paid leave capped at ${MAX_TOGETHER} (max together)`); creditUsed = MAX_TOGETHER; }
@@ -913,9 +918,13 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
           const { rows: b2 } = await client.query(
             'SELECT COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger WHERE employee_id=$1', [line.employee_id]);
           const liveBal = Number(b2[0].bal);
+          // This month's accrual and 6:30 credits can be used this month too
+          // (owner, 2 Oct 2026) — they post below, after the usage.
+          const usable = liveBal + (MONTHLY_ACCRUAL[line.worker_group] || 0)
+            + (line.worker_group === 'fixed_admin' ? Math.max(Number(line.sick_credit_earned) || 0, 0) : 0);
           // Credits cover only absences (holidays are never counted as absent)
           const deductibleAbsent = Math.max(Number(line.absent_days), 0);
-          creditUsed = Math.max(0, Math.min(creditUsed, liveBal, deductibleAbsent, MAX_TOGETHER));
+          creditUsed = Math.max(0, Math.min(creditUsed, usable, deductibleAbsent, MAX_TOGETHER));
         } else {
           creditUsed = 0;
         }
