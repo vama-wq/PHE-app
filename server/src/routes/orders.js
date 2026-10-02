@@ -9,7 +9,7 @@ const { createNotification } = require('./notifications');
 // longer tied to drawing approval — it now fires when the item clears QC (single
 // job card) or when a partially-dispatched item is fully dispatched (see qc.js /
 // dispatch.js). These helpers stay imported for the inventory-edit reconcile path.
-const { deductItemInventory, restoreItemInventory } = require('../lib/inventoryDeduction');
+const { deductItemInventory } = require('../lib/inventoryDeduction');
 const { applyBomCorrection } = require('../lib/bomCorrection');
 const rework = require('../lib/rework');
 const orderActions = require('../services/actions/orders');
@@ -675,13 +675,12 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
 
 router.delete('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), async (req, res) => {
   const db = getDB();
-  // Anything this item had already taken — from stock or a rework bin — goes
-  // back before its BOM rows cascade away with it. Until now the rows simply
-  // vanished and whatever they had consumed stayed consumed.
+  // Stock is never moved by a delete (owner's inventory rules, 2 Oct 2026):
+  // parts are only taken when production really uses them (stage 15, stage 21,
+  // QC), so what was taken stays taken. A genuine mistake is corrected through
+  // the inventory box, which follows the rules.
   const it = await db.get('SELECT id FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   if (!it) return res.status(404).json({ error: 'Item not found' });
-  const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
-  await restoreItemInventory(db, it.id, ord?.order_code || `Order #${req.params.id}`, req.user.id, 'Item deleted');
   await db.run('DELETE FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   res.json({ message: 'Deleted' });
 });
@@ -935,12 +934,10 @@ router.put('/:id/drawings/:drawingId/reject', authenticate, authorize('owner'), 
   const d = await db.get('SELECT * FROM order_drawings WHERE id=$1 AND order_id=$2', [req.params.drawingId, req.params.id]);
   if (!d) return res.status(404).json({ error: 'Drawing not found' });
   await db.run(`UPDATE order_drawings SET drawing_status='rejected', rejection_reason=$1 WHERE id=$2`, [reason.trim(), req.params.drawingId]);
-  // If this drawing was previously approved, its inventory was deducted — put it
-  // back so design can revise the selection before the next approval.
-  if (d.item_id) {
-    const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [req.params.id]);
-    await restoreItemInventory(db, d.item_id, ord?.order_code || `Order #${req.params.id}`, req.user.id, 'Drawing reopened');
-  }
+  // A drawing decision is paperwork: it never moves stock (owner's inventory
+  // rules, 2 Oct 2026). Stock is taken when production uses the parts, not at
+  // approval, so there is nothing to give back; the item keeps its record of
+  // what was taken, and a corrected list goes through the inventory rules.
   await logActivity(req.params.id, null, 'drawing_rejected', `Drawing rejected: ${reason}`, req.user.id);
   res.json({ message: 'Drawing rejected' });
 });
@@ -1112,11 +1109,10 @@ router.delete('/:id', authenticate, authorize('owner'), async (req, res) => {
     await db.run('DELETE FROM job_cards WHERE id=$1', [jc.id]);
   }
 
-  const fullOrder = await db.get('SELECT order_code FROM orders WHERE id=$1', [order.id]);
   const items = await db.all('SELECT id FROM order_items WHERE order_id=$1', [order.id]);
   for (const item of items) {
-    // Reverse inventory only for items whose drawing was approved (deducted).
-    await restoreItemInventory(db, item.id, fullOrder?.order_code || ('Order #' + req.params.id), req.user.id, 'Order deleted');
+    // Stock is never moved by a delete (owner's inventory rules, 2 Oct 2026):
+    // what production really used stays used.
     const images = await db.all('SELECT file_path FROM order_item_images WHERE item_id=$1', [item.id]);
     for (const img of images) await deleteFromStorage(img.file_path);
     await db.run('DELETE FROM order_item_images WHERE item_id=$1', [item.id]);

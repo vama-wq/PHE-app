@@ -26,10 +26,14 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
   const q1 = async (q, p = []) => (await client.query(q, p)).rows[0];
   const qa = async (q, p = []) => (await client.query(q, p)).rows;
   const designer = await q1("SELECT id, name, role FROM users WHERE id=4");
+  const ownerUser = await q1("SELECT id, name, role FROM users WHERE role='owner' ORDER BY id LIMIT 1");
+  let actor = designer;
   const auth = require(S + '/src/middleware/auth.js');
-  auth.authenticate = (req, res, next) => { req.user = designer; next(); };
+  auth.authenticate = (req, res, next) => { req.user = actor; next(); };
   // Drawing uploads: no real file is stored — the upload step is stubbed.
   const upload = require(S + '/src/middleware/upload.js');
+  upload.deleteFromStorage = async () => {};      // never touch real files
+  upload.copyInStorage = async () => {};
   upload.uploadOrderDrawing = [(req, res, next) => { if (req.body.__file) req.file = { storagePath: 'test/x.pdf', filename: 'x.pdf', originalname: 'x.pdf' }; next(); }];
   const express = require(S + '/node_modules/express');
   const app = express();
@@ -360,6 +364,39 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
         ok('Drawing upload part-way through production keeps what stage 15 already took, so stage 15 never takes it twice',
           r.status === 201 && fl2.deducted + fl2.waived + 1e-6 >= before && (await stock(fl.id)) === sF, `${r.body.summary} | before ${before}, after ${fl2.deducted + fl2.waived}`);
       }
+    }
+
+    // ── X. Rejecting a drawing, deleting an item or an order never moves stock ──
+    {
+      actor = ownerUser;
+      const call = async (method, url, body) => { const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+      const touched = async (itemId) => [...new Set([...(await lines(itemId)).map(l => l.id),
+        ...(await qa('SELECT DISTINCT item_id FROM inventory_transactions WHERE order_item_id=$1', [itemId])).map(r => r.item_id)])];
+      if (cand) {
+        const dw = await q1('SELECT id FROM order_drawings WHERE item_id=$1 ORDER BY id DESC LIMIT 1', [cand.id]);
+        const L0 = await lines(cand.id);
+        const flag0 = (await q1('SELECT inventory_deducted f FROM order_items WHERE id=$1', [cand.id])).f;
+        const snap = await snapshot(await touched(cand.id));
+        const r = await call('PUT', `/api/orders/${cand.order_id}/drawings/${dw.id}/reject`, { reason: 'test' });
+        ok(`Rejecting ${cand.order_code}'s drawing gives nothing back and keeps the item's record`,
+          r.status === 200 && !(await unchanged(snap)) && JSON.stringify(await lines(cand.id)) === JSON.stringify(L0)
+          && (await q1('SELECT inventory_deducted f FROM order_items WHERE id=$1', [cand.id])).f === flag0, await unchanged(snap));
+        const r2 = await call('DELETE', `/api/orders/${cand.order_id}/items/${cand.id}`);
+        ok(`Deleting ${cand.order_code}'s item gives nothing back`, r2.status === 200 && !(await unchanged(snap)), await unchanged(snap));
+      }
+      const del = await q1(`SELECT o.id, o.order_code FROM orders o
+         WHERE EXISTS (SELECT 1 FROM inventory_transactions t JOIN order_items oi ON oi.id=t.order_item_id WHERE oi.order_id=o.id AND t.source='bom')
+           AND NOT EXISTS (SELECT 1 FROM job_card_split_requests sr JOIN job_cards jc ON jc.id=sr.job_card_id WHERE jc.order_id=o.id)
+           AND o.id <> $1
+         ORDER BY o.id DESC LIMIT 1`, [cand ? cand.order_id : 0]);
+      if (del) {
+        const its = await qa('SELECT id FROM order_items WHERE order_id=$1', [del.id]);
+        let ids = []; for (const i of its) ids = ids.concat(await touched(i.id));
+        const snap = await snapshot(ids);
+        const r = await call('DELETE', `/api/orders/${del.id}`);
+        ok(`Deleting a whole order (${del.order_code}) gives nothing back`, r.status === 200 && !(await unchanged(snap)), await unchanged(snap));
+      }
+      actor = designer;
     }
 
     // ── G. The every-restart sweep is gone ──
