@@ -46,8 +46,9 @@ function esslOtHours(group, outMinsList) {
   return start == null ? 0 : otHoursFromClockOut(outMinsList, start);
 }
 
-// Late-arrival: a present day is "late" when the arrival punch is strictly after
-// the group's threshold. The salary cut is graduated — a base cut at the
+// Late-arrival: a full present day is "late" when the arrival punch is strictly
+// after the group's threshold (a Half Day is never late-cut — it is already
+// paid as half). The salary cut is graduated — a base cut at the
 // threshold, then +15 minutes of cut for each further 10 minutes late:
 //   labour / production-no-leave (after 9:10): 30 → 45 → 60 …  (base 30)
 //   production-with-leave (after 9:20):        60 → 75 → 90 …  (base 60)
@@ -191,7 +192,9 @@ async function parseEssl(buffer) {
       if (row.status === 'Present' || row.status === 'Half Day') {
         w.present += row.status === 'Half Day' ? 0.5 : 1;
         w.outMinsList.push(outMin || 0);            // clock-out for OT
-        if (inMin) w.inMinsList.push(inMin);        // arrival for late-day counting
+        // Arrival for late-day counting — full days only. A Half Day is already
+        // paid as half, so it never takes a late cut too (owner, 2 Oct 2026).
+        if (inMin && row.status === 'Present') w.inMinsList.push(inMin);
         if (outMin != null && outMin >= LATE_STAY_MIN) w.lateStayDates.push(dayIso);
       } else if (/^Absent/.test(row.status)) {
         w.absent += 1;
