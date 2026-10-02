@@ -20,8 +20,10 @@ const NOT_BOM = ['material usage, not a BOM line', 'order deleted', 'order no lo
   try {
     await c.query('BEGIN');
     await c.query("SET LOCAL lock_timeout = '10s'");
-    await c.query('ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS order_item_id INTEGER');
-    await c.query('ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS source TEXT');
+    // No ALTER here: it would lock the table for the whole run. initDB adds the columns.
+    const cols = (await c.query(`SELECT COUNT(*)::int n FROM information_schema.columns
+      WHERE table_name='inventory_transactions' AND column_name IN ('order_item_id','source')`)).rows[0].n;
+    if (cols !== 2) throw new Error('The new columns are missing — deploy the app first (initDB adds them).');
     const { considered, link, why, tx } = await linkStockHistory(c, { apply: APPLY });
     const bySrc = {};
     for (const l of link.values()) bySrc[l.source] = (bySrc[l.source] || 0) + 1;

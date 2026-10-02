@@ -80,8 +80,10 @@ async function deductLine(db, sel, dedQty, note, userId) {
 
   const fromStock = dedQty - fromRework;
   if (fromStock > 0) {
-    const newStock = (inv.current_stock || 0) - fromStock; // allow negative so shortages are visible
-    await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+    // Allow negative so shortages are visible. Atomic, so a correction or
+    // another deduction running at the same moment cannot be overwritten.
+    const newStock = Number((await db.get('UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id=$2 RETURNING current_stock',
+      [fromStock, sel.inventory_item_id])).current_stock);
     await recordMove(db, { itemId: sel.inventory_item_id, type: 'dispatch_to_production', qty: fromStock, balanceAfter: newStock,
       notes: fromRework > 0 ? `${note} | ${fromRework} from rework bin` : note, userId,
       orderItemId: sel.order_item_id || null, source: 'bom' });
@@ -121,7 +123,7 @@ async function deductStageCategories(db, jc, stageNo, userId) {
     const total = parseFloat(sel.qty || 0);
     const already = parseFloat(sel.qty_deducted || 0) + parseFloat(sel.qty_waived || 0);
     const ded = Math.min(total * ratio, total - already);
-    if (ded <= 0) continue;
+    if (ded <= 1e-4) continue;     // rounding dust is not a take
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
     noteParts.push(`${STAGE_LABEL[stageNo]} (JC ${jc.job_card_no})`);
@@ -166,7 +168,7 @@ async function deductPartialAtQC(db, jc, userId) {
     const total = parseFloat(sel.qty || 0);
     const already = parseFloat(sel.qty_deducted || 0) + parseFloat(sel.qty_waived || 0);
     const ded = Math.min(total * ratio, total - already);
-    if (ded <= 0) continue;
+    if (ded <= 1e-4) continue;     // rounding dust is not a take
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
     noteParts.push(`Partial dispatch QC-approved (JC ${jc.job_card_no})`);
@@ -256,7 +258,7 @@ async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = '
   for (const sel of sels) {
     if (FINS_CODES.includes(sel.item_code)) continue; // length-based, handled separately
     const remaining = parseFloat(sel.qty || 0) - parseFloat(sel.qty_deducted || 0) - parseFloat(sel.qty_waived || 0);
-    if (remaining <= 0) continue;
+    if (remaining <= 1e-4) continue; // rounding dust is not a take
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
     noteParts.push(reasonNote);
@@ -318,8 +320,8 @@ async function applyRemakeExtras(db, jc, extras, userId) {
     if (!(qty > 0) || !invId) continue;
     const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [invId]);
     if (!inv) continue;
-    const newStock = (inv.current_stock || 0) - qty;
-    await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, invId]);
+    const newStock = Number((await db.get('UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id=$2 RETURNING current_stock',
+      [qty, invId])).current_stock);
     await recordMove(db, { itemId: invId, type: 'dispatch_to_production', qty, balanceAfter: newStock,
       notes: `Order: ${orderCode} | Extra consumption for remade qty (QC approval, JC ${jc.job_card_no})`, userId,
       orderItemId: await resolveJobCardItemId(db, jc), source: 'remake' });
@@ -344,8 +346,8 @@ async function restoreItemInventory(db, itemId, orderCode, userId, reasonNote) {
     if (toStock > 0) {
       const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
       if (inv) {
-        const newStock = (inv.current_stock || 0) + toStock;
-        await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
+        const newStock = Number((await db.get('UPDATE inventory_items SET current_stock = current_stock + $1 WHERE id=$2 RETURNING current_stock',
+          [toStock, sel.inventory_item_id])).current_stock);
         await recordMove(db, { itemId: sel.inventory_item_id, type: 'return_from_production', qty: toStock, balanceAfter: newStock,
           notes: `${reasonNote} — ${orderCode}`, userId, orderItemId: itemId, source: 'bom' });
       }

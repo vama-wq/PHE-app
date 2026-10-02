@@ -33,7 +33,7 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
     await client.query("SET LOCAL lock_timeout = '10s'");
     // One save at a time per order line.
     const item = await tx.get(
-      `SELECT oi.id, oi.order_id, oi.drawing_number, o.order_code
+      `SELECT oi.id, oi.order_id, oi.drawing_number, oi.inventory_deducted, o.order_code
          FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id=$1 FOR UPDATE OF oi`, [orderItemId]);
     if (!item) { const e = new Error('Item not found'); e.status = 404; throw e; }
     const orderCode = item.order_code;
@@ -56,8 +56,12 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
     }
 
     const ledger = await ledgerForItem(tx, orderItemId);
+    // settled: the whole list was already taken (or settled) — a correction never un-settles it.
     const { targets, allPassed } = await progressTargets(tx, orderItemId, newLines,
-      { stageMap: STAGE_CATEGORY_MAP, finsCodes: FINS_CODES });
+      { stageMap: STAGE_CATEGORY_MAP, finsCodes: FINS_CODES, settled: !!item.inventory_deducted });
+    // What the old lines already counted as settled without taking stock.
+    const oldWaived = {};
+    for (const l of oldLines) oldWaived[String(l.inventory_item_id)] = (oldWaived[String(l.inventory_item_id)] || 0) + (Number(l.qty_waived) || 0);
     const reworkInvolved = oldLines.some(l => Number(l.rework_qty) > 0 || Number(l.rework_deducted) > 0)
       || newLines.some(l => l.rework_qty > 0);
 
@@ -68,7 +72,8 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
     else if (reworkInvolved) { mode = 'record'; why = 'it uses rework-bin pieces'; }
 
     const moves = [], short = [];
-    const actual = {};
+    const actual = {};        // really taken through the line, after this save
+    const waivedNow = {};     // settled without stock, after this save
     if (mode === 'difference') {
       const lineOf = Object.fromEntries(newLines.map(l => [String(l.inventory_item_id), l]));
       const invIds = new Set([...newLines.map(l => String(l.inventory_item_id)), ...Object.keys(ledger.net)]);
@@ -78,8 +83,13 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
         const line = lineOf[id];
         const target = line ? (targets.get(line.inventory_item_id) || 0) : 0;
         const have = Math.max(0, Number(ledger.net[id]) || 0);
-        const diff = r4(target - have);
+        let waived = oldWaived[id] || 0;
+        // An earlier record-only save settled part without stock: it counts as
+        // done, and a lowered quantity is absorbed there before any real give-back.
+        let diff = r4(target - have - waived);
+        if (diff < 0 && waived > 0) { const w = Math.min(waived, -diff); waived = r4(waived - w); diff = r4(diff + w); }
         actual[id] = have;
+        waivedNow[id] = waived;
         if (Math.abs(diff) < EPS) continue;
         const inv = await tx.get('SELECT id, item_code, unit, current_stock FROM inventory_items WHERE id=$1 FOR UPDATE', [id]);
         if (!inv) continue;
@@ -89,8 +99,7 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
             short.push({ code: inv.item_code, need: diff, stock: r4(stock), unit: inv.unit || '' });
             continue;
           }
-          const after = r4(stock - diff);
-          await tx.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [after, id]);
+          const after = Number((await tx.get('UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id=$2 RETURNING current_stock', [diff, id])).current_stock);
           await recordMove(tx, { itemId: Number(id), type: 'dispatch_to_production', qty: diff, balanceAfter: after,
             notes: `Order: ${orderCode}${item.drawing_number ? ` | Dwg: ${item.drawing_number}` : ''} | Auto-corrected by inventory rules (corrected list)`,
             userId, orderItemId, source: 'correction' });
@@ -98,8 +107,7 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
           actual[id] = r4(have + diff);
         } else {
           const back = -diff;
-          const after = r4(stock + back);
-          await tx.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [after, id]);
+          const after = Number((await tx.get('UPDATE inventory_items SET current_stock = current_stock + $1 WHERE id=$2 RETURNING current_stock', [back, id])).current_stock);
           await recordMove(tx, { itemId: Number(id), type: 'return_from_production', qty: back, balanceAfter: after,
             notes: `Auto-corrected by inventory rules (corrected list) — ${orderCode}`,
             userId, orderItemId, source: 'correction' });
@@ -123,9 +131,18 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
         deducted = Number(old?.qty_deducted) || 0;
         waived = Number(old?.qty_waived) || 0;
       } else if (mode === 'record') {
-        waived = t;
+        // Stock untouched — and never lower what the line already counted as
+        // taken or settled, or production would take it again later. What was
+        // really taken stays recorded as taken (a delete still gives it back);
+        // where the history is known, only what it shows really left counts.
+        const oldTaken = Number(old?.qty_deducted) || 0;
+        const realCap = ledger.known ? Math.max(0, Number(ledger.net[k]) || 0) : Infinity;
+        deducted = Math.min(oldTaken, l.qty, realCap);
+        const prior = oldTaken + (Number(old?.qty_waived) || 0);
+        waived = Math.max(0, Math.min(l.qty, Math.max(t, prior)) - deducted);
       } else {
         deducted = Math.min(Number(actual[k]) || 0, l.qty);
+        waived = Math.max(0, Math.min(Number(waivedNow[k]) || 0, l.qty - deducted));
       }
       const reworkDeducted = Math.min(Number(old?.rework_deducted) || 0, l.rework_qty || 0);
       await tx.run(
@@ -135,7 +152,7 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
     }
     // Fully through QC → settled, so nothing later (a settle, a stage re-tick)
     // takes the list again. Otherwise later stages and QC take the rest.
-    await tx.run('UPDATE order_items SET inventory_deducted=$1 WHERE id=$2', [allPassed, orderItemId]);
+    await tx.run('UPDATE order_items SET inventory_deducted=$1 WHERE id=$2', [allPassed || !!item.inventory_deducted, orderItemId]);
 
     // Design rewriting the BOM IS the review.
     if (['design', 'admin', 'owner'].includes(userRole)) {

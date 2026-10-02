@@ -111,17 +111,26 @@ async function ledgerForItem(db, orderItemId) {
 // in production used its share of the stage-timed lines whose stage is ticked.
 // Shares are card qty ÷ item qty, capped at the line. Fins lines are left out:
 // they go by tube length at QC and a correction never moves them.
-async function progressTargets(db, orderItemId, lines, { stageMap, finsCodes }) {
+async function progressTargets(db, orderItemId, lines, { stageMap, finsCodes, settled = false }) {
   const item = await db.get('SELECT id, quantity FROM order_items WHERE id=$1', [orderItemId]);
-  const cards = await db.all('SELECT id, qty, status FROM job_cards WHERE order_item_id=$1', [orderItemId]);
+  const cards = await db.all(
+    'SELECT id, job_card_no, qty, status, fins_deducted, qc_dispatch_qty, qc_fg_qty FROM job_cards WHERE order_item_id=$1', [orderItemId]);
   const cardIds = cards.map(c => c.id);
+  // A card sent back after QC (owner reversal, repair, debit-note return) has
+  // still used its parts: it counts as through QC if it ever got there.
+  const qcTook = new Set((await db.all(
+    `SELECT DISTINCT substring(notes from '\\(JC ([^)]+)\\)') AS jc FROM inventory_transactions
+      WHERE order_item_id=$1 AND source='bom' AND notes LIKE '%QC-approved (JC %'`, [orderItemId])).map(r => r.jc));
+  const everPassed = (c) => PASSED_QC.has(c.status) || !!c.fins_deducted
+    || (Number(c.qc_dispatch_qty) || 0) + (Number(c.qc_fg_qty) || 0) > 0 || qcTook.has(c.job_card_no);
   const done = cardIds.length ? await db.all(
     `SELECT job_card_id, stage_no FROM production_checklist
       WHERE job_card_id = ANY($1) AND done=1 AND stage_no = ANY($2)`,
     [cardIds, Object.keys(stageMap).map(Number)]) : [];
   const stageDone = new Set(done.map(d => `${d.job_card_id}:${d.stage_no}`));
   const itemQty = Number(item?.quantity) || cards.reduce((a, c) => a + (Number(c.qty) || 0), 0) || 1;
-  const allPassed = cards.length > 0 && cards.every(c => PASSED_QC.has(c.status));
+  // An item already settled (its whole list taken at QC/dispatch) stays settled.
+  const allPassed = settled || (cards.length > 0 && cards.every(everPassed));
   const stageOf = (category) => {
     const cat = String(category || '').trim();
     for (const [st, cats] of Object.entries(stageMap)) if (cats.includes(cat)) return Number(st);
@@ -136,7 +145,7 @@ async function progressTargets(db, orderItemId, lines, { stageMap, finsCodes }) 
     let used = 0;
     for (const c of cards) {
       const share = Math.min(1, (Number(c.qty) || 0) / itemQty);
-      if (PASSED_QC.has(c.status)) used += share * total;
+      if (everPassed(c)) used += share * total;
       else if (st && stageDone.has(`${c.id}:${st}`)) used += share * total;
     }
     out.set(ln.inventory_item_id, r4(Math.min(total, used)));

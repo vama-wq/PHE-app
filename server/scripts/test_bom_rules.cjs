@@ -58,6 +58,28 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       ORDER BY current_stock DESC LIMIT 1`, [min, exclude]);
 
   try {
+    // ── R1. Before the history is linked: record-only must never un-settle ──
+    {
+      const it = await q1(`SELECT oi.id, oi.order_id, o.order_code FROM order_items oi JOIN orders o ON o.id=oi.order_id
+         WHERE oi.inventory_deducted = TRUE AND o.order_type <> 'finished_goods'
+           AND EXISTS (SELECT 1 FROM job_cards jc WHERE jc.order_item_id=oi.id AND jc.status IN ('in_progress','pending','qc_pending'))
+           AND EXISTS (SELECT 1 FROM order_item_inventory l WHERE l.order_item_id=oi.id AND l.qty_deducted > 0)
+         ORDER BY oi.id LIMIT 1`);
+      if (it) {
+        const L0 = await lines(it.id);
+        const snap = await snapshot(L0.map(l => l.id));
+        const r = await save(it.order_id, it.id, asSels(L0));
+        const L1 = await lines(it.id);
+        const flag = (await q1('SELECT inventory_deducted f FROM order_items WHERE id=$1', [it.id])).f;
+        ok(`${it.order_code} (list already taken, cards back in production, history not linked): record-only save moves nothing`, r.body.mode === 'record' && !(await unchanged(snap)), r.body.summary);
+        ok('…and never un-settles it: same taken amounts kept, flag stays on', flag === true && L1.every(l => { const o = L0.find(x => x.id === l.id); return l.deducted + l.waived + 1e-6 >= o.deducted + o.waived; }), JSON.stringify(L1.slice(0, 2)));
+        const cards = await qa('SELECT * FROM job_cards WHERE order_item_id=$1', [it.id]);
+        for (const c of cards) { await ded.deductPartialAtQC(txDb, c, 4); await ded.deductStageCategories(txDb, c, 15, 4); await ded.deductStageCategories(txDb, c, 21, 4); }
+        await ded.deductItemInventory(txDb, it.id, it.order_code, 4, 'test settle');
+        ok('…so later stages, QC and settle take nothing a second time', !(await unchanged(snap)), await unchanged(snap));
+      } else ok('No settled item with cards back in production right now (skipped)', true);
+    }
+
     // ── 0. Link the history (inside this transaction) ──
     const linked = await linkStockHistory(client, { apply: true });
     ok(`History linked: ${linked.link.size} movements tied to their order line`, linked.link.size > 1000);
@@ -241,6 +263,38 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       const L0 = await lines(it.id);
       const r = await save(it.order_id, it.id, L0.filter(l => !/Terminal Pin/.test(l.category)).map(l => ({ id: l.id, qty: l.qty })));
       ok('A list without a terminal pin is refused and nothing changes', r.status === 400 && JSON.stringify(await lines(it.id)) === JSON.stringify(L0), r.body.error);
+    }
+
+    // ── R2. A settled item whose card is sent back before QC (owner reversal / repair / return) ──
+    if (cand) {
+      const card = await q1('SELECT id FROM job_cards WHERE order_item_id=$1 ORDER BY id LIMIT 1', [cand.id]);
+      await client.query("UPDATE job_cards SET status='qc_pending' WHERE id=$1", [card.id]);
+      const L0 = await lines(cand.id);
+      const snap = await snapshot(L0.map(l => l.id));
+      const r = await save(cand.order_id, cand.id, asSels(L0));
+      const flag = (await q1('SELECT inventory_deducted f FROM order_items WHERE id=$1', [cand.id])).f;
+      ok(`${cand.order_code} with its card sent back to QC: saving moves nothing and it stays settled`, !(await unchanged(snap)) && flag === true, r.body.summary);
+      await ded.settleItemInventory(txDb, cand.id, 4, cand.order_code);
+      await client.query("UPDATE job_cards SET status='qc_approved' WHERE id=$1", [card.id]);
+      await ded.settleItemInventory(txDb, cand.id, 4, cand.order_code);
+      ok('…and approving QC again takes nothing a second time', !(await unchanged(snap)), await unchanged(snap));
+    }
+
+    // ── R3. A share settled record-only is never taken by a later save ──
+    if (early) {
+      const L = await lines(early.id);
+      const fl = L.find(l => ['Flange', 'Flange Cap', 'Flange Spare', 'Brazing EQ'].includes(l.category));
+      if (fl) {
+        // Make the line "record-only settled" for the flange, then give the item a real take elsewhere.
+        await client.query('UPDATE order_item_inventory SET qty_waived = qty, qty_deducted = 0 WHERE order_item_id=$1 AND inventory_item_id=$2', [early.id, fl.id]);
+        const other = L.find(l => l.id !== fl.id && !/^FIN-/.test(l.item_code));
+        await client.query(`INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by, order_item_id, source)
+                            VALUES ($1,'dispatch_to_production',1,0,'test natural take',4,$2,'bom')`, [other.id, early.id]);
+        await client.query('UPDATE order_item_inventory SET qty_deducted = qty_deducted + 1 WHERE order_item_id=$1 AND inventory_item_id=$2', [early.id, other.id]);
+        const sF = await stock(fl.id);
+        const r = await save(early.order_id, early.id, asSels(await lines(early.id)));
+        ok('A flange settled record-only is not taken when a later save runs by difference', r.body.mode === 'difference' && (await stock(fl.id)) === sF, `${r.body.summary} | ${sF} → ${await stock(fl.id)}`);
+      }
     }
 
     // ── G. The every-restart sweep is gone ──

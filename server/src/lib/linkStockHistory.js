@@ -16,8 +16,6 @@ async function linkStockHistory(c, { apply = false } = {}) {
   const itemsOf = {};
   for (const it of items) (itemsOf[it.order_id] ||= []).push(it);
   const cards = Object.fromEntries((await q('SELECT job_card_no, order_item_id, order_id FROM job_cards')).map(j => [j.job_card_no, j]));
-  const bomHas = {};
-  for (const b of await q('SELECT order_item_id, inventory_item_id FROM order_item_inventory')) (bomHas[b.order_item_id] ||= new Set()).add(b.inventory_item_id);
   const edits = await q(`SELECT a.id, a.created_at, a.created_by, a.order_id,
                                 substring(a.description from 'item #([0-9]+)')::int AS item_id
                            FROM activity_log a WHERE a.activity_type='inventory_edited' ORDER BY a.created_at, a.id`);
@@ -30,10 +28,17 @@ async function linkStockHistory(c, { apply = false } = {}) {
   // The order a note refers to: same code, created before the movement
   // (codes of deleted orders have been reused).
   const orderFor = (code, at) => {
-    const cands = (byCode[code] || []).filter(o => o.created_at <= new Date(at.getTime() + 5 * 60e3));
+    const cands = (byCode[code] || []).filter(o => o.created_at <= at);
     cands.sort((a, b) => b.created_at - a.created_at);
     return cands[0] || null;
   };
+  // Did this order ever lose a line? (cards pointing at a line that is gone,
+  // or an 'Item deleted' give-back)
+  const allCards = await q('SELECT order_id, order_item_id FROM job_cards');
+  const itemIds = new Set(items.map(i => i.id));
+  const lostByCard = new Set(allCards.filter(j => j.order_item_id && !itemIds.has(j.order_item_id)).map(j => j.order_id));
+  const lostByNote = new Set(tx.filter(t => /^Item deleted — /.test(t.notes || '')).map(t => ((t.notes || '').match(CODE_RE) || [])[0]));
+  const lostLine = (o) => lostByCard.has(o.id) || lostByNote.has(o.order_code);
   const link = new Map();            // tx id → { item, source, how }
   const why = new Map();             // tx id → reason it stayed unlinked
 
@@ -81,10 +86,12 @@ async function linkStockHistory(c, { apply = false } = {}) {
       let it = byCard;
       if (!it) {
         const dwg = (m[1].match(/^Dwg: (.*?)(?: \| .*)?$/)?.[1] || '').trim();
-        let cand = dwg ? its.filter(x => x.dwg === dwg) : its;
-        if (cand.length > 1) cand = cand.filter(x => bomHas[x.id]?.has(r.item_id));
+        // Several lines could have taken it → doubt → leave it (record-only).
+        // No line matches → a renamed drawing on a one-line order is fine, but
+        // not if the order ever lost a line (the stock may be that line's).
+        const cand = dwg ? its.filter(x => x.dwg === dwg) : (only ? its : []);
         if (cand.length === 1) it = cand[0].id;
-        else if (!cand.length && only) it = only;     // drawing number edited since; one line only
+        else if (!cand.length && only && !lostLine(o)) it = only;
       }
       if (it) {
         link.set(r.id, { item: it, source: 'bom', how: byCard ? 'card' : 'drawing' });
@@ -101,17 +108,12 @@ async function linkStockHistory(c, { apply = false } = {}) {
       const itemsSeen = [...new Set(prev.map(a => a.item))];
       let it = itemsSeen.length === 1 ? itemsSeen[0] : null;
       if (!it) { const sameQty = prev.filter(a => Math.abs(a.qty - r.qty) < 1e-6); if (sameQty.length === 1) it = sameQty[0].item; }
-      if (!it) it = only;
+      if (!it && only && !lostLine(o)) it = only;
       if (it) link.set(r.id, { item: it, source: 'bom', how: 'reverted approval' }); else why.set(r.id, 'reverted: line unknown');
       continue;
     }
     if (/^Drawing reopened — |^Item deleted — /.test(notes)) {
-      let it = only;
-      if (!it) {
-        const took = new Set([...link.entries()].filter(([id, l]) => l.source === 'bom'
-          && tx.find(x => x.id === id)?.item_id === r.item_id && its.some(x => x.id === l.item)).map(([, l]) => l.item));
-        if (took.size === 1) it = [...took][0];
-      }
+      const it = only && !lostLine(o) ? only : null;     // which line it was is not recorded
       if (it) link.set(r.id, { item: it, source: 'bom', how: 'give-back' }); else why.set(r.id, 'give-back: line unknown');
       continue;
     }
