@@ -78,7 +78,8 @@ const WIRE_DRAW = {
     ],
     copper: [
       { minG: 20, maxG: 24, pct: 0.15 },
-      { minG: 25, maxG: 29, pct: 0.26 },
+      // 25-29 moved 26% -> 20% (owner, 2 Oct 2026). Cards already made keep 26%.
+      { minG: 25, maxG: 29, pct: 0.20 },
       // 30 and above moved 29% -> 21% (owner, 28 Sep 2026): a 1 kW 31 SWG card
       // wound to 68.24 ohm on 29% landed at 57-58 ohm after draw, i.e. a real
       // draw of 18-20%. Cards already made keep their 29% (frozen figures).
