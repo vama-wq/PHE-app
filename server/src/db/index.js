@@ -483,11 +483,26 @@ async function initDB(retries = 20, delayMs = 10000) {
         WHERE jc.id = fg.job_card_id AND fg.product_code IS NULL AND oi.product_code IS NOT NULL`);
       // Per-BOM-line deduction tracking: stage-timed categories (15 brazing/flange,
       // 21 nipple) deduct early; QC deducts the remainder. qty_deducted accumulates.
+      // The one-off fill below ran on EVERY start, marking lines "taken" with no
+      // stock moving whenever an item was flagged deducted with a line at 0 (e.g.
+      // after a drawing re-upload) — a later give-back then returned stock that
+      // never left. It now runs only when the column is first added (1 Oct 2026).
+      const hadQtyDeducted = (await pool.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name='order_item_inventory' AND column_name='qty_deducted'`)).rowCount > 0;
       await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_deducted NUMERIC DEFAULT 0`);
-      await pool.query(`
-        UPDATE order_item_inventory oii SET qty_deducted = oii.qty
-        FROM order_items oi
-        WHERE oi.id = oii.order_item_id AND oi.inventory_deducted = TRUE AND COALESCE(oii.qty_deducted,0) = 0`);
+      if (!hadQtyDeducted) {
+        await pool.query(`
+          UPDATE order_item_inventory oii SET qty_deducted = oii.qty
+          FROM order_items oi
+          WHERE oi.id = oii.order_item_id AND oi.inventory_deducted = TRUE AND COALESCE(oii.qty_deducted,0) = 0`);
+      }
+      // Inventory-correction rules (owner, 1 Oct 2026 — lib/stockLedger.js):
+      // each stock movement remembers its order line and what caused it, and a
+      // record-only correction settles a line without taking stock (qty_waived).
+      await pool.query(`ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS order_item_id INTEGER`);
+      await pool.query(`ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS source TEXT`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS inventory_transactions_order_item ON inventory_transactions (order_item_id)`);
+      await pool.query(`ALTER TABLE order_item_inventory ADD COLUMN IF NOT EXISTS qty_waived NUMERIC DEFAULT 0`);
       // The order_type CHECK predates finished_goods — recreate it. (The status
       // CHECK is recreated in the customer-query migration further below.)
       await pool.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_order_type_check`);

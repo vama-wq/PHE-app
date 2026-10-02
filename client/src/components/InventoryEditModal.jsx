@@ -20,6 +20,8 @@ export default function InventoryEditModal({ orderId, item, onClose, onDone }) {
   const [showDropdown, setShowDropdown] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // What the inventory rules did with the save (owner, 1 Oct 2026).
+  const [result, setResult] = useState(null);
 
   useEffect(() => { api.get('/inventory').then(r => setInventoryItems(r.data)).catch(() => {}); }, []);
 
@@ -52,7 +54,8 @@ export default function InventoryEditModal({ orderId, item, onClose, onDone }) {
     setSaving(true);
     setError('');
     try {
-      await api.put(`/orders/${orderId}/items/${item.id}/inventory`, { inventory_item_ids });
+      const r = await api.put(`/orders/${orderId}/items/${item.id}/inventory`, { inventory_item_ids });
+      if (r.data?.summary) { setResult(r.data); setSaving(false); return; }
       onDone?.();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to update inventory');
@@ -60,12 +63,28 @@ export default function InventoryEditModal({ orderId, item, onClose, onDone }) {
     }
   };
 
+  if (result) {
+    const moved = result.mode === 'difference' && (result.moves?.length || result.short?.length);
+    return (
+      <Modal open title={`Inventory — ${item?.drawing_number || `Item ${item?.id}`}`} onClose={() => onDone?.()} size="lg">
+        <div className="space-y-4">
+          <div className={`rounded-lg border px-3 py-2.5 text-sm ${moved ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-green-50 border-green-200 text-green-800'}`}>
+            <div className="font-medium mb-0.5">Inventory saved</div>
+            <div>{result.summary.charAt(0).toUpperCase() + result.summary.slice(1)}.</div>
+          </div>
+          <p className="text-xs text-gray-500">This is also written on the order's timeline.</p>
+          <button type="button" className="btn-primary w-full" onClick={() => onDone?.()}>Done</button>
+        </div>
+      </Modal>
+    );
+  }
+
   return (
     <Modal open title={`Inventory — ${item?.drawing_number || `Item ${item?.id}`}`} onClose={onClose} size="lg">
       <div className="space-y-4">
         <p className="text-xs text-gray-500">
-          Adjust the inventory this item consumes. If this item's inventory was already deducted,
-          the change is reconciled in stock automatically.
+          Correct the inventory this item consumes. Stock only changes where real stock was already
+          taken for this item, and then only by the difference; otherwise just the list is corrected.
         </p>
 
         <div className="relative">

@@ -9,7 +9,8 @@ const { createNotification } = require('./notifications');
 // longer tied to drawing approval — it now fires when the item clears QC (single
 // job card) or when a partially-dispatched item is fully dispatched (see qc.js /
 // dispatch.js). These helpers stay imported for the inventory-edit reconcile path.
-const { deductItemInventory, restoreItemInventory, replayDeductions } = require('../lib/inventoryDeduction');
+const { deductItemInventory, restoreItemInventory } = require('../lib/inventoryDeduction');
+const { applyBomCorrection } = require('../lib/bomCorrection');
 const rework = require('../lib/rework');
 const orderActions = require('../services/actions/orders');
 
@@ -717,7 +718,6 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
   const item = await db.get('SELECT id, inventory_deducted, remark FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
   const ord = await db.get('SELECT order_code, order_type FROM orders WHERE id=$1', [req.params.id]);
-  const orderCode = ord?.order_code || `Order #${req.params.id}`;
   if (ord?.order_type !== 'finished_goods') {
     const pinCat = requiredPinCategory(item.remark);
     if (!(await hasPinCategory(db, sels.map(s => parseInt(s.id)), pinCat))) {
@@ -728,43 +728,26 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
       });
     }
   }
-
-  // Gate on what was ACTUALLY taken, not on the settle flag. An item over 50
-  // pieces runs as several cards and spends the whole middle of its life
-  // part-deducted with inventory_deducted still FALSE — so the flag alone let
-  // an edit orphan everything already out of stock (the DELETE below drops
-  // qty_deducted with the rows) and then take it again at settle.
-  const partly = await db.get(
-    'SELECT 1 AS x FROM order_item_inventory WHERE order_item_id=$1 AND COALESCE(qty_deducted,0) > 0 LIMIT 1',
-    [item.id]);
-  const wasDeducted = !!item.inventory_deducted || !!partly;
-  if (wasDeducted) await restoreItemInventory(db, item.id, orderCode, req.user.id, 'Inventory edited');
-
+  // Checked before anything changes (it used to run after the old stock had
+  // already been given back, leaving that give-back in place on a refusal).
   const reworkErr = await checkReworkPortions(db, sels, item.id);
   if (reworkErr) return res.status(400).json({ error: reworkErr });
 
-  await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
-  for (const sel of sels) {
-    await db.run('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty, rework_qty) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
-      [item.id, parseInt(sel.id), parseFloat(sel.qty) || 0, Number(sel.rework_qty) || 0]);
+  // The owner's inventory-correction rules (1 Oct 2026, lib/stockLedger.js):
+  // stock moves only by the difference, and only when real stock was really
+  // taken for this line; otherwise the list is corrected and stock untouched.
+  let result;
+  try {
+    result = await applyBomCorrection(db, { orderItemId: item.id, sels, userId: req.user.id, userRole: req.user.role });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('inventory correction failed:', err);
+    return res.status(500).json({ error: 'Could not save the inventory — nothing was changed. Please try again.' });
   }
-
-  // Re-take against the new BOM, to the progress the cards have actually made
-  // — a part-built item must not have its whole BOM deducted just because the
-  // selection was edited.
-  if (wasDeducted) await replayDeductions(db, item.id, orderCode, req.user.id);
-
-  // Design rewriting the BOM IS the review — clear the flag on the way past so
-  // they never have to confirm a thing they just finished editing.
-  if (['design', 'admin', 'owner'].includes(req.user.role)) {
-    await db.run(
-      "UPDATE order_items SET bom_review=CASE WHEN bom_review='needed' THEN 'confirmed' ELSE bom_review END, " +
-      "bom_review_by=CASE WHEN bom_review='needed' THEN $1 ELSE bom_review_by END, " +
-      "bom_review_at=CASE WHEN bom_review='needed' THEN NOW() ELSE bom_review_at END WHERE id=$2",
-      [req.user.id, item.id]);
-  }
-  await logActivity(req.params.id, null, 'inventory_edited', `Inventory selection updated for item #${item.id}`, req.user.id);
-  res.json({ message: 'Inventory updated', reDeducted: wasDeducted });
+  await logActivity(req.params.id, null, 'inventory_edited',
+    `Inventory selection updated for item #${item.id} — ${result.summary}`, req.user.id);
+  res.json({ message: 'Inventory updated', summary: result.summary, mode: result.mode,
+    moves: result.moves, short: result.short, reDeducted: result.moves.length > 0 });
 });
 
 router.post('/:orderId/items/:itemId/images', authenticate, authorize('admin', 'owner'), ...uploadOrderItemImage, async (req, res) => {

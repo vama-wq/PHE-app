@@ -8,8 +8,12 @@
 // order_item_inventory.qty_deducted tracks how much of each BOM line has been
 // consumed so far (stage triggers prorate by job-card qty / item qty), and
 // order_items.inventory_deducted marks the item fully settled.
+// order_item_inventory.qty_waived is what a record-only correction settled
+// WITHOUT taking stock (stockLedger.js) — it counts as done, never as taken, so
+// later stages and QC do not take it and a give-back never returns it.
 
 const rework = require('./rework');
+const { recordMove } = require('./stockLedger');
 
 const STAGE_CATEGORY_MAP = {
   15: ['Flange', 'Flange Cap', 'Flange Spare', 'Brazing EQ'],
@@ -78,11 +82,9 @@ async function deductLine(db, sel, dedQty, note, userId) {
   if (fromStock > 0) {
     const newStock = (inv.current_stock || 0) - fromStock; // allow negative so shortages are visible
     await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
-    await db.insert(
-      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-       VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
-      [sel.inventory_item_id, fromStock, newStock, fromRework > 0 ? `${note} | ${fromRework} from rework bin` : note, userId]
-    );
+    await recordMove(db, { itemId: sel.inventory_item_id, type: 'dispatch_to_production', qty: fromStock, balanceAfter: newStock,
+      notes: fromRework > 0 ? `${note} | ${fromRework} from rework bin` : note, userId,
+      orderItemId: sel.order_item_id || null, source: 'bom' });
   }
   await db.run('UPDATE order_item_inventory SET qty_deducted = COALESCE(qty_deducted,0) + $1 WHERE id=$2', [dedQty, sel.id]);
 }
@@ -117,7 +119,7 @@ async function deductStageCategories(db, jc, stageNo, userId) {
   );
   for (const sel of sels) {
     const total = parseFloat(sel.qty || 0);
-    const already = parseFloat(sel.qty_deducted || 0);
+    const already = parseFloat(sel.qty_deducted || 0) + parseFloat(sel.qty_waived || 0);
     const ded = Math.min(total * ratio, total - already);
     if (ded <= 0) continue;
     const noteParts = [`Order: ${orderCode}`];
@@ -162,7 +164,7 @@ async function deductPartialAtQC(db, jc, userId) {
   );
   for (const sel of sels) {
     const total = parseFloat(sel.qty || 0);
-    const already = parseFloat(sel.qty_deducted || 0);
+    const already = parseFloat(sel.qty_deducted || 0) + parseFloat(sel.qty_waived || 0);
     const ded = Math.min(total * ratio, total - already);
     if (ded <= 0) continue;
     const noteParts = [`Order: ${orderCode}`];
@@ -253,7 +255,7 @@ async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = '
   );
   for (const sel of sels) {
     if (FINS_CODES.includes(sel.item_code)) continue; // length-based, handled separately
-    const remaining = parseFloat(sel.qty || 0) - parseFloat(sel.qty_deducted || 0);
+    const remaining = parseFloat(sel.qty || 0) - parseFloat(sel.qty_deducted || 0) - parseFloat(sel.qty_waived || 0);
     if (remaining <= 0) continue;
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
@@ -318,11 +320,9 @@ async function applyRemakeExtras(db, jc, extras, userId) {
     if (!inv) continue;
     const newStock = (inv.current_stock || 0) - qty;
     await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, invId]);
-    await db.insert(
-      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-       VALUES ($1,'dispatch_to_production',$2,$3,$4,$5)`,
-      [invId, qty, newStock, `Order: ${orderCode} | Extra consumption for remade qty (QC approval, JC ${jc.job_card_no})`, userId]
-    );
+    await recordMove(db, { itemId: invId, type: 'dispatch_to_production', qty, balanceAfter: newStock,
+      notes: `Order: ${orderCode} | Extra consumption for remade qty (QC approval, JC ${jc.job_card_no})`, userId,
+      orderItemId: await resolveJobCardItemId(db, jc), source: 'remake' });
   }
 }
 
@@ -346,11 +346,8 @@ async function restoreItemInventory(db, itemId, orderCode, userId, reasonNote) {
       if (inv) {
         const newStock = (inv.current_stock || 0) + toStock;
         await db.run('UPDATE inventory_items SET current_stock=$1 WHERE id=$2', [newStock, sel.inventory_item_id]);
-        await db.insert(
-          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-           VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
-          [sel.inventory_item_id, toStock, newStock, `${reasonNote} — ${orderCode}`, userId]
-        );
+        await recordMove(db, { itemId: sel.inventory_item_id, type: 'return_from_production', qty: toStock, balanceAfter: newStock,
+          notes: `${reasonNote} — ${orderCode}`, userId, orderItemId: itemId, source: 'bom' });
       }
     }
     await db.run('UPDATE order_item_inventory SET qty_deducted = 0, rework_deducted = 0 WHERE id=$1', [sel.id]);
@@ -430,4 +427,4 @@ async function settleItemInventory(db, orderItemId, userId, orderCode) {
   if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)');
 }
 
-module.exports = { buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, replayDeductions, FINS_CODES };
+module.exports = { STAGE_CATEGORY_MAP, buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, replayDeductions, FINS_CODES };
