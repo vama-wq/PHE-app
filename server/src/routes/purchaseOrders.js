@@ -841,12 +841,12 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     if (!item) return res.status(404).json({ error: 'Item not found' });
     if (item.received) return res.status(400).json({ error: 'This item is already received' });
     if (item.short_closed) return res.status(400).json({ error: 'This balance was short-closed' });
-    // Two documents are compulsory on every receipt: the supplier's invoice and
-    // the PO copy that came with the goods — image or PDF either way.
+    // The supplier's invoice is compulsory on every receipt. The PO copy that
+    // came with the goods is optional (owner, 2 Oct 2026 — suppliers often do
+    // not send it back) — image or PDF when attached.
     const invoiceFile = req.files?.invoice?.[0] || null;
     const poDocFile = req.files?.po_document?.[0] || null;
     if (!invoiceFile) return res.status(400).json({ error: 'The invoice received with this delivery is required' });
-    if (!poDocFile) return res.status(400).json({ error: 'The PO copy (image or PDF) received with the goods is required' });
 
     // A delivery can be short of what was ordered (2000 ordered, 1780 arrived).
     // The arrived quantity is received on THIS line and the balance splits off
@@ -958,7 +958,7 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
            billed_qty=$11, invoice_no=$12, invoice_date=$13, billed_pf=$14, receive_undo=$15::jsonb WHERE id=$16`,
         [invoiceFile.storagePath, invoiceFile.originalname, otherCost, otherReason,
          lineQty, lineRate, Math.round(lineQty * lineRate * 100) / 100,
-         overQty, poDocFile.storagePath, poDocFile.originalname,
+         overQty, poDocFile?.storagePath || null, poDocFile?.originalname || null,
          billedQty, invoiceNo, invoiceDate, billedPf, JSON.stringify(undo), item.id]
       );
       if (billedRate != null && Math.abs(billedRate - (Number(item.rate) || 0)) > 1e-9) {

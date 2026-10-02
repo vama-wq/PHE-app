@@ -873,7 +873,6 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
       // Over-receipt is allowed — it parks for the owner's approval.
     }
     if (!file) return setError('Attach the invoice received with this delivery');
-    if (!poDoc) return setError('Attach the PO copy (image or PDF) that came with the goods');
     for (const it of coveredList) {
       // Compulsory: a blank used to mean "all of it", which quietly recorded a
       // full delivery for a short one. Over-receipt parks for owner approval.
@@ -898,7 +897,7 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
         const fd = new FormData();
         fd.append('invoice', file);
         fd.append('received_qty', qtyIn[it.id]);
-        fd.append('po_document', poDoc);
+        if (poDoc) fd.append('po_document', poDoc);   // optional
         // The bill's figures for this line, as checked by accounts
         const bl = billLines[it.id] || {};
         if (bl.qty !== undefined && String(bl.qty).trim() !== '') fd.append('billed_qty', bl.qty);
@@ -1058,7 +1057,7 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
               </div>
             )}
             <div>
-              <label className="label">PO copy received with the goods <span className="text-red-500">*</span></label>
+              <label className="label">PO copy received with the goods <span className="text-gray-400 font-normal">(optional)</span></label>
               <FileUpload onFile={setPoDoc} accept=".pdf,.jpg,.jpeg,.png" label="Select PO document (PDF or image)" />
             </div>
             <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-3">
