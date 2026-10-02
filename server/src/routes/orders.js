@@ -815,33 +815,39 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
         });
       }
     }
+    const orderItem = await db.get('SELECT id FROM order_items WHERE id=$1 AND order_id=$2', [parseInt(item_id), req.params.id]);
+    if (!orderItem) return res.status(404).json({ error: 'Item not found' });
+    // Checked before anything is written (it used to run after the drawing was saved).
+    const reworkErr = await checkReworkPortions(db, invSelections, orderItem.id);
+    if (reworkErr) return res.status(400).json({ error: reworkErr });
+
+    // The inventory list chosen with the drawing goes through the owner's
+    // inventory-correction rules (1 Oct 2026), exactly like the inventory box:
+    // it used to replace the list directly, erasing what was already taken so
+    // that production could take it again. On a new item nothing has been used
+    // yet, so the list is simply saved. (This also confirms the BOM review.)
+    let result;
+    try {
+      result = await applyBomCorrection(db, { orderItemId: orderItem.id, sels: invSelections, userId: req.user.id, userRole: req.user.role });
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message });
+      throw err;
+    }
+
     const r = await db.insert(
       `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
-      [req.params.id, parseInt(item_id), req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null, notes||null, req.user.id]
+      [req.params.id, orderItem.id, req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null, notes||null, req.user.id]
     );
-
-    // Replace this item's inventory selection with what design just chose.
-    const reworkErr = await checkReworkPortions(db, invSelections, parseInt(item_id));
-    if (reworkErr) return res.status(400).json({ error: reworkErr });
-    await db.run('DELETE FROM order_item_inventory WHERE order_item_id=$1', [parseInt(item_id)]);
-    for (const sel of invSelections) {
-      await db.run(
-        'INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty, rework_qty) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
-        [parseInt(item_id), parseInt(sel.id), parseFloat(sel.qty) || 0, Number(sel.rework_qty) || 0]
-      );
-    }
-
-    // Design picked this BOM by hand on the way in — that satisfies the check.
-    await db.run(
-      "UPDATE order_items SET bom_review=CASE WHEN bom_review='needed' THEN 'confirmed' ELSE bom_review END, " +
-      "bom_review_by=CASE WHEN bom_review='needed' THEN $1 ELSE bom_review_by END, " +
-      "bom_review_at=CASE WHEN bom_review='needed' THEN NOW() ELSE bom_review_at END WHERE id=$2",
-      [req.user.id, parseInt(item_id)]);
 
     await logActivity(req.params.id, null, 'drawing_uploaded',
       req.file ? `Reference drawing uploaded: ${req.file.originalname}` : 'Drawing entry recorded without file (finished-goods order)', req.user.id);
-    res.status(201).json({ id: r.lastInsertRowid, file_name: req.file?.filename || null, original_name: req.file?.originalname || null });
+    if (!result.fresh) {
+      await logActivity(req.params.id, null, 'inventory_edited',
+        `Inventory selection updated for item #${orderItem.id} (with a drawing upload) — ${result.summary}`, req.user.id);
+    }
+    res.status(201).json({ id: r.lastInsertRowid, file_name: req.file?.filename || null, original_name: req.file?.originalname || null,
+      summary: result.summary, mode: result.mode, fresh: result.fresh, moves: result.moves, short: result.short });
   } catch (e) {
     console.error('drawing upload error:', e);
     res.status(500).json({ error: 'Failed to save drawing' });

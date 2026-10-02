@@ -28,6 +28,9 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
   const designer = await q1("SELECT id, name, role FROM users WHERE id=4");
   const auth = require(S + '/src/middleware/auth.js');
   auth.authenticate = (req, res, next) => { req.user = designer; next(); };
+  // Drawing uploads: no real file is stored — the upload step is stubbed.
+  const upload = require(S + '/src/middleware/upload.js');
+  upload.uploadOrderDrawing = [(req, res, next) => { if (req.body.__file) req.file = { storagePath: 'test/x.pdf', filename: 'x.pdf', originalname: 'x.pdf' }; next(); }];
   const express = require(S + '/node_modules/express');
   const app = express();
   app.use(express.json());
@@ -49,6 +52,11 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     return { status: r.status, body: await r.json() };
   };
   const asSels = (ls) => ls.map(l => ({ id: l.id, qty: l.qty }));
+  const uploadDrawing = async (orderId, itemId, sels) => {
+    const r = await fetch(`${base}/api/orders/${orderId}/drawings`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ __file: 1, item_id: String(itemId), inventory_item_ids: JSON.stringify(sels) }) });
+    return { status: r.status, body: await r.json() };
+  };
   const snapshot = async (ids) => { const o = {}; for (const id of new Set(ids)) o[id] = await stock(id); return o; };
   const unchanged = async (snap) => { for (const [id, v] of Object.entries(snap)) if (Math.abs((await stock(id)) - v) > 1e-6) return `item ${id}: ${v} → ${await stock(id)}`; return null; };
   const pickStock = async (exclude, min, cat = null) => q1(`SELECT id, item_code, current_stock::float AS s FROM inventory_items
@@ -71,7 +79,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
         const r = await save(it.order_id, it.id, asSels(L0));
         const L1 = await lines(it.id);
         const flag = (await q1('SELECT inventory_deducted f FROM order_items WHERE id=$1', [it.id])).f;
-        ok(`${it.order_code} (list already taken, cards back in production, history not linked): record-only save moves nothing`, r.body.mode === 'record' && !(await unchanged(snap)), r.body.summary);
+        ok(`${it.order_code} (list already taken, cards back in production): saving the same list moves nothing`, r.status === 200 && !(await unchanged(snap)), r.body.summary);
         ok('…and never un-settles it: same taken amounts kept, flag stays on', flag === true && L1.every(l => { const o = L0.find(x => x.id === l.id); return l.deducted + l.waived + 1e-6 >= o.deducted + o.waived; }), JSON.stringify(L1.slice(0, 2)));
         const cards = await qa('SELECT * FROM job_cards WHERE order_item_id=$1', [it.id]);
         for (const c of cards) { await ded.deductPartialAtQC(txDb, c, 4); await ded.deductStageCategories(txDb, c, 15, 4); await ded.deductStageCategories(txDb, c, 21, 4); }
@@ -82,7 +90,8 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
 
     // ── 0. Link the history (inside this transaction) ──
     const linked = await linkStockHistory(client, { apply: true });
-    ok(`History linked: ${linked.link.size} movements tied to their order line`, linked.link.size > 1000);
+    const linkedTotal = Number((await q1('SELECT COUNT(*) n FROM inventory_transactions WHERE order_item_id IS NOT NULL')).n);
+    ok(`History linked: ${linkedTotal} movements tied to their order line (${linked.link.size} newly in this run)`, linkedTotal > 1000);
 
     // ── A. The June TRAIN orders: record only, nothing moves ──
     for (const code of ['ORD-003-26', 'ORD-004-26', 'ORD-009-26', 'ORD-012-26', 'ORD-016-26', 'ORD-018-26', 'ORD-022-26', 'ORD-024-26']) {
@@ -294,6 +303,62 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
         const sF = await stock(fl.id);
         const r = await save(early.order_id, early.id, asSels(await lines(early.id)));
         ok('A flange settled record-only is not taken when a later save runs by difference', r.body.mode === 'difference' && (await stock(fl.id)) === sF, `${r.body.summary} | ${sF} → ${await stock(fl.id)}`);
+      }
+    }
+
+    // ── U. Drawing uploads follow the same rules ──
+    {
+      const it = await q1(`SELECT oi.id, oi.order_id FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.order_code='ORD-024-26' ORDER BY oi.id LIMIT 1`);
+      const L0 = await lines(it.id);
+      const extra = await pickStock(L0.map(l => l.id), 50);
+      const snap = await snapshot([...L0.map(l => l.id), extra.id]);
+      const nDw = Number((await q1('SELECT COUNT(*) n FROM order_drawings WHERE item_id=$1', [it.id])).n);
+      const r = await uploadDrawing(it.order_id, it.id, [...asSels(L0), { id: extra.id, qty: 12 }]);
+      const after = await lines(it.id);
+      ok('Drawing upload on ORD-024-26 (TRAIN): drawing saved, list record-only, no stock moved',
+        r.status === 201 && r.body.mode === 'record' && !(await unchanged(snap)) && Number((await q1('SELECT COUNT(*) n FROM order_drawings WHERE item_id=$1', [it.id])).n) === nDw + 1, r.body.summary);
+      ok('…and the list keeps its settled record (nothing can be taken for it later)', after.every(l => l.deducted + l.waived + 1e-6 >= l.qty), JSON.stringify(after.slice(0, 2)));
+    }
+    if (cand) {
+      const L0 = await lines(cand.id);
+      const X = await pickStock(L0.map(l => l.id), 100);
+      const sx = await stock(X.id);
+      const snapOld = await snapshot(L0.map(l => l.id));
+      const r = await uploadDrawing(cand.order_id, cand.id, [...asSels(L0), { id: X.id, qty: 7 }]);
+      ok(`Drawing upload on ${cand.order_code} (really taken) with a forgotten item: takes exactly 7 ${X.item_code}, nothing else moves`,
+        r.status === 201 && Math.abs((await stock(X.id)) - (sx - 7)) < 1e-6 && !(await unchanged(snapOld)), r.body.summary);
+    }
+    {
+      const fresh = await q1(`SELECT oi.id, oi.order_id, o.order_code FROM order_items oi JOIN orders o ON o.id=oi.order_id
+         WHERE NOT EXISTS (SELECT 1 FROM job_cards jc WHERE jc.order_item_id=oi.id)
+           AND NOT EXISTS (SELECT 1 FROM inventory_transactions t WHERE t.order_item_id=oi.id)
+           AND COALESCE(oi.inventory_deducted,FALSE)=FALSE AND o.order_type <> 'finished_goods'
+         ORDER BY oi.id DESC LIMIT 1`);
+      if (fresh) {
+        const pin = await q1(`SELECT id FROM inventory_items WHERE TRIM(category)='Terminal Pin' AND current_stock > 10 ORDER BY id LIMIT 1`);
+        const hv = await q1(`SELECT id FROM inventory_items WHERE TRIM(category)='Heavy Terminal Pin' AND current_stock > 10 ORDER BY id LIMIT 1`);
+        const remark = (await q1('SELECT remark FROM order_items WHERE id=$1', [fresh.id])).remark || '';
+        const pinId = /heavy[\s\-_.]*terminal[\s\-_.]*pin/i.test(remark) ? hv.id : pin.id;
+        const snap = await snapshot([pinId]);
+        const r = await uploadDrawing(fresh.order_id, fresh.id, [{ id: pinId, qty: 4 }]);
+        const after = await lines(fresh.id);
+        ok(`First drawing upload on a new item (${fresh.order_code}): the list is simply saved, nothing taken, no extra message`,
+          r.status === 201 && r.body.fresh === true && !(await unchanged(snap)) && after.length === 1 && after[0].deducted === 0 && after[0].waived === 0, r.body.summary);
+      } else ok('No brand-new item without cards right now (skipped)', true);
+    }
+    if (early) {
+      // stage 15 was ticked and its flange share recorded earlier in this test
+      const L0 = await lines(early.id);
+      const fl = L0.find(l => ['Flange', 'Flange Cap', 'Flange Spare', 'Brazing EQ'].includes(l.category));
+      if (fl) {
+        const before = fl.deducted + fl.waived;
+        const r = await uploadDrawing(early.order_id, early.id, asSels(L0));
+        const fl2 = (await lines(early.id)).find(l => l.id === fl.id);
+        const sF = await stock(fl.id);
+        const card = await q1('SELECT * FROM job_cards WHERE id=$1', [early.card_id]);
+        await ded.deductStageCategories(txDb, card, 15, 4);
+        ok('Drawing upload part-way through production keeps what stage 15 already took, so stage 15 never takes it twice',
+          r.status === 201 && fl2.deducted + fl2.waived + 1e-6 >= before && (await stock(fl.id)) === sF, `${r.body.summary} | before ${before}, after ${fl2.deducted + fl2.waived}`);
       }
     }
 

@@ -163,8 +163,16 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
         [userId, orderItemId]);
     }
 
+    // Nothing used yet and nothing recorded before: simply the item's list
+    // (a first drawing upload, or an order not started) — no message needed.
+    const fresh = mode === 'record' && !ledger.naturalReal && !ledger.hadPlaceholder
+      && newLines.every(l => !(Number(targets.get(l.inventory_item_id)) > 0))
+      && oldLines.every(l => !(Number(l.qty_deducted) > 0) && !(Number(l.qty_waived) > 0))
+      && !item.inventory_deducted;
     let summary;
-    if (mode === 'record') {
+    if (fresh) {
+      summary = 'list saved — nothing used yet; stock is taken as production reaches each stage';
+    } else if (mode === 'record') {
       summary = `list corrected only — stock not changed (${why})`;
     } else if (!moves.length && !short.length) {
       summary = 'stock already matches the corrected list — nothing moved';
@@ -177,7 +185,7 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
       for (const s of short) parts.push(`not taken: ${s.code} (needs ${fmt(s.need)}, only ${fmt(s.stock)} in stock)`);
       summary = `auto-corrected by inventory rules: ${parts.join('; ')}`;
     }
-    return { mode, why, moves, short, summary, orderId: item.order_id };
+    return { mode, why, moves, short, summary, fresh, orderId: item.order_id };
   });
 }
 

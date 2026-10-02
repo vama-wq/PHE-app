@@ -17,6 +17,8 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   const [notes, setNotes] = useState('');
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
+  // What the inventory rules did with the list (owner, 1 Oct 2026).
+  const [result, setResult] = useState(null);
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -83,13 +85,30 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
     setUploading(true);
     setError('');
     try {
-      await uploadApi.post(`/orders/${orderId}/drawings`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const r = await uploadApi.post(`/orders/${orderId}/drawings`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (r.data?.summary && !r.data.fresh) { setResult(r.data); setUploading(false); return; }
       onDone?.();
     } catch (err) {
       setError(err.response?.data?.error || 'Upload failed');
       setUploading(false);
     }
   };
+
+  if (result) {
+    const moved = result.mode === 'difference' && (result.moves?.length || result.short?.length);
+    return (
+      <Modal open title={label} onClose={() => onDone?.()} size="lg">
+        <div className="space-y-4">
+          <div className={`rounded-lg border px-3 py-2.5 text-sm ${moved ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-green-50 border-green-200 text-green-800'}`}>
+            <div className="font-medium mb-0.5">Drawing uploaded — inventory saved</div>
+            <div>{result.summary.charAt(0).toUpperCase() + result.summary.slice(1)}.</div>
+          </div>
+          <p className="text-xs text-gray-500">This is also written on the order's timeline.</p>
+          <button type="button" className="btn-primary w-full" onClick={() => onDone?.()}>Done</button>
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal open title={label} onClose={onClose} size="lg">
