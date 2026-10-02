@@ -36,6 +36,9 @@ const PETROL_GROUPS = ['fixed_admin', 'fixed_production'];
 // July 2026, which stays as paid).
 const MONTH_BASIS_DAYS = 30;
 const basisDays = (_month, _group) => MONTH_BASIS_DAYS;
+// Months whose late cuts the owner waived: no late-cut money (July 2026 was
+// waived by zeroing the stored minutes; August 2026 waived 2 Oct 2026).
+const LATE_CUT_WAIVED_MONTHS = ['2026-08'];
 // OT hourly rate = day pay ÷ standard-hours: 8h for labour/admin, 10h for
 // production (their day is 10h). Only labour + production-no-leave earn OT.
 const OT_DIVISOR = 8;
@@ -66,8 +69,10 @@ function computeLine(emp, line, holidays = 0, month = null) {
   const petrol = PETROL_GROUPS.includes(emp.worker_group) ? Number(line.petrol ?? emp.petrol_monthly ?? 0) : 0;
   const advance = Number(line.advance_deduction || 0);
   const otDiv = OT_DIVISOR_BY_GROUP[emp.worker_group] ?? OT_DIVISOR;
-  // Graduated late cut: money = total cut minutes ÷ 60 × hourly (day pay ÷ otDiv)
-  const lateCutMin = Math.max(Number(line.late_cut_minutes || 0), 0);
+  // Graduated late cut: money = total cut minutes ÷ 60 × hourly (day pay ÷ otDiv).
+  // Months the owner waived pay no late cut; the late days and minutes stay
+  // on the line as a record of who was late.
+  const lateCutMin = LATE_CUT_WAIVED_MONTHS.includes(month) ? 0 : Math.max(Number(line.late_cut_minutes || 0), 0);
 
   // Every money figure is rounded to the WHOLE RUPEE, and the total is the sum
   // of those rounded parts — so the grid, the export and the bank payment tie
