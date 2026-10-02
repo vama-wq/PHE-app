@@ -185,7 +185,7 @@ async function buildDraft(db, orderItemId, answers = {}) {
     ['From the order', 'Order no, client code, order date, product code, drawing no, punching, quantity, tube material, plating, remark'],
     ['Asked when making the card', 'ASMBLY, fixture type, dispatch date, total length off the drawing'],
     ['Total length', `${answers.drawing_total_length_in}" on the drawing + ${E.TOTAL_LENGTH_ALLOWANCE_IN}" allowance = ${card.totalLengthIn}"`],
-    ['Tube draw', `${pct(card.tubeDrawPct)} — ${dia} mm ${card.material === 'copper' ? 'copper' : 'SS / Incoloy'} at ${card.totalLengthIn}"`],
+    ['Tube draw', `${pct(card.tubeDrawPct)} — ${dia} mm ${({ copper: 'copper', ss304: 'SS304', ss316: 'SS316', ss310: 'SS310', incoloy: 'Incoloy' })[card.tubeGrade] || (card.material === 'copper' ? 'copper' : 'SS / Incoloy')} at ${card.totalLengthIn}"`],
     ['Wire gauge', card.gauge == null
       ? 'no wire on the sheet reaches the required coil length — choose by hand'
       : card.doubleCoil

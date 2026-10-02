@@ -36,16 +36,26 @@ const PI = 3.14;
 // Policy Step 5 — tube draw, by material and total length (inches).
 // 11 mm SS above 51" moved from 13% to 15% (owner, 24 Sep 2026). Everything
 // else — 15.6% below 51", copper flat at 16%, and the whole 8 mm set — stands.
+// Since 2 Oct 2026 the tube draw goes by the tube's GRADE (owner's figures);
+// a grade with no row of its own uses its material's row ('steel' / 'copper').
 const TUBE_DRAW = {
-  // 8 mm went flat at every length (owner, 24 Sep 2026): 20.7% steel / Incoloy,
-  // 23.7% copper. The old 43" and 50" breaks (20 / 19.7 / 19) are retired.
+  // 8 mm, flat at every length (owner, 2 Oct 2026): copper 23.7 → 26.2%,
+  // Incoloy 20.7 → 21%, SS316 20.7 → 22%; SS304 (and SS310, any other steel)
+  // stays 20.7%. The old 43" and 50" breaks (20 / 19.7 / 19) are retired.
   8: {
-    steel:  [ { maxTL: Infinity, pct: 0.207 } ],
-    copper: [ { maxTL: Infinity, pct: 0.237 } ],
+    steel:   [ { maxTL: Infinity, pct: 0.207 } ],
+    ss316:   [ { maxTL: Infinity, pct: 0.22 } ],
+    incoloy: [ { maxTL: Infinity, pct: 0.21 } ],
+    copper:  [ { maxTL: Infinity, pct: 0.262 } ],
   },
+  // 11 mm (owner, 2 Oct 2026): above 51" SS304 15 → 14.5% and Incoloy 15 → 16%;
+  // up to 51" stays 15.6%; SS316 (and any other steel) stays 15.6 / 15%;
+  // copper stays a flat 16%.
   11: {
-    steel:  [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.15 } ],
-    copper: [ { maxTL: Infinity, pct: 0.16 } ],
+    steel:   [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.15 } ],
+    ss304:   [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.145 } ],
+    incoloy: [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.16 } ],
+    copper:  [ { maxTL: Infinity, pct: 0.16 } ],
   },
 };
 
@@ -148,9 +158,23 @@ function materialClass(tubeMaterial) {
   return null; // caller must decide — never guess a material
 }
 
+// The tube's grade, for the tube draw only (everything else still splits
+// copper / steel). Reads item codes (TUB-SS316-038-T06, TUB-INC-…) and plain
+// names ("SS 304", "Incoloy", "SS316 Seamless").
+function tubeGrade(tubeMaterial) {
+  const s = String(tubeMaterial || '').toLowerCase();
+  if (/\bcopper\b|\bcu\b|તાંબુ|तांबा/.test(s)) return 'copper';
+  if (/\bincoloy\b|\binc\b/.test(s)) return 'incoloy';
+  if (/\bss[\s-]*316/.test(s)) return 'ss316';
+  if (/\bss[\s-]*310/.test(s)) return 'ss310';
+  if (/\bss[\s-]*304/.test(s)) return 'ss304';
+  return null;
+}
+
 // ── Policy lookups ──────────────────────────────────────────────────────────
-function tubeDrawPct(material, totalLengthIn, dia = 8) {
-  const bands = TUBE_DRAW[dia] && TUBE_DRAW[dia][material];
+function tubeDrawPct(material, totalLengthIn, dia = 8, grade = null) {
+  const table = TUBE_DRAW[dia];
+  const bands = table && ((grade && table[grade]) || table[material]);
   if (!bands) return null;
   return bands.find(b => totalLengthIn <= b.maxTL).pct;
 }
@@ -395,7 +419,8 @@ function buildJobCard(input) {
 
   // Step 5 — the card's length is the drawing's plus the standard allowance.
   const totalLengthIn = round(drawingLen + TOTAL_LENGTH_ALLOWANCE_IN, 4);
-  const tubeDraw = tubeDrawPct(material, totalLengthIn, D);
+  const grade = tubeGrade(tubeMaterial);
+  const tubeDraw = tubeDrawPct(material, totalLengthIn, D, grade);
   // The policy's steel bands read "below 43", "between 44 and 50", "above 51",
   // so 43-44 and 50-51 are simply unwritten. The engine has to resolve them to
   // something; it says which way it went rather than letting a hundredth of an
@@ -533,6 +558,7 @@ function buildJobCard(input) {
     tubeLengthAfterDrawMm: row19LengthsMm[2],
 
     tubeDrawPct: tubeDraw,
+    tubeGrade: grade,
     cuttingLengthIn: round(cuttingLengthIn, 4),
     cuttingLengthMm: round(cuttingLengthIn * INCH_MM, 2),
 
@@ -603,7 +629,7 @@ function round(n, dp) { const f = 10 ** dp; return Math.round(n * f) / f; }
 
 module.exports = {
   buildJobCard, chooseWire, springLengthIn,
-  materialClass, tubeDrawPct, wireDrawPct, standardColdZone, perElementWattage, terminalPin, pinFor,
+  materialClass, tubeGrade, tubeDrawPct, wireDrawPct, standardColdZone, perElementWattage, terminalPin, pinFor,
   TUBE_DRAW, WIRE_DRAW, SPRING_DIVISORS, TOTAL_LENGTH_ALLOWANCE_IN, ROW19_STEP_DOWN_MM, TIE_BREAK,
   WIRE_TABLES, SUPPORTED_DIAMETERS, PIN_DIVISOR, STUD, COLD_ZONE_STANDARD,
   DOUBLE_COIL_THIN_SPOOLS, DOUBLE_COIL_WIDE_DIVISOR,

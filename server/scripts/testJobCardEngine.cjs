@@ -190,7 +190,7 @@ for (const card of CARDS) {
       ['spring window high', hi, card.actual.springWindowHighIn],
     ];
     const allOk = checks.every(([, got, want]) => Math.abs(got - want) <= 0.0005);
-    console.log(Y(`\n  POLICY MOVED — 8 mm tube draw is now a flat ${card.input.tubeMaterial.toLowerCase().includes('cop') ? '23.7' : '20.7'}%; this card was built on ${(tdm.cardPct * 100).toFixed(1)}%.`));
+    console.log(Y(`\n  POLICY MOVED — 8 mm ${card.input.tubeMaterial} tube draw is now ${(out.tubeDrawPct * 100).toFixed(1)}%; this card was built on ${(tdm.cardPct * 100).toFixed(1)}%.`));
     for (const [label, got, want] of checks) {
       console.log(`    ${label.padEnd(26)}${fmt(got).padStart(14)}${fmt(want).padStart(16)}   ` +
         (Math.abs(got - want) <= 0.0005 ? G('match') : R('DIFF')));
@@ -202,7 +202,16 @@ for (const card of CARDS) {
   const kd = card.knownDivergence;
   if (kd) {
     console.log(Y(`\n  KNOWN DIVERGENCE — ${kd.why}.`));
-    const re = E.buildJobCard({ ...card.input, wireDrawPctOverride: kd.rerunWithOverride });
+    // Re-run on the card's OWN figures: its wire draw, and its tube draw too
+    // when the tube policy has moved since (copper 23% → 26.2% on 2 Oct 2026).
+    const D8 = E.TUBE_DRAW[8], saved = { ...D8 };
+    if (card.tubeDrawMoved) {
+      const bands = [{ maxTL: Infinity, pct: card.tubeDrawMoved.cardPct }];
+      for (const k of Object.keys(D8)) D8[k] = bands;
+    }
+    let re;
+    try { re = E.buildJobCard({ ...card.input, wireDrawPctOverride: kd.rerunWithOverride }); }
+    finally { Object.assign(D8, saved); }
     const same = re.gauge === card.actual.gauge && Math.abs(re.ohmsRangeMid - card.actual.ohmsRangeMid) < 0.0005;
     console.log(`  Re-run forcing the card's own ${(kd.rerunWithOverride * 100).toFixed(0)}%: ` +
       `${re.gauge} SWG, ohms ${fmt(re.ohmsRangeMid)} ` +
@@ -219,8 +228,11 @@ for (const card of CARDS) {
 console.log(`\n${'═'.repeat(88)}\nRegressions — defects found by the 22 Sep 2026 audit\n${'═'.repeat(88)}`);
 
 // The owner's PT-UTYPE-68U-4KW, the card that brought in the double-coil rule.
+// Its figures were confirmed at 15% tube draw; since 2 Oct 2026 SS304 above 51"
+// is 14.5%, so the mechanism checks run it as SS316 (still 15%) to keep the
+// owner-confirmed numbers. As SS304 it still comes out 22 SWG double coil.
 const DOUBLE_COIL_CARD = {
-  tubeMaterial: 'SS304', wattage: 4000, voltage: 230, tubeDiameterMm: 11,
+  tubeMaterial: 'SS316', wattage: 4000, voltage: 230, tubeDiameterMm: 11,
   drawingTotalLengthIn: 136.7 - E.TOTAL_LENGTH_ALLOWANCE_IN, coldZoneBigIn: 3, coldZoneSmallIn: 3,
   drawingNumber: 'PT-UTYPE-68U-4KW',
 };
@@ -330,8 +342,9 @@ const REGRESSIONS = [
       const o = E.buildJobCard({ tubeMaterial: 'SS304', wattage: w, voltage: 230, drawingTotalLengthIn: tl - E.TOTAL_LENGTH_ALLOWANCE_IN });
       if (o.ok && o.wire && o.wire.row >= 67 && o.wire.row <= 70 && !o.usedLastResort) n++; } return n; },
     n => n === 0],
-  ['...but still save a card nothing else reaches (copper 2 kW 27")',
-    () => E.buildJobCard({ tubeMaterial: 'Copper', wattage: 2000, voltage: 230, drawingTotalLengthIn: 27 - E.TOTAL_LENGTH_ALLOWANCE_IN }),
+  // (copper 2 kW 27" was the example until copper went to 26.2% on 2 Oct 2026)
+  ['...but still save a card nothing else reaches (copper 1 kW 50")',
+    () => E.buildJobCard({ tubeMaterial: 'Copper', wattage: 1000, voltage: 230, drawingTotalLengthIn: 50 - E.TOTAL_LENGTH_ALLOWANCE_IN }),
     o => o.gauge === 24 && o.usedLastResort === true && o.warnings.some(w => /odd 24 SWG/.test(w))],
 
   // The returned wire must not be a live row of the shared table.
@@ -341,16 +354,15 @@ const REGRESSIONS = [
     return E.WIRE_TABLES[8].rows.some(r => r.ohms_per_m === -1);
   }, poisoned => poisoned === false],
 
-  // ── The 24 Sep 2026 policy revision, pinned ───────────────────────────────
-  // 8 mm tube draw is flat at every length: the 43" and 50" breaks are gone.
-  ['8 mm steel tube draw is a flat 20.7% at every length',
-    () => [12, 42.9, 43, 43.1, 50, 50.1, 56, 120]
-      .map(tl => E.TUBE_DRAW[8].steel.find(b => tl <= b.maxTL).pct),
-    pcts => pcts.every(p => p === 0.207)],
-  ['8 mm copper tube draw is a flat 23.7% at every length',
-    () => [12, 21.2, 43, 50, 56, 120]
-      .map(tl => E.TUBE_DRAW[8].copper.find(b => tl <= b.maxTL).pct),
-    pcts => pcts.every(p => p === 0.237)],
+  // ── Tube draw by grade (owner, 2 Oct 2026), pinned ────────────────────────
+  // 8 mm is flat at every length: SS304 20.7%, SS316 22%, Incoloy 21%, copper
+  // 26.2%; SS310 and any other steel use the steel row (20.7%).
+  ...[['TUB-SS304-038-T06', 0.207], ['SS 304', 0.207], ['TUB-SS316-038-T06', 0.22], ['TUB-SS316-038-T06-SML', 0.22],
+      ['SS 316', 0.22], ['TUB-INC-038-T06', 0.21], ['Incoloy', 0.21], ['TUB-CU-038-T06', 0.262], ['Copper', 0.262],
+      ['TUB-SS310-038-T06', 0.207]].map(([m, want]) =>
+    [`8 mm ${m} tube draw is a flat ${(want * 100).toFixed(1)}% at every length`,
+      () => [12, 21.2, 42.9, 43, 50.1, 56, 120].map(tl => E.tubeDrawPct(E.materialClass(m), tl, 8, E.tubeGrade(m))),
+      pcts => pcts.every(p => p === want)]),
   // Wire draw: 30 and above went 45.5% -> 46% on steel (24 Sep) and 29% -> 21%
   // on copper (28 Sep). Gauge 29 must not move with either.
   ['8 mm steel wire draw is 46% from gauge 30 up',
@@ -365,12 +377,13 @@ const REGRESSIONS = [
   ['8 mm copper gauges 25-29 still take 26%',
     () => [25, 29].map(g => E.WIRE_DRAW[8].copper.find(b => g >= b.minG && g <= b.maxG).pct),
     pcts => pcts.every(p => p === 0.26)],
-  // The revision is 8 mm only — 11 mm must not have moved with it.
-  ['11 mm tube draw did not move with the 8 mm revision',
-    () => [E.TUBE_DRAW[11].steel.find(b => 40 <= b.maxTL).pct,
-           E.TUBE_DRAW[11].steel.find(b => 60 <= b.maxTL).pct,
-           E.TUBE_DRAW[11].copper.find(b => 60 <= b.maxTL).pct],
-    ([lo, hi, cu]) => lo === 0.156 && hi === 0.15 && cu === 0.16],
+  // 11 mm: up to 51" stays 15.6% for every steel; above 51" SS304 14.5%,
+  // Incoloy 16%, SS316 / other steel 15%; copper a flat 16% (owner, 2 Oct 2026).
+  ...[['TUB-SS304-12-T06', 0.156, 0.145], ['TUB-INC-12-T06', 0.156, 0.16], ['TUB-SS316-12-T06', 0.156, 0.15],
+      ['TUB-CU-12-T05', 0.16, 0.16]].map(([m, upTo51, above51]) =>
+    [`11 mm ${m} tube draw is ${(upTo51 * 100).toFixed(1)}% up to 51" and ${(above51 * 100).toFixed(1)}% above`,
+      () => [40, 51, 51.1, 60].map(tl => E.tubeDrawPct(E.materialClass(m), tl, 11, E.tubeGrade(m))),
+      ([a, b, c, d]) => a === upTo51 && b === upTo51 && c === above51 && d === above51]),
   // Rows 37/38 of the wire sheet carry a "22 SWG" spool at 2.72 / 2.70 ohm/m —
   // physically a 21 SWG figure (0.71 mm wire runs 3.5-3.7). The owner's own
   // IT-PT-UL-48U7L card picked 21 SWG where the app picked this phantom 22, and
@@ -394,6 +407,9 @@ const REGRESSIONS = [
   // range and its normal wire length; only the spool row says DOUBLE COIL.
   // Reference: the owner's PT-UTYPE-68U-4KW — 11 mm SS, 4 kW 230 V, 136.7",
   // cold zones 3"/3". At /2.2 only one 23 SWG spool fits; at /2 fourteen 22s do.
+  ['double coil: the same card as SS304 (14.5% tube draw) is still 22 SWG double coil, 14 spools',
+    () => E.buildJobCard({ ...DOUBLE_COIL_CARD, tubeMaterial: 'SS304' }),
+    o => o.ok && o.gauge === 22 && o.spoolOptions.length === 14 && !!o.doubleCoil && o.tubeDrawPct === 0.145],
   ['double coil: the 4 kW 11 mm card is a double coil of 22 SWG at 12%, 14 spools',
     () => E.buildJobCard(DOUBLE_COIL_CARD),
     o => o.ok && o.gauge === 22 && o.wireDrawPct === 0.12 && o.spoolOptions.length === 14 && o.wire.ohms_per_m === 3.74 && !!o.doubleCoil],
@@ -427,14 +443,14 @@ const REGRESSIONS = [
     ].map(i => E.buildJobCard(i)),
     os => os.every(o => o.ok && o.gauge != null && o.doubleCoil === null)],
   ['widening is for double coils only: a single coil with one spool keeps /2.2',
-    () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 250, voltage: 230, drawingTotalLengthIn: 63, tubeDiameterMm: 11 }),
+    () => E.buildJobCard({ tubeMaterial: 'SS316', wattage: 250, voltage: 230, drawingTotalLengthIn: 63, tubeDiameterMm: 11 }),
     o => o.gauge === 31 && o.spoolOptions.length === 1 && o.doubleCoil === null && o.springWindowHighIn === 21.5415],
   ['a double coil with more than 2 spools is not widened',
     () => E.buildJobCard({ tubeMaterial: 'SS304', wattage: 3000, voltage: 230, drawingTotalLengthIn: 150.5, tubeDiameterMm: 8 }),
     o => o.gauge === 23 && o.spoolOptions.length === 16 && o.doubleCoil && o.doubleCoil.widened === false
       && Math.abs(o.doubleCoil.windowHighIn - o.springWindowHighIn / 2) < 0.0001],
   ['8 mm copper already tops out at /2, so its double coil checks plain half length',
-    () => E.buildJobCard({ tubeMaterial: 'Copper', wattage: 250, voltage: 230, drawingTotalLengthIn: 138, tubeDiameterMm: 8 }),
+    () => E.buildJobCard({ tubeMaterial: 'Copper', wattage: 600, voltage: 230, drawingTotalLengthIn: 63 - E.TOTAL_LENGTH_ALLOWANCE_IN, tubeDiameterMm: 8 }),
     o => E.SPRING_DIVISORS[8].copper.high === E.DOUBLE_COIL_WIDE_DIVISOR && o.doubleCoil && o.doubleCoil.widened === false
       && Math.abs(o.doubleCoil.windowHighIn - o.springWindowHighIn / 2) < 0.0001],
   ['a hand-set wire draw also falls back to a double coil, still printing its own ohms',
