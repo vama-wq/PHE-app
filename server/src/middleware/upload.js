@@ -220,6 +220,8 @@ module.exports = {
   uploadEsslReport:      [uploaders.esslReport.upload.single('essl'),           uploaders.esslReport.pushToStorage],
   uploadPurchaseInvoice: [uploaders.purchaseInvoice.upload.single('invoice'), uploaders.purchaseInvoice.pushToStorage],
   uploadPurchaseReceive: [purchaseReceiveFields, pushPurchaseReceiveFields],
+  // The invoice is read (not stored) before the receive is saved — memory only.
+  parseInvoiceOnly:      uploaders.purchaseInvoice.upload.single('invoice'),
   uploadPurchaseItemQC:  [uploaders.purchaseItemQC.upload.single('image'),   uploaders.purchaseItemQC.pushToStorage],
   uploadPurchaseItemQCFields: [purchaseItemQCFields, pushPurchaseItemQCFields],
   uploadDebitNote:       [uploaders.debitNote.upload.single('file'),         uploaders.debitNote.pushToStorage],

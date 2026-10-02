@@ -779,6 +779,68 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [progress, setProgress] = useState('');
+  // The supplier's bill, read from the invoice the moment it is attached
+  // (owner, 2 Oct 2026). Accounts checks every figure against the paper bill
+  // and corrects it here; what is saved is what they confirm. The PO and the
+  // payment then follow the bill; QC's count goes to stock.
+  const [reading, setReading] = useState(false);
+  const [bill, setBill] = useState(null);           // the reader's reply
+  const [billLines, setBillLines] = useState({});   // itemId → { qty, rate }
+  const [invNo, setInvNo] = useState('');
+  const [invDate, setInvDate] = useState('');
+  const [pf, setPf] = useState('');
+  const [gst, setGst] = useState('');
+
+  // Arrived quantities a previous read filled in — cleared when the file changes
+  const [prefilled, setPrefilled] = useState({});
+  // Same unit on the bill and the PO? (pcs = nos, kg = kgs, foot = ft …)
+  const UNIT_GROUPS = [['pc', 'pcs', 'piece', 'pieces', 'no', 'nos', 'number', 'numbers', 'each', 'ea', 'unit', 'units'],
+    ['kg', 'kgs', 'kilo', 'kilos', 'kilogram', 'kilograms'], ['ft', 'foot', 'feet'], ['m', 'mtr', 'mtrs', 'metre', 'metres', 'meter', 'meters'],
+    ['g', 'gm', 'gms', 'gram', 'grams'], ['set', 'sets'], ['l', 'ltr', 'ltrs', 'litre', 'litres', 'liter', 'liters']];
+  const unitKey = (u) => { const s = String(u || '').trim().toLowerCase().replace(/\.$/, ''); const g = UNIT_GROUPS.findIndex(x => x.includes(s)); return g >= 0 ? g : s; };
+  const sameUnit = (a, b) => !a || !b || unitKey(a) === unitKey(b);
+
+  const readBill = async (f) => {
+    setBill(null); setBillLines({}); setInvNo(''); setInvDate(''); setPf(''); setGst('');
+    // A new file: undo what the last read filled in (ticks stay as accounts left them)
+    setQtyIn(p => { const s = { ...p }; for (const [id, v] of Object.entries(prefilled)) if (s[id] === v) delete s[id]; return s; });
+    setPrefilled({});
+    if (!f) return;
+    setReading(true);
+    try {
+      const fd = new FormData();
+      fd.append('invoice', f);
+      const { data } = await uploadApi.post(`/purchase-orders/${poId}/read-invoice`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setBill(data);
+      if (data?.readable) {
+        const pos = (v) => (v != null && Number(v) >= 0 ? String(v) : '');
+        setInvNo(data.invoice_no || ''); setInvDate(/^\d{4}-\d{2}-\d{2}$/.test(data.invoice_date || '') ? data.invoice_date : '');
+        setPf(pos(data.packaging_forwarding));
+        setGst(data.gst_percent != null && data.gst_percent >= 0 && data.gst_percent <= 28 ? String(data.gst_percent) : '');
+        const next = {};
+        const unitWarn = [];
+        for (const l of data.lines || []) {
+          const po = items.find(i => String(i.id) === String(l.po_item_id));
+          // A bill in another unit (kg against a PO in pieces) is not filled in —
+          // accounts enters the PO-unit figure themselves.
+          const okUnit = sameUnit(l.unit_on_invoice, po?.unit);
+          if (!okUnit) unitWarn.push(`${po?.description || 'a line'}: bill in ${l.unit_on_invoice}, PO in ${po?.unit} — enter billed qty in ${po?.unit}`);
+          next[l.po_item_id] = { qty: okUnit ? pos(l.billed_qty) : '', rate: okUnit ? pos(l.rate) : '' };
+        }
+        if (unitWarn.length) setBill({ ...data, notes: [data.notes, ...unitWarn].filter(Boolean).join('\n') });
+        setBillLines(next);
+        // Tick the lines the bill covers and start "arrived" at the billed qty
+        // — accounts changes it if the count differs.
+        setSelected(p => { const s = { ...p }; for (const id of Object.keys(next)) s[id] = true; return s; });
+        const filled = {};
+        setQtyIn(p => { const s = { ...p }; for (const [id, v] of Object.entries(next)) if ((s[id] === undefined || s[id] === '') && v.qty) { s[id] = v.qty; filled[id] = v.qty; } return s; });
+        setPrefilled(filled);
+      }
+    } catch (e) {
+      setBill({ readable: false, notes: e.response?.data?.error || 'The invoice could not be read — type the figures from the bill.' });
+    } finally { setReading(false); }
+  };
+  const setBillLine = (id, k) => (e) => setBillLines(p => ({ ...p, [id]: { ...(p[id] || { qty: '', rate: '' }), [k]: e.target.value } }));
 
   // The transport bill splits across exactly what was received in this delivery.
   const coveredList = items.filter(i => selected[i.id]);
@@ -837,6 +899,20 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
         fd.append('invoice', file);
         fd.append('received_qty', qtyIn[it.id]);
         fd.append('po_document', poDoc);
+        // The bill's figures for this line, as checked by accounts
+        const bl = billLines[it.id] || {};
+        if (bl.qty !== undefined && String(bl.qty).trim() !== '') fd.append('billed_qty', bl.qty);
+        if (bl.rate !== undefined && String(bl.rate).trim() !== '') fd.append('billed_rate', bl.rate);
+        if (invNo.trim()) fd.append('invoice_no', invNo.trim());
+        if (invDate) fd.append('invoice_date', invDate);
+        // The bill's P&F and GST go with EVERY item of this delivery — the
+        // server counts one P&F per invoice, so this never doubles it. When a
+        // bill is being entered, a blank P&F means the bill has none (₹0) —
+        // the payment follows the bill, not the PO's estimate.
+        if (bill) {
+          fd.append('packaging_forwarding', String(pf).trim() === '' ? '0' : pf);
+          if (String(gst).trim() !== '') fd.append('gst_percent', gst);
+        }
         if (idx === 0) {
           if (transportCost) fd.append('transport_cost', transportCost);
           if (transportPaidTo) fd.append('transport_paid_to', transportPaidTo);
@@ -915,8 +991,72 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
             </div>
             <div>
               <label className="label">Invoice received with this delivery <span className="text-red-500">*</span></label>
-              <FileUpload onFile={setFile} accept=".pdf,.jpg,.jpeg,.png" label="Select invoice (PDF or image)" />
+              <FileUpload onFile={(f) => { setFile(f); readBill(f); }} accept=".pdf,.jpg,.jpeg,.png" label="Select invoice (PDF or image)" />
+              {reading && <p className="text-xs text-gray-500 mt-1.5 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> Reading the invoice…</p>}
             </div>
+            {/* What the bill says — check every figure against the paper, correct here.
+                The PO and the payment follow these; QC's count goes to stock. */}
+            {bill && !reading && (
+              <div className={`rounded-xl border p-3 space-y-2.5 ${bill.readable ? 'border-brand-200 bg-brand-50/40' : 'border-amber-200 bg-amber-50'}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-xs font-semibold text-gray-800">
+                    {bill.readable ? 'From the invoice — check against the bill before saving' : 'Could not read the invoice — type the figures from the bill'}
+                  </p>
+                  {bill.readable && bill.confidence && bill.confidence !== 'high' && (
+                    <span className="text-[10px] font-semibold uppercase rounded-full px-2 py-0.5 bg-amber-100 text-amber-800">check carefully</span>
+                  )}
+                </div>
+                {bill.notes && <p className="text-[11px] text-gray-600 whitespace-pre-wrap">{bill.notes}</p>}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="label">Invoice no.</label>
+                    <input className="input py-1 text-sm" value={invNo} onChange={e => setInvNo(e.target.value)} placeholder="as printed" />
+                  </div>
+                  <div>
+                    <label className="label">Invoice date</label>
+                    <input className="input py-1 text-sm" type="date" value={invDate} onChange={e => setInvDate(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label">Packaging &amp; forwarding on this bill <span className="text-gray-400 font-normal">(₹)</span></label>
+                    <input className="input py-1 text-sm" type="number" step="any" min="0" value={pf} onChange={e => setPf(e.target.value)} placeholder="0 if none on the bill" />
+                  </div>
+                  <div>
+                    <label className="label">GST %</label>
+                    <input className="input py-1 text-sm" type="number" step="any" min="0" max="28" value={gst} onChange={e => setGst(e.target.value)} placeholder="e.g. 18" />
+                  </div>
+                </div>
+                {coveredList.length > 0 && (
+                  <div className="border border-gray-100 rounded-lg bg-white divide-y divide-gray-100">
+                    {coveredList.map(ci => {
+                      const bl = billLines[ci.id] || { qty: '', rate: '' };
+                      const arrived = qtyIn[ci.id] === undefined || qtyIn[ci.id] === '' ? null : Number(qtyIn[ci.id]);
+                      const bq = bl.qty === '' ? null : Number(bl.qty);
+                      const br = bl.rate === '' ? null : Number(bl.rate);
+                      return (
+                        <div key={ci.id} className="px-2.5 py-2 text-xs">
+                          <div className="font-medium text-gray-800 truncate">{ci.description} <span className="text-gray-400 font-normal">· PO {ci.qty} {ci.unit || ''} @ ₹{ci.rate}</span></div>
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            <span className="text-gray-500">Billed qty</span>
+                            <input className="input py-0.5 px-1.5 text-xs w-24" type="number" step="any" min="0" value={bl.qty} onChange={setBillLine(ci.id, 'qty')} placeholder={ci.unit || 'qty'} />
+                            <span className="text-gray-500">@ ₹</span>
+                            <input className="input py-0.5 px-1.5 text-xs w-20" type="number" step="any" min="0" value={bl.rate} onChange={setBillLine(ci.id, 'rate')} placeholder={String(ci.rate)} />
+                            {br != null && Math.abs(br - Number(ci.rate)) > 1e-9 && (
+                              <span className={br > Number(ci.rate) ? 'text-red-600' : 'text-emerald-700'}>rate {br > Number(ci.rate) ? 'above' : 'below'} the PO — the PO will follow the bill</span>
+                            )}
+                            {bq != null && arrived != null && Math.abs(bq - arrived) > 1e-9 && (
+                              <span className="text-amber-700">billed {bq}, arrived {arrived} — {bq > arrived
+                                ? 'short against the bill: a debit note opens at QC. If the rest is coming later, set billed to what came now and receive the rest against the same invoice when it arrives.'
+                                : 'extra: goes to stock at no cost'}</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-[11px] text-gray-500">Billed qty = what the bill charges for <b>this delivery</b>, in the PO's unit. Leave a figure blank if it is not on the bill. The PO and the payment follow these figures; QC's count goes to stock.</p>
+              </div>
+            )}
             <div>
               <label className="label">PO copy received with the goods <span className="text-red-500">*</span></label>
               <FileUpload onFile={setPoDoc} accept=".pdf,.jpg,.jpeg,.png" label="Select PO document (PDF or image)" />
@@ -981,7 +1121,7 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
             {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
             <div className="flex gap-3">
               <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-              <button className="btn-primary flex-1" disabled={saving} onClick={submit}>
+              <button className="btn-primary flex-1" disabled={saving || reading} onClick={submit} title={reading ? "Wait — the invoice is still being read" : undefined}>
                 {saving ? 'Saving…' : 'Receive & Send to QC'}
               </button>
             </div>
@@ -1092,6 +1232,11 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
           {item.qc_status !== 'rejected' && (
             <span>Accepted: <b>{item.qc_received_qty}</b> · Weight of 10: <b>{item.qc_weight_10}</b>{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</span>
           )}
+          {/* Paid on the bill, stocked on the count — show both when they differ */}
+          {item.billed_qty != null && Math.abs(Number(item.billed_qty) - (Number(item.qc_received_qty) || 0) - (Number(item.qc_rejected_qty) || 0)) > 1e-9 && (
+            <span className="text-amber-700">Billed: <b>{item.billed_qty}</b> (paid on the bill)</span>
+          )}
+          {item.invoice_no && <span>Invoice {item.invoice_no}{item.invoice_date ? ` · ${String(item.invoice_date).slice(0, 10)}` : ''}</span>}
           {item.qc_status !== 'approved' && (
             <span className="text-red-600">Rejected: <b>{item.qc_rejected_qty}</b> — {item.qc_rejection_reason}</span>
           )}

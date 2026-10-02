@@ -346,7 +346,9 @@ async function decideOverReceipt(db, { poItemId, poId, approve, actor, via = 'ap
   const expect = expectOverQty != null ? expectOverQty : pendingRaw;
 
   if (approve) {
-    const qty = Number(pendingRaw);
+    // The line follows the supplier's bill when one was read at receipt
+    // (payment is on the bill; QC's count goes to stock) — else the arrived qty.
+    const qty = item.billed_qty != null ? Number(item.billed_qty) : Number(pendingRaw);
     const totals = await db.withTransaction(async (client) => {
       const u = await client.query(
         `UPDATE purchase_order_items
@@ -370,8 +372,14 @@ async function decideOverReceipt(db, { poItemId, poId, approve, actor, via = 'ap
     };
   }
 
+  // Decline: only the ordered quantity stands — for the line and for the
+  // payable too (Payments Due reads billed_qty first). A bill below the order
+  // still wins: never pay above the invoice. What arrived beyond it is extra
+  // against the bill at QC — free stock.
   const u = await db.run(
-    'UPDATE purchase_order_items SET over_qty_pending=NULL WHERE id=$1 AND over_qty_pending=$2 RETURNING id',
+    `UPDATE purchase_order_items SET over_qty_pending=NULL,
+            billed_qty = CASE WHEN billed_qty IS NULL THEN NULL ELSE LEAST(billed_qty, qty) END
+      WHERE id=$1 AND over_qty_pending=$2 RETURNING id`,
     [item.id, pendingRaw]);
   if (!u.rowCount) return overAlreadyDone(db, id, expect);
   await logActivity(null, null, 'po_over_qty_rejected',

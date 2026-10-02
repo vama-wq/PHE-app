@@ -1,7 +1,8 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseReceive, uploadPurchaseItemQC, uploadPurchaseItemQCFields, uploadDebitNote, uploadChatAttachments } = require('../middleware/upload');
+const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseReceive, uploadPurchaseItemQC, uploadPurchaseItemQCFields, uploadDebitNote, uploadChatAttachments, parseInvoiceOnly } = require('../middleware/upload');
+const { readInvoice } = require('../lib/invoiceReader');
 const { createNotification } = require('./notifications');
 // Owner actions shared with the WhatsApp reply dispatcher (same code, both paths).
 const poActions = require('../services/actions/purchaseOrders');
@@ -148,7 +149,7 @@ const VALID_DELIVERY_STATUSES = [
 
 // Totals (and a PO's standing) live in lib/poSettle.js, shared with the
 // startup correction: a short-closed line never counts toward the total.
-const { calcTotals, recomputePoTotals, settlePoStatus } = require('../lib/poSettle');
+const { calcTotals, recomputePoTotals, settlePoStatus, settleBillCharges } = require('../lib/poSettle');
 
 async function nextPoNumber(db) {
   const last = await db.get('SELECT po_number FROM purchase_orders ORDER BY id DESC LIMIT 1');
@@ -209,14 +210,19 @@ router.get('/pending-material-qc', authenticate, authorize('design', 'owner', 'a
 const receivedPayable = (material, igstPercent) =>
   Math.round(Number(material || 0) * (1 + Number(igstPercent || 0) / 100));
 
+// Material payable per PO — ONE definition for the list and the pay check so
+// they cannot drift: the billed qty when the supplier's bill was read at
+// receipt, else the QC count (owner, 2 Oct 2026: payment follows the bill).
+const MATERIAL_VALUE_SQL = `COALESCE((SELECT SUM(poi.rate * COALESCE(poi.billed_qty, poi.qc_received_qty)) FROM purchase_order_items poi
+                WHERE poi.po_id = po.id AND poi.qc_status = 'approved' AND poi.qc_received_qty IS NOT NULL), 0)`;
+
 router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const db = getDB();
   const rows = await db.all(`
     SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.created_at, s.name AS supplier_name,
       COALESCE(po.received_at, (SELECT MAX(COALESCE(poi.received_at, poi.qc_at))
                FROM purchase_order_items poi WHERE poi.po_id = po.id AND poi.qc_status = 'approved')) AS received_at,
-      COALESCE((SELECT SUM(poi.rate * poi.qc_received_qty) FROM purchase_order_items poi
-                WHERE poi.po_id = po.id AND poi.qc_status = 'approved' AND poi.qc_received_qty IS NOT NULL), 0) AS material_value,
+      ${MATERIAL_VALUE_SQL} AS material_value,
       COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
                 WHERE pce.po_id = po.id AND pce.entry_type = 'expense' AND pce.payment_method = 'paid_bank'), 0) AS paid_cleared,
       COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
@@ -261,8 +267,7 @@ router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'acco
         if (!Number.isInteger(poId) || !(amount > 0)) { errors.push('Invalid payment row skipped'); continue; }
         const po = await client.query(
           `SELECT po.po_number, po.igst_percent, po.transport_charges, s.name AS supplier_name,
-             COALESCE((SELECT SUM(poi.rate * poi.qc_received_qty) FROM purchase_order_items poi
-                       WHERE poi.po_id = po.id AND poi.qc_status='approved' AND poi.qc_received_qty IS NOT NULL),0) AS material_value,
+             ${MATERIAL_VALUE_SQL} AS material_value,
              COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
                        WHERE pce.po_id = po.id AND pce.entry_type='expense'
                          AND pce.payment_method IN ('paid_bank','unpaid_bank')),0) AS allocated
@@ -761,14 +766,24 @@ router.put('/:id/items/:itemId/unreceive', authenticate, authorize('owner'), asy
       }
     }
 
+    // Put the line back as it stood before this receipt — including what the
+    // supplier's bill changed (qty and rate followed the bill), then let the
+    // PO's P&F and GST settle from the bills that remain.
+    const undo = item.receive_undo || null;
+    const backQty = undo && undo.qty != null ? Number(undo.qty) : Number(item.qty);
+    const backRate = undo && undo.rate != null ? Number(undo.rate) : Number(item.rate);
     await db.run(
       `UPDATE purchase_order_items
           SET received=FALSE, received_at=NULL, invoice_file=NULL, invoice_original_name=NULL,
               receive_other_cost=NULL, receive_other_cost_reason=NULL,
               receive_transport_cost=NULL, receive_transport_paid_to=NULL,
               receive_local_transport_cost=NULL, receive_local_transport_paid_to=NULL,
-              po_doc_file=NULL, po_doc_original_name=NULL
-        WHERE id=$1`, [item.id]);
+              po_doc_file=NULL, po_doc_original_name=NULL,
+              billed_qty=NULL, invoice_no=NULL, invoice_date=NULL, billed_pf=NULL, receive_undo=NULL,
+              over_qty_pending=NULL, qty=$2, rate=$3, amount=$4
+        WHERE id=$1`, [item.id, backQty, backRate, Math.round(backQty * backRate * 100) / 100]);
+    await settleBillCharges(db, po.id);
+    await recomputePoTotals(db, po.id);
     // Nothing received on the PO any more → back to the state it was in before.
     const stillReceived = await db.get(
       'SELECT COUNT(*)::int AS n FROM purchase_order_items WHERE po_id=$1 AND received=TRUE', [po.id]);
@@ -781,6 +796,31 @@ router.put('/:id/items/:itemId/unreceive', authenticate, authorize('owner'), asy
   } catch (e) {
     console.error('unreceive error:', e);
     res.status(500).json({ error: 'Failed to un-receive the item' });
+  }
+});
+
+// Read the supplier's invoice before the receive is saved: invoice number and
+// date, each open line's billed quantity and rate, packaging & forwarding and
+// GST. The file is only read here (it is stored by the receive itself).
+// Accounts checks the figures on screen; nothing is written. Owner's rule
+// (2 Oct 2026): the PO and its payment follow the BILL; stock follows the
+// quantity QC counts.
+router.post('/:id/read-invoice', authenticate, authorize('owner', 'admin', 'accounts'), parseInvoiceOnly, async (req, res) => {
+  try {
+    const db = getDB();
+    const po = await db.get(
+      'SELECT po.*, s.name AS supplier_name FROM purchase_orders po LEFT JOIN suppliers s ON s.id = po.supplier_id WHERE po.id=$1',
+      [req.params.id]);
+    if (!po) return res.status(404).json({ error: 'Not found' });
+    if (!req.file) return res.status(400).json({ error: 'Attach the invoice to read' });
+    const lines = await db.all(
+      'SELECT id, description, unit, qty, rate FROM purchase_order_items WHERE po_id=$1 AND NOT received AND NOT short_closed ORDER BY id',
+      [po.id]);
+    const read = await readInvoice({ buffer: req.file.buffer, mimetype: req.file.mimetype, po, lines });
+    res.json(read);
+  } catch (err) {
+    console.error('[po/read-invoice] error:', err);
+    res.json({ readable: false, notes: 'The invoice could not be read just now — type the figures from the bill.' });
   }
 });
 
@@ -823,7 +863,29 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     // line is NOT updated here — the excess is parked for the owner to approve
     // and QC cannot take it into stock until they do.
     const overQty = recvQty > orderedQty + 1e-9 ? recvQty : null;
-    const balanceQty = overQty ? 0 : Math.round((orderedQty - recvQty) * 1e6) / 1e6;
+
+    // The supplier's bill (read from the invoice, checked by accounts). The PO
+    // line and the payment follow the bill: its quantity becomes the line's
+    // quantity, its rate the line's rate. What physically arrived is counted
+    // again at QC and goes to stock; a difference against the bill is settled
+    // there (short → debit note, extra → free stock). Blank = same as arrived.
+    const num = (v) => (v === undefined || v === null || String(v).trim() === '' ? null : Number(v));
+    const billedQty = num(req.body.billed_qty);
+    if (billedQty != null && !(billedQty >= 0)) return res.status(400).json({ error: 'Billed quantity must be 0 or more' });
+    const billedRate = num(req.body.billed_rate);
+    if (billedRate != null && !(billedRate >= 0)) return res.status(400).json({ error: 'Billed rate must be 0 or more' });
+    const invoiceNo = (req.body.invoice_no || '').trim() || null;
+    const invoiceDate = /^\d{4}-\d{2}-\d{2}$/.test(req.body.invoice_date || '') ? req.body.invoice_date : null;
+    const billedPf = num(req.body.packaging_forwarding);          // on this invoice, whole bill
+    if (billedPf != null && !(billedPf >= 0)) return res.status(400).json({ error: 'Packaging & forwarding must be 0 or more' });
+    const billedGst = num(req.body.gst_percent);
+    if (billedGst != null && !(billedGst >= 0 && billedGst <= 28)) return res.status(400).json({ error: 'GST % must be between 0 and 28' });
+    const lineRate = billedRate != null ? billedRate : (Number(item.rate) || 0);
+    // A bill for more than arrived is not a balance still to come — it is a
+    // short delivery against the bill, which QC's count turns into a debit
+    // note. So the balance line is only for what was neither billed nor sent.
+    const balanceQty = overQty ? 0
+      : Math.max(0, Math.round((orderedQty - Math.max(recvQty, billedQty != null ? billedQty : 0)) * 1e6) / 1e6);
 
     const transportCost = Number(req.body.transport_cost) || 0;             // main vehicle freight (the whole bill)
     const transportPaidTo = (req.body.transport_paid_to || '').trim() || null;
@@ -869,16 +931,54 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     const tShares = transportCost > 0 ? shares(transportCost) : [];
     const lShares = localCost > 0 ? shares(localCost) : [];
 
+    // The line's quantity: the bill's figure when there is one, else what
+    // arrived. While an over-receipt waits for the owner it stays at the
+    // ordered figure (the approval raises it — to the bill's figure if known).
+    const lineQty = overQty ? orderedQty : (billedQty != null ? billedQty : recvQty);
+    // What un-receive puts back: the line as it stands without this receipt
+    // (its qty + any balance line split off below = the ordered qty again).
+    const undo = { qty: overQty ? orderedQty : Math.round((orderedQty - balanceQty) * 1e6) / 1e6, rate: Number(item.rate) || 0 };
+    const billNotes = [];
     await db.withTransaction(async (client) => {
+      const q = {
+        get: async (s, p = []) => (await client.query(s, p)).rows[0] || null,
+        all: async (s, p = []) => (await client.query(s, p)).rows,
+        run: (s, p = []) => client.query(s, p),
+      };
+      // Keep the PO's own P&F and GST the first time a bill touches them
+      if (billedPf != null || billedGst != null) {
+        await client.query(
+          `UPDATE purchase_orders SET pf_before_bills = COALESCE(pf_before_bills, transport_charges),
+             gst_before_bills = COALESCE(gst_before_bills, igst_percent) WHERE id=$1`, [po.id]);
+      }
       await client.query(
         `UPDATE purchase_order_items SET received=TRUE, received_at=NOW(), invoice_file=$1, invoice_original_name=$2,
-           receive_other_cost=$3, receive_other_cost_reason=$4, qty=$5, amount=$6,
-           over_qty_pending=$7, po_doc_file=$8, po_doc_original_name=$9 WHERE id=$10`,
+           receive_other_cost=$3, receive_other_cost_reason=$4, qty=$5, rate=$6, amount=$7,
+           over_qty_pending=$8, po_doc_file=$9, po_doc_original_name=$10,
+           billed_qty=$11, invoice_no=$12, invoice_date=$13, billed_pf=$14, receive_undo=$15::jsonb WHERE id=$16`,
         [invoiceFile.storagePath, invoiceFile.originalname, otherCost, otherReason,
-         overQty ? orderedQty : recvQty,
-         Math.round((overQty ? orderedQty : recvQty) * (Number(item.rate) || 0) * 100) / 100,
-         overQty, poDocFile.storagePath, poDocFile.originalname, item.id]
+         lineQty, lineRate, Math.round(lineQty * lineRate * 100) / 100,
+         overQty, poDocFile.storagePath, poDocFile.originalname,
+         billedQty, invoiceNo, invoiceDate, billedPf, JSON.stringify(undo), item.id]
       );
+      if (billedRate != null && Math.abs(billedRate - (Number(item.rate) || 0)) > 1e-9) {
+        billNotes.push(`rate ₹${item.rate} → ₹${billedRate} as billed`);
+      }
+      if (billedQty != null && Math.abs(billedQty - recvQty) > 1e-9) {
+        billNotes.push(`billed ${billedQty}, arrived ${recvQty}`);
+      }
+      // GST from the bill; P&F as one figure per invoice across the PO's bills
+      if (billedGst != null && Math.abs(billedGst - (Number(po.igst_percent) || 0)) > 1e-9) {
+        await client.query('UPDATE purchase_orders SET igst_percent=$1 WHERE id=$2', [billedGst, po.id]);
+        billNotes.push(`GST ${Number(po.igst_percent) || 0}% → ${billedGst}% as billed`);
+      }
+      if (billedPf != null) {
+        await settleBillCharges(q, po.id);
+        const pfNow = Number((await q.get('SELECT transport_charges FROM purchase_orders WHERE id=$1', [po.id])).transport_charges) || 0;
+        if (Math.abs(pfNow - (Number(po.transport_charges) || 0)) > 1e-9) {
+          billNotes.push(`packaging & forwarding ₹${Number(po.transport_charges) || 0} → ₹${pfNow} as billed`);
+        }
+      }
       // Short delivery: the balance carries on as its own open line so it can
       // be received when it arrives. Ordered qty is preserved across the pair
       // (received + balance), so the PO's own totals do not move.
@@ -917,7 +1017,31 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
            VALUES (CURRENT_DATE,'expense','Purchase Transport',$1,$2,$3,'cash',TRUE,$4)`,
           [`Local transport (dock → unit) — ${po.po_number} (${coveredLabel})`, localPaidTo, localCost, req.user.id]);
       }
+      // The bill may have moved the line's value, P&F or GST — the PO's totals
+      // follow it (its printed figures are the bill's, as the owner wants).
+      if (billNotes.length || balanceQty > 0) {
+        await recomputePoTotals({
+          get: async (s, p = []) => (await client.query(s, p)).rows[0] || null,
+          all: async (s, p = []) => (await client.query(s, p)).rows,
+          run: (s, p = []) => client.query(s, p),
+        }, po.id);
+      }
     });
+
+    // The owner hears when a supplier bills above the PO's rate.
+    if (billedRate != null && billedRate > (Number(item.rate) || 0) + 1e-9) {
+      try {
+        const owners = await db.all("SELECT id FROM users WHERE role='owner' AND id != $1", [req.user.id]);
+        for (const o of owners) {
+          await createNotification(db, {
+            userId: o.id, type: 'po_billed_rate_higher',
+            title: `Billed above PO rate — ${po.po_number}`,
+            body: `${item.description}: invoice rate ₹${billedRate} against ₹${item.rate} on the PO. The PO now follows the bill.`,
+            link: `/purchases/${po.id}`, sourceUserId: req.user.id,
+          });
+        }
+      } catch (e) { console.error('billed-rate notify failed:', e.message); }
+    }
 
     // Notify owners of the new Unpaid-Bank main-vehicle freight awaiting payment.
     if (transportCost > 0) {
@@ -961,7 +1085,9 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
         link: `/purchases/${po.id}`, sourceUserId: req.user.id,
       });
     }
-    await logActivity(null, null, 'purchase_received', `PO ${po.po_number}: item "${item.description}" received & sent to QC`, req.user.id);
+    await logActivity(null, null, 'purchase_received',
+      `PO ${po.po_number}: item "${item.description}" received & sent to QC${invoiceNo ? ` — invoice ${invoiceNo}${invoiceDate ? ` of ${invoiceDate}` : ''}` : ''}${billNotes.length ? ` (${billNotes.join('; ')})` : ''}`,
+      req.user.id);
     res.json({ message: 'Item received — sent to QC' });
    } catch (err) {
     console.error('[po/receive] error:', err);
@@ -1019,6 +1145,14 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
     }
 
     let debitNoteId = null;
+    // Against the bill: what physically arrived (accepted + rejected) vs what
+    // the supplier billed for this line. We pay the bill; a shortfall is
+    // claimed back by debit note, an extra is free stock (owner, 2 Oct 2026).
+    const billed = item.billed_qty != null ? Number(item.billed_qty) : null;
+    const arrived = acceptedQty + rejectedQty;
+    const shortfall = billed != null && arrived < billed - 1e-9 ? Math.round((billed - arrived) * 1e6) / 1e6 : 0;
+    const extra = billed != null && arrived > billed + 1e-9 ? Math.round((arrived - billed) * 1e6) / 1e6 : 0;
+    let shortNoteId = null;
     await db.withTransaction(async (client) => {
       await client.query(
         `UPDATE purchase_order_items SET qc_status=$1, qc_weight_10=$2, qc_received_qty=$3, qc_rejected_qty=$4,
@@ -1041,6 +1175,15 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
           `INSERT INTO purchase_debit_notes (po_id, po_item_id, rejected_qty, suggested_amount) VALUES ($1,$2,$3,$4) RETURNING id`,
           [po.id, item.id, rejectedQty, suggested]);
         debitNoteId = dn[0].id;
+      }
+      if (shortfall > 0) {
+        // Billed for more than came: a second pending debit note for the
+        // shortfall, so accounts claims it back from the supplier.
+        const suggested = Math.round(shortfall * (Number(item.rate) || 0) * (1 + (Number(po.igst_percent) || 0) / 100) * 100) / 100;
+        const { rows: dn } = await client.query(
+          `INSERT INTO purchase_debit_notes (po_id, po_item_id, rejected_qty, suggested_amount, notes) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+          [po.id, item.id, shortfall, suggested, `Short against invoice${item.invoice_no ? ` ${item.invoice_no}` : ''}: billed ${billed}, received ${arrived}`]);
+        shortNoteId = dn[0].id;
       }
     });
 
@@ -1065,6 +1208,24 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
         }
       } catch (e) { console.error('debit-note notify failed:', e.message); }
     }
+    // Short against the bill → accounts claims it; extra → the owner knows.
+    if (shortNoteId || extra > 0) {
+      try {
+        const who = await db.all(
+          shortNoteId ? "SELECT id FROM users WHERE role IN ('accounts','owner') AND id != $1" : "SELECT id FROM users WHERE role='owner' AND id != $1",
+          [req.user.id]);
+        for (const u of who) {
+          await createNotification(db, {
+            userId: u.id, type: shortNoteId ? 'debit_note_pending' : 'po_extra_received',
+            title: shortNoteId ? `Billed more than came — ${po.po_number}` : `Extra received — ${po.po_number}`,
+            body: shortNoteId
+              ? `${item.description}: billed ${billed}, ${arrived} came. Raise a debit note for the ${shortfall} short.`
+              : `${item.description}: billed ${billed}, ${arrived} came — ${extra} extra went into stock at no cost.`,
+            link: `/purchases/${po.id}`, sourceUserId: req.user.id,
+          });
+        }
+      } catch (e) { console.error('bill-difference notify failed:', e.message); }
+    }
 
     // Finalise the PO once every line still expected has been QC-resolved. A
     // short-closed balance is not expected, so it no longer holds the PO open
@@ -1072,11 +1233,13 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
     // check). Fully-rejected POs flag as material_rejected; partials received
     // (their accepted stock is in — the rejection lives on in the debit note).
     const allResolved = (await settlePoStatus(db, po.id, { receivedAt: 'now' })) === 'received';
+    const billNote = shortfall > 0 ? ` — billed ${billed}, ${arrived} came: ${shortfall} short → debit note pending`
+      : extra > 0 ? ` — billed ${billed}, ${arrived} came: ${extra} extra in stock at no cost` : '';
     await logActivity(null, null, 'purchase_qc',
-      `PO ${po.po_number}: item QC ${result}${rejectedQty > 0 ? ` (${rejectedQty} rejected → debit note pending)` : ''}`, req.user.id);
-    res.json({ message: result === 'approved' ? 'Item QC approved — stock added'
+      `PO ${po.po_number}: item QC ${result}${rejectedQty > 0 ? ` (${rejectedQty} rejected → debit note pending)` : ''}${billNote}`, req.user.id);
+    res.json({ message: (result === 'approved' ? 'Item QC approved — stock added'
       : result === 'partial' ? `Partial: ${acceptedQty} accepted to stock, ${rejectedQty} rejected — debit note pending`
-      : 'Item QC rejected — debit note pending', allResolved });
+      : 'Item QC rejected — debit note pending') + billNote, allResolved });
    } catch (err) {
     console.error('[po/item-qc] error:', err);
     res.status(500).json({ error: err.message || 'Failed to record QC' });

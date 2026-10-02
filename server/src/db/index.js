@@ -1013,6 +1013,38 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS over_qty_pending NUMERIC`);
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS over_qty_approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL`);
       await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS over_qty_approved_at TIMESTAMPTZ`);
+      // The supplier's bill, read from the invoice at receipt (owner, 2 Oct
+      // 2026): the PO and its payment follow the bill, stock follows QC's count.
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS billed_qty NUMERIC`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS invoice_no TEXT`);
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS invoice_date DATE`);
+      // The bill's packaging & forwarding as confirmed with this line (the
+      // whole invoice's figure). The PO's P&F is derived as ONE figure per
+      // invoice, so re-sending the same bill never adds it twice.
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS billed_pf NUMERIC`);
+      // What a receive overwrote on the line, read back by un-receive.
+      await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS receive_undo JSONB`);
+      // The PO's own P&F/GST before the first bill was recorded on it — kept
+      // for POs partly received before bills were read, and for un-receive.
+      await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS pf_before_bills NUMERIC`);
+      await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS gst_before_bills NUMERIC`);
+      {
+        // One-off: the five lines the owner corrected by hand on 2 Oct 2026
+        // (bill ≠ arrived) had the billed figure written into qc_received_qty
+        // because billed_qty did not exist yet. Put the bill in billed_qty and
+        // the real count back in qc_received_qty; the payable is unchanged
+        // (Payments Due now reads billed_qty first). Runs once.
+        const done = await pool.query(`SELECT 1 FROM app_flags WHERE key='po_billed_qty_backfill_v1'`);
+        if (!done.rows.length) {
+          const fix = [[16, 1088, 1180], [22, 14000, 14176], [23, 2910, 2995], [53, 6000, 6007], [55, 0.5, 0.501]];
+          for (const [id, billedQty, arrived] of fix) {
+            await pool.query(
+              `UPDATE purchase_order_items SET billed_qty=$2, qc_received_qty=$3
+                WHERE id=$1 AND billed_qty IS NULL AND qty=$2 AND qc_received_qty=$2`, [id, billedQty, arrived]);
+          }
+          await pool.query(`INSERT INTO app_flags (key) VALUES ('po_billed_qty_backfill_v1') ON CONFLICT DO NOTHING`);
+        }
+      }
       {
         // Owner-confirmed correction: four items were QC-accepted ABOVE the
         // ordered quantity before the gate existed, so their PO lines still
@@ -1020,10 +1052,13 @@ async function initDB(retries = 20, delayMs = 10000) {
         // larger accepted one. Bring the lines up to what was actually
         // received and recompute those POs' totals so each document agrees
         // with what is owed. Guarded — after this nothing matches.
+        // A line carrying the supplier's bill is EXCLUDED: its qty is the
+        // billed figure and a larger QC count is free stock by design (owner,
+        // 2 Oct 2026), not an error to correct.
         const { rows: over } = await pool.query(`
           SELECT id, po_id, rate::float AS rate, qc_received_qty::float AS accepted
             FROM purchase_order_items
-           WHERE qc_received_qty IS NOT NULL AND qc_received_qty > qty`);
+           WHERE qc_received_qty IS NOT NULL AND qc_received_qty > qty AND billed_qty IS NULL`);
         const touched = new Set();
         for (const it of over) {
           await pool.query('UPDATE purchase_order_items SET qty=$1, amount=$2 WHERE id=$3',

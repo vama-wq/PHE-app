@@ -86,4 +86,44 @@ async function settlePoStatus(db, poId, { receivedAt } = {}) {
   return 'open';
 }
 
-module.exports = { calcTotals, recomputePoTotals, settlePoStatus, QC_RESOLVED };
+// Packaging & forwarding and GST follow the supplier's bills (owner, 2 Oct
+// 2026). P&F is ONE figure per invoice — the latest confirmed for it — summed
+// over the PO's received lines, so re-sending the same bill (a retry, a second
+// item on the same invoice, an un-receive and receive again) never adds it
+// twice. An invoice is known by its number, or — when none was typed — by the
+// file name and day it was received with. Lines received without a bill keep
+// the PO's own P&F as it stood before the first bill. No bill left on the PO →
+// its own P&F and GST come back.
+const invoiceKey = (l) => (l.invoice_no && String(l.invoice_no).trim())
+  ? `no:${String(l.invoice_no).trim().toLowerCase()}`
+  : `file:${l.invoice_original_name || ''}|${l.received_day || ''}`;
+
+async function settleBillCharges(db, poId) {
+  const po = await db.get(
+    'SELECT transport_charges, igst_percent, pf_before_bills, gst_before_bills FROM purchase_orders WHERE id=$1', [poId]);
+  if (!po) return;
+  const lines = await db.all(
+    `SELECT id, invoice_no, invoice_original_name, to_char(received_at, 'YYYY-MM-DD') AS received_day,
+            billed_pf, billed_qty
+       FROM purchase_order_items WHERE po_id=$1 AND received ORDER BY id`, [poId]);
+  const withPf = lines.filter(l => l.billed_pf != null);
+  if (withPf.length) {
+    const perInvoice = new Map();
+    for (const l of withPf) perInvoice.set(invoiceKey(l), Number(l.billed_pf) || 0);
+    const fromBills = [...perInvoice.values()].reduce((s, v) => s + v, 0);
+    const unbilled = lines.some(l => l.billed_pf == null);
+    const base = unbilled ? Number(po.pf_before_bills || 0) : 0;
+    const pf = Math.round((base + fromBills) * 100) / 100;
+    if (Math.abs(pf - (Number(po.transport_charges) || 0)) > 1e-9) {
+      await db.run('UPDATE purchase_orders SET transport_charges=$1 WHERE id=$2', [pf, poId]);
+    }
+  } else if (po.pf_before_bills != null) {
+    await db.run('UPDATE purchase_orders SET transport_charges=pf_before_bills, pf_before_bills=NULL WHERE id=$1', [poId]);
+  }
+  const anyBill = lines.some(l => l.billed_qty != null || l.billed_pf != null || (l.invoice_no && String(l.invoice_no).trim()));
+  if (!anyBill && po.gst_before_bills != null) {
+    await db.run('UPDATE purchase_orders SET igst_percent=gst_before_bills, gst_before_bills=NULL WHERE id=$1', [poId]);
+  }
+}
+
+module.exports = { calcTotals, recomputePoTotals, settlePoStatus, settleBillCharges, QC_RESOLVED };
