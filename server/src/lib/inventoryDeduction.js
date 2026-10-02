@@ -28,6 +28,17 @@ const STAGE_LABEL = { 15: 'Stage 15 Brazing', 21: 'Stage 21 Nipple Press' };
 // probably been attached by mistake and the stock would come off twice.
 // Deliberately a WARNING, not a block: the BOM is curated by design, and
 // silently refusing to deduct a part that really was used would overstate stock.
+// Finished-goods orders (owner, 2 Oct 2026): the heater comes off the
+// finished-goods store already built, and goes into the store WITHOUT its nuts
+// and washers. While preparing the order the team fits only these, so only
+// these are taken from stock for a finished-goods order — fins by the kg typed
+// on the list (there is no tube length to measure). Everything else on its list
+// (terminal pins, end sealing bushes, nipples, …) is inside the heater already.
+const FG_PREP_CATEGORIES = ['Wire', 'Lugs', 'Finns', 'Thermostat Spare', 'Nut', 'Washer',
+  'Heavy Terminal Nut', 'Heavy Terminal Washer', 'Heavy Terminal Pin', 'Bracket'];
+const fgTakes = (category) =>
+  FG_PREP_CATEGORIES.some(c => c.toLowerCase() === String(category || '').trim().toLowerCase());
+
 const BUILD_ONLY_CATEGORIES = [
   'Tube', 'Spring Guage', 'Finns', 'Flange', 'Flange Cap', 'Flange Spare',
   'Brazing EQ', 'Powder', 'Chemical Oil', 'Sealing Liquid', 'Wire', 'Lugs',
@@ -140,8 +151,11 @@ async function deductPartialAtQC(db, jc, userId) {
   if (!jc) return;
   const itemId = await resolveJobCardItemId(db, jc);
   if (!itemId) return;
-  const item = await db.get('SELECT id, drawing_number, quantity, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
+  const item = await db.get(
+    `SELECT oi.id, oi.drawing_number, oi.quantity, oi.inventory_deducted, o.order_type
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id=$1`, [itemId]);
   if (!item || item.inventory_deducted) return;
+  const fgOrder = item.order_type === 'finished_goods';
   const cardCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE order_item_id=$1', [itemId]);
   if (parseInt(cardCount.n, 10) <= 1) return; // single card → full settle handles it
 
@@ -158,12 +172,16 @@ async function deductPartialAtQC(db, jc, userId) {
   const stageCats = Object.values(STAGE_CATEGORY_MAP).flat();
   const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
   const orderCode = o?.order_code || `Order #${jc.order_id}`;
-  const sels = await db.all(
-    `SELECT oii.* FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
-     WHERE oii.order_item_id=$1 AND (ii.category IS NULL OR TRIM(ii.category) <> ALL($2))
-       AND ii.item_code <> ALL($3)`,
-    [itemId, stageCats, FINS_CODES]
-  );
+  const sels = (fgOrder
+    ? (await db.all(
+      `SELECT oii.*, TRIM(ii.category) AS category FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+        WHERE oii.order_item_id=$1`, [itemId])).filter(l => fgTakes(l.category))
+    : await db.all(
+      `SELECT oii.* FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+       WHERE oii.order_item_id=$1 AND (ii.category IS NULL OR TRIM(ii.category) <> ALL($2))
+         AND ii.item_code <> ALL($3)`,
+      [itemId, stageCats, FINS_CODES]
+    ));
   for (const sel of sels) {
     const total = parseFloat(sel.qty || 0);
     const already = parseFloat(sel.qty_deducted || 0) + parseFloat(sel.qty_waived || 0);
@@ -248,15 +266,24 @@ async function deductFinsByLength(db, jc, userId) {
 // second time — nuts and washers. Anything else on an FG item's BOM is already
 // in the heater, so deducting it would take the same part out of stock twice.
 async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = 'Consumed for production') {
-  const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
+  const item = await db.get(
+    `SELECT oi.id, oi.drawing_number, oi.inventory_deducted, o.order_type
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id=$1`, [itemId]);
   if (!item || item.inventory_deducted) return; // never double-deduct
+  const fgOrder = item.order_type === 'finished_goods';
   const sels = await db.all(
     `SELECT oii.*, ii.item_code, TRIM(ii.category) AS category FROM order_item_inventory oii
      JOIN inventory_items ii ON ii.id = oii.inventory_item_id
      WHERE oii.order_item_id=$1`, [itemId]
   );
   for (const sel of sels) {
-    if (FINS_CODES.includes(sel.item_code)) continue; // length-based, handled separately
+    if (fgOrder && !fgTakes(sel.category)) {
+      // Inside the heater already: settled without taking stock.
+      const rest = parseFloat(sel.qty || 0) - parseFloat(sel.qty_deducted || 0) - parseFloat(sel.qty_waived || 0);
+      if (rest > 1e-4) await db.run('UPDATE order_item_inventory SET qty_waived = COALESCE(qty_waived,0) + $1 WHERE id=$2', [rest, sel.id]);
+      continue;
+    }
+    if (!fgOrder && FINS_CODES.includes(sel.item_code)) continue; // length-based, handled separately
     const remaining = parseFloat(sel.qty || 0) - parseFloat(sel.qty_deducted || 0) - parseFloat(sel.qty_waived || 0);
     if (remaining <= 1e-4) continue; // rounding dust is not a take
     const noteParts = [`Order: ${orderCode}`];
@@ -429,4 +456,4 @@ async function settleItemInventory(db, orderItemId, userId, orderCode) {
   if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)');
 }
 
-module.exports = { STAGE_CATEGORY_MAP, buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, replayDeductions, FINS_CODES };
+module.exports = { STAGE_CATEGORY_MAP, FG_PREP_CATEGORIES, fgTakes, buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, replayDeductions, FINS_CODES };

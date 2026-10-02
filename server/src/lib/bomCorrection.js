@@ -3,7 +3,7 @@
 // All of it — the stock moves, the new lines and their accounting — happens in
 // one transaction, so a failure part-way leaves nothing half-done.
 
-const { STAGE_CATEGORY_MAP, FINS_CODES } = require('./inventoryDeduction');
+const { STAGE_CATEGORY_MAP, FINS_CODES, fgTakes } = require('./inventoryDeduction');
 const { ledgerColumnsReady, recordMove, ledgerForItem, progressTargets, r4, EPS } = require('./stockLedger');
 
 function clientDb(client) {
@@ -33,7 +33,7 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
     await client.query("SET LOCAL lock_timeout = '10s'");
     // One save at a time per order line.
     const item = await tx.get(
-      `SELECT oi.id, oi.order_id, oi.drawing_number, oi.inventory_deducted, o.order_code
+      `SELECT oi.id, oi.order_id, oi.drawing_number, oi.inventory_deducted, o.order_code, o.order_type
          FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id=$1 FOR UPDATE OF oi`, [orderItemId]);
     if (!item) { const e = new Error('Item not found'); e.status = 404; throw e; }
     const orderCode = item.order_code;
@@ -55,10 +55,19 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
         item_code: info[id].item_code, category: info[id].category, unit: info[id].unit });
     }
 
+    // Finished-goods orders take only the prep parts, fins by the kg on the list;
+    // a correction never moves anything else on them (owner, 2 Oct 2026).
+    const fgOrder = item.order_type === 'finished_goods';
     const ledger = await ledgerForItem(tx, orderItemId);
     // settled: the whole list was already taken (or settled) — a correction never un-settles it.
     const { targets, allPassed } = await progressTargets(tx, orderItemId, newLines,
-      { stageMap: STAGE_CATEGORY_MAP, finsCodes: FINS_CODES, settled: !!item.inventory_deducted });
+      { stageMap: STAGE_CATEGORY_MAP, finsCodes: fgOrder ? [] : FINS_CODES, settled: !!item.inventory_deducted });
+    if (fgOrder) for (const l of newLines) if (!fgTakes(l.category)) targets.set(l.inventory_item_id, null);
+    const ledgerCats = Object.keys(ledger.net || {}).length ? Object.fromEntries((await tx.all(
+      'SELECT id, TRIM(category) AS category FROM inventory_items WHERE id = ANY($1)', [Object.keys(ledger.net).map(Number)])).map(r => [String(r.id), r.category])) : {};
+    // Lines a correction never moves: fins (by tube length) on normal orders; on
+    // finished-goods orders, everything that is not a prep part.
+    const frozen = (id, code, category) => (fgOrder ? !fgTakes(category) : FINS_CODES.includes(code));
     // What the old lines already counted as settled without taking stock.
     const oldWaived = {};
     for (const l of oldLines) oldWaived[String(l.inventory_item_id)] = (oldWaived[String(l.inventory_item_id)] || 0) + (Number(l.qty_waived) || 0);
@@ -79,7 +88,7 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
       const invIds = new Set([...newLines.map(l => String(l.inventory_item_id)), ...Object.keys(ledger.net)]);
       for (const id of [...invIds].sort((a, b) => Number(a) - Number(b))) {   // fixed order: no lock cycles
         const code = lineOf[id]?.item_code || ledger.codes[id];
-        if (FINS_CODES.includes(code)) continue;          // fins go by tube length at QC — never by a correction
+        if (frozen(id, code, lineOf[id]?.category || ledgerCats[id])) continue;
         const line = lineOf[id];
         const target = line ? (targets.get(line.inventory_item_id) || 0) : 0;
         const have = Math.max(0, Number(ledger.net[id]) || 0);

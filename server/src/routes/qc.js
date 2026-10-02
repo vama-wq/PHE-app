@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQC, uploadChecklistPhoto } = require('../middleware/upload');
-const { settleItemInventory, resolveJobCardItemId, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, buildOnlyOnFg, FINS_CODES } = require('../lib/inventoryDeduction');
+const { settleItemInventory, resolveJobCardItemId, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, buildOnlyOnFg, fgTakes, FINS_CODES } = require('../lib/inventoryDeduction');
 const rework = require('../lib/rework');
 
 // Stage names, for readable activity-log lines when work is sent back to a
@@ -517,13 +517,12 @@ router.get('/:id/bom', authenticate, authorize('design', 'owner', 'admin'), asyn
     `SELECT item_id AS inventory_item_id, SUM(qty) AS qty FROM inventory_rework_moves WHERE job_card_id=$1 AND kind='deposit' GROUP BY item_id`,
     [req.params.id]);
   const cardCount = await db.get('SELECT COUNT(*) AS n FROM job_cards WHERE order_item_id=$1', [itemId]);
-  // A finished-goods card fits parts onto a heater that already exists, so its
-  // BOM should only carry what is genuinely put on during prep. If a build-only
-  // part (tube, coil, flange, fins…) is on there, the full build BOM has likely
-  // been attached and approving would take that stock out a SECOND time.
+  // A finished-goods card fits parts onto a heater that already exists: only the
+  // prep parts are taken at QC (owner, 2 Oct 2026 — lib/inventoryDeduction.js
+  // FG_PREP_CATEGORIES). The QC screen lists the rest as "not taken".
   const card = await db.get('SELECT is_fg FROM job_cards WHERE id=$1', [req.params.id]);
   const fgBuildOnly = card?.is_fg
-    ? inventory_items.filter(i => buildOnlyOnFg(i.category)).map(i => ({ item_code: i.item_code, category: i.category, qty: i.qty }))
+    ? inventory_items.filter(i => !fgTakes(i.category)).map(i => ({ item_code: i.item_code, category: i.category, qty: i.qty }))
     : [];
   res.json({
     order_id: jc.order_id,

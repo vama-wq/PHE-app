@@ -1046,6 +1046,7 @@ export default function OrderDetail() {
       {invEditItem && (
         <InventoryEditModal orderId={id}
           item={invEditItem}
+          fgOrder={isFG}
           onClose={() => setInvEditItem(null)}
           onDone={() => { setInvEditItem(null); load(); }}
         />

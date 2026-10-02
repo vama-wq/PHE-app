@@ -843,20 +843,18 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
                 onClick={() => setShowInvEdit(true)}>Edit inventory</button>
             )}
           </div>
-          {/* Finished-goods cards fit parts onto a heater that already exists.
-              A build-only part on this BOM means the full build BOM was likely
-              attached, and approving would take that stock out a second time. */}
+          {/* Finished-goods cards: only the prep parts are taken at QC (owner,
+              2 Oct 2026); everything else on the list is inside the heater. */}
           {bom?.fg_build_only?.length > 0 && (
-            <div className="text-xs rounded-lg px-3 py-2 mb-2 bg-amber-50 border border-amber-300 text-amber-800">
-              <b>Check this BOM before approving.</b> This is a Finished-Goods card — the heater is already
-              built, so its parts were consumed on the inventory order. These lines look like build parts and
-              would come out of stock a second time:
+            <div className="text-xs rounded-lg px-3 py-2 mb-2 bg-sky-50 border border-sky-200 text-sky-900">
+              <b>Finished-goods card.</b> Only the parts fitted while preparing it are taken from stock at QC —
+              wire, lugs, fins, thermostats, nuts and washers, heavy terminal nut/washer/pin and brackets.
+              These lines are already inside the heater and will <b>not</b> be taken:
               <ul className="mt-1 ml-4 list-disc">
                 {bom.fg_build_only.map(i => (
                   <li key={i.item_code}>{i.item_code} · {i.category} · qty {i.qty}</li>
                 ))}
               </ul>
-              <span className="block mt-1">Keep only what is actually fitted during finished-goods prep (nuts, washers, nipple fittings, sealing bushes).</span>
             </div>
           )}
           {!bom ? (
@@ -1058,6 +1056,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
     {showInvEdit && bom?.item_id && (
       <InventoryEditModal
         orderId={bom.order_id}
+        fgOrder={!!bom.is_fg}
         item={{ id: bom.item_id, drawing_number: bom.drawing_number, inventory_items: bom.inventory_items }}
         onClose={() => setShowInvEdit(false)}
         onDone={() => { setShowInvEdit(false); loadBom(); }}

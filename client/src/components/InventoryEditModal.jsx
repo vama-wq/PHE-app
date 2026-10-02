@@ -7,7 +7,7 @@ import { Package, X } from 'lucide-react';
 // Edit the inventory selected for an order item. If the item's drawing is already
 // approved (stock deducted), saving reverses the old selection and re-deducts the
 // new one server-side so stock stays accurate.
-export default function InventoryEditModal({ orderId, item, onClose, onDone }) {
+export default function InventoryEditModal({ orderId, item, fgOrder = false, onClose, onDone }) {
   const [inventoryItems, setInventoryItems] = useState([]);
   const [selected, setSelected] = useState(
     Object.fromEntries((item?.inventory_items || []).map(i => [i.id, i.qty ?? '']))
@@ -41,7 +41,8 @@ export default function InventoryEditModal({ orderId, item, onClose, onDone }) {
   const setQty = (id, qty) => setSelected(prev => ({ ...prev, [id]: qty }));
   const selectedList = inventoryItems.filter(i => i.id in selected);
   // Fins need no qty — they deduct automatically by tube length at QC approval
-  const isFins = (i) => (i?.category || '').trim().toLowerCase() === 'finns';
+  // On a finished-goods order there is no tube length, so fins are typed in kg (owner, 2 Oct 2026).
+  const isFins = (i) => !fgOrder && (i?.category || '').trim().toLowerCase() === 'finns';
   const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
 
   const handleSave = async () => {

@@ -7,7 +7,7 @@ import { Upload, Package, X, FileText } from 'lucide-react';
 // Design uploads a reference drawing for an order item AND selects the inventory
 // that item consumes. Inventory deducts when the owner approves the drawing.
 // fileOptional: finished-goods orders may record the inventory without a file.
-export default function DrawingUploadModal({ orderId, item, label = 'Upload Drawing', fileOptional = false, onClose, onDone }) {
+export default function DrawingUploadModal({ orderId, item, label = 'Upload Drawing', fileOptional = false, fgOrder = fileOptional, onClose, onDone }) {
   const [file, setFile] = useState(null);
   const [inventoryItems, setInventoryItems] = useState([]);
   const [selected, setSelected] = useState({}); // { [id]: qty }
@@ -52,7 +52,8 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   const setQty = (id, qty) => setSelected(prev => ({ ...prev, [id]: qty }));
   const selectedList = inventoryItems.filter(i => i.id in selected);
   // Fins need no qty — they deduct automatically by tube length at QC approval
-  const isFins = (i) => (i?.category || '').trim().toLowerCase() === 'finns';
+  // On a finished-goods order there is no tube length, so fins are typed in kg (owner, 2 Oct 2026).
+  const isFins = (i) => !fgOrder && (i?.category || '').trim().toLowerCase() === 'finns';
   const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
   // Every production BOM must include a terminal pin (finished-goods exempt —
   // fileOptional marks FG orders, where the heater is already built). Which pin
