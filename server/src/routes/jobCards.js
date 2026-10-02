@@ -1015,13 +1015,13 @@ router.get('/:id/checklist', authenticate, async (req, res) => {
     ? await holdingCapaFor(db, req.params.id)
     : await activeCapaFor(db, req.params.id);
 
-  // Stage numbers in display order. 30 = Kharoch Process — an optional stage shown
-  // right after Bending (14); it keeps a high id so existing data is never renumbered.
-  // FG inventory cards run the short 4-stage checklist instead.
+  // Stage numbers in display order. FG inventory cards run the short 4-stage
+  // checklist instead. Stage 30 (Kharoch Process) was removed on 2 Oct 2026
+  // (owner); its past ticks stay in production_checklist.
   const jcType = await db.get('SELECT is_fg FROM job_cards WHERE id=$1', [req.params.id]);
   const STAGE_NOS = jcType?.is_fg
     ? [1,2,3,4]
-    : [1,2,3,4,5,6,7,8,9,10,11,12,13,14,30,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29];
+    : [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29];
   const map = {};
   rows.forEach(r => { map[r.stage_no] = r; });
   const stages = STAGE_NOS.map(n => map[n] || {
@@ -1048,6 +1048,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   const jobCardId = parseInt(req.params.id, 10);
   const stageNo   = parseInt(req.params.stage, 10);
   if (isNaN(stageNo) || stageNo < 1 || stageNo > 40) return res.status(400).json({ error: 'Invalid stage' });
+  if (stageNo === 30) return res.status(400).json({ error: 'The Kharoch Process stage has been removed from the checklist. Please refresh the page.' });
 
   const { done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, coil_weight } = req.body;
   const db = getDB();

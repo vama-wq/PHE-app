@@ -20,10 +20,8 @@ export const PRODUCTION_STAGES = [
   { no: 12, name: 'Spot Annealing or Furnace Annealing' },
   { no: 13, name: 'Buffing',            optional: true },
   { no: 14, name: 'Bending',            heaterAdjust: true, photoRequired: true },
-  // Kharoch is an optional step right after Bending. It keeps a high stage id (30)
-  // so existing checklist data (keyed 1–29) is never renumbered; array position
-  // here controls where it shows. Excluded from the linear current_stage tracker.
-  { no: 30, name: 'Kharoch Process',    optional: true },
+  // Kharoch Process (stage 30, optional, after Bending) was removed on 2 Oct 2026
+  // (owner). Past ticks stay in the records; reports still name stage 30.
   { no: 15, name: 'Brazing',            optional: true, brazing: true },
   { no: 16, name: 'In Plating',          optional: true },
   { no: 17, name: 'Plating Completed',  optional: true },
