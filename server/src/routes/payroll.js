@@ -31,15 +31,11 @@ const MONTHLY_ACCRUAL = { fixed_admin: 1, fixed_production: 2 };
 // Only Admin and Production (with leave) get petrol — labour and no-leave
 // production never receive petrol reimbursement.
 const PETROL_GROUPS = ['fixed_admin', 'fixed_production'];
-const MONTH_BASIS_DAYS = 30; // fallback when no month is known
-// ALL fixed groups (admin, production with/without leave) divide by the month's
-// ACTUAL days (July/Aug 31, Feb 28/29) — owner extended this to no-leave
-// production on 2026-08-05.
-const daysInMonth = (month) => {
-  const [y, m] = String(month || '').split('-').map(Number);
-  return y && m ? new Date(Date.UTC(y, m, 0)).getUTCDate() : MONTH_BASIS_DAYS;
-};
-const basisDays = (month, _group) => daysInMonth(month);
+// Every month counts as 30 days for ALL fixed groups — 31-day months and
+// February too (owner, 2 Oct 2026; replaces the days-in-month basis used for
+// July 2026, which stays as paid).
+const MONTH_BASIS_DAYS = 30;
+const basisDays = (_month, _group) => MONTH_BASIS_DAYS;
 // OT hourly rate = day pay ÷ standard-hours: 8h for labour/admin, 10h for
 // production (their day is 10h). Only labour + production-no-leave earn OT.
 const OT_DIVISOR = 8;
@@ -196,6 +192,26 @@ async function applyAttendanceUpdates(client, runId, updates, holidays = 0) {
        LEAVE_GROUPS.includes(line.worker_group) && Number(u.absent_days) > MAX_TOGETHER,
        u.late_days || 0, u.late_cut_minutes || 0, pay.late_deduction,
        pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay, pay.total_payable, line.id]);
+  }
+}
+
+// Re-price every line of an open run with the current rules, keeping the
+// attendance, credits, petrol and advances as stored. Runs at the end of each
+// save so a rule change (e.g. the 30-day month) reaches every worker's row,
+// not only the rows just edited. Approval re-prices again before locking.
+async function repriceRun(client, runId, holidays, month) {
+  const { rows } = await client.query(
+    `SELECT pl.*, e.daily_rate AS e_rate, e.monthly_salary AS e_salary
+       FROM payroll_lines pl JOIN employees e ON e.id = pl.employee_id WHERE pl.run_id=$1`, [runId]);
+  for (const line of rows) {
+    const emp = { worker_group: line.worker_group, daily_rate: line.worker_group === 'labour' ? line.e_rate : null,
+                  monthly_salary: line.e_salary, petrol_monthly: line.petrol };
+    const pay = computeLine(emp, line, holidays, month);
+    await client.query(
+      `UPDATE payroll_lines SET daily_rate=$1, base_pay=$2, ot_amount=$3, absent_deduction=$4, holiday_pay=$5,
+         late_deduction=$6, total_payable=$7 WHERE id=$8`,
+      [pay.daily_rate, pay.base_pay, pay.ot_amount, pay.absent_deduction, pay.holiday_pay,
+       pay.late_deduction, pay.total_payable, line.id]);
   }
 }
 
@@ -563,6 +579,7 @@ router.put('/runs/:id/parse-essl', authenticate, authorize('owner', 'accounts'),
         if (old && old !== req.file.storagePath) deleteFromStorage(old).catch(() => {});
       }
       await applyAttendanceUpdates(client, id, result.updates, holidays);
+      await repriceRun(client, id, holidays, run.month);
     });
     res.json({ message: 'ESSL applied', applied: result.applied, unmatched: result.unmatched, period: result.period });
   } catch (e) {
@@ -709,6 +726,7 @@ router.put('/runs/:id/attendance', authenticate, authorize('owner', 'accounts'),
             [id, lineId, line.name, JSON.stringify(logged), reason || null, req.user.id]);
         }
       }
+      await repriceRun(client, id, holidays, run.month);
     });
     res.json({ message: 'Attendance saved', warnings: errors });
   } catch (e) {
@@ -839,6 +857,7 @@ router.put('/runs/:id/review', authenticate, authorize('owner', 'accounts'), asy
              reason || null, req.user.id]);
         }
       }
+      await repriceRun(client, id, holidays, run.month);
     });
     res.json({ message: 'Review saved', warnings: errors });
   } catch (e) {
