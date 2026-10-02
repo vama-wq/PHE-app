@@ -149,7 +149,8 @@ function readTimes(row, format) {
   return { inMin: t.length >= 2 ? t[0] : null, outMin: t.length >= 2 ? t[1] : null };
 }
 
-async function parseEssl(buffer) {
+async function parseEssl(buffer, { holidayDates = [] } = {}) {
+  const holidaySet = new Set(holidayDates);
   const data = await pdfParse(buffer);
   const format = /\(Basic Report\)/i.test(data.text) ? 'basic' : 'detailed';
 
@@ -180,8 +181,10 @@ async function parseEssl(buffer) {
       seenDayKeys.add(`${key}|${dayIso}`);
       // Sunday is the weekly off — a non-attendance there isn't an absence
       // (the device inconsistently marks Sundays "WeeklyOff" or "Absent").
-      // Saturday IS a working day, so its absences DO count.
-      if (day.date.getUTCDay() === 0 && row.status !== 'Present' && row.status !== 'Half Day') continue;
+      // Saturday IS a working day, so its absences DO count. A paid festival
+      // holiday is treated like Sunday: the device marks it "Absent" (it doesn't
+      // know the holiday), but it is never an absent day (owner, 2 Oct 2026).
+      if ((day.date.getUTCDay() === 0 || holidaySet.has(dayIso)) && row.status !== 'Present' && row.status !== 'Half Day') continue;
       if (!workers.has(key)) {
         workers.set(key, { display, present: 0, absent: 0, noOutPunch: 0, inMinsList: [], outMinsList: [], lateStayDates: [], days: 0 });
       }

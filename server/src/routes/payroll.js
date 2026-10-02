@@ -57,8 +57,9 @@ const seesPay = (req) => req.user.role === 'owner' || req.user.role === 'account
 const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
 
 // Salary maths — single source of truth. `holidays` = paid festival holidays in
-// the run's month: labour gets +1 day's rate each; fixed workers aren't deducted
-// for them (holiday days come off the deductible-absent count).
+// the run's month: labour gets +1 day's rate each. A holiday is never an absent
+// day (the ESSL parse skips holiday dates like Sundays — owner, 2 Oct 2026), so
+// fixed workers' absent days are all real absences and are cut in full.
 function computeLine(emp, line, holidays = 0, month = null) {
   const present = Number(line.present_days || 0);
   const absent = Number(line.absent_days || 0);
@@ -97,8 +98,8 @@ function computeLine(emp, line, holidays = 0, month = null) {
   // fixed_admin / fixed_production / fixed_production_nl
   const salary = Number(line.monthly_salary ?? emp.monthly_salary ?? 0);
   const perDay = salary / basisDays(month, emp.worker_group);
-  // Paid festival holidays are never deducted (come off absents before credits)
-  const deductibleAbsent = Math.max(absent - hol, 0);
+  // Holidays are already left out of absent_days, so every absent day counts
+  const deductibleAbsent = Math.max(absent, 0);
   const chargedAbsent = Math.max(deductibleAbsent - creditUsed, 0);
   const absentDeduction = rnd(perDay * chargedAbsent);
   const otAmount = rnd((perDay / otDiv) * ot);
@@ -122,6 +123,14 @@ async function paidHolidaysInMonth(db, month) {
   return Number(row.n);
 }
 
+// The paid holiday dates ('YYYY-MM-DD') in a month — the ESSL parse skips them
+// so a holiday never counts as an absent day
+async function paidHolidayDates(db, month) {
+  const rows = await db.all(
+    `SELECT to_char(holiday_date,'YYYY-MM-DD') AS d FROM holidays WHERE paid=TRUE AND to_char(holiday_date,'YYYY-MM')=$1`, [month]);
+  return rows.map(r => r.d);
+}
+
 // Leave balance = sum of ledger deltas
 async function leaveBalance(db, employeeId) {
   const row = await db.get(
@@ -134,8 +143,8 @@ async function leaveBalance(db, employeeId) {
 // present (unlisted days count as absent until the owner corrects); OT hours
 // and 6:30 late-stays as counted; admin sick-credit weeks pre-filled as a
 // suggestion. Returns { applied, unmatched, updates:[{employee_id,...}] }.
-async function esslToAttendance(buffer, employees, workingDays) {
-  const parsed = await parseEssl(buffer);
+async function esslToAttendance(buffer, employees, workingDays, holidayDates = []) {
+  const parsed = await parseEssl(buffer, { holidayDates });
   const { matched, unmatched } = matchEmployees(parsed.workers, employees);
   const empById = Object.fromEntries(employees.map(e => [e.id, e]));
   const updates = [];
@@ -487,7 +496,7 @@ router.post('/runs', authenticate, authorize('owner', 'accounts'), ...uploadEssl
     // Parse the ESSL PDF up front (best-effort) so the grid arrives pre-filled
     let parseResult = null;
     if (req.file?.buffer) {
-      try { parseResult = await esslToAttendance(req.file.buffer, employees, workingDays); }
+      try { parseResult = await esslToAttendance(req.file.buffer, employees, workingDays, await paidHolidayDates(db, month)); }
       catch (pe) { console.error('ESSL parse (non-fatal):', pe.message); }
     }
 
@@ -544,7 +553,7 @@ router.put('/runs/:id/parse-essl', authenticate, authorize('owner', 'accounts'),
     }
     const employees = await db.all(
       'SELECT * FROM employees WHERE id IN (SELECT employee_id FROM payroll_lines WHERE run_id=$1)', [id]);
-    const result = await esslToAttendance(buffer, employees, run.working_days);
+    const result = await esslToAttendance(buffer, employees, run.working_days, await paidHolidayDates(db, run.month));
     const holidays = await paidHolidaysInMonth(db, run.month);
     await db.withTransaction(async (client) => {
       if (req.file?.storagePath) {
@@ -763,8 +772,8 @@ router.put('/runs/:id/review', authenticate, authorize('owner', 'accounts'), asy
         const line = rows[0];
         if (!line) continue;
 
-        // Credits can only cover deductible absences (paid holidays are already free)
-        const deductibleAbsent = Math.max(Number(line.absent_days) - holidays, 0);
+        // Credits can only cover absences (holidays are never counted as absent)
+        const deductibleAbsent = Math.max(Number(line.absent_days), 0);
         let creditUsed = u.leave_credit_used != null ? Number(u.leave_credit_used) : Number(line.leave_credit_used);
         if (LEAVE_GROUPS.includes(line.worker_group)) {
           const { rows: balRows } = await client.query(
@@ -904,8 +913,8 @@ router.put('/runs/:id/approve', authenticate, authorize('owner'), async (req, re
           const { rows: b2 } = await client.query(
             'SELECT COALESCE(SUM(delta),0) AS bal FROM employee_leave_ledger WHERE employee_id=$1', [line.employee_id]);
           const liveBal = Number(b2[0].bal);
-          // Credits cover only deductible absences (paid holidays already free)
-          const deductibleAbsent = Math.max(Number(line.absent_days) - holidays, 0);
+          // Credits cover only absences (holidays are never counted as absent)
+          const deductibleAbsent = Math.max(Number(line.absent_days), 0);
           creditUsed = Math.max(0, Math.min(creditUsed, liveBal, deductibleAbsent, MAX_TOGETHER));
         } else {
           creditUsed = 0;

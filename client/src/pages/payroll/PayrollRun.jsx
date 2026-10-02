@@ -341,7 +341,7 @@ export default function PayrollRun() {
                 <th className="table-header text-right" title="Days punched in after the grace time (auto from ESSL)">Late Days</th>
                 {canWork && (
                   <>
-                    <th className="table-header text-right" title="Paid leaves available to spend this month: carried balance + this month's accrual (+1 admin / +2 production) + 6:30 sick credits. '→ N left' shows what remains after the credits used this run.">Leaves Avail.</th>
+                    <th className="table-header text-right" title="Paid leaves this worker can use this month — the balance carried in at the start of the month. This month's +1 (admin) / +2 (production) and 6:30 sick credits are added at approval and can be used from next month. '→ N left' shows what remains after the credits used this run.">Leaves Avail.</th>
                     <th className="table-header text-right" title="Absences to charge against leave credit (no salary cut)">Credit Used</th>
                     <th className="table-header text-right" title="Sick credits earned this month (admin 6:30 rule)">Sick +</th>
                     <th className="table-header text-right">Absent Ded.</th>
@@ -390,19 +390,21 @@ export default function PayrollRun() {
                         <>
                           <td className="table-cell text-right text-sm font-semibold">
                             {(() => {
-                              // AVAILABLE = what the worker has to spend this month
-                              // (carried + this month's accrual + 6:30 credits),
-                              // BEFORE the credits used below. The small "→ N left"
-                              // shows what remains once this month's usage applies.
+                              // AVAILABLE = what the worker can spend THIS month: the
+                              // leave carried in at the start of the month (owner,
+                              // 2 Oct 2026). This month's accrual and 6:30 credits
+                              // post at approval and are spendable from next month.
+                              // The small "→ N left" shows what remains after usage.
                               const carried = Number(leaveBal?.[l.employee_id] ?? 0);
                               const accrual = l.worker_group === 'fixed_admin' ? 1 : l.worker_group === 'fixed_production' ? 2 : 0;
                               const sickPlus = l.worker_group === 'fixed_admin' ? (Number(val(l, 'sick_credit_earned')) || 0) : 0;
                               const used = Number(val(l, 'leave_credit_used')) || 0;
-                              const avail = carried + accrual + sickPlus;
+                              const avail = carried;
                               const left = avail - used;
+                              const nextMonth = left + accrual + sickPlus;
                               return (
                                 <span className="inline-flex items-center gap-1">
-                                  <span title={`Available ${avail} = carried ${carried} + monthly ${accrual}${sickPlus ? ` + 6:30 credits ${sickPlus}` : ''}${used ? ` · using ${used} this month → ${left} left` : ''}`}
+                                  <span title={`Can use ${avail} this month (carried in)${used ? ` · using ${used} → ${left} left` : ''} · at approval +${accrual} monthly${sickPlus ? ` + ${sickPlus} sick (6:30)` : ''} → ${nextMonth} for next month`}
                                     className={avail < 0 ? 'text-red-600' : ''}>
                                     {avail}
                                     {used > 0 && (
