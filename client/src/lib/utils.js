@@ -359,5 +359,10 @@ export const UNIT_GROUPS = [
 const normUnit = (u) => String(u || '').trim().toLowerCase().replace(/\.$/, '');
 const unitKey = (u) => { const s = normUnit(u); const g = UNIT_GROUPS.findIndex(x => x.includes(s)); return g >= 0 ? `g${g}` : s; };
 export const sameUnit = (a, b) => !normUnit(a) || !normUnit(b) || unitKey(a) === unitKey(b);
+// Weighed lines: a difference within 0.5% is scale noise (owner, 3 Oct 2026).
+// Mirrors server/src/lib/units.js.
+export const WEIGHT_TOLERANCE = 0.005;
+export const isWeightUnit = (u) => { const k = unitKey(u); return k === unitKey('kg') || k === unitKey('g'); };
+export const weighAllowance = (unit, base) => (isWeightUnit(unit) ? Math.abs(Number(base) || 0) * WEIGHT_TOLERANCE : 0);
 // Units a PO line can be bought in (the item's own unit is always offered too).
 export const PO_UNITS = ['pcs', 'kgs', 'foot', 'mtr', 'liters', 'boxes', 'set'];

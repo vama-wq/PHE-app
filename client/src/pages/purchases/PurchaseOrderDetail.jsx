@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
-import { fmtDate, fmtDateTime, ROLE_COLORS, ROLE_LABELS, istTodayInput, sameUnit } from '../../lib/utils';
+import { fmtDate, fmtDateTime, ROLE_COLORS, ROLE_LABELS, istTodayInput, sameUnit, weighAllowance } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import {
@@ -984,7 +984,13 @@ function ReceiveItemModal({ poId, items: rawItems, allItems = [], onClose, onDon
               <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 bg-white max-h-48 overflow-y-auto">
                 {items.map(i => {
                   const got = qtyIn[i.id] === undefined || qtyIn[i.id] === '' ? Number(i.qty) : Number(qtyIn[i.id]);
-                  const short = selected[i.id] && got > 0 && got < Number(i.qty);
+                  // Weighed lines: within 0.5% of the order is scale noise (as the server rules).
+                  // A balance only opens for what was neither billed nor sent.
+                  const allow = weighAllowance(i.unit, i.qty);
+                  const billedQ = billLines[i.id]?.qty !== undefined && billLines[i.id]?.qty !== '' ? Number(billLines[i.id].qty) : 0;
+                  const coveredQ = Math.max(got, billedQ);
+                  const withinAllow = got > 0 && Math.abs(coveredQ - Number(i.qty)) > 1e-9 && Math.abs(coveredQ - Number(i.qty)) <= allow + 1e-9 && got <= Number(i.qty) + allow + 1e-9;
+                  const short = selected[i.id] && got > 0 && coveredQ < Number(i.qty) - allow - 1e-9;
                   return (
                     <div key={i.id} className="px-3 py-2 text-sm hover:bg-gray-50">
                       <label className="flex items-center gap-2 cursor-pointer">
@@ -1000,13 +1006,16 @@ function ReceiveItemModal({ poId, items: rawItems, allItems = [], onClose, onDon
                             onChange={e => setQtyIn(p => ({ ...p, [i.id]: e.target.value }))} />
                           {short && (
                             <span className="text-[11px] text-amber-700">
-                              {Math.round((Number(i.qty) - got) * 1e6) / 1e6} stays open as a balance line
+                              {Math.round((Number(i.qty) - coveredQ) * 1e6) / 1e6} stays open as a balance line
                             </span>
                           )}
-                          {got > Number(i.qty) && (
+                          {got > Number(i.qty) + allow + 1e-9 && (
                             <span className="text-[11px] text-amber-700">
                               {Math.round((got - Number(i.qty)) * 1e6) / 1e6} more than ordered — needs owner approval before QC
                             </span>
+                          )}
+                          {selected[i.id] && withinAllow && (
+                            <span className="text-[11px] text-teal-700">within the 0.5% weighing allowance — nothing left open, no approval needed</span>
                           )}
                         </div>
                       )}
@@ -1092,7 +1101,10 @@ function ReceiveItemModal({ poId, items: rawItems, allItems = [], onClose, onDon
                             {br != null && Math.abs(br - Number(ci.rate)) > 1e-9 && (
                               <span className={br > Number(ci.rate) ? 'text-red-600' : 'text-emerald-700'}>rate {br > Number(ci.rate) ? 'above' : 'below'} the PO — the PO will follow the bill</span>
                             )}
-                            {bq != null && arrived != null && Math.abs(bq - arrived) > 1e-9 && (
+                            {bq != null && arrived != null && Math.abs(bq - arrived) > 1e-9 && Math.abs(bq - arrived) <= weighAllowance(unitOf(ci), bq) + 1e-9 && (
+                              <span className="text-teal-700">billed {bq}, arrived {arrived} — within the 0.5% weighing allowance: the bill is paid as it stands, no debit note</span>
+                            )}
+                            {bq != null && arrived != null && Math.abs(bq - arrived) > weighAllowance(unitOf(ci), bq) + 1e-9 && (
                               <span className="text-amber-700">billed {bq}, arrived {arrived} — {bq > arrived
                                 ? 'short against the bill: a debit note opens at QC. If the rest is coming later, set billed to what came now and receive the rest against the same invoice when it arrives.'
                                 : 'extra: goes to stock at no cost'}</span>

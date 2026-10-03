@@ -3,7 +3,7 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseReceive, uploadPurchaseItemQC, uploadPurchaseItemQCFields, uploadDebitNote, uploadChatAttachments, parseInvoiceOnly } = require('../middleware/upload');
 const { readInvoice } = require('../lib/invoiceReader');
-const { sameUnit } = require('../lib/units');
+const { sameUnit, weighAllowance } = require('../lib/units');
 const { createNotification } = require('./notifications');
 // Owner actions shared with the WhatsApp reply dispatcher (same code, both paths).
 const poActions = require('../services/actions/purchaseOrders');
@@ -941,7 +941,9 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     // More can arrive than was ordered. That raises what is payable, so the
     // line is NOT updated here — the excess is parked for the owner to approve
     // and QC cannot take it into stock until they do.
-    const overQty = recvQty > orderedQty + 1e-9 ? recvQty : null;
+    // On a weighed line, up to 0.5% over is scale noise, not an over-receipt.
+    const allow = weighAllowance(item.unit, orderedQty);
+    const overQty = recvQty > orderedQty + allow + 1e-9 ? recvQty : null;
 
     // The supplier's bill (read from the invoice, checked by accounts). The PO
     // line and the payment follow the bill: its quantity becomes the line's
@@ -963,8 +965,10 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     // A bill for more than arrived is not a balance still to come — it is a
     // short delivery against the bill, which QC's count turns into a debit
     // note. So the balance line is only for what was neither billed nor sent.
-    const balanceQty = overQty ? 0
-      : Math.max(0, Math.round((orderedQty - Math.max(recvQty, billedQty != null ? billedQty : 0)) * 1e6) / 1e6);
+    // Within the weighing allowance a shortfall is scale noise: nothing is left
+    // open, and the line simply takes what arrived (or was billed).
+    const shortBy = Math.round((orderedQty - Math.max(recvQty, billedQty != null ? billedQty : 0)) * 1e6) / 1e6;
+    const balanceQty = overQty || shortBy <= allow + 1e-9 ? 0 : Math.max(0, shortBy);
 
     const transportCost = Number(req.body.transport_cost) || 0;             // main vehicle freight (the whole bill)
     const transportPaidTo = (req.body.transport_paid_to || '').trim() || null;
@@ -1098,7 +1102,8 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
       }
       // The bill may have moved the line's value, P&F or GST — the PO's totals
       // follow it (its printed figures are the bill's, as the owner wants).
-      if (billNotes.length || balanceQty > 0) {
+      // A weighed line taken within the allowance also moves the line's value.
+      if (billNotes.length || balanceQty > 0 || Math.abs(lineQty - orderedQty) > 1e-9) {
         await recomputePoTotals({
           get: async (s, p = []) => (await client.query(s, p)).rows[0] || null,
           all: async (s, p = []) => (await client.query(s, p)).rows,
@@ -1234,8 +1239,17 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
     // claimed back by debit note, an extra is free stock (owner, 2 Oct 2026).
     const billed = item.billed_qty != null ? Number(item.billed_qty) : null;
     const arrived = acceptedQty + rejectedQty;
-    const shortfall = billed != null && arrived < billed - 1e-9 ? Math.round((billed - arrived) * 1e6) / 1e6 : 0;
-    const extra = billed != null && arrived > billed + 1e-9 ? Math.round((arrived - billed) * 1e6) / 1e6 : 0;
+    // Weighed lines: within 0.5% of the bill is scale noise — the bill is paid
+    // as it stands, nothing is claimed and nothing flagged. Beyond it, the
+    // whole difference counts.
+    // Only when the bill itself is within the allowance of what this line
+    // ordered — otherwise a bill above the order plus a short arrival would
+    // stack the two allowances and pay ~1% over the order unflagged.
+    const orderedForLine = item.receive_undo && item.receive_undo.qty != null ? Number(item.receive_undo.qty) : Number(item.qty);
+    const billInOrder = billed != null && billed <= orderedForLine + weighAllowance(item.unit, orderedForLine) + 1e-9;
+    const billAllow = billed != null && billInOrder ? weighAllowance(item.unit, billed) : 0;
+    const shortfall = billed != null && arrived < billed - billAllow - 1e-9 ? Math.round((billed - arrived) * 1e6) / 1e6 : 0;
+    const extra = billed != null && arrived > billed + billAllow + 1e-9 ? Math.round((arrived - billed) * 1e6) / 1e6 : 0;
     let shortNoteId = null;
     await db.withTransaction(async (client) => {
       await client.query(

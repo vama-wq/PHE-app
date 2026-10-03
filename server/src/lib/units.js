@@ -18,4 +18,13 @@ const unitKey = (u) => { const s = normUnit(u); const g = UNIT_GROUPS.findIndex(
 // A blank unit on either side is treated as the same (nothing to convert).
 const sameUnit = (a, b) => !normUnit(a) || !normUnit(b) || unitKey(a) === unitKey(b);
 
-module.exports = { UNIT_GROUPS, normUnit, unitKey, sameUnit };
+// Weighed goods never match the supplier's scale to the gram. On a line bought
+// by weight, a difference within 0.5% of the figure it is checked against is
+// scale noise — no balance line, no over-receipt approval, no short debit note,
+// no "extra" alert (owner, 3 Oct 2026). Stock still takes what QC weighed.
+// Counted goods stay exact.
+const WEIGHT_TOLERANCE = 0.005;
+const isWeightUnit = (u) => { const k = unitKey(u); return k === unitKey('kg') || k === unitKey('g'); };
+const weighAllowance = (unit, base) => (isWeightUnit(unit) ? Math.abs(Number(base) || 0) * WEIGHT_TOLERANCE : 0);
+
+module.exports = { UNIT_GROUPS, normUnit, unitKey, sameUnit, WEIGHT_TOLERANCE, isWeightUnit, weighAllowance };
