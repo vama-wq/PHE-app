@@ -1067,7 +1067,7 @@ router.put('/:id/reject', authenticate, authorize('owner'), async (req, res) => 
 
 router.put('/:id', authenticate, authorize('admin', 'owner', 'accounts'), async (req, res) => {
   const db = getDB();
-  const order = await db.get('SELECT status FROM orders WHERE id=$1', [req.params.id]);
+  const order = await db.get('SELECT status, order_type, order_code FROM orders WHERE id=$1', [req.params.id]);
   if (!order) return res.status(404).json({ error: 'Order not found' });
 
   if (order.status === 'rejected') {
@@ -1079,6 +1079,45 @@ router.put('/:id', authenticate, authorize('admin', 'owner', 'accounts'), async 
     if (order_type !== undefined) { sets.push(`order_type = $${idx}`); params.push(order_type); idx++; }
     params.push(req.params.id);
     await db.run(`UPDATE orders SET ${sets.join(', ')} WHERE id = $${idx}`, params);
+
+    // A reused item's list was copied from an order of the old kind (reuse
+    // copies only within FG / Inventory Order / Local HE + Export HE + IO HE).
+    // Moving the order to another kind leaves that list behind, so design is
+    // asked to check it again, the same way a fresh reuse asks.
+    const oldFamily = bomFamily(order.order_type);
+    if (order_type !== undefined && bomFamily(order_type) !== oldFamily) {
+      const fromLabel = ORDER_TYPE_LABEL[order.order_type || 'local_he'] || order.order_type;
+      const toLabel = ORDER_TYPE_LABEL[order_type] || order_type;
+      const items = await db.all(
+        `SELECT oi.id, oi.drawing_number, oi.product_code,
+                EXISTS (SELECT 1 FROM order_item_inventory x WHERE x.order_item_id = oi.id) AS has_list
+           FROM order_items oi WHERE oi.order_id=$1 AND oi.copied_from_item_id IS NOT NULL`, [req.params.id]);
+      for (const it of items) {
+        const why = it.has_list
+          ? `The order was changed from ${fromLabel} to ${toLabel}, but this item's inventory list was copied from a ${BOM_FAMILY_LABEL[oldFamily]} order. Check it is right for ${toLabel} and add anything missing.`
+          : `The order was changed from ${fromLabel} to ${toLabel} and this item has no inventory list — add its BOM.`;
+        await db.run('UPDATE order_items SET bom_review=$1, bom_review_reason=$2, bom_review_by=NULL, bom_review_at=NULL WHERE id=$3',
+          ['needed', why, it.id]);
+      }
+      if (items.length) {
+        const names = items.map(i => i.drawing_number || i.product_code || `item #${i.id}`).join(', ');
+        await logActivity(req.params.id, null, 'bom_review_order_type',
+          `Order type changed ${fromLabel} → ${toLabel}; BOM sent back to design on ${names}`, req.user.id);
+        try {
+          const designers = await db.all(`SELECT id FROM users WHERE role='design'`);
+          for (const u of designers) {
+            await createNotification(db, {
+              userId: u.id,
+              type: 'inventory_needed',
+              title: 'Check the inventory on reused items',
+              body: `${order.order_code} was changed from ${fromLabel} to ${toLabel}. These reused items carry a list copied under the old type: ${names}. Their drawings cannot be approved, and no job card made, until you confirm them.`,
+              link: `/orders/${req.params.id}`,
+              sourceUserId: req.user.id,
+            });
+          }
+        } catch (e) { console.error('[orders] order-type BOM notify failed:', e.message); }
+      }
+    }
   } else {
     const { notes } = req.body;
     await db.run('UPDATE orders SET notes=$1 WHERE id=$2', [notes || null, req.params.id]);
