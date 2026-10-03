@@ -31,7 +31,45 @@ const baseDrawing = (s) => s ? (String(s).trim().replace(/-\d+$/, '') || String(
 const FILL = (argb) => ({ type:'pattern', pattern:'solid', fgColor:{ argb } });
 const RED = 'FFF8CBAD', GREEN = 'FFC6EFCE', AMBER = 'FFFFEB9C', BLUE = 'FFDDEBF7', HEAD = 'FF1F4E78';
 
+// Rejections count in the month they were ENTERED (tapped in) on the checklist
+// — owner, 3 Oct 2026 — not the month the item finished or dispatched. The
+// moment of entry is when the stage was marked done with the rejection, or,
+// for a stage not marked done yet, when the row was saved.
+async function rejectionsEntered(db, startISO, endISO) {
+  return db.all(`
+    SELECT pc.job_card_id, pc.stage_no, pc.rejection_qty, pc.remade_qty, pc.worker_name, pc.notes, pc.done,
+           COALESCE(pc.done_at, pc.updated_at) AS entered_at,
+           jc.job_card_no, jc.qty, o.order_code, c.customer_code, u.name AS entered_by
+      FROM production_checklist pc
+      JOIN job_cards jc ON jc.id = pc.job_card_id
+      JOIN orders o ON o.id = jc.order_id
+      LEFT JOIN customers c ON c.id = o.customer_id
+      LEFT JOIN users u ON u.id = pc.updated_by
+     WHERE pc.rejection_qty > 0
+       AND COALESCE(pc.done_at, pc.updated_at) >= $1::timestamptz
+       AND COALESCE(pc.done_at, pc.updated_at) <  $2::timestamptz
+     ORDER BY COALESCE(pc.done_at, pc.updated_at), pc.id`, [startISO, endISO]);
+}
+
+// Stage 16 (In Plating) holds the plating VENDOR in worker_name (owner,
+// 3 Oct 2026) — a vendor is not a worker, so it is left out of the workers.
+const PLATING_STAGE = 16;
+const workerNames = (r) => (r.stage_no === PLATING_STAGE ? [] :
+  String(r.worker_name || '').split(',').map(x => x.trim()).filter(Boolean));
+
 async function buildMonth(db, startISO, endISO) {
+  const entered = await rejectionsEntered(db, startISO, endISO);
+  const stageRejects = {}, workers = {};
+  let enteredRejects = 0, enteredRemakes = 0;
+  for (const r of entered) {
+    const rq = parseInt(r.rejection_qty, 10) || 0;
+    enteredRejects += rq;
+    if (r.stage_no !== 29) enteredRemakes += parseInt(r.remade_qty, 10) || 0;
+    stageRejects[r.stage_no] = (stageRejects[r.stage_no] || 0) + rq;
+    for (const w of workerNames(r)) { (workers[w] ||= { items: new Set(), rejects: 0 }); workers[w].rejects += rq; }
+  }
+  const rejections = { rows: entered, rejects: enteredRejects, remakes: enteredRemakes };
+
   const cards = await db.all(`
     SELECT jc.id, jc.job_card_no, jc.qty, jc.order_item_id, jc.dispatch_date, jc.drawing_no, jc.product_name, jc.created_at,
            jc.tube_used_qty, jc.tube_scrap_qty, jc.coil_used_qty, jc.coil_scrap_qty,
@@ -46,7 +84,7 @@ async function buildMonth(db, startISO, endISO) {
     LEFT JOIN order_items oi ON oi.id = jc.order_item_id
     WHERE s29.done_at::timestamptz >= $1::timestamptz AND s29.done_at::timestamptz < $2::timestamptz
     ORDER BY s29.done_at`, [startISO, endISO]);
-  if (!cards.length) return { rows: [], stageRejects: {}, workers: {}, products: {} };
+  if (!cards.length) return { rows: [], stageRejects, workers, products: {}, rejections };
   const ids = cards.map(c => c.id);
   const cl = await db.all(`SELECT job_card_id, stage_no, value1, worker_name, rejection_qty, remade_qty
                            FROM production_checklist WHERE job_card_id = ANY($1)`, [ids]);
@@ -61,22 +99,23 @@ async function buildMonth(db, startISO, endISO) {
   const byCard = {}; cl.forEach(r => (byCard[r.job_card_id] ||= []).push(r));
   const holdsByCard = {}; holds.forEach(h => (holdsByCard[h.job_card_id] ||= []).push(h));
 
-  const stageRejects = {}, workers = {}, products = {};
+  const products = {};
   const now = new Date();
   const rows = cards.map(c => {
     const cs = byCard[c.id] || [];
     const stg = n => cs.find(r => r.stage_no === n);
+    // The card's own rejects and remakes, whenever entered — for its net qty
+    // and delay reason. The month's totals use `rejections` (entered this month).
     let rejects = 0, remades = 0; const wset = new Set();
     cs.forEach(r => {
       const rq = parseInt(r.rejection_qty,10)||0; rejects += rq;
       if (r.stage_no !== 29) remades += parseInt(r.remade_qty,10)||0;
-      if (rq > 0) stageRejects[r.stage_no] = (stageRejects[r.stage_no]||0) + rq;
       // A stage can carry more than one worker, joined with ", " (since 26 Sep
-      // 2026). Credit the card and its rejects to each of them, so a shared
-      // stage never shows up as a phantom worker called "A, B".
-      for (const w of String(r.worker_name || '').split(',').map(x => x.trim()).filter(Boolean)) {
+      // 2026). Credit the card to each of them, so a shared stage never shows
+      // up as a phantom worker called "A, B".
+      for (const w of workerNames(r)) {
         wset.add(w);
-        (workers[w] ||= { items:new Set(), rejects:0 }); workers[w].items.add(c.id); workers[w].rejects += rq;
+        (workers[w] ||= { items:new Set(), rejects:0 }); workers[w].items.add(c.id);
       }
     });
     // "2in1"/"3in1" etc. in the item name means N heaters share the stated wattage,
@@ -138,19 +177,19 @@ async function buildMonth(db, startISO, endISO) {
       delay, workers: [...wset].join(', '),
     };
   });
-  return { rows, stageRejects, workers, products };
+  return { rows, stageRejects, workers, products, rejections };
 }
 
-function summarize(rows) {
+// month = buildMonth()'s result. Output (items, units, on-time …) is the items
+// finished this month; rejections are the ones ENTERED this month, on any item.
+function summarize(month) {
+  const rows = month.rows;
   const n = rows.length, N = (r,k) => Number(r[k]) || 0;
   const qty = rows.reduce((s,r)=>s+N(r,'qty'),0);
-  const rejects = rows.reduce((s,r)=>s+N(r,'rejects'),0);
-  // Counted in HEATERS, not job cards. An item over 50 pieces runs as several
-  // cards, and scoring each card pass/fail let the same physical quality read
-  // better simply for being split: 100 pieces with 3 rejects was one card
-  // scoring 0 of 1, and became a clean card plus a rejected one — 50%. Pieces
-  // cannot be gamed by how the paperwork is divided.
-  const goodPcs = rows.reduce((sum, r) => sum + Math.max(N(r, 'qty') - N(r, 'rejects'), 0), 0);
+  const rejects = month.rejections.rejects;
+  // Counted in HEATERS, not job cards: units produced this month less the
+  // rejections entered this month, as a share of units produced.
+  const goodPcs = Math.max(qty - rejects, 0);
   // On-time % counts only cards that actually dispatched — FG-routed ('To FG')
   // and still-pending cards are excluded from the denominator.
   const disp = rows.filter(r=>r.onTime==='Yes'||r.onTime==='No');
@@ -158,10 +197,10 @@ function summarize(rows) {
   const devs = rows.map(r=>r.ohmsDev).filter(v=>v!=='' && v!=null).map(Number);
   const dtd = rows.map(r=>r.daysToDispatch).filter(v=>v!=='' && v!=null).map(Number);
   return {
-    items:n, qty, rejects, remakes: rows.reduce((s,r)=>s+N(r,'remakes'),0),
+    items:n, qty, rejects, remakes: month.rejections.remakes,
     fgQty: rows.reduce((s,r)=>s+N(r,'fgQty'),0),
-    rejectRate: qty ? round(rejects/qty*100,1) : 0,
-    firstPass: qty ? round(goodPcs/qty*100,1) : 0,
+    rejectRate: qty ? round(rejects/qty*100,1) : null,
+    firstPass: qty ? round(goodPcs/qty*100,1) : null,
     onTime: disp.length ? round(ontime/disp.length*100,1) : 0,
     scrapTube: round(rows.reduce((s,r)=>s+N(r,'tubeScrap'),0)),
     scrapWire: round(rows.reduce((s,r)=>s+N(r,'wireScrap'),0),3),
@@ -184,18 +223,22 @@ function styleHeader(ws) {
 
 async function generate(db, month) {
   const [y, m] = month.split('-').map(Number);
-  const mStart = (yy, mm) => new Date(Date.UTC(yy, mm, 1)).toISOString();
+  // Months run on Indian time: 1 Sep 00:00 IST is 31 Aug 18:30 UTC, so a
+  // rejection tapped in just after midnight on the 1st belongs to the new month.
+  const IST_MS = 330 * 60e3;
+  const mStart = (yy, mm) => new Date(Date.UTC(yy, mm, 1) - IST_MS).toISOString();
+  const mLabel = (yy, mm) => new Date(Date.UTC(yy, mm, 1)).toISOString().slice(0, 7);
   const cur  = await buildMonth(db, mStart(y, m-1), mStart(y, m));
   const prev = await buildMonth(db, mStart(y, m-2), mStart(y, m-1));
-  const A = summarize(cur.rows), B = summarize(prev.rows);
+  const A = summarize(cur), B = summarize(prev);
 
   // trailing 12 months: trend + finished-goods recurrence
   const trend = [], fg = {};
   for (let i = 11; i >= 0; i--) {
     const md = await buildMonth(db, mStart(y, m-1-i), mStart(y, m-i));
-    const s = summarize(md.rows);
-    trend.push({ month: mStart(y, m-1-i).slice(0,7), items:s.items, qty:s.qty, rejectRate:s.rejectRate,
-      firstPass:s.firstPass, onTime:s.onTime, scrapTube:s.scrapTube, scrapWire:s.scrapWire,
+    const s = summarize(md);
+    trend.push({ month: mLabel(y, m-1-i), items:s.items, qty:s.qty, rejects:s.rejects, rejectRate:s.rejectRate ?? '',
+      firstPass:s.firstPass ?? '', onTime:s.onTime, scrapTube:s.scrapTube, scrapWire:s.scrapWire,
       avgOhmsDev:s.avgOhmsDev ?? '', outSpec:s.outSpec, avgDaysToDispatch:s.avgDaysToDispatch ?? '', matCost:s.matCost });
     for (const [k, v] of Object.entries(md.products)) {
       (fg[k] ||= { qty:0, count:0, months:0, customers:new Set() });
@@ -210,8 +253,9 @@ async function generate(db, month) {
   const g = wb.addWorksheet('How to Read');
   g.columns = [{ header:'Metric', key:'m', width:26 }, { header:'What it means', key:'w', width:70 }, { header:'Good direction', key:'d', width:16 }];
   const guide = [
-    ['Reject rate %', 'Of everything you made, the share rejected during production. Lower = better quality.', 'Lower ↓'],
-    ['First-pass yield %', 'Share of items that passed with ZERO rejections. Higher = fewer reworks.', 'Higher ↑'],
+    ['Rejections', 'Counted in the month they were ENTERED on the production checklist — on any item, finished or not. A rejection entered in August stays in August even if the item finished or dispatched in September. Each one is listed on the "Rejections Entered" sheet.', '—'],
+    ['Reject rate %', 'Rejections entered this month ÷ units produced this month. Lower = better quality.', 'Lower ↓'],
+    ['First-pass yield %', 'Units produced this month less the rejections entered this month, as a share of units produced. Higher = fewer reworks.', 'Higher ↑'],
     ['Avg |Ω deviation| %', 'How far actual resistance (stage 27) is from the designed value (V²/W), on average. Near 0 = accurate coils.', 'Lower ↓'],
     ['Ω out-of-spec', 'Count of items whose resistance was more than ±5% off design. These may under/over-heat.', 'Lower ↓'],
     ['On-time dispatch %', 'Share of dispatched items shipped on or before their due date. Higher = reliable delivery.', 'Higher ↑'],
@@ -239,13 +283,14 @@ async function generate(db, month) {
   };
   const addKpi = (k, t, l, better, up, down) => { const r = interp(t,l,better,up,down); an.addRow({ k, t:t??'', l:l??'', c:r.c, i:r.i }); };
   an.addRow({ k:`MONTHLY PRODUCTION REPORT — ${month}` });
-  an.addRow({ k:'Basis: items whose production (Stage 29) completed this month. Compared to the previous month.' });
+  an.addRow({ k:'Basis: items whose production (Stage 29) completed this month. Rejections: the ones entered this month, on any item. Months on Indian time. Compared to the previous month.' });
   an.addRow({});
   an.addRow({ k:'OUTPUT' });
   addKpi('Items produced', A.items, B.items, 'higher', 'More items completed.', 'Fewer items — check capacity/holds.');
   addKpi('Units (qty)', A.qty, B.qty, 'higher', 'Higher output.', 'Lower output — investigate delays.');
   addKpi('Qty stocked to Finished Goods', A.fgQty, B.fgQty, 'higher', 'More stocked for future orders (counted in output above, not in dispatch).', 'Less stocked to FG this month.');
   an.addRow({}); an.addRow({ k:'QUALITY' });
+  addKpi('Rejections entered', A.rejects, B.rejects, 'lower', 'Fewer rejections this month.', 'More rejections — see the "Rejections Entered" sheet.');
   addKpi('Reject rate %', A.rejectRate, B.rejectRate, 'lower', 'Fewer rejects.', 'More rejects — see "Rejections by stage" below and fix the top stage.');
   addKpi('First-pass yield %', A.firstPass, B.firstPass, 'higher', 'More right-first-time.', 'More rework — target the worst stage/worker.');
   // (Pieces good ÷ pieces made. Before Sep 2026 this was cards without a
@@ -259,18 +304,39 @@ async function generate(db, month) {
   addKpi('Tube scrap (ft)', A.scrapTube, B.scrapTube, 'lower', 'Less tube waste.', 'More tube waste — check cutting/draw.');
   addKpi('Wire scrap (kg)', A.scrapWire, B.scrapWire, 'lower', 'Less wire waste.', 'More wire waste — check coiling.');
   addKpi('Material consumed ₹', A.matCost, B.matCost, 'lower', 'Lower material cost.', 'Higher material cost — compare to output.');
-  an.addRow({}); an.addRow({ k:'REJECTIONS BY STAGE (worst first — fix the top one)' });
+  an.addRow({}); an.addRow({ k:'REJECTIONS BY STAGE — entered this month (worst first — fix the top one)' });
   an.addRow({ k:'Stage', t:'Rejects' });
   Object.entries(cur.stageRejects).sort((a,b)=>b[1]-a[1]).forEach(([s,nn]) => an.addRow({ k:`${s} · ${RPT_STAGES[s]||''}`, t:nn }));
-  an.addRow({}); an.addRow({ k:'WORKERS (this month)' });
+  if (!Object.keys(cur.stageRejects).length) an.addRow({ k:'No rejections entered this month' });
+  an.addRow({}); an.addRow({ k:'WORKERS (this month) — Items: finished this month · Rejects: entered this month' });
   an.addRow({ k:'Worker', t:'Items', l:'Rejects' });
-  Object.entries(cur.workers).sort((a,b)=>b[1].items.size-a[1].items.size).forEach(([w,x]) => an.addRow({ k:w, t:x.items.size, l:x.rejects }));
+  Object.entries(cur.workers).sort((a,b)=>b[1].items.size-a[1].items.size || b[1].rejects-a[1].rejects).forEach(([w,x]) => an.addRow({ k:w, t:x.items.size, l:x.rejects }));
   styleHeader(an);
   an.getColumn('i').alignment = { wrapText:true, vertical:'top' };
   // colour the Change column by improvement
   an.eachRow((row) => { const i = row.getCell('i').value; if (typeof i==='string' && i.startsWith('✅')) row.getCell('c').fill = FILL(GREEN); else if (typeof i==='string' && i.startsWith('⚠️')) row.getCell('c').fill = FILL(RED); });
 
-  // ── Sheet 3: Item Detail (filters + conditional formatting) ──
+  // ── Sheet 3: Rejections Entered — every rejection tapped in this month ──
+  const re = wb.addWorksheet('Rejections Entered');
+  re.columns = [{ header:'Entered', key:'at', width:17 }, { header:'Order', key:'order', width:13 }, { header:'Customer', key:'customer', width:10 },
+    { header:'Job Card', key:'jc', width:28 }, { header:'Card Qty', key:'qty', width:9 }, { header:'Stage', key:'stage', width:22 },
+    { header:'Rejected', key:'rej', width:9 }, { header:'Remade', key:'rem', width:8 }, { header:'Worker', key:'worker', width:24 },
+    { header:'Entered by', key:'by', width:18 }, { header:'Note', key:'note', width:40 }];
+  const enteredAt = (t) => t ? new Date(t).toLocaleString('en-IN', { timeZone:'Asia/Kolkata', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:false }) : '';
+  if (cur.rejections.rows.length) {
+    cur.rejections.rows.forEach(r => re.addRow({ at: enteredAt(r.entered_at), order: r.order_code, customer: r.customer_code || '',
+      jc: r.job_card_no, qty: r.qty, stage: `${r.stage_no} · ${RPT_STAGES[r.stage_no] || ''}`,
+      rej: num(r.rejection_qty), rem: r.stage_no !== 29 ? num(r.remade_qty) : '', worker: r.stage_no === PLATING_STAGE ? `${r.worker_name || ''} (vendor)` : (r.worker_name || ''),
+      by: r.entered_by || '', note: [r.done ? '' : 'stage not marked done yet', r.notes || ''].filter(Boolean).join(' — ') }));
+    const tot = re.addRow({ at:'TOTAL', rej: cur.rejections.rejects, rem: cur.rejections.remakes });
+    tot.font = { bold:true };
+  } else {
+    re.addRow({ at: `No rejections entered in ${month}` });
+  }
+  styleHeader(re);
+  re.getColumn('note').alignment = { wrapText:true, vertical:'top' };
+
+  // ── Sheet 4: Item Detail (filters + conditional formatting) ──
   const it = wb.addWorksheet('Item Detail');
   it.columns = [
     { header:'Job Card', key:'jc', width:22 }, { header:'Order', key:'order', width:13 }, { header:'Customer', key:'customer', width:10 },
@@ -281,7 +347,7 @@ async function generate(db, month) {
     { header:'Ω Dev %', key:'ohmsDev', width:9 }, { header:'Ω ±5%', key:'ohmsFlag', width:8 },
     { header:'Megger', key:'megger', width:12 }, { header:'Draw Len (St.8)', key:'drawLen', width:13 }, { header:'Tube Cut (St.5)', key:'tubeCut', width:13 },
     { header:'Spring Gauge', key:'gauge', width:13 },
-    { header:'Rejects', key:'rejects', width:8 }, { header:'Remakes', key:'remakes', width:8 },
+    { header:'Rejects (whole card, any month)', key:'rejects', width:14 }, { header:'Remakes (whole card)', key:'remakes', width:11 },
     { header:'Tube Used', key:'tubeUsed', width:10 }, { header:'Tube Scrap', key:'tubeScrap', width:10 },
     { header:'Wire Used', key:'wireUsed', width:10 }, { header:'Wire Scrap', key:'wireScrap', width:10 }, { header:'Material ₹', key:'matVal', width:11 },
     { header:'Produced', key:'produced', width:12 }, { header:'Due', key:'due', width:12 }, { header:'Dispatched', key:'dispatched', width:12 },
@@ -360,7 +426,7 @@ async function generate(db, month) {
   // ── Sheet 7: 12-Month Trend ──
   const tr = wb.addWorksheet('12-Month Trend');
   tr.columns = [{ header:'Month', key:'month', width:10 }, { header:'Items', key:'items', width:8 }, { header:'Qty', key:'qty', width:8 },
-    { header:'Reject %', key:'rejectRate', width:10 }, { header:'First-Pass %', key:'firstPass', width:12 }, { header:'On-Time %', key:'onTime', width:10 },
+    { header:'Rejections Entered', key:'rejects', width:11 }, { header:'Reject %', key:'rejectRate', width:10 }, { header:'First-Pass %', key:'firstPass', width:12 }, { header:'On-Time %', key:'onTime', width:10 },
     { header:'Scrap Tube (ft)', key:'scrapTube', width:13 }, { header:'Scrap Wire (kg)', key:'scrapWire', width:13 },
     { header:'Avg |Ω Dev| %', key:'avgOhmsDev', width:12 }, { header:'Ω Out-of-Spec', key:'outSpec', width:12 },
     { header:'Avg Days→Dispatch', key:'avgDaysToDispatch', width:15 }, { header:'Material ₹', key:'matCost', width:11 }];
