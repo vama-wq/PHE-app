@@ -585,7 +585,7 @@ function ChecklistSummaryModal({ jc, onClose }) {
                             {s.value2 && <span className="text-xs text-gray-500">{def?.fields?.[1]?.label || 'Value 2'}: <span className="text-gray-700">{s.value2}</span></span>}
                           </>
                         )}
-                        {s.worker_name && <span className="text-xs text-gray-500">Worker: <span className="text-gray-700">{s.worker_name}</span></span>}
+                        {s.worker_name && <span className="text-xs text-gray-500">{s.stage_no === 16 ? 'Vendor' : 'Worker'}: <span className="text-gray-700">{s.worker_name}</span></span>}
                         {s.done_at && <span className="text-xs text-gray-400">{fmtDateTime(s.done_at)}</span>}
                       </div>
                       {hasPhoto && (

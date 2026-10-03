@@ -4,7 +4,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
-import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS, getStageLabel, stagesFor, downloadExcel, WORKER_NAME_STAGES, SCRAP_VALUE_STAGES } from '../../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS, getStageLabel, stagesFor, downloadExcel, WORKER_NAME_STAGES, SCRAP_VALUE_STAGES, PLATING_STAGE, PLATING_COMPANIES } from '../../lib/utils';
 import { printJobCardSlip } from '../../lib/printJobCardSlip';
 import { compressImage } from '../../lib/compressImage';
 import {
@@ -1200,6 +1200,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [qtyMismatchModal, setQtyMismatchModal] = useState(null); // { originalQty, netQty, breakdown }
 
   const needsWorker = WORKER_NAME_STAGES.has(stageDef.no);
+  // Stage 16 records the plating vendor (in the same field) instead of workers
+  const isPlatingStage = stageDef.no === PLATING_STAGE;
   const hasScrap = SCRAP_VALUE_STAGES.has(stageDef.no);
   // Coil scrap (Stage 3) and tube scrap (Stage 5) are compulsory & numeric —
   // 0 is a valid entry, blank is not (they drive the material FIFO draws).
@@ -1390,7 +1392,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const uploadStagePhoto = async (rawFile) => {
     const file = await compressImage(rawFile);
     if (needsWorker && !workerName.trim()) {
-      return setError('Worker name is required');
+      return setError(isPlatingStage ? 'Pick the plating vendor' : 'Worker name is required');
     }
     setUploadingStagePhoto(true);
     setError('');
@@ -1633,8 +1635,31 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         );
       })()}
 
+      {/* Stage 16 (In Plating): done by an outside vendor — pick the vendor */}
+      {needsWorker && isPlatingStage && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Plating vendor <span className="text-red-500">*</span>
+          </label>
+          {isDone && stageData.worker_name ? (
+            <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+              {stageData.worker_name}
+            </div>
+          ) : (
+            <select className="input w-full" value={workerName} onChange={e => setWorkerName(e.target.value)} disabled={isDone}>
+              <option value="">Select the plating vendor…</option>
+              {/* A name entered before this list existed stays selectable */}
+              {workerName && !PLATING_COMPANIES.includes(workerName) && (
+                <option value={workerName}>{workerName} (as entered earlier)</option>
+              )}
+              {PLATING_COMPANIES.map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
+          )}
+        </div>
+      )}
+
       {/* Worker Name (all production stages up to QC) */}
-      {needsWorker && (
+      {needsWorker && !isPlatingStage && (
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Worker Name <span className="text-red-500">*</span>

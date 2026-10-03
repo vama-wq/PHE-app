@@ -755,7 +755,7 @@ function OverviewTab({ jc, userRole }) {
                   <div className="px-5 pb-4 pt-1 ml-12 space-y-2 bg-gray-50/50">
                     {s.worker_name && (
                       <div className="flex gap-2 text-sm">
-                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">Worker:</span>
+                        <span className="text-gray-500 font-medium w-28 flex-shrink-0">{s.stage_no === 16 ? 'Plating vendor:' : 'Worker:'}</span>
                         <span className="text-gray-800">{s.worker_name}</span>
                       </div>
                     )}

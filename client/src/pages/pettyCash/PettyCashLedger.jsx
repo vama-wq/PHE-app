@@ -6,7 +6,7 @@ import SupplierModal from '../../components/SupplierModal';
 import InventoryItemModal from '../../components/InventoryItemModal';
 import StockExistingPartModal from './StockExistingPartModal';
 import CategorySelect from '../../components/CategorySelect';
-import { fmtDate, downloadExcel, toDateInput, istTodayInput } from '../../lib/utils';
+import { fmtDate, downloadExcel, toDateInput, istTodayInput, PLATING_COMPANIES } from '../../lib/utils';
 import { Wallet, Plus, Download, ExternalLink, Trash2, TrendingUp, TrendingDown, Upload, BookOpen, ArrowLeft, Building2, Landmark, Clock, CheckCircle, FlaskConical, XCircle, Boxes, CheckSquare, Square, Droplets, ChevronDown, ChevronRight, Printer, Paperclip, Search } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -15,7 +15,6 @@ const MACHINERY = 'Machinery';
 const SAMPLING = 'Sampling';
 const EMPLOYEE_EXPENSE = 'Employee Expense';
 const PLATING = 'Plating';
-const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise', 'Palsto Coat', 'Peena Traders'];
 // Vendors that keep the goods — sending there is a one-way transfer, no return
 // leg (kept in sync with server/src/lib/plating.js).
 const ONE_WAY_VENDORS = ['Peena Traders'];
