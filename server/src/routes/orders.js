@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
-const { scaleBomQty, isSuspectLine } = require('../lib/bom');
+const { scaleBomQty, isSuspectLine, BOM_FAMILIES, BOM_FAMILY_LABEL, ORDER_TYPE_LABEL, bomFamily } = require('../lib/bom');
 const { PLATING_INSTRUCTIONS, isValidPlating } = require('../lib/plating');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, uploadQC, deleteFromStorage, copyInStorage } = require('../middleware/upload');
@@ -176,7 +176,7 @@ router.get('/drawings/pending', authenticate, async (req, res) => {
 router.get('/customer/:customerId/previous-items', authenticate, async (req, res) => {
   const db = getDB();
   const items = await db.all(
-    `SELECT oi.id, oi.order_id, o.order_code, o.order_date,
+    `SELECT oi.id, oi.order_id, o.order_code, o.order_date, o.order_type,
             oi.product_code, oi.drawing_number, oi.tube_material, oi.tube_diameter,
             oi.wattage, oi.voltage, oi.plating_instructions, oi.quantity, oi.remark,
             EXISTS (SELECT 1 FROM order_drawings od WHERE od.item_id = oi.id) AS has_drawing,
@@ -409,6 +409,27 @@ router.get('/:id/items', authenticate, async (req, res) => {
   res.json(items);
 });
 
+// Where a reused item's inventory list comes from: the picked item when its
+// order is of the same kind and it has a list, else the latest item of that
+// kind with the same drawing number (any customer) that has one. Null when
+// there is none.
+async function reuseListSource(db, pickedItemId, family, newItemId) {
+  const hasList = 'EXISTS (SELECT 1 FROM order_item_inventory x WHERE x.order_item_id = oi.id)';
+  const picked = await db.get(
+    `SELECT oi.id, oi.quantity, oi.drawing_number, o.order_code, o.order_type, ${hasList} AS has_list
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id=$1`, [pickedItemId]);
+  if (!picked) return null;
+  if (bomFamily(picked.order_type) === family && picked.has_list) return picked;
+  const dn = String(picked.drawing_number || '').trim().toLowerCase();
+  if (!dn) return null;
+  return (await db.get(
+    `SELECT oi.id, oi.quantity, o.order_code, o.order_type
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id
+      WHERE LOWER(TRIM(oi.drawing_number)) = $1 AND oi.id <> $2
+        AND COALESCE(o.order_type, 'local_he') = ANY($3) AND ${hasList}
+      ORDER BY o.created_at DESC, oi.id DESC LIMIT 1`, [dn, newItemId, BOM_FAMILIES[family]])) || null;
+}
+
 router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req, res) => {
   const { product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark, inventory_item_ids, copy_from_item_id } = req.body;
   if (!isValidPlating(plating_instructions)) {
@@ -497,13 +518,22 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
     // silently changes the per-piece rate — which is how a BOM for 22 pieces
     // ended up on a 12-piece item. The source quantity is not in the request
     // (the client blanks it deliberately), so it is read here.
-    const srcItem = await db.get('SELECT quantity FROM order_items WHERE id=$1', [copy_from_item_id]);
-    const fromQty = Number(srcItem?.quantity) || 0;
+    //
+    // The list only ever comes from an order of the same kind (owner, 3 Oct
+    // 2026): FG from FG, Inventory Order from Inventory Order, and Local HE /
+    // Export HE / IO + HE among themselves. The picked item's list is used when
+    // its order is of this kind; otherwise the latest item of this kind with the
+    // same drawing number (any customer) that has a list; otherwise none, and
+    // design adds it.
+    const target = await db.get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]);
+    const family = bomFamily(target?.order_type);
+    const listSrc = await reuseListSource(db, copy_from_item_id, family, itemId);
+    const fromQty = Number(listSrc?.quantity) || 0;
     const toQty = Number(quantity) || 0;
-    const srcInv = await db.all(
+    const srcInv = listSrc ? await db.all(
       `SELECT oii.inventory_item_id, oii.qty, ii.unit, ii.item_code
          FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
-        WHERE oii.order_item_id=$1`, [copy_from_item_id]);
+        WHERE oii.order_item_id=$1`, [listSrc.id]) : [];
     const scaleNotes = [];
     for (const s of srcInv) {
       const r = scaleBomQty(s.qty, fromQty, toQty, s.unit);
@@ -515,11 +545,13 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
     // Design must look at every carried BOM before the drawing can be approved —
     // the reuse path is the one way into production that never passes through
     // the screen where a BOM is chosen and validated.
+    const srcType = listSrc?.order_type || 'local_he';
+    const from = listSrc ? `${listSrc.order_code} (${ORDER_TYPE_LABEL[srcType] || srcType})` : '';
     const why = srcInv.length === 0
-      ? 'Reused item came across with no inventory at all — add its BOM.'
+      ? `No earlier ${BOM_FAMILY_LABEL[family]} order with this drawing has an inventory list, so none was copied — add its BOM.`
       : scaleNotes.length
-        ? `Carried from a ${fromQty}-piece item and re-sized to ${toQty}. These lines do not come to a whole number of pieces, so the original BOM is wrong: ${scaleNotes.join('; ')}`
-        : `Carried from a ${fromQty}-piece item and re-sized to ${toQty}. Check the quantities and add anything missing.`;
+        ? `Carried from a ${fromQty}-piece item on ${from} and re-sized to ${toQty}. These lines do not come to a whole number of pieces, so the original BOM is wrong: ${scaleNotes.join('; ')}`
+        : `Carried from a ${fromQty}-piece item on ${from} and re-sized to ${toQty}. Check the quantities and add anything missing.`;
     await db.run(
       'UPDATE order_items SET copied_from_item_id=$1, bom_review=$2, bom_review_reason=$3 WHERE id=$4',
       [copy_from_item_id, 'needed', why, itemId]);

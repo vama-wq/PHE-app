@@ -85,4 +85,25 @@ function isSuspectLine(qty, itemQty, unit) {
   return Math.abs(rate - Math.round(rate)) > 1e-9;
 }
 
-module.exports = { scaleBomQty, isPieceLine, isSuspectLine, perPiece, normUnit, PIECE_UNITS };
+// Which orders' inventory lists can be reused for one another (owner, 3 Oct
+// 2026). A finished-goods order fits only the prep parts, an inventory order
+// builds heaters for the store, and Local HE / Export HE / IO + HE orders build
+// complete heaters for a customer — so a list is only ever carried within its
+// own group, never across.
+const BOM_FAMILIES = {
+  fg: ['finished_goods'],
+  inventory: ['inventory_order'],
+  he: ['local_he', 'export_he', 'io_local_he', 'io_export_he'],
+};
+const BOM_FAMILY_LABEL = { fg: 'FG', inventory: 'Inventory Order', he: 'Local HE / Export HE' };
+const ORDER_TYPE_LABEL = {
+  local_he: 'Local HE', export_he: 'Export HE', inventory_order: 'Inventory Order',
+  io_local_he: 'IO + Local HE', io_export_he: 'IO + Export HE', finished_goods: 'FG',
+};
+function bomFamily(orderType) {
+  const t = orderType || 'local_he';
+  return Object.keys(BOM_FAMILIES).find(f => BOM_FAMILIES[f].includes(t)) || 'he';
+}
+
+module.exports = { scaleBomQty, isPieceLine, isSuspectLine, perPiece, normUnit, PIECE_UNITS,
+  BOM_FAMILIES, BOM_FAMILY_LABEL, ORDER_TYPE_LABEL, bomFamily };

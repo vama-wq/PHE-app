@@ -7,7 +7,7 @@ import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import DrawingUploadModal from '../../components/DrawingUploadModal';
 import InventoryEditModal from '../../components/InventoryEditModal';
-import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati } from '../../lib/utils';
+import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati, ORDER_TYPE_COLORS, orderTypeLabel, reuseListNote } from '../../lib/utils';
 import { printJobCardSlip } from '../../lib/printJobCardSlip';
 import { splitQuantity, MAX_CARD_QTY, SPLIT_MARKER } from '../../lib/jobCardSplit';
 import { compressImages } from '../../lib/compressImage';
@@ -292,6 +292,14 @@ export default function OrderDetail() {
               <div>
                 <dt className="text-xs text-gray-500 uppercase tracking-wide">Status</dt>
                 <dd className="mt-1"><StatusBadge status={order.status} /></dd>
+              </div>
+              <div>
+                <dt className="text-xs text-gray-500 uppercase tracking-wide">Order Type</dt>
+                <dd className="mt-1">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${ORDER_TYPE_COLORS[order.order_type || 'local_he'] || 'bg-gray-100 text-gray-700'}`}>
+                    {orderTypeLabel(order.order_type)}
+                  </span>
+                </dd>
               </div>
               {order.approved_by_name && (
                 <div>
@@ -1083,6 +1091,7 @@ export default function OrderDetail() {
         <ItemModal
           item={editingItem}
           orderId={id}
+          orderType={order?.order_type}
           customerId={order?.customer_id}
           onClose={() => { setShowItemModal(false); setEditingItem(null); }}
           onSave={() => { setShowItemModal(false); setEditingItem(null); load(); }}
@@ -1471,7 +1480,7 @@ function TimelinePanel({ activity }) {
 }
 
 // ── Item modal (add / edit on existing order) ────────────────────────────────
-function ItemModal({ item, orderId, customerId, onClose, onSave }) {
+function ItemModal({ item, orderId, orderType, customerId, onClose, onSave }) {
   const blank = {
     product_code: '', drawing_number: '', tube_material: '', tube_diameter: '',
     wattage: '', voltage: '', plating_instructions: '', quantity: '', remark: ''
@@ -1639,7 +1648,7 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
                   <option value="">Start fresh — enter new item details</option>
                   {prevItems.map(p => (
                     <option key={p.id} value={p.id}>
-                      {p.order_code} · {p.drawing_number || p.product_code || 'item'}
+                      {p.order_code} · {orderTypeLabel(p.order_type)} · {p.drawing_number || p.product_code || 'item'}
                       {p.has_drawing ? ' · has drawing' : ''} · qty {p.quantity}
                     </option>
                   ))}
@@ -1653,6 +1662,8 @@ function ItemModal({ item, orderId, customerId, onClose, onSave }) {
                     {f.tube_material ? ', and so is its tube' : ''}. Enter this order's quantity
                     (left blank since it varies); plating and remark can be changed.
                     Choose "Start fresh" to enter a different item.
+                    {/* Inventory lists are carried only within one group of order types (owner, 3 Oct 2026). */}
+                    {' '}{reuseListNote(prevItems.find(p => String(p.id) === String(copyFromItemId)), orderType)}
                   </p>
                 )}
               </>

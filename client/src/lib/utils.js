@@ -318,3 +318,30 @@ export const awaitingDispatch = (jc) => !isDispatched(jc?.status) && !isAllToFin
 // 'approved' and 'waived' are both settled — so every banner and gate asks this
 // one question rather than testing for 'approved' and silently ignoring a waive.
 export const capaBlocks = (status) => status === 'open' || status === 'awaiting_approval';
+
+// Order types, named the same everywhere.
+export const ORDER_TYPE_LABELS = {
+  local_he: 'Local HE', export_he: 'Export HE', inventory_order: 'Inventory Order',
+  io_local_he: 'IO + Local HE', io_export_he: 'IO + Export HE', finished_goods: 'Finished Goods',
+};
+export const ORDER_TYPE_COLORS = {
+  local_he: 'bg-blue-50 text-blue-700', export_he: 'bg-purple-100 text-purple-700',
+  inventory_order: 'bg-amber-100 text-amber-700', io_local_he: 'bg-teal-100 text-teal-700',
+  io_export_he: 'bg-orange-100 text-orange-700', finished_goods: 'bg-emerald-100 text-emerald-700',
+};
+export const orderTypeLabel = (t) => ORDER_TYPE_LABELS[t || 'local_he'] || t;
+// Groups whose inventory lists can be reused for one another — a list is never
+// carried across groups (owner, 3 Oct 2026). Mirrors server/src/lib/bom.js.
+const BOM_FAMILY_OF = { finished_goods: 'fg', inventory_order: 'inventory' };
+export const bomFamily = (t) => BOM_FAMILY_OF[t || 'local_he'] || 'he';
+export const BOM_FAMILY_LABELS = { fg: 'Finished Goods', inventory: 'Inventory Order', he: 'Local HE / Export HE' };
+// What happens to a reused item's inventory list on an order of `orderType`.
+// `src` is the picked previous item ({ order_type, inventory_items } or { order_type, has_list }).
+export const reuseListNote = (src, orderType) => {
+  if (!src) return '';
+  const sameGroup = bomFamily(src.order_type) === bomFamily(orderType);
+  const hasList = src.has_list ?? ((src.inventory_items?.length || 0) > 0);
+  if (sameGroup && hasList) return 'Its inventory list is copied too, re-sized to this quantity.';
+  const why = sameGroup ? 'it has no inventory list' : `it was a ${orderTypeLabel(src.order_type)} order`;
+  return `Its inventory list is not used (${why}) — the list comes from the last ${BOM_FAMILY_LABELS[bomFamily(orderType)]} order with this drawing, or design adds one.`;
+};

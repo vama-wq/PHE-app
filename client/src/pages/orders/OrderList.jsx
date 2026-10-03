@@ -6,7 +6,7 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
-import { fmtDate, downloadExcel, STATUS_LABELS } from '../../lib/utils';
+import { fmtDate, downloadExcel, STATUS_LABELS, orderTypeLabel, reuseListNote } from '../../lib/utils';
 
 // Every status an ORDER can hold, in the order it moves through them. Labels
 // come from STATUS_LABELS so the filter reads the same as the badge beside it.
@@ -229,7 +229,7 @@ export default function OrderList() {
 }
 
 // ── Item sub-modal ──────────────────────────────────────────────────────────
-function ItemModal({ item, images: initialImages = [], customerId, onClose, onSave }) {
+function ItemModal({ item, images: initialImages = [], orderType, customerId, onClose, onSave }) {
   const blank = {
     product_code: '', drawing_number: '', tube_material: '', tube_diameter: '',
     wattage: '', voltage: '', plating_instructions: '', quantity: '', remark: ''
@@ -340,7 +340,13 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
       return;
     }
     // Inventory is no longer chosen here — design selects it at the drawing stage.
-    onSave({ ...f, copy_from_item_id: copyFromItemId || null }, images);
+    // copy_src is for this form only (the server ignores it): it lets each queued
+    // item say what will happen to its list under the order type finally chosen.
+    const src = prevItems.find(p => String(p.id) === String(copyFromItemId));
+    const copy_src = !copyFromItemId ? null
+      : src ? { order_code: src.order_code, order_type: src.order_type, has_list: (src.inventory_items?.length || 0) > 0 }
+      : (item?.copy_src || null);
+    onSave({ ...f, copy_from_item_id: copyFromItemId || null, copy_src }, images);
   };
 
   return (
@@ -363,7 +369,7 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
                   <option value="">Start fresh — enter new item details</option>
                   {prevItems.map(p => (
                     <option key={p.id} value={p.id}>
-                      {p.order_code} · {p.drawing_number || p.product_code || 'item'}
+                      {p.order_code} · {orderTypeLabel(p.order_type)} · {p.drawing_number || p.product_code || 'item'}
                       {p.has_drawing ? ' · has drawing' : ''} · qty {p.quantity}
                     </option>
                   ))}
@@ -377,6 +383,8 @@ function ItemModal({ item, images: initialImages = [], customerId, onClose, onSa
                     {reuseTubeLocked ? ', and so is its tube' : ''}. Enter this order's quantity
                     (left blank since it varies); plating and remark can be changed.
                     Choose "Start fresh" to enter a different item.
+                    {/* Inventory lists are carried only within one group of order types (owner, 3 Oct 2026). */}
+                    {' '}{reuseListNote(prevItems.find(p => String(p.id) === String(copyFromItemId)), orderType)}
                   </p>
                 )}
               </>
@@ -762,6 +770,11 @@ function NewOrderModal({ onClose, onSave }) {
                             <span className="text-gray-600">{item.remark}</span>
                           </div>
                         )}
+                        {item.copy_from_item_id && item.copy_src && (
+                          <div className="col-span-4 text-xs text-brand-600">
+                            Reused from {item.copy_src.order_code} ({orderTypeLabel(item.copy_src.order_type)}). {reuseListNote(item.copy_src, form.order_type)}
+                          </div>
+                        )}
                         {/* Image thumbnails preview */}
                         {itemImages[idx]?.length > 0 && (
                           <div className="col-span-4 mt-1.5 flex flex-wrap gap-1.5">
@@ -818,6 +831,7 @@ function NewOrderModal({ onClose, onSave }) {
         <ItemModal
           item={editingItem?.data || null}
           images={editingItem?.images || []}
+          orderType={form.order_type}
           customerId={form.customer_id}
           onClose={() => { setShowItemModal(false); setEditingItem(null); }}
           onSave={addItem}
