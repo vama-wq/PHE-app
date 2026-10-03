@@ -45,12 +45,21 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
   const isFins = (i) => !fgOrder && (i?.category || '').trim().toLowerCase() === 'finns';
   const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
 
+  // A blank Qty with a number in the rework box means the whole line comes
+  // from the rework bin, so the rework number is the line's Qty (owner, 3 Oct 2026).
+  const lineQty = (id) => {
+    const s = selected[id];
+    const q = parseFloat(s);
+    const rw = parseInt(reworkOf[id], 10);
+    if ((s === '' || s == null || q === 0) && rw > 0) return rw;
+    return q;
+  };
   const handleSave = async () => {
     const ids = Object.keys(selected);
     if (!ids.length) return setError('Select at least one inventory item');
-    const missingQty = ids.filter(id => !finsIds.has(String(id)) && (!selected[id] || parseFloat(selected[id]) <= 0));
+    const missingQty = ids.filter(id => !finsIds.has(String(id)) && !(lineQty(id) > 0));
     if (missingQty.length) return setError('Enter a quantity for every selected item');
-    const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : parseFloat(selected[id]),
+    const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : lineQty(id),
       rework_qty: parseInt(reworkOf[id], 10) || 0 }));
     setSaving(true);
     setError('');
@@ -125,7 +134,7 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
                   </span>
                 ) : (
                   <>
-                    <input className="input w-24 text-sm py-1" type="number" min="0" step="any" placeholder="Qty"
+                    <input className="input w-24 text-sm py-1" type="number" min="0" step="any" placeholder={parseInt(reworkOf[i.id], 10) > 0 ? String(parseInt(reworkOf[i.id], 10)) : 'Qty'}
                       value={selected[i.id]} onChange={e => setQty(i.id, e.target.value)} />
                     <span className="text-xs text-gray-400 w-8">{i.unit}</span>
                     {reworkMax(i) > 0 && (

@@ -63,11 +63,20 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   const requiredPinCat = needsHeavyPin ? 'heavy terminal pin' : 'terminal pin';
   const hasTerminalPin = selectedList.some(i => (i?.category || '').trim().toLowerCase() === requiredPinCat);
 
+  // A blank Qty with a number in the rework box means the whole line comes
+  // from the rework bin, so the rework number is the line's Qty (owner, 3 Oct 2026).
+  const lineQty = (id) => {
+    const s = selected[id];
+    const q = parseFloat(s);
+    const rw = parseInt(reworkOf[id], 10);
+    if ((s === '' || s == null || q === 0) && rw > 0) return rw;
+    return q;
+  };
   const handleUpload = async () => {
     if (!file && !fileOptional) return setError('Please choose a drawing file');
     const ids = Object.keys(selected);
     if (ids.length === 0) return setError('Select at least one inventory item for this drawing');
-    const missingQty = ids.filter(id => !finsIds.has(String(id)) && (!selected[id] || parseFloat(selected[id]) <= 0));
+    const missingQty = ids.filter(id => !finsIds.has(String(id)) && !(lineQty(id) > 0));
     if (missingQty.length) return setError('Enter a quantity for every selected inventory item');
     if (!fileOptional && !hasTerminalPin) {
       return setError(needsHeavyPin
@@ -75,7 +84,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
         : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory.');
     }
 
-    const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : parseFloat(selected[id]),
+    const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : lineQty(id),
       rework_qty: parseInt(reworkOf[id], 10) || 0 }));
     const fd = new FormData();
     if (file) fd.append('file', file);
@@ -199,7 +208,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
                     </span>
                   ) : (
                     <>
-                      <input className="input w-24 text-sm py-1" type="number" min="0" step="any" placeholder="Qty"
+                      <input className="input w-24 text-sm py-1" type="number" min="0" step="any" placeholder={parseInt(reworkOf[i.id], 10) > 0 ? String(parseInt(reworkOf[i.id], 10)) : 'Qty'}
                         value={selected[i.id]} onChange={e => setQty(i.id, e.target.value)} />
                       <span className="text-xs text-gray-400 w-8">{i.unit}</span>
                       {reworkMax(i) > 0 && (
