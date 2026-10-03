@@ -3,6 +3,7 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseReceive, uploadPurchaseItemQC, uploadPurchaseItemQCFields, uploadDebitNote, uploadChatAttachments, parseInvoiceOnly } = require('../middleware/upload');
 const { readInvoice } = require('../lib/invoiceReader');
+const { sameUnit } = require('../lib/units');
 const { createNotification } = require('./notifications');
 // Owner actions shared with the WhatsApp reply dispatcher (same code, both paths).
 const poActions = require('../services/actions/purchaseOrders');
@@ -19,19 +20,18 @@ function sendActionError(res, result, oldMessages = {}) {
 // Add a single received PO item's stock to inventory (FIFO lot + moving-average
 // cost + transaction). `qty` is the ACTUAL quantity received (entered at QC),
 // which may differ from the ordered quantity.
-// Some material is BOUGHT by weight but STOCKED and consumed by the piece —
-// brazing rings, for instance, come in kilograms and go into a heater one ring
-// at a time. QC already records the weight of 10 pieces (in kg), which is
+// Some material is BOUGHT in one unit and STOCKED in another — brazing rings
+// come in kilograms and go into a heater one ring at a time; copper tube is
+// billed in kg and used by the foot. Stock always comes in in the ITEM's unit
+// (owner, 3 Oct 2026). When the PO line's unit differs from the item's, QC
+// records what 10 of the item's unit come to in the PO's unit ("10 ft = 0.345
+// kg") in the same box that otherwise holds the weight of 10 pcs, and that is
 // exactly what converts one to the other.
-const WEIGHT_UNITS = ['kg', 'kgs', 'kilo', 'kilos', 'kilogram', 'kilograms'];
-const PIECE_UNITS = ['pcs', 'pc', 'nos', 'no', 'piece', 'pieces', 'each'];
-const norm = (u) => String(u || '').trim().toLowerCase();
-function weightToPieces(poUnit, stockUnit, weight10) {
-  const w10 = Number(weight10);
-  if (!(w10 > 0)) return null;
-  if (!WEIGHT_UNITS.includes(norm(poUnit))) return null;
-  if (!PIECE_UNITS.includes(norm(stockUnit))) return null;
-  return { perPieceKg: w10 / 10 };   // weight of 10 pieces, in kg
+function poToStockUnit(poUnit, stockUnit, per10) {
+  if (sameUnit(poUnit, stockUnit)) return { same: true };
+  const p10 = Number(per10);
+  if (!(p10 > 0)) return null;                     // different units, nothing to convert with
+  return { same: false, perStockUnit: p10 / 10 };  // PO units in ONE stock unit
 }
 
 async function receiveItemStock(db, po, item, userId, qty) {
@@ -50,21 +50,21 @@ async function receiveItemStock(db, po, item, userId, qty) {
   const localTransport = Number(item.receive_local_transport_cost) || 0;
   const other = Number(item.receive_other_cost) || 0;
 
-  // Bought by weight, stocked by the piece? Convert here, so stock and the BOM
-  // both speak in pieces while the PO and the supplier's bill stay in kg.
+  // Bought in another unit? Convert here, so stock and the BOM both speak in
+  // the item's unit while the PO and the supplier's bill stay in theirs.
   const invRow = await db.get('SELECT unit FROM inventory_items WHERE id=$1', [item.inventory_item_id]);
-  const conv = weightToPieces(item.unit, invRow?.unit, item.qc_weight_10);
-  // Bought by weight, stocked by the piece, but no weight recorded: adding the
-  // kilogram figure as a piece count would be badly wrong (0.7 kg becoming
-  // "0.7 pcs"). Refuse rather than corrupt the stock.
-  if (!conv && WEIGHT_UNITS.includes(norm(item.unit)) && PIECE_UNITS.includes(norm(invRow?.unit))) {
-    console.error(`[receiveItemStock] ${po.po_number} "${item.description}": bought in ${item.unit}, stocked in ${invRow?.unit}, but no weight of 10 — stock NOT added`);
+  const conv = poToStockUnit(item.unit, invRow?.unit, item.qc_weight_10);
+  // Different units but no conversion recorded: adding the PO figure as stock
+  // would be badly wrong (61.5 kg becoming "61.5 ft"). Refuse rather than
+  // corrupt the stock — QC refuses to save without the figure anyway.
+  if (!conv) {
+    console.error(`[receiveItemStock] ${po.po_number} "${item.description}": bought in ${item.unit}, stocked in ${invRow?.unit}, but no conversion — stock NOT added`);
     return;
   }
   let stockQty = q, convNote = '';
-  if (conv) {
-    stockQty = Math.round((q / conv.perPieceKg) * 100) / 100;   // kg ÷ kg-per-piece
-    convNote = ` — ${q} ${item.unit} @ ${item.qc_weight_10}kg/10pcs = ${stockQty} pcs`;
+  if (!conv.same) {
+    stockQty = Math.round((q / conv.perStockUnit) * 100) / 100;   // PO qty ÷ PO-units-per-stock-unit
+    convNote = ` — ${q} ${item.unit} @ 10 ${invRow.unit} = ${item.qc_weight_10} ${item.unit} → ${stockQty} ${invRow.unit}`;
   }
   if (!(stockQty > 0)) return;
 
@@ -86,7 +86,7 @@ async function receiveItemStock(db, po, item, userId, qty) {
   const avgCost = totalQty > 0 ? totalCost / totalQty : landedUnitCost;
   await db.run('UPDATE inventory_items SET current_stock=$1, unit_cost=$2 WHERE id=$3',
     [newStock, Math.round(avgCost * 100) / 100, item.inventory_item_id]);
-  const landedNote = ` @ landed ₹${landedUnitCost}/${conv ? 'pc' : 'u'}`;
+  const landedNote = ` @ landed ₹${landedUnitCost}/${conv.same ? 'u' : invRow.unit}`;
   await db.run(
     `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, po_number, supplier_name, notes, created_by)
      VALUES ($1,'purchase_in',$2,$3,$4,$5,$6,$7)`,
@@ -104,15 +104,22 @@ async function detectRateIncreases(db, supplierId, items, excludePoId = 0) {
     const newRate = Number(item.rate) || 0;
     if (newRate <= 0) continue;
     let baseline = null, basis = '';
-    const link = await db.get('SELECT supplier_price FROM supplier_items WHERE supplier_id=$1 AND inventory_item_id=$2', [supplierId, item.inventory_item_id]);
+    // A rate only compares with one in the same unit: ₹1,600 a kg is not an
+    // increase on ₹55 a foot (owner, 3 Oct 2026). The agreed rate is per the
+    // item's own unit.
+    const inv = await db.get('SELECT unit FROM inventory_items WHERE id=$1', [item.inventory_item_id]);
+    const link = sameUnit(item.unit, inv?.unit)
+      ? await db.get('SELECT supplier_price FROM supplier_items WHERE supplier_id=$1 AND inventory_item_id=$2', [supplierId, item.inventory_item_id])
+      : null;
     if (link && link.supplier_price != null && Number(link.supplier_price) > 0) {
       baseline = Number(link.supplier_price); basis = 'agreed rate';
     } else {
-      const last = await db.get(
-        `SELECT poi.rate FROM purchase_order_items poi JOIN purchase_orders po ON po.id = poi.po_id
-         WHERE poi.inventory_item_id=$1 AND po.id <> $2 ORDER BY po.created_at DESC LIMIT 1`,
+      const recent = await db.all(
+        `SELECT poi.rate, poi.unit FROM purchase_order_items poi JOIN purchase_orders po ON po.id = poi.po_id
+         WHERE poi.inventory_item_id=$1 AND po.id <> $2 ORDER BY po.created_at DESC, poi.id DESC LIMIT 20`,
         [item.inventory_item_id, excludePoId]
       );
+      const last = recent.find(r => sameUnit(r.unit || inv?.unit, item.unit || inv?.unit));
       if (last && Number(last.rate) > 0) { baseline = Number(last.rate); basis = 'last PO rate'; }
     }
     if (baseline != null && newRate > baseline) {
@@ -331,7 +338,7 @@ router.get('/:id', authenticate, async (req, res) => {
     const po = await db.get('SELECT id, po_number, status, delivery_status FROM purchase_orders WHERE id=$1', [req.params.id]);
     if (!po) return res.status(404).json({ error: 'Not found' });
     const items = await db.all(
-      `SELECT poi.id, poi.description, poi.qty, poi.received, poi.received_at,
+      `SELECT poi.id, poi.description, poi.qty, poi.unit, poi.received, poi.received_at,
               poi.qc_status, poi.qc_weight_10, poi.qc_received_qty, poi.qc_rejected_qty, poi.qc_image_file, poi.qc_image_name,
               poi.qc_observations, poi.qc_rejection_reason,
               ii.item_code, ii.name as item_name, ii.unit as item_unit,
@@ -588,9 +595,14 @@ router.put('/:id/approve', authenticate, authorize('owner', 'admin', 'accounts')
   // Sync the supplier-item link rate to this PO's approved rate. If an item's
   // final rate differs from the rate stored on the supplier↔item link, update
   // the link so the catalog always reflects the latest approved price.
+  // The link's price is per the item's own unit, so a line bought in another
+  // unit (₹/kg for a tube stocked in feet) never overwrites it (3 Oct 2026).
   let ratesUpdated = 0;
-  const poItems = await db.all('SELECT inventory_item_id, rate FROM purchase_order_items WHERE po_id=$1 AND inventory_item_id IS NOT NULL', [po.id]);
+  const poItems = await db.all(
+    `SELECT poi.inventory_item_id, poi.rate, poi.unit, ii.unit AS stock_unit FROM purchase_order_items poi
+       JOIN inventory_items ii ON ii.id = poi.inventory_item_id WHERE poi.po_id=$1`, [po.id]);
   for (const it of poItems) {
+    if (!sameUnit(it.unit, it.stock_unit)) continue;
     const link = await db.get('SELECT supplier_price FROM supplier_items WHERE supplier_id=$1 AND inventory_item_id=$2', [po.supplier_id, it.inventory_item_id]);
     if (link && Number(link.supplier_price) !== Number(it.rate)) {
       await db.run('UPDATE supplier_items SET supplier_price=$1 WHERE supplier_id=$2 AND inventory_item_id=$3', [Number(it.rate), po.supplier_id, it.inventory_item_id]);
@@ -723,6 +735,73 @@ router.put('/:id/items/:itemId/reopen', authenticate, authorize('owner'), async 
   } catch (e) {
     console.error('reopen error:', e);
     res.status(500).json({ error: 'Failed to reopen the balance' });
+  }
+});
+
+// Accounts corrects the unit a PO line is bought in — e.g. copper tube billed
+// in kg that was put on the PO in feet — before the line is received. Only the
+// PO line changes: the item keeps its own unit, and stock still comes in in
+// that unit, converted at QC (owner, 3 Oct 2026). The ordered qty and rate are
+// confirmed in the NEW unit at the same time (2,000 ft @ ₹55 is not 2,000 kg @
+// ₹55), and the PO's total follows.
+router.put('/:id/items/:itemId/unit', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  try {
+    const db = getDB();
+    const unit = String(req.body.unit || '').trim();
+    if (!unit) return res.status(400).json({ error: 'Choose a unit' });
+    if (unit.length > 20) return res.status(400).json({ error: 'That unit is too long' });
+    const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+    if (!po) return res.status(404).json({ error: 'Not found' });
+    const item = await db.get(
+      `SELECT poi.*, ii.unit AS stock_unit FROM purchase_order_items poi
+         LEFT JOIN inventory_items ii ON ii.id = poi.inventory_item_id
+        WHERE poi.id=$1 AND poi.po_id=$2`, [req.params.itemId, po.id]);
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    // Only where Receive itself is allowed: an approved PO waiting for goods.
+    // Draft and sent POs are edited through the PO form (which re-runs the
+    // owner's rate gate); a cancelled one is not touched.
+    if (po.status !== 'approved' || !['purchase_accepted', 'in_transit', 'qc_pending'].includes(po.delivery_status)) {
+      return res.status(400).json({ error: 'The unit can only be corrected on an approved PO that is waiting for delivery — edit the PO otherwise' });
+    }
+    if (item.received || item.qc_status) {
+      return res.status(400).json({ error: 'This line has already been received — its unit can no longer change' });
+    }
+    if (item.short_closed) return res.status(400).json({ error: 'This line is short-closed' });
+    const qty = Number(req.body.qty), rate = Number(req.body.rate);
+    if (!(qty > 0) || !(rate >= 0) || req.body.rate === '' || req.body.rate == null) {
+      return res.status(400).json({ error: `Enter the ordered quantity and rate in ${unit}` });
+    }
+    const amount = Math.round(qty * rate * 100) / 100;
+    // The new rate is checked against what was last paid in THIS unit (before
+    // it replaces the line's rate, so the receive-time "billed above PO rate"
+    // check would otherwise compare the bill with itself).
+    const increases = await detectRateIncreases(db, po.supplier_id,
+      [{ inventory_item_id: item.inventory_item_id, description: item.description, unit, rate }], po.id);
+    await db.run('UPDATE purchase_order_items SET unit=$1, qty=$2, rate=$3, amount=$4 WHERE id=$5', [unit, qty, rate, amount, item.id]);
+    await recomputePoTotals(db, po.id);
+    if (increases.length) {
+      try {
+        const owners = await db.all("SELECT id FROM users WHERE role='owner' AND id != $1", [req.user.id]);
+        for (const o of owners) {
+          await createNotification(db, {
+            userId: o.id, type: 'po_billed_rate_higher',
+            title: `Rate above last ${unit} rate — ${po.po_number}`,
+            body: `${item.description}: now ₹${rate}/${unit}, last paid ₹${increases[0].oldRate}/${unit} (${increases[0].basis}).`,
+            link: `/purchases/${po.id}`, sourceUserId: req.user.id,
+          });
+        }
+      } catch (e) { console.error('unit-rate notify failed:', e.message); }
+    }
+    const stockNote = item.stock_unit && !sameUnit(unit, item.stock_unit)
+      ? ` Stock still comes in in ${item.stock_unit}; QC will enter what 10 ${item.stock_unit} come to in ${unit}.` : '';
+    await db.run('INSERT INTO purchase_order_messages (po_id, user_id, message) VALUES ($1,$2,$3)',
+      [po.id, req.user.id, `Unit of "${item.description}" changed: ${item.qty} ${item.unit || ''} @ ₹${item.rate} → ${qty} ${unit} @ ₹${rate}.${stockNote}`]);
+    await logActivity(null, null, 'purchase_unit_changed',
+      `${po.po_number}: "${item.description}" ${item.qty} ${item.unit || ''} @ ₹${item.rate} → ${qty} ${unit} @ ₹${rate}`, req.user.id);
+    res.json({ message: `Unit changed to ${unit}` });
+  } catch (e) {
+    console.error('po unit change error:', e);
+    res.status(500).json({ error: 'Failed to change the unit' });
   }
 });
 
@@ -1081,7 +1160,7 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
       await createNotification(db, {
         userId: u.id, type: 'purchase_qc_pending',
         title: `Material QC needed — ${po.po_number}`,
-        body: `Item "${item.description}" received — awaiting QC (material image + weight of 10 pcs).`,
+        body: `Item "${item.description}" received — awaiting QC (material image + weight of 10 pcs, or the conversion if it was bought in another unit).`,
         link: `/purchases/${po.id}`, sourceUserId: req.user.id,
       });
     }
@@ -1133,9 +1212,14 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
       : result === 'partial' ? Number(rejected_qty)
       : (Number(rejected_qty) > 0 ? Number(rejected_qty) : Number(item.qty));
 
+    const stockUnit = item.inventory_item_id
+      ? (await db.get('SELECT unit FROM inventory_items WHERE id=$1', [item.inventory_item_id]))?.unit : null;
+    const converts = !sameUnit(item.unit, stockUnit);
     if (result !== 'rejected') {
       if (!materialImage) return res.status(400).json({ error: 'A material image is required to approve material' });
-      if (!weight_10 || Number(weight_10) <= 0) return res.status(400).json({ error: 'Weight of 10 pcs is required to approve material' });
+      if (!weight_10 || Number(weight_10) <= 0) return res.status(400).json({ error: converts
+        ? `This line is bought in ${item.unit} but stocked in ${stockUnit}: enter how many ${item.unit} 10 ${stockUnit} come to`
+        : 'Weight of 10 pcs is required to approve material' });
       if (!(acceptedQty > 0)) return res.status(400).json({ error: 'Enter the accepted quantity' });
     }
     if (result !== 'approved') {
@@ -1280,13 +1364,19 @@ router.put('/:id/debit-notes/:dnId/raise', authenticate, authorize('accounts', '
 );
 
 router.get('/last-rate/:itemId', authenticate, async (req, res) => {
-  const last = await getDB().get(
-    `SELECT poi.rate FROM purchase_order_items poi
+  // The last rate in the unit asked for (default: the item's own unit) — a
+  // per-kg rate is never offered for a line in feet, or the other way round.
+  const db = getDB();
+  const inv = await db.get('SELECT unit FROM inventory_items WHERE id=$1', [req.params.itemId]);
+  const want = req.query.unit || inv?.unit;
+  const recent = await db.all(
+    `SELECT poi.rate, poi.unit FROM purchase_order_items poi
      JOIN purchase_orders po ON po.id = poi.po_id
      WHERE poi.inventory_item_id = $1
-     ORDER BY po.created_at DESC LIMIT 1`,
+     ORDER BY po.created_at DESC, poi.id DESC LIMIT 20`,
     [req.params.itemId]
   );
+  const last = recent.find(r => sameUnit(r.unit || inv?.unit, want));
   res.json({ rate: last?.rate || 0 });
 });
 

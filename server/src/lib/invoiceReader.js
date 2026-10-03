@@ -58,7 +58,7 @@ const PROMPT = (po, lines) => `This is a supplier's tax invoice received with a 
 Our PO lines, with the id to use for po_item_id:
 ${lines.map(l => `  id ${l.id}: "${l.description}" — ordered ${l.qty} ${l.unit || ''} @ ₹${l.rate}`).join('\n')}
 
-Read the figures EXACTLY as printed. Match each invoice line to the PO line it is for (by description, size and unit); leave out invoice lines that are for none of them and mention them in notes. A quantity, rate or number that is not clearly legible is null, never a guess. Rate and amount are before GST. If the invoice is in kg but the PO is in pieces (or the other way round), give the invoice figures as printed and say so in notes. Our own GSTIN 24ABGFP7267B1ZA is the buyer's — ignore it. Call invoice_figures once.`;
+Read the figures EXACTLY as printed. Match each invoice line to the PO line it is for (by description, size and unit); leave out invoice lines that are for none of them and mention them in notes. A quantity, rate or number that is not clearly legible is null, never a guess. Rate and amount are before GST. If the invoice is in another unit from the PO line (kg against pieces or feet, or the other way round), give the invoice figures as printed, give the invoice's unit in unit_on_invoice, and say so in notes. Our own GSTIN 24ABGFP7267B1ZA is the buyer's — ignore it. Call invoice_figures once.`;
 
 async function readInvoice({ buffer, mimetype, po, lines }) {
   const client = getClient();

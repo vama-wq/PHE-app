@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { PO_UNITS, sameUnit } from '../../lib/utils';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
@@ -111,6 +112,29 @@ export default function PurchaseOrderForm() {
     setPickerOpen(false);
   };
 
+  // A rate is per unit: switching a line between feet and kg brings the last
+  // rate paid in the new unit (blank if never bought that way), never the old one.
+  // Back in the item's own unit, the supplier's agreed price comes first, as
+  // when the item was picked. The row is found by its item, not its position,
+  // so a row removed meanwhile cannot take the rate.
+  const changeUnit = async (idx, unit) => {
+    const row = items[idx];
+    updateItem(idx, 'unit', unit);
+    if (!row?.inventory_item_id) return;
+    const invId = row.inventory_item_id;
+    const stockUnit = invItems.find(v => v.id === invId)?.unit || '';
+    const agreed = linkedItems.find(l => l.id === invId)?.supplier_price;
+    let rate = '';
+    if (sameUnit(unit, stockUnit) && agreed != null && agreed !== '') rate = String(agreed);
+    else {
+      try { const r = await api.get(`/purchase-orders/last-rate/${invId}`, { params: { unit } }); rate = Number(r.data?.rate) > 0 ? String(r.data.rate) : ''; } catch { rate = ''; }
+    }
+    setItems(prev => prev.map(it => {
+      if (it.inventory_item_id !== invId || it.unit !== unit) return it;   // removed, or changed again since
+      const q = parseFloat(it.qty) || 0, r = parseFloat(rate) || 0;
+      return { ...it, rate, amount: Math.round(q * r * 100) / 100 };
+    }));
+  };
   const removeItem = (idx) => setItems(prev => prev.filter((_, i) => i !== idx));
 
   // Computed totals
@@ -327,7 +351,25 @@ export default function PurchaseOrderForm() {
                       <td className="table-cell" style={{ minWidth: '320px' }}>
                         <div className="font-medium text-gray-800">{item.description}</div>
                       </td>
-                      <td className="table-cell text-center text-gray-600">{item.unit || '—'}</td>
+                      <td className="table-cell text-center text-gray-600">
+                        {(() => {
+                          // Bought in another unit (e.g. copper tube billed in kg) — the
+                          // item keeps its own unit and stock comes in in it, converted
+                          // at QC (owner, 3 Oct 2026).
+                          const stockUnit = invItems.find(v => v.id === item.inventory_item_id)?.unit || '';
+                          const opts = [...new Set([stockUnit, item.unit, ...PO_UNITS].filter(Boolean))];
+                          return (
+                            <>
+                              <select className="input text-xs py-1.5 px-1" value={item.unit || ''} onChange={e => changeUnit(idx, e.target.value)}>
+                                {opts.map(u => <option key={u} value={u}>{u}</option>)}
+                              </select>
+                              {stockUnit && !sameUnit(item.unit, stockUnit) && (
+                                <div className="text-[10px] text-amber-700 mt-0.5 leading-tight">stock in {stockUnit}</div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </td>
                       <td className="table-cell">
                         <input className="input text-xs py-1.5 text-right" type="number" step="any" value={item.qty} onChange={e => updateItem(idx, 'qty', e.target.value)} placeholder="0" />
                       </td>

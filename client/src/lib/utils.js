@@ -345,3 +345,19 @@ export const reuseListNote = (src, orderType) => {
   const why = sameGroup ? 'it has no inventory list' : `it was a ${orderTypeLabel(src.order_type)} order`;
   return `Its inventory list is not used (${why}) — the list comes from the last ${BOM_FAMILY_LABELS[bomFamily(orderType)]} order with this drawing, or design adds one.`;
 };
+
+// Units written different ways that mean the same thing (pcs = nos, kg = kgs,
+// foot = ft …). A PO line may be bought in another unit from its item's; stock
+// always comes in in the item's unit (owner, 3 Oct 2026). Mirrors
+// server/src/lib/units.js.
+export const UNIT_GROUPS = [
+  ['pc', 'pcs', 'piece', 'pieces', 'no', 'nos', 'number', 'numbers', 'each', 'ea', 'unit', 'units'],
+  ['kg', 'kgs', 'kilo', 'kilos', 'kilogram', 'kilograms'], ['ft', 'foot', 'feet'],
+  ['m', 'mtr', 'mtrs', 'metre', 'metres', 'meter', 'meters'], ['g', 'gm', 'gms', 'gram', 'grams'],
+  ['set', 'sets'], ['box', 'boxes'], ['l', 'ltr', 'ltrs', 'litre', 'litres', 'liter', 'liters'],
+];
+const normUnit = (u) => String(u || '').trim().toLowerCase().replace(/\.$/, '');
+const unitKey = (u) => { const s = normUnit(u); const g = UNIT_GROUPS.findIndex(x => x.includes(s)); return g >= 0 ? `g${g}` : s; };
+export const sameUnit = (a, b) => !normUnit(a) || !normUnit(b) || unitKey(a) === unitKey(b);
+// Units a PO line can be bought in (the item's own unit is always offered too).
+export const PO_UNITS = ['pcs', 'kgs', 'foot', 'mtr', 'liters', 'boxes', 'set'];

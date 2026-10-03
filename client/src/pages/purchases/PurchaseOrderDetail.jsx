@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
-import { fmtDate, fmtDateTime, ROLE_COLORS, ROLE_LABELS, istTodayInput } from '../../lib/utils';
+import { fmtDate, fmtDateTime, ROLE_COLORS, ROLE_LABELS, istTodayInput, sameUnit } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import {
@@ -157,7 +157,7 @@ export default function PurchaseOrderDetail() {
         </div>
         <div className="card p-5">
           <p className="text-sm text-gray-500 mb-4">
-            For each received item, add a material image and the weight of 10 pcs, then approve (or reject).
+            For each received item, add a material image and the weight of 10 pcs (or, for a line bought in another unit, what 10 of the item's unit come to), then approve (or reject).
           </p>
           <div className="space-y-2.5">
             {po.items.map(item => (
@@ -316,7 +316,7 @@ export default function PurchaseOrderDetail() {
             <PackageCheck size={16} className="text-teal-600" /> Item Receiving & QC
           </h3>
           <p className="text-xs text-gray-400 mb-4">
-            Receive each item as it arrives (attach its invoice), then QC it — material image + weight of 10 pcs are required to approve.
+            Receive each item as it arrives (attach its invoice), then QC it — material image + weight of 10 pcs (or the unit conversion) are required to approve.
           </p>
           <div className="space-y-2.5">
             {po.items.map(item => (
@@ -663,6 +663,7 @@ export default function PurchaseOrderDetail() {
           allItems={po.items}
           onClose={() => setShowReceiveModal(false)}
           onDone={() => { setShowReceiveModal(false); load(); }}
+          onLinesChanged={load}
         />
       )}
       {/* Which bank paid this — asked here so the account's statement matches */}
@@ -760,11 +761,11 @@ function AdvanceModal({ poId, poNumber, supplier, onClose, onSaved }) {
 
 // Receive a single item: pick it from the dropdown of not-yet-received items and
 // attach that item's invoice (mandatory). The item then goes to QC.
-function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
+function ReceiveItemModal({ poId, items: rawItems, allItems = [], onClose, onDone, onLinesChanged }) {
   // Several items usually arrive on one vehicle with one invoice, so the
   // delivery is ticked off as a whole. Whatever is selected is received, and
   // the transport bill splits across exactly those items by material value.
-  const [selected, setSelected] = useState(() => (items[0] ? { [items[0].id]: true } : {}));
+  const [selected, setSelected] = useState(() => (rawItems[0] ? { [rawItems[0].id]: true } : {}));
   // How much of each ticked item actually arrived — blank means the full
   // ordered quantity. A short quantity leaves the balance open on the PO.
   const [qtyIn, setQtyIn] = useState({});
@@ -792,15 +793,18 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
 
   // Arrived quantities a previous read filled in — cleared when the file changes
   const [prefilled, setPrefilled] = useState({});
-  // Same unit on the bill and the PO? (pcs = nos, kg = kgs, foot = ft …)
-  const UNIT_GROUPS = [['pc', 'pcs', 'piece', 'pieces', 'no', 'nos', 'number', 'numbers', 'each', 'ea', 'unit', 'units'],
-    ['kg', 'kgs', 'kilo', 'kilos', 'kilogram', 'kilograms'], ['ft', 'foot', 'feet'], ['m', 'mtr', 'mtrs', 'metre', 'metres', 'meter', 'meters'],
-    ['g', 'gm', 'gms', 'gram', 'grams'], ['set', 'sets'], ['l', 'ltr', 'ltrs', 'litre', 'litres', 'liter', 'liters']];
-  const unitKey = (u) => { const s = String(u || '').trim().toLowerCase().replace(/\.$/, ''); const g = UNIT_GROUPS.findIndex(x => x.includes(s)); return g >= 0 ? g : s; };
-  const sameUnit = (a, b) => !a || !b || unitKey(a) === unitKey(b);
+  // A line whose bill is in another unit from the PO (kg on the bill, feet on
+  // the PO) — accounts can correct the PO line's unit right here, before
+  // receiving (owner, 3 Oct 2026). unitFixed holds the corrected units.
+  const [unitMismatch, setUnitMismatch] = useState([]);   // [{ id, description, billUnit, poUnit, qty, rate }]
+  const [unitFixed, setUnitFixed] = useState({});          // itemId → { unit, qty, rate } now on the PO line
+  const [fixingUnit, setFixingUnit] = useState(null);
+  // The lines as they now stand on the PO, corrections included.
+  const items = rawItems.map(i => (unitFixed[i.id] ? { ...i, ...unitFixed[i.id] } : i));
+  const unitOf = (ci) => unitFixed[ci.id]?.unit || ci.unit;
 
   const readBill = async (f) => {
-    setBill(null); setBillLines({}); setInvNo(''); setInvDate(''); setPf(''); setGst('');
+    setBill(null); setBillLines({}); setInvNo(''); setInvDate(''); setPf(''); setGst(''); setUnitMismatch([]);
     // A new file: undo what the last read filled in (ticks stay as accounts left them)
     setQtyIn(p => { const s = { ...p }; for (const [id, v] of Object.entries(prefilled)) if (s[id] === v) delete s[id]; return s; });
     setPrefilled({});
@@ -817,16 +821,25 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
         setPf(pos(data.packaging_forwarding));
         setGst(data.gst_percent != null && data.gst_percent >= 0 && data.gst_percent <= 28 ? String(data.gst_percent) : '');
         const next = {};
-        const unitWarn = [];
+        const mism = [];
         for (const l of data.lines || []) {
           const po = items.find(i => String(i.id) === String(l.po_item_id));
-          // A bill in another unit (kg against a PO in pieces) is not filled in —
-          // accounts enters the PO-unit figure themselves.
-          const okUnit = sameUnit(l.unit_on_invoice, po?.unit);
-          if (!okUnit) unitWarn.push(`${po?.description || 'a line'}: bill in ${l.unit_on_invoice}, PO in ${po?.unit} — enter billed qty in ${po?.unit}`);
+          // A bill in another unit (kg against a PO in feet) is not filled in:
+          // either the PO line's unit is corrected below, or accounts enters
+          // the PO-unit figure themselves.
+          const okUnit = sameUnit(l.unit_on_invoice, po ? unitOf(po) : null);
+          if (!okUnit && po) {
+            // Were the PO's figures already in the bill's unit (only the unit
+            // word was wrong)? Then keep them; otherwise start from the bill's.
+            const br = Number(l.rate), pr = Number(po.rate);
+            const figuresFit = br > 0 && pr > 0 && Math.abs(pr - br) / br <= 0.25;
+            mism.push({ id: po.id, description: po.description, billUnit: String(l.unit_on_invoice || '').trim(),
+              poUnit: unitOf(po), poQty: po.qty, poRate: po.rate, qty: pos(l.billed_qty), rate: pos(l.rate),
+              newQty: figuresFit ? String(po.qty) : pos(l.billed_qty), newRate: figuresFit ? String(po.rate) : pos(l.rate) });
+          }
           next[l.po_item_id] = { qty: okUnit ? pos(l.billed_qty) : '', rate: okUnit ? pos(l.rate) : '' };
         }
-        if (unitWarn.length) setBill({ ...data, notes: [data.notes, ...unitWarn].filter(Boolean).join('\n') });
+        setUnitMismatch(mism);
         setBillLines(next);
         // Tick the lines the bill covers and start "arrived" at the billed qty
         // — accounts changes it if the count differs.
@@ -840,6 +853,25 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
     } finally { setReading(false); }
   };
   const setBillLine = (id, k) => (e) => setBillLines(p => ({ ...p, [id]: { ...(p[id] || { qty: '', rate: '' }), [k]: e.target.value } }));
+  // Change the PO line to the bill's unit, then take the bill's figures as read.
+  const setMism = (id, k) => (e) => setUnitMismatch(list => list.map(x => x.id === id ? { ...x, [k]: e.target.value } : x));
+  const fixUnit = async (m) => {
+    setFixingUnit(m.id); setError('');
+    try {
+      await api.put(`/purchase-orders/${poId}/items/${m.id}/unit`, { unit: m.billUnit, qty: m.newQty, rate: m.newRate });
+      const nq = Number(m.newQty), nr = Number(m.newRate);
+      setUnitFixed(p => ({ ...p, [m.id]: { unit: m.billUnit, qty: nq, rate: nr, amount: Math.round(nq * nr * 100) / 100 } }));
+      setBillLines(p => ({ ...p, [m.id]: { qty: m.qty, rate: m.rate } }));
+      // Anything typed as "arrived" was in the old unit — start it again from
+      // the bill, and let a later file change clear it like any other prefill.
+      setQtyIn(p => { const s = { ...p }; if (m.qty) s[m.id] = m.qty; else delete s[m.id]; return s; });
+      if (m.qty) setPrefilled(p => ({ ...p, [m.id]: m.qty }));
+      setUnitMismatch(list => list.filter(x => x.id !== m.id));
+      onLinesChanged?.();   // the PO page shows the corrected line even if this is cancelled
+    } catch (e) {
+      setError(e.response?.data?.error || 'Could not change the unit');
+    } finally { setFixingUnit(null); }
+  };
 
   // The transport bill splits across exactly what was received in this delivery.
   const coveredList = items.filter(i => selected[i.id]);
@@ -1022,6 +1054,26 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
                     <input className="input py-1 text-sm" type="number" step="any" min="0" max="28" value={gst} onChange={e => setGst(e.target.value)} placeholder="e.g. 18" />
                   </div>
                 </div>
+                {unitMismatch.length > 0 && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-2 space-y-1.5">
+                    {unitMismatch.map(m => (
+                      <div key={m.id} className="text-xs text-amber-900 space-y-1">
+                        <div><b>{m.description}</b>: the bill is in <b>{m.billUnit}</b>, the PO line is <b>{m.poQty} {m.poUnit} @ ₹{m.poRate}</b>.</div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>Change the PO line to: ordered</span>
+                          <input className="input py-0.5 px-1.5 text-xs w-20" type="number" step="any" min="0" value={m.newQty} onChange={setMism(m.id, 'newQty')} />
+                          <span>{m.billUnit} @ ₹</span>
+                          <input className="input py-0.5 px-1.5 text-xs w-20" type="number" step="any" min="0" value={m.newRate} onChange={setMism(m.id, 'newRate')} />
+                          <button type="button" className="btn-secondary py-0.5 px-2 text-xs" disabled={fixingUnit === m.id || !(Number(m.newQty) > 0) || m.newRate === ''} onClick={() => fixUnit(m)}>
+                            {fixingUnit === m.id ? 'Changing…' : 'Change'}
+                          </button>
+                          <span className="text-amber-700">— or type the billed qty in {m.poUnit} below.</span>
+                        </div>
+                      </div>
+                    ))}
+                    <p className="text-[11px] text-amber-700">Only the PO line's unit changes — the item keeps its own unit, and stock still comes in in it (QC enters the conversion).</p>
+                  </div>
+                )}
                 {coveredList.length > 0 && (
                   <div className="border border-gray-100 rounded-lg bg-white divide-y divide-gray-100">
                     {coveredList.map(ci => {
@@ -1031,10 +1083,10 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
                       const br = bl.rate === '' ? null : Number(bl.rate);
                       return (
                         <div key={ci.id} className="px-2.5 py-2 text-xs">
-                          <div className="font-medium text-gray-800 truncate">{ci.description} <span className="text-gray-400 font-normal">· PO {ci.qty} {ci.unit || ''} @ ₹{ci.rate}</span></div>
+                          <div className="font-medium text-gray-800 truncate">{ci.description} <span className="text-gray-400 font-normal">· PO {ci.qty} {unitOf(ci) || ''} @ ₹{ci.rate}</span></div>
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <span className="text-gray-500">Billed qty</span>
-                            <input className="input py-0.5 px-1.5 text-xs w-24" type="number" step="any" min="0" value={bl.qty} onChange={setBillLine(ci.id, 'qty')} placeholder={ci.unit || 'qty'} />
+                            <input className="input py-0.5 px-1.5 text-xs w-24" type="number" step="any" min="0" value={bl.qty} onChange={setBillLine(ci.id, 'qty')} placeholder={unitOf(ci) || 'qty'} />
                             <span className="text-gray-500">@ ₹</span>
                             <input className="input py-0.5 px-1.5 text-xs w-20" type="number" step="any" min="0" value={bl.rate} onChange={setBillLine(ci.id, 'rate')} placeholder={String(ci.rate)} />
                             {br != null && Math.abs(br - Number(ci.rate)) > 1e-9 && (
@@ -1182,19 +1234,29 @@ function PackagingForwarding({ po, onSaved }) {
 }
 
 function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClose = isOwner, igstPercent = 0 }) {
+  // Bought in another unit from the one the item is stocked in (copper tube:
+  // kg on the PO, feet in stock) — the "weight of 10" box then holds what 10 of
+  // the item's unit come to in the PO's unit, and stock comes in converted
+  // (owner, 3 Oct 2026).
+  const stockUnit = item.item_unit || '';
+  const converts = !!stockUnit && !sameUnit(item.unit, stockUnit);
   const transport = Number(item.receive_transport_cost) || 0;
   const localTransport = Number(item.receive_local_transport_cost) || 0;
   const other = Number(item.receive_other_cost) || 0;
   const landedQty = Number(item.qc_received_qty) || 0;
-  const landedPerUnit = landedQty > 0
-    ? Math.round((Number(item.rate || 0) + (transport + localTransport + other) / landedQty) * 100) / 100
+  // Into stock in the item's unit: converted when bought in another unit, the
+  // same way the server adds it (rounded to 2 places).
+  const per10 = Number(item.qc_weight_10) || 0;
+  const stockQtyIn = converts ? (per10 > 0 && landedQty > 0 ? Math.round((landedQty / (per10 / 10)) * 100) / 100 : 0) : landedQty;
+  const landedPerUnit = stockQtyIn > 0
+    ? Math.round(((Number(item.rate || 0) * landedQty + transport + localTransport + other) / stockQtyIn) * 100) / 100
     : null;
   const costLine = showCosts && (transport > 0 || localTransport > 0 || other > 0) ? (
     <div className="text-xs text-gray-500 mt-0.5">
       {transport > 0 && <span>Freight: ₹{transport}{item.receive_transport_paid_to ? ` (${item.receive_transport_paid_to})` : ''}</span>}
       {localTransport > 0 && <span>{transport > 0 ? ' · ' : ''}Local: ₹{localTransport}{item.receive_local_transport_paid_to ? ` (${item.receive_local_transport_paid_to})` : ''}</span>}
       {other > 0 && <span>{(transport > 0 || localTransport > 0) ? ' · ' : ''}Other: ₹{other}{item.receive_other_cost_reason ? ` (${item.receive_other_cost_reason})` : ''}</span>}
-      {['approved', 'partial'].includes(item.qc_status) && landedPerUnit != null && <span> · Landed cost: <b>₹{landedPerUnit}/unit</b></span>}
+      {['approved', 'partial'].includes(item.qc_status) && landedPerUnit != null && <span> · Landed cost: <b>₹{landedPerUnit}/{converts ? stockUnit : 'unit'}</b></span>}
     </div>
   ) : null;
   const [open, setOpen] = useState(false);
@@ -1223,7 +1285,7 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
         </div>
         <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
           {item.qc_status !== 'rejected' && (
-            <span>Accepted: <b>{item.qc_received_qty}</b> · Weight of 10: <b>{item.qc_weight_10}</b>{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</span>
+            <span>Accepted: <b>{item.qc_received_qty}</b>{converts ? ` ${item.unit}` : ''} · {converts ? <>10 {stockUnit} = <b>{item.qc_weight_10}</b> {item.unit} → <b>{stockQtyIn.toLocaleString('en-IN')} {stockUnit}</b> into stock</> : <>Weight of 10: <b>{item.qc_weight_10}</b></>}{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</span>
           )}
           {/* Paid on the bill, stocked on the count — show both when they differ */}
           {item.billed_qty != null && Math.abs(Number(item.billed_qty) - (Number(item.qc_received_qty) || 0) - (Number(item.qc_rejected_qty) || 0)) > 1e-9 && (
@@ -1302,7 +1364,7 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
     setError('');
     if (mode !== 'rejected') {
       if (!image) return setError('Material image is required');
-      if (!weight10 || Number(weight10) <= 0) return setError('Weight of 10 pcs is required');
+      if (!weight10 || Number(weight10) <= 0) return setError(converts ? `Enter what 10 ${stockUnit} come to in ${item.unit}` : 'Weight of 10 pcs is required');
       if (!receivedQty || Number(receivedQty) <= 0) return setError('Enter the accepted quantity');
     }
     if (mode !== 'approved') {
@@ -1409,24 +1471,23 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
                 <FileUpload onFile={setImage} accept=".jpg,.jpeg,.png,.webp" label="Select material image" />
               </div>
               <div>
-                <label className="label text-xs">{mode === 'partial' ? 'Accepted quantity' : 'Actual quantity received'} <span className="text-red-500">*</span></label>
+                <label className="label text-xs">{mode === 'partial' ? 'Accepted quantity' : 'Actual quantity received'}{converts ? ` (in ${item.unit})` : ''} <span className="text-red-500">*</span></label>
                 <input className="input text-sm" type="number" step="any" min="0" value={receivedQty} onChange={e => setReceivedQty(e.target.value)} placeholder={`ordered: ${item.qty}`} />
                 <p className="text-xs text-gray-400 mt-0.5">Only this quantity is added to inventory.</p>
               </div>
               <div>
-                <label className="label text-xs">Weight of 10 pcs (kg) <span className="text-red-500">*</span></label>
-                <input className="input text-sm" type="number" step="any" min="0" value={weight10} onChange={e => setWeight10(e.target.value)} placeholder="e.g. 1.25" />
-                {/* Bought by weight, stocked by the piece: show what will
+                <label className="label text-xs">{converts ? `10 ${stockUnit} = how many ${item.unit}?` : 'Weight of 10 pcs (kg)'} <span className="text-red-500">*</span></label>
+                <input className="input text-sm" type="number" step="any" min="0" value={weight10} onChange={e => setWeight10(e.target.value)} placeholder={converts ? `${item.unit} for 10 ${stockUnit}` : 'e.g. 1.25'} />
+                {/* Bought in one unit, stocked in another: show what will
                     actually go into inventory before QC is submitted. */}
                 {(() => {
-                  const wu = ['kg', 'kgs', 'kilo', 'kilos', 'kilogram', 'kilograms'];
-                  if (!wu.includes(String(item.unit || '').trim().toLowerCase())) return null;
+                  if (!converts) return null;
                   const w10 = Number(weight10), acc = Number(receivedQty);
-                  if (!(w10 > 0) || !(acc > 0)) return null;
-                  const pcs = Math.round((acc / (w10 / 10)) * 100) / 100;
+                  if (!(w10 > 0) || !(acc > 0)) return <p className="text-[11px] text-gray-400 mt-0.5">Stock comes in in {stockUnit}: this converts the {item.unit} received.</p>;
+                  const into = Math.round((acc / (w10 / 10)) * 100) / 100;
                   return (
                     <p className="text-[11px] text-teal-700 mt-1">
-                      {acc} {item.unit} ÷ {w10}kg per 10 → <b>{pcs} pcs</b> into stock
+                      {acc} {item.unit} ÷ {w10} {item.unit} per 10 {stockUnit} → <b>{into.toLocaleString('en-IN')} {stockUnit}</b> into stock
                     </p>
                   );
                 })()}
