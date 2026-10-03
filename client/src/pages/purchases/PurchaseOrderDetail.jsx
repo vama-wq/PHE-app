@@ -1498,6 +1498,9 @@ function DebitNoteRow({ poId, dn, photos, onDone }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+  // A note opened because the supplier billed more than QC counted (owner,
+  // 3 Oct 2026) — not a rejection; its lines are spelled out in dn.notes.
+  const isShort = /^Short against invoice/i.test(dn.notes || '');
 
   const raise = async () => {
     if (!noteNo.trim()) return setError('Enter the debit note number');
@@ -1517,8 +1520,8 @@ function DebitNoteRow({ poId, dn, photos, onDone }) {
     <div className={`rounded-lg border px-3 py-2.5 ${dn.status === 'raised' ? 'bg-green-50 border-green-200' : 'bg-red-50/50 border-red-200'}`}>
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="text-sm">
-          <span className="font-medium text-gray-800">{dn.item_description || 'Item'}</span>
-          <span className="text-xs text-gray-500 ml-2">rejected qty <b>{dn.rejected_qty}</b> · suggested {inr(dn.suggested_amount)}</span>
+          <span className="font-medium text-gray-800">{dn.item_description || (isShort ? 'Billed more than received' : 'Item')}</span>
+          <span className="text-xs text-gray-500 ml-2">{isShort ? 'short' : 'rejected qty'} <b>{dn.rejected_qty}</b> · suggested {inr(dn.suggested_amount)}</span>
           {photos.map((p, i) => (
             <a key={p.id} className="text-xs text-brand-600 hover:underline ml-2" href={`/uploads/${p.file_path}`} target="_blank" rel="noopener noreferrer">photo {i + 1}</a>
           ))}
@@ -1532,6 +1535,9 @@ function DebitNoteRow({ poId, dn, photos, onDone }) {
           <button className="btn-primary btn-sm text-xs" onClick={() => setOpen(true)}>Raise Debit Note</button>
         ) : null}
       </div>
+      {isShort && dn.notes && (
+        <p className="text-xs text-gray-600 mt-1">{dn.notes}</p>
+      )}
       {dn.status !== 'raised' && open && (
         <div className="mt-3 grid grid-cols-2 gap-2.5 border-t border-red-100 pt-3">
           <div>

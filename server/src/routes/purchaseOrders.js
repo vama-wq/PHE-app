@@ -1259,10 +1259,14 @@ router.put('/:id/debit-notes/:dnId/raise', authenticate, authorize('accounts', '
     const noteNo = (req.body.note_no || '').trim();
     if (!noteNo) return res.status(400).json({ error: 'Enter the debit note number' });
     const amount = Math.round((Number(req.body.amount) > 0 ? Number(req.body.amount) : Number(dn.suggested_amount)) * 100) / 100;
+    // Keep what the note was opened for (e.g. "Short against invoice …");
+    // accounts' own remark is added after it, never in its place.
+    const typed = (req.body.notes || '').trim();
+    const notes = typed ? (dn.notes ? `${dn.notes} — ${typed}` : typed) : (dn.notes || null);
     await db.run(
       `UPDATE purchase_debit_notes SET status='raised', note_no=$1, amount=$2, notes=$3,
          file_path=$4, original_name=$5, raised_by=$6, raised_at=NOW() WHERE id=$7`,
-      [noteNo, amount, (req.body.notes || '').trim() || null,
+      [noteNo, amount, notes,
        req.file?.storagePath || null, req.file?.originalname || null, req.user.id, dn.id]);
     const po = await db.get('SELECT po_number FROM purchase_orders WHERE id=$1', [req.params.id]);
     await logActivity(null, null, 'debit_note_raised',
