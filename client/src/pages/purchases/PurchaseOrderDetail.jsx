@@ -769,7 +769,6 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
   // ordered quantity. A short quantity leaves the balance open on the PO.
   const [qtyIn, setQtyIn] = useState({});
   const [file, setFile] = useState(null);
-  const [poDoc, setPoDoc] = useState(null);
   const [transportCost, setTransportCost] = useState('');
   const [transportPaidTo, setTransportPaidTo] = useState('');
   const [localCost, setLocalCost] = useState('');
@@ -897,7 +896,6 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
         const fd = new FormData();
         fd.append('invoice', file);
         fd.append('received_qty', qtyIn[it.id]);
-        if (poDoc) fd.append('po_document', poDoc);   // optional
         // The bill's figures for this line, as checked by accounts
         const bl = billLines[it.id] || {};
         if (bl.qty !== undefined && String(bl.qty).trim() !== '') fd.append('billed_qty', bl.qty);
@@ -1056,10 +1054,6 @@ function ReceiveItemModal({ poId, items, allItems = [], onClose, onDone }) {
                 <p className="text-[11px] text-gray-500">Billed qty = what the bill charges for <b>this delivery</b>, in the PO's unit. Leave a figure blank if it is not on the bill. The PO and the payment follow these figures; QC's count goes to stock.</p>
               </div>
             )}
-            <div>
-              <label className="label">PO copy received with the goods <span className="text-gray-400 font-normal">(optional)</span></label>
-              <FileUpload onFile={setPoDoc} accept=".pdf,.jpg,.jpeg,.png" label="Select PO document (PDF or image)" />
-            </div>
             <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-3">
               <p className="text-xs text-gray-500">
                 Enter the <b>whole bill</b> once — tick below which items it covered and it splits across them by value for landed cost. Posts once to the Account Statement: main freight → <b>Unpaid Bank</b> (owner pays &amp; is notified), local → <b>Cash in Hand</b>.

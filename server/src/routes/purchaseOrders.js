@@ -841,9 +841,9 @@ router.post('/:id/items/:itemId/receive', authenticate, authorize('owner', 'admi
     if (!item) return res.status(404).json({ error: 'Item not found' });
     if (item.received) return res.status(400).json({ error: 'This item is already received' });
     if (item.short_closed) return res.status(400).json({ error: 'This balance was short-closed' });
-    // The supplier's invoice is compulsory on every receipt. The PO copy that
-    // came with the goods is optional (owner, 2 Oct 2026 — suppliers often do
-    // not send it back) — image or PDF when attached.
+    // The supplier's invoice is compulsory on every receipt. The PO copy is no
+    // longer asked for (owner, 3 Oct 2026); a copy still sent by an old page
+    // is stored as before, and earlier copies stay linked on their items.
     const invoiceFile = req.files?.invoice?.[0] || null;
     const poDocFile = req.files?.po_document?.[0] || null;
     if (!invoiceFile) return res.status(400).json({ error: 'The invoice received with this delivery is required' });
