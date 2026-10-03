@@ -356,10 +356,10 @@ const REGRESSIONS = [
   }, poisoned => poisoned === false],
 
   // ── Tube draw by grade (owner, 2 Oct 2026), pinned ────────────────────────
-  // 8 mm is flat at every length: SS304 20.7%, SS316 22%, Incoloy 21%, copper
-  // 26.2%; SS310 and any other steel use the steel row (20.7%).
-  ...[['TUB-SS304-038-T06', 0.207], ['SS 304', 0.207], ['TUB-SS316-038-T06', 0.22], ['TUB-SS316-038-T06-SML', 0.22],
-      ['SS 316', 0.22], ['TUB-INC-038-T06', 0.21], ['Incoloy', 0.21], ['TUB-CU-038-T06', 0.262], ['Copper', 0.262],
+  // 8 mm is flat at every length: SS304 20.7%, SS316 23% (owner, 3 Oct 2026),
+  // Incoloy 21%, copper 26.2%; SS310 and any other steel use the steel row (20.7%).
+  ...[['TUB-SS304-038-T06', 0.207], ['SS 304', 0.207], ['TUB-SS316-038-T06', 0.23], ['TUB-SS316-038-T06-SML', 0.23],
+      ['SS 316', 0.23], ['TUB-INC-038-T06', 0.21], ['Incoloy', 0.21], ['TUB-CU-038-T06', 0.262], ['Copper', 0.262],
       ['TUB-SS310-038-T06', 0.207]].map(([m, want]) =>
     [`8 mm ${m} tube draw is a flat ${(want * 100).toFixed(1)}% at every length`,
       () => [12, 21.2, 42.9, 43, 50.1, 56, 120].map(tl => E.tubeDrawPct(E.materialClass(m), tl, 8, E.tubeGrade(m))),

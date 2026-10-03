@@ -40,11 +40,12 @@ const PI = 3.14;
 // a grade with no row of its own uses its material's row ('steel' / 'copper').
 const TUBE_DRAW = {
   // 8 mm, flat at every length (owner, 2 Oct 2026): copper 23.7 → 26.2%,
-  // Incoloy 20.7 → 21%, SS316 20.7 → 22%; SS304 (and SS310, any other steel)
-  // stays 20.7%. The old 43" and 50" breaks (20 / 19.7 / 19) are retired.
+  // Incoloy 20.7 → 21%, SS316 20.7 → 22% → 23% (owner, 3 Oct 2026); SS304
+  // (and SS310, any other steel) stays 20.7%. The old 43" and 50" breaks
+  // (20 / 19.7 / 19) are retired.
   8: {
     steel:   [ { maxTL: Infinity, pct: 0.207 } ],
-    ss316:   [ { maxTL: Infinity, pct: 0.22 } ],
+    ss316:   [ { maxTL: Infinity, pct: 0.23 } ],
     incoloy: [ { maxTL: Infinity, pct: 0.21 } ],
     copper:  [ { maxTL: Infinity, pct: 0.262 } ],
   },
