@@ -33,12 +33,13 @@ const RED = 'FFF8CBAD', GREEN = 'FFC6EFCE', AMBER = 'FFFFEB9C', BLUE = 'FFDDEBF7
 
 // Rejections count in the month they were ENTERED (tapped in) on the checklist
 // — owner, 3 Oct 2026 — not the month the item finished or dispatched. The
-// moment of entry is when the stage was marked done with the rejection, or,
-// for a stage not marked done yet, when the row was saved.
+// moment of entry is rejection_entered_at, fixed when the rejection is first
+// saved; rows from before it existed were filled from the stage's done time
+// (or its last save), and the fallback covers any row written mid-deploy.
 async function rejectionsEntered(db, startISO, endISO) {
   return db.all(`
     SELECT pc.job_card_id, pc.stage_no, pc.rejection_qty, pc.remade_qty, pc.worker_name, pc.notes, pc.done,
-           COALESCE(pc.done_at, pc.updated_at) AS entered_at,
+           COALESCE(pc.rejection_entered_at, pc.done_at, pc.updated_at) AS entered_at,
            jc.job_card_no, jc.qty, o.order_code, c.customer_code, u.name AS entered_by
       FROM production_checklist pc
       JOIN job_cards jc ON jc.id = pc.job_card_id
@@ -46,9 +47,9 @@ async function rejectionsEntered(db, startISO, endISO) {
       LEFT JOIN customers c ON c.id = o.customer_id
       LEFT JOIN users u ON u.id = pc.updated_by
      WHERE pc.rejection_qty > 0
-       AND COALESCE(pc.done_at, pc.updated_at) >= $1::timestamptz
-       AND COALESCE(pc.done_at, pc.updated_at) <  $2::timestamptz
-     ORDER BY COALESCE(pc.done_at, pc.updated_at), pc.id`, [startISO, endISO]);
+       AND COALESCE(pc.rejection_entered_at, pc.done_at, pc.updated_at) >= $1::timestamptz
+       AND COALESCE(pc.rejection_entered_at, pc.done_at, pc.updated_at) <  $2::timestamptz
+     ORDER BY COALESCE(pc.rejection_entered_at, pc.done_at, pc.updated_at), pc.id`, [startISO, endISO]);
 }
 
 // Stage 16 (In Plating) holds the plating VENDOR in worker_name (owner,

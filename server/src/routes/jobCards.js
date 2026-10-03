@@ -1227,13 +1227,17 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
 
   await db.run(`
     INSERT INTO production_checklist
-      (job_card_id, stage_no, done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, coil_weight, done_at, updated_by, updated_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+      (job_card_id, stage_no, done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, coil_weight, done_at, updated_by, updated_at, rejection_entered_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(), CASE WHEN $6 > 0 THEN NOW() END)
     ON CONFLICT(job_card_id, stage_no) DO UPDATE SET
       done          = EXCLUDED.done,
       value1        = EXCLUDED.value1,
       value2        = EXCLUDED.value2,
       rejection_qty = EXCLUDED.rejection_qty,
+      -- First entered: set when the rejection goes from none to some, kept
+      -- while it stays, cleared if it is removed (owner, 3 Oct 2026).
+      rejection_entered_at = CASE WHEN EXCLUDED.rejection_qty > 0
+        THEN COALESCE(production_checklist.rejection_entered_at, NOW()) END,
       remade_qty    = EXCLUDED.remade_qty,
       worker_name   = EXCLUDED.worker_name,
       scrap_value   = EXCLUDED.scrap_value,
@@ -1395,12 +1399,14 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
     if (markDone) {
       await db.run(`
         INSERT INTO production_checklist
-          (job_card_id, stage_no, done, photo_file, photo_original_name, rejection_qty, remade_qty, dispatched_qty, worker_name, scrap_value, value1, value2, done_at, updated_by, updated_at)
-        VALUES ($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+          (job_card_id, stage_no, done, photo_file, photo_original_name, rejection_qty, remade_qty, dispatched_qty, worker_name, scrap_value, value1, value2, done_at, updated_by, updated_at, rejection_entered_at)
+        VALUES ($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(), CASE WHEN $5 > 0 THEN NOW() END)
         ON CONFLICT(job_card_id, stage_no) DO UPDATE SET
           photo_file          = EXCLUDED.photo_file,
           photo_original_name = EXCLUDED.photo_original_name,
           rejection_qty       = EXCLUDED.rejection_qty,
+          rejection_entered_at = CASE WHEN EXCLUDED.rejection_qty > 0
+            THEN COALESCE(production_checklist.rejection_entered_at, NOW()) END,
           remade_qty          = EXCLUDED.remade_qty,
           dispatched_qty      = EXCLUDED.dispatched_qty,
           worker_name         = EXCLUDED.worker_name,

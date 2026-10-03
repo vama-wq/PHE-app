@@ -1045,6 +1045,20 @@ async function initDB(retries = 20, delayMs = 10000) {
           await pool.query(`INSERT INTO app_flags (key) VALUES ('po_billed_qty_backfill_v1') ON CONFLICT DO NOTHING`);
         }
       }
+      // When a stage's rejection was first entered (owner, 3 Oct 2026). Set once,
+      // when the rejection goes from none to some, so un-ticking, re-ticking or a
+      // QC send-back never moves a rejection into another month. Rejections
+      // already in the app take the date the monthly report used for them.
+      await pool.query(`ALTER TABLE production_checklist ADD COLUMN IF NOT EXISTS rejection_entered_at TIMESTAMPTZ`);
+      {
+        const done = await pool.query(`SELECT 1 FROM app_flags WHERE key='rejection_entered_at_backfill_v1'`);
+        if (!done.rows.length) {
+          await pool.query(
+            `UPDATE production_checklist SET rejection_entered_at = COALESCE(done_at, updated_at)
+              WHERE rejection_qty > 0 AND rejection_entered_at IS NULL`);
+          await pool.query(`INSERT INTO app_flags (key) VALUES ('rejection_entered_at_backfill_v1') ON CONFLICT DO NOTHING`);
+        }
+      }
       {
         // Owner-confirmed correction: four items were QC-accepted ABOVE the
         // ordered quantity before the gate existed, so their PO lines still
