@@ -28,6 +28,11 @@ const avgNumbers = (v) => {
   return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
 };
 
+// Incoloy tube is not taken at Stage 5 until its next purchase is received
+// after this moment (owner, 4 Oct 2026 — see Stage 5 below).
+const INCOLOY_PAUSED_FROM = '2026-10-04T00:00:00+05:30';
+const isIncoloy = (tube) => /incoloy/i.test(tube?.name || '') || /^TUB-INC/i.test(tube?.item_code || '');
+
 async function invByCode(db, code, category) {
   if (!code) return null;
   return db.get(
@@ -127,6 +132,18 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
     const tube = await invByCode(db, oi?.tube_material, 'tube');
     if (isDone && !jc.tube_deducted) {
       if (!tube) return; // Tube Material isn't a "Tube" inventory code — nothing to deduct
+      // Incoloy (owner, 4 Oct 2026): every Incoloy tube was set to 0 because tube
+      // had been taken without its purchases ever received. Until that tube's next
+      // purchase comes in, Stage 5 takes none of it — work goes on, stock stays at
+      // 0. Each Incoloy tube resumes by itself once a purchase of it is received.
+      if (isIncoloy(tube) && !(await db.get(
+        `SELECT 1 FROM inventory_transactions WHERE item_id=$1 AND transaction_type='purchase_in' AND created_at >= $2 LIMIT 1`,
+        [tube.id, INCOLOY_PAUSED_FROM]))) {
+        await logActivity(jc.order_id, jobCardId, 'tube_not_taken',
+          `${tube.item_code} not taken from stock at Stage 5 — Incoloy is paused until its next purchase is received (owner, 4 Oct 2026) — ${detail}`, userId);
+        await db.run('UPDATE job_cards SET tube_deducted=TRUE, tube_used_qty=0, tube_scrap_qty=0 WHERE id=$1', [jobCardId]);
+        return;
+      }
       const s5 = await db.get('SELECT value1, scrap_value FROM production_checklist WHERE job_card_id=$1 AND stage_no=5', [jobCardId]);
       const lenMm = avgNumbers(s5?.value1);
       let scrapIn = parseFloat(s5?.scrap_value) || 0; // per-piece scrap, inches
