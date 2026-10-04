@@ -13,6 +13,7 @@
 // later stages and QC do not take it and a give-back never returns it.
 
 const rework = require('./rework');
+const { cardLengths, specForCard } = require('./cardSpec');
 const { recordMove } = require('./stockLedger');
 
 const STAGE_CATEGORY_MAP = {
@@ -47,9 +48,11 @@ const buildOnlyOnFg = (category) =>
   BUILD_ONLY_CATEGORIES.some(c => c.toLowerCase() === String(category || '').trim().toLowerCase());
 
 // Fins consume by tube length, not by BOM qty: each code has a known weight per
-// 50.8 mm. At QC approval the card's stage-8 (Draw) Total Length gives the
-// PER-PIECE weight — length_mm × (weight / 50.8) — which is multiplied by the
-// QC-approved qty of that card (partial dispatches deduct only their share).
+// 50.8 mm. At QC approval the job card's finished (total) length gives the
+// per-element weight — length_mm × (weight / 50.8) — multiplied by the
+// QC-approved qty × elements of that card (partial dispatches deduct only their
+// share). A card with no generated spec uses the Stage-8 (Draw) Total Length
+// typed on the floor, × approved qty (owner, 4 Oct 2026).
 // These lines are excluded from the normal qty-based BOM deduction paths below.
 const FINS_MM_BASE = 50.8;
 const FINS_WEIGHT_PER_BASE = {
@@ -195,7 +198,8 @@ async function deductPartialAtQC(db, jc, userId) {
 }
 
 // Fins by tube length: at QC approval, each fins BOM line deducts kgs computed
-// from THIS card's stage-8 (Draw) Total Length — not the BOM qty.
+// from the job card's finished length (else this card's Stage-8 Total Length) —
+// not the BOM qty.
 async function deductFinsByLength(db, jc, userId) {
   if (!jc || jc.is_fg) return; // FG inventory cards have no Draw stage
   // Once per card. Nothing used to stop this running again on a second QC
@@ -219,6 +223,9 @@ async function deductFinsByLength(db, jc, userId) {
   );
   if (!sels.length) return;
 
+  // The finished length comes from the app-generated job card when it has one
+  // (owner, 4 Oct 2026), for every element it makes; else from Stage 8 as typed.
+  const spec = cardLengths(await specForCard(db, jc));
   const s8 = await db.get(
     'SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=8', [jc.id]
   );
@@ -227,19 +234,21 @@ async function deductFinsByLength(db, jc, userId) {
   // mashed a range into 16,101,625mm and drew 163,868kg of fins.) The >20m guard
   // below stays as a second net against implausible entries.
   const s8nums = (String(s8?.value1 || '').match(/\d+(?:\.\d+)?/g) || []).map(Number);
-  const lengthMm = s8nums.length ? s8nums.reduce((a, b) => a + b, 0) / s8nums.length : NaN;
+  const lengthMm = spec?.totalMm ? spec.totalMm
+    : (s8nums.length ? s8nums.reduce((a, b) => a + b, 0) / s8nums.length : NaN);
+  const fromCard = !!spec?.totalMm;
   if (!(lengthMm > 0)) {
-    console.warn(`[fins] JC ${jc.job_card_no}: no stage-8 Total Length — fins not deducted`);
+    console.warn(`[fins] JC ${jc.job_card_no}: no length on the job card and no stage-8 Total Length — fins not deducted`);
     return;
   }
   if (lengthMm > 20000) {
-    console.warn(`[fins] JC ${jc.job_card_no}: stage-8 length ${lengthMm}mm implausible (>20m) — fins not deducted, fix the stage value`);
+    console.warn(`[fins] JC ${jc.job_card_no}: length ${lengthMm}mm (${fromCard ? 'job card' : 'stage 8'}) implausible (>20m) — fins not deducted`);
     return;
   }
 
   // Per-piece weight × QC-approved qty of THIS card (dispatch + FG). A partial
   // dispatch therefore deducts fins only for the pieces actually approved.
-  const pcs = approved;
+  const pcs = fromCard ? approved * spec.elements : approved;
 
   const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
   const orderCode = o?.order_code || `Order #${jc.order_id}`;
@@ -250,7 +259,7 @@ async function deductFinsByLength(db, jc, userId) {
     if (!(kgs > 0)) continue;
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
-    noteParts.push(`Fins by tube length: ${lengthMm}mm × ${perBase}kg/${FINS_MM_BASE}mm × ${pcs} pcs = ${kgs}kg (JC ${jc.job_card_no})`);
+    noteParts.push(`Fins by tube length: ${lengthMm}mm${fromCard ? ' (job card)' : ' (Stage 8)'} × ${perBase}kg/${FINS_MM_BASE}mm × ${pcs}${fromCard && spec.elements > 1 ? ` (${approved} × ${spec.elements}in1)` : ''} pcs = ${kgs}kg (JC ${jc.job_card_no})`);
     await deductLine(db, sel, kgs, noteParts.join(' | '), userId);
     totalKg += kgs;
   }

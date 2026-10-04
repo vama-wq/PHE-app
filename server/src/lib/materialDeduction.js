@@ -2,20 +2,26 @@
 // Tube and Spring-Gauge wire are NOT part of the design BOM. They are deducted
 // from stock based on ACTUAL usage recorded in the production checklist, with
 // FIFO lot draw-down so landed-cost valuation stays accurate:
-//   • Stage 5 (Tube Cutting): tube used  = value1 (mm)  × qty  → feet  (÷304.8)
+//   • Stage 5 (Tube Cutting): tube used  = the job card's cutting length (mm) × qty × elements
+//                                          → feet (÷304.8); typed value1 (mm) × qty only for a
+//                                          card with no generated spec (owner, 4 Oct 2026)
 //                             tube scrap = scrap (inches)× qty  → feet  (÷12)
 //     Tube inventory item = the order item's Tube Material (item code, category "Tube").
 //   • Stage 4 (Spot) done — deducted once Stage 4 completes, using the data entered
-//     at Stage 3 (Ohms): coil used  = coil_weight (g, total)  → Kgs (÷1000)
+//     at Stage 3 (Ohms): coil used  = coil_weight — the box is KG — taken as kg as typed
+//                                     (it was wrongly ÷1000 until 4 Oct 2026)
 //                        coil scrap = scrap (g, total)        → Kgs (÷1000)
 //     Gauge inventory item = Stage 1 gauge pick (item code, category "Spring Guage").
 //   • Stage 6 (Filling):      PVC bush   = 2 pcs/piece × qty — PVC-FB08-M4 (8mm dia) or
 //                                          PVC-FB11-M5 (11mm dia), by the order item's Tube Diameter.
-//                             MGO-65A powder = (stage-5 length(mm) × qty) → inches ÷25.4, then
-//                                          × rate-per-inch (8mm: 0.018g/5in; 11mm: 0.027g/5in) → Kgs (÷1000).
+//                             MGO-65A powder = (cutting length(mm) × qty × elements, as for the
+//                                          tube) → inches ÷25.4, × KG per inch (8mm: 0.018 kg/5in;
+//                                          11mm: 0.027 kg/5in). No ÷1000 — 18 g per 5 inches.
+//     A split child or a replacement card uses the job card it came from (cardSpec.specForCard).
 // Only runs for orders flagged material_deduction=TRUE (created after this feature).
 
 const { resolveJobCardItemId } = require('./inventoryDeduction');
+const { cardLengths, specForCard } = require('./cardSpec');
 const { logActivity } = require('../db');
 
 const r4 = (n) => Math.round(Number(n) * 1e4) / 1e4;
@@ -33,18 +39,14 @@ const avgNumbers = (v) => {
 const INCOLOY_PAUSED_FROM = '2026-10-04T00:00:00+05:30';
 const isIncoloy = (tube) => /incoloy/i.test(tube?.name || '') || /^TUB-INC/i.test(tube?.item_code || '');
 
-// The tube a card uses is what the card itself says (owner, 4 Oct 2026): the
-// app-generated job card's cutting length, for every element it makes — a 3in1
-// card of 12 heaters cuts 36 lengths. Not the figure typed at Stage 5. A card
-// without a generated spec (made before the generator, or uploaded) still goes
-// by what was typed.
-function cardCutting(jc) {
-  try {
-    const g = typeof jc?.generated_spec === 'string' ? JSON.parse(jc.generated_spec) : jc?.generated_spec;
-    const mm = Number(g?.computed?.cuttingLengthMm);
-    if (!(mm > 0)) return null;
-    return { mm, elements: Math.max(1, parseInt(g?.computed?.elements, 10) || 1) };
-  } catch { return null; }
+// The tube (Stage 5) and MgO (Stage 6) a card uses go by what the card itself
+// says (owner, 4 Oct 2026): the app-generated job card's cutting length, for
+// every element it makes — a 3in1 card of 12 heaters cuts 36 lengths. Not the
+// figure typed at Stage 5. A card without a generated spec (made before the
+// generator, or uploaded) still goes by what was typed.
+async function cardCutting(db, jc) {
+  const L = cardLengths(await specForCard(db, jc));
+  return L && L.cutMm ? { mm: L.cutMm, elements: L.elements } : null;
 }
 
 async function invByCode(db, code, category) {
@@ -159,7 +161,7 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
         return;
       }
       const s5 = await db.get('SELECT value1, scrap_value FROM production_checklist WHERE job_card_id=$1 AND stage_no=5', [jobCardId]);
-      const cut = cardCutting(jc);
+      const cut = await cardCutting(db, jc);
       const lenMm = cut ? cut.mm : avgNumbers(s5?.value1);
       const lengths = cut ? qty * cut.elements : qty;   // tube lengths actually cut
       let scrapIn = parseFloat(s5?.scrap_value) || 0; // per-piece scrap, inches
@@ -200,11 +202,13 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
     if (isDone && !jc.coil_deducted) {
       if (!gauge) return; // no gauge selected in Stage 1 — nothing to deduct
       const s3 = await db.get('SELECT coil_weight, scrap_value FROM production_checklist WHERE job_card_id=$1 AND stage_no=3', [jobCardId]);
-      const wG = parseFloat(s3?.coil_weight) || 0;   // total weight of all coils (g)
-      const scrapG = parseFloat(s3?.scrap_value) || 0; // total coil scrap (g)
-      const usedKg = r4(wG / 1000);
+      // The Stage 3 box is "Total Weight of All Coils (kg)" and the floor types
+      // kg. Until 4 Oct 2026 it was read as grams, so coil wire left stock at a
+      // thousandth of what was used (owner confirmed the fix). Scrap is "(g, total)".
+      const usedKg = r4(parseFloat(s3?.coil_weight) || 0);   // total weight of all coils (kg)
+      const scrapG = parseFloat(s3?.scrap_value) || 0;         // total coil scrap (g)
       const scrapKg = r4(scrapG / 1000);
-      if (usedKg > 0) await consumeFifo(db, gauge.id, usedKg, { type: 'dispatch_to_production', note: `Coil wire ${usedKg} Kgs (${wG}g total) — ${detail}`, userId });
+      if (usedKg > 0) await consumeFifo(db, gauge.id, usedKg, { type: 'dispatch_to_production', note: `Coil wire ${usedKg} Kgs (total weight of all coils, Stage 3) — ${detail}`, userId });
       if (scrapKg > 0) await consumeFifo(db, gauge.id, scrapKg, { type: 'scrap', note: `Scrap coil ${scrapKg} Kgs (${scrapG}g) — ${detail}`, userId });
       await db.run('UPDATE job_cards SET coil_deducted=TRUE, coil_used_qty=$1, coil_scrap_qty=$2 WHERE id=$3', [usedKg, scrapKg, jobCardId]);
     } else if (!isDone && jc.coil_deducted) {
@@ -223,22 +227,27 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
     // Tube Diameter is a required 8mm/11mm dropdown at order-item creation, so this is
     // expected to always resolve for material-tracked orders; falls through safely if not.
     const pvcCode = dia === '8' ? 'PVC-FB08-M4' : dia === '11' ? 'PVC-FB11-M5' : null;
-    const mgoGPerInch = dia === '8' ? 0.018 / 5 : dia === '11' ? 0.027 / 5 : null;
+    // 18 g of MgO per 5 inches of 8 mm tube, 27 g for 11 mm (owner confirmed,
+    // 4 Oct 2026). Until then the figure was read as grams, a thousandth too low.
+    const mgoKgPerInch = dia === '8' ? 0.018 / 5 : dia === '11' ? 0.027 / 5 : null;
     const pvc = pvcCode ? await invByCode(db, pvcCode, 'bush') : null;
     const mgo = await invByCode(db, 'MGO-65A', 'powder');
 
     if (isDone && !jc.fill_deducted) {
       if (!pvc && !mgo) return; // no matching bush/powder items — nothing to deduct
       const s5 = await db.get('SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=5', [jobCardId]);
-      const lenMm = avgNumbers(s5?.value1);
+      const cut = await cardCutting(db, jc);
+      const lenMm = cut ? cut.mm : avgNumbers(s5?.value1);
+      const lengths = cut ? qty * cut.elements : qty;
       const pvcQty = pvc ? r4(2 * qty) : 0; // 2 bushes per piece × qty
       let mgoKg = 0;
-      if (mgo && mgoGPerInch != null && lenMm > 0) {
-        const totalInches = (lenMm * qty) / 25.4;
-        mgoKg = r4((totalInches * mgoGPerInch) / 1000);
+      if (mgo && mgoKgPerInch != null && lenMm > 0) {
+        const totalInches = (lenMm * lengths) / 25.4;
+        mgoKg = r4(totalInches * mgoKgPerInch);
       }
+      const mgoHow = cut ? `${lenMm}mm job card cutting length × ${cut.elements > 1 ? `${lengths} (${qty} × ${cut.elements}in1)` : `${qty} pcs`}` : `${lenMm}mm × ${qty} pcs`;
       if (pvcQty > 0) await consumeFifo(db, pvc.id, pvcQty, { type: 'dispatch_to_production', note: `Filling bush ${pvcQty} pcs (${dia}mm dia × ${qty} pcs) — ${detail}`, userId });
-      if (mgoKg > 0) await consumeFifo(db, mgo.id, mgoKg, { type: 'dispatch_to_production', note: `MGO powder ${mgoKg} kg (${dia}mm dia, ${lenMm}mm × ${qty} pcs) — ${detail}`, userId });
+      if (mgoKg > 0) await consumeFifo(db, mgo.id, mgoKg, { type: 'dispatch_to_production', note: `MGO powder ${mgoKg} kg (${dia}mm dia, ${mgoHow}) — ${detail}`, userId });
       await db.run('UPDATE job_cards SET fill_deducted=TRUE, fill_pvc_qty=$1, fill_mgo_qty=$2 WHERE id=$3', [pvcQty || null, mgoKg || null, jobCardId]);
     } else if (!isDone && jc.fill_deducted) {
       if (pvc && Number(jc.fill_pvc_qty) > 0) await returnFifo(db, pvc.id, jc.fill_pvc_qty, { note: `Reverted filling bush (Stage 6 undone) — ${detail}`, userId });
