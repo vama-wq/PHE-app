@@ -33,6 +33,20 @@ const avgNumbers = (v) => {
 const INCOLOY_PAUSED_FROM = '2026-10-04T00:00:00+05:30';
 const isIncoloy = (tube) => /incoloy/i.test(tube?.name || '') || /^TUB-INC/i.test(tube?.item_code || '');
 
+// The tube a card uses is what the card itself says (owner, 4 Oct 2026): the
+// app-generated job card's cutting length, for every element it makes — a 3in1
+// card of 12 heaters cuts 36 lengths. Not the figure typed at Stage 5. A card
+// without a generated spec (made before the generator, or uploaded) still goes
+// by what was typed.
+function cardCutting(jc) {
+  try {
+    const g = typeof jc?.generated_spec === 'string' ? JSON.parse(jc.generated_spec) : jc?.generated_spec;
+    const mm = Number(g?.computed?.cuttingLengthMm);
+    if (!(mm > 0)) return null;
+    return { mm, elements: Math.max(1, parseInt(g?.computed?.elements, 10) || 1) };
+  } catch { return null; }
+}
+
 async function invByCode(db, code, category) {
   if (!code) return null;
   return db.get(
@@ -145,7 +159,9 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
         return;
       }
       const s5 = await db.get('SELECT value1, scrap_value FROM production_checklist WHERE job_card_id=$1 AND stage_no=5', [jobCardId]);
-      const lenMm = avgNumbers(s5?.value1);
+      const cut = cardCutting(jc);
+      const lenMm = cut ? cut.mm : avgNumbers(s5?.value1);
+      const lengths = cut ? qty * cut.elements : qty;   // tube lengths actually cut
       let scrapIn = parseFloat(s5?.scrap_value) || 0; // per-piece scrap, inches
       // Abnormally large scrap (a bad cut/rework, not normal trim waste) is excluded from
       // scrap accounting entirely — not deducted. Copper: 14in or more; other tube
@@ -157,9 +173,12 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
           `Tube scrap of ${scrapIn}in excluded from deduction (${isCopper ? 'copper ≥14in' : '>16in'} threshold) — ${detail}`, userId);
         scrapIn = 0;
       }
-      const usedFt = r4((lenMm * qty) / 304.8);   // per-piece length × qty → feet
+      const usedFt = r4((lenMm * lengths) / 304.8);   // cutting length × lengths cut → feet
       const scrapFt = r4((scrapIn * qty) / 12);    // per-piece scrap × qty → feet
-      if (usedFt > 0) await consumeFifo(db, tube.id, usedFt, { type: 'dispatch_to_production', note: `Tube used ${usedFt} ft (${lenMm}mm × ${qty} pcs) — ${detail}`, userId });
+      const howCut = cut
+        ? `${lenMm}mm job card cutting length × ${cut.elements > 1 ? `${lengths} (${qty} × ${cut.elements}in1)` : `${qty} pcs`}`
+        : `${lenMm}mm as typed at Stage 5 × ${qty} pcs`;
+      if (usedFt > 0) await consumeFifo(db, tube.id, usedFt, { type: 'dispatch_to_production', note: `Tube used ${usedFt} ft (${howCut}) — ${detail}`, userId });
       if (scrapFt > 0) await consumeFifo(db, tube.id, scrapFt, { type: 'scrap', note: `Scrap tube ${scrapFt} ft (${scrapIn}in × ${qty} pcs) — ${detail}`, userId });
       await db.run('UPDATE job_cards SET tube_deducted=TRUE, tube_used_qty=$1, tube_scrap_qty=$2 WHERE id=$3', [usedFt, scrapFt, jobCardId]);
     } else if (!isDone && jc.tube_deducted) {
