@@ -5,6 +5,7 @@ const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromSto
 const { createNotification } = require('./notifications');
 const { applyMaterialDeductions } = require('../lib/materialDeduction');
 const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventoryDeduction');
+const { cardLengths, specForCard } = require('../lib/cardSpec');
 const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit } = require('../lib/jobCardSplit');
 const { buildDraft, draftQuestions } = require('../lib/jobCardDraft');
 const { render: renderJobCard, renderParts } = require('../lib/jobCardRender');
@@ -1207,6 +1208,21 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
       error: 'Total weight of all coils is required before marking this stage done.',
       code: 'COIL_WEIGHT_REQUIRED'
     });
+  }
+  // Sanity check (owner, 5 Oct 2026): the figure is kg for ALL the card's coils,
+  // and it now comes straight off coil-wire stock — "11" typed for 4 coils would
+  // take 11 kg. Per coil it must land between 0.2 g and 500 g. A 3in1 card makes
+  // three coils per heater (a split or replacement card counts as its original).
+  if (!isFg && stageNo === 3 && done && coilWeightNum > 0) {
+    const spec = cardLengths(await specForCard(db, jcCard));
+    const coils = (Number(jcCard.qty) || 0) * (spec?.elements || 1);
+    const perCoilG = coils > 0 ? (coilWeightNum * 1000) / coils : null;
+    if (perCoilG != null && (perCoilG < 0.2 || perCoilG > 500)) {
+      return res.status(400).json({
+        error: `That is ${Math.round(perCoilG * 100) / 100} g per coil (${coilWeightNum} kg ÷ ${coils} coils). The total weight is in kg for all the coils together — please check it.`,
+        code: 'COIL_WEIGHT_IMPLAUSIBLE',
+      });
+    }
   }
 
   // Stage 1 (Coil): gauge selection is required for material-tracked (new) orders,

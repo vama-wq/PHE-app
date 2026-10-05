@@ -2010,6 +2010,20 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
             />
           )}
           <p className="text-xs text-gray-400 mt-1">Combined weight of every coil made for this job card.</p>
+          {/* Per coil as they type — the app refuses below 0.2 g or above 500 g a coil (owner, 5 Oct 2026). */}
+          {!isDone && parseFloat(coilWeight) > 0 && (() => {
+            let el = 1;
+            try { const g = typeof card?.generated_spec === 'string' ? JSON.parse(card.generated_spec) : card?.generated_spec; el = Math.max(1, parseInt(g?.computed?.elements, 10) || 1); } catch { el = 1; }
+            const coils = (Number(card?.qty) || 0) * el;
+            if (!(coils > 0)) return null;
+            const per = (parseFloat(coilWeight) * 1000) / coils;
+            const bad = per < 0.2 || per > 500;
+            return (
+              <p className={`text-xs mt-1 ${bad ? 'text-red-600 font-medium' : 'text-teal-700'}`}>
+                = {Math.round(per * 100) / 100} g per coil ({coils} coils){bad ? ' — that looks wrong: enter the total for all coils, in kg' : ''}
+              </p>
+            );
+          })()}
         </div>
       )}
 
