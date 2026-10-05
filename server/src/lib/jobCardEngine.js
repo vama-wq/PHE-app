@@ -56,10 +56,10 @@ const TUBE_DRAW = {
     steel:   [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.15 } ],
     ss304:   [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.145 } ],
     incoloy: [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.16 } ],
-    // Incoloy 1/2" 0.6 mm (owner, 5 Oct 2026): 16% on average below 50"; from
-    // 50" up it stays what was already taken (15.6% to 51", 16% above).
+    // Incoloy 1/2" 0.6 mm (owner, 5 Oct 2026): 16% on average below 50";
+    // 15.6% to 51" as already taken; 15.5% above 51".
     // Incoloy 0.5 mm keeps the row above.
-    incoloy_t06: [ { maxTL: 50, pct: 0.16 }, { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.16 } ],
+    incoloy_t06: [ { maxTL: 50, pct: 0.16 }, { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.155 } ],
     copper:  [ { maxTL: Infinity, pct: 0.16 } ],
   },
 };

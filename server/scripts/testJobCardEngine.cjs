@@ -385,10 +385,10 @@ const REGRESSIONS = [
     [`11 mm ${m} tube draw is ${(upTo51 * 100).toFixed(1)}% up to 51" and ${(above51 * 100).toFixed(1)}% above`,
       () => [40, 51, 51.1, 60].map(tl => E.tubeDrawPct(E.materialClass(m), tl, 11, E.tubeGrade(m))),
       ([a, b, c, d]) => a === upTo51 && b === upTo51 && c === above51 && d === above51]),
-  // Incoloy 1/2" 0.6 mm (owner, 5 Oct 2026): 16% below 50"; 15.6% to 51"; 16% above.
-  ['11 mm Incoloy 0.6 mm (TUB-INC-12-T06) is 16% below 50", 15.6% to 51", 16% above',
+  // Incoloy 1/2" 0.6 mm (owner, 5 Oct 2026): 16% below 50"; 15.6% to 51"; 15.5% above.
+  ['11 mm Incoloy 0.6 mm (TUB-INC-12-T06) is 16% below 50", 15.6% to 51", 15.5% above',
     () => [30, 49.9, 50, 50.5, 51, 51.1, 60].map(tl => E.tubeDrawPct(E.materialClass('TUB-INC-12-T06'), tl, 11, E.tubeGrade('TUB-INC-12-T06'))),
-    p => JSON.stringify(p) === JSON.stringify([0.16, 0.16, 0.16, 0.156, 0.156, 0.16, 0.16])],
+    p => JSON.stringify(p) === JSON.stringify([0.16, 0.16, 0.16, 0.156, 0.156, 0.155, 0.155])],
   ['the Incoloy 0.6 mm name reads the same as its code, and 8 mm Incoloy 0.6 mm stays 21%',
     () => [E.tubeGrade('Incoloy 1/2" Tube (OD 12.86, ID 11.12), 0.6mm Thickness'), E.tubeDrawPct('steel', 40, 8, E.tubeGrade('TUB-INC-038-T06'))],
     ([g, p8]) => g === 'incoloy_t06' && p8 === 0.21],
