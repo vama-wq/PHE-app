@@ -31,11 +31,12 @@ export default function PurchasePaymentsDue() {
   useEffect(() => { load(); }, []);
 
   // Group by the RECEIVED month (YYYY-MM), oldest month first so the longest-
-  // outstanding dues surface at the top.
+  // outstanding dues surface at the top. A PO that came in parts has one row per
+  // delivery, each in the month it was received (owner, 5 Oct 2026).
   const groups = useMemo(() => {
     const m = new Map();
     for (const b of bills) {
-      const key = (b.received_at || '').slice(0, 7) || 'unknown';
+      const key = b.month || (b.received_at || '').slice(0, 7) || 'unknown';
       if (!m.has(key)) m.set(key, { key, label: key === 'unknown' ? 'Undated' : monthLabel(key), bills: [], total: 0 });
       const g = m.get(key); g.bills.push(b); g.total += b.remaining;
     }
@@ -73,7 +74,7 @@ export default function PurchasePaymentsDue() {
       const amt = Math.round((parseFloat(sel[b.id]) || 0) * 100) / 100;
       if (!(amt > 0)) return setError(`Enter a valid amount for ${b.po_number}.`);
       if (amt > b.remaining + 0.009) return setError(`${b.po_number}: amount can't exceed remaining ${inr(b.remaining)}.`);
-      payments.push({ po_id: b.id, amount: amt });
+      payments.push({ po_id: b.po_id ?? b.id, amount: amt });
     }
     if (!payments.length) return setError('Select at least one bill to pay.');
     if (!window.confirm(`Send ${payments.length} payment(s) totalling ${inr(totalSelected)} to the Unpaid-Bank ledger? The owner then marks each Paid to deduct the Bank.`)) return;
@@ -102,7 +103,7 @@ export default function PurchasePaymentsDue() {
           <th class="r">Material</th><th class="r">P&amp;F</th><th class="r">GST %</th><th class="r">Payable</th>
           <th class="r">Paid</th><th class="r">Pending</th><th class="r">Remaining</th><th class="r">Proposed</th></tr></thead>
         <tbody>${g.bills.map(b => `<tr>
-          <td>${esc(b.supplier_name)}</td><td>${esc(b.po_number)}</td><td>${fmtDate(b.received_at)}</td>
+          <td>${esc(b.supplier_name)}</td><td>${esc(b.po_number)}${b.parts_count > 1 ? ` <span class="muted">(part ${b.part_no} of ${b.parts_count})</span>` : ''}</td><td>${fmtDate(b.received_at)}</td>
           <td class="r">${inr(b.material_value)}</td><td class="r">${b.packaging_forwarding > 0 ? inr(b.packaging_forwarding) : '—'}</td><td class="r">${b.igst_percent}%</td><td class="r">${inr(b.received_value)}</td>
           <td class="r">${b.paid_cleared > 0 ? inr(b.paid_cleared) : '—'}</td>
           <td class="r">${b.paid_pending > 0 ? inr(b.paid_pending) : '—'}</td><td class="r">${inr(b.remaining)}</td>
@@ -132,7 +133,7 @@ export default function PurchasePaymentsDue() {
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
         <div>
           <h1 className="page-title flex items-center gap-2"><Wallet size={24} className="text-brand-600" /> Purchase Payments Due</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Received purchases with an outstanding balance, grouped by month.</p>
+          <p className="text-gray-500 text-sm mt-0.5">Received purchases with an outstanding balance, grouped by the month each delivery was received.</p>
         </div>
         <div className="flex items-center gap-2">
           <button className="btn-secondary" onClick={exportPdf} disabled={bills.length === 0}><FileDown size={16} /> Export PDF</button>
@@ -209,7 +210,10 @@ export default function PurchasePaymentsDue() {
                           </button>
                         </td>
                         <td className="table-cell text-sm font-medium text-gray-800">{b.supplier_name}</td>
-                        <td className="table-cell text-sm"><Link to={`/purchases/${b.id}`} className="text-brand-600 hover:underline">{b.po_number}</Link></td>
+                        <td className="table-cell text-sm">
+                          <Link to={`/purchases/${b.po_id ?? b.id}`} className="text-brand-600 hover:underline">{b.po_number}</Link>
+                          {b.parts_count > 1 && <span className="ml-1.5 text-[10px] font-semibold bg-sky-100 text-sky-800 rounded px-1.5 py-0.5" title="This PO came in parts — each delivery is due in the month it was received">part {b.part_no} of {b.parts_count}</span>}
+                        </td>
                         <td className="table-cell text-xs text-gray-500">{fmtDate(b.received_at)}</td>
                         <td className="table-cell text-right text-sm" title={`Material ${inr(b.material_value)}${b.packaging_forwarding > 0 ? ` + P&F ${inr(b.packaging_forwarding)}` : ''} + ${b.igst_percent}% GST`}>{inr(b.received_value)}</td>
                         <td className="table-cell text-right text-sm text-green-700">{b.paid_cleared > 0 ? inr(b.paid_cleared) : '—'}</td>

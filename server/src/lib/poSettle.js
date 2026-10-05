@@ -126,4 +126,4 @@ async function settleBillCharges(db, poId) {
   }
 }
 
-module.exports = { calcTotals, recomputePoTotals, settlePoStatus, settleBillCharges, QC_RESOLVED };
+module.exports = { calcTotals, recomputePoTotals, settlePoStatus, settleBillCharges, invoiceKey, QC_RESOLVED };

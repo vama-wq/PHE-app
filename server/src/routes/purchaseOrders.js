@@ -156,7 +156,7 @@ const VALID_DELIVERY_STATUSES = [
 
 // Totals (and a PO's standing) live in lib/poSettle.js, shared with the
 // startup correction: a short-closed line never counts toward the total.
-const { calcTotals, recomputePoTotals, settlePoStatus, settleBillCharges } = require('../lib/poSettle');
+const { calcTotals, recomputePoTotals, settlePoStatus, settleBillCharges, invoiceKey } = require('../lib/poSettle');
 
 async function nextPoNumber(db) {
   const last = await db.get('SELECT po_number FROM purchase_orders ORDER BY id DESC LIMIT 1');
@@ -229,48 +229,91 @@ router.get('/pending-material-qc', authenticate, authorize('design', 'owner', 'a
 const receivedPayable = (material, igstPercent) =>
   Math.round(Number(material || 0) * (1 + Number(igstPercent || 0) / 100));
 
-// Material payable per PO — ONE definition for the list and the pay check so
-// they cannot drift: the billed qty when the supplier's bill was read at
-// receipt, else the QC count (owner, 2 Oct 2026: payment follows the bill).
-const MATERIAL_VALUE_SQL = `COALESCE((SELECT SUM(poi.rate * COALESCE(poi.billed_qty, poi.qc_received_qty)) FROM purchase_order_items poi
-                WHERE poi.po_id = po.id AND poi.qc_status = 'approved' AND poi.qc_received_qty IS NOT NULL), 0)`;
-
-router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
-  const db = getDB();
-  const rows = await db.all(`
-    SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.created_at, s.name AS supplier_name,
-      COALESCE(po.received_at, (SELECT MAX(COALESCE(poi.received_at, poi.qc_at))
-               FROM purchase_order_items poi WHERE poi.po_id = po.id AND poi.qc_status = 'approved')) AS received_at,
-      ${MATERIAL_VALUE_SQL} AS material_value,
+// Payables BY DELIVERY (owner, 5 Oct 2026). A PO that came in parts is payable
+// part by part: its lines are grouped by the month each was received (IST), and
+// each part is due in its own month — an early delivery no longer slides into a
+// later month with the rest. Each line is valued on its bill (billed qty) or, if
+// no bill was read, on what arrived (QC's accepted + rejected count — a blank
+// bill means "as arrived"); lines QC passed in full OR in part both count, and a
+// rejected share is claimed back by its debit note. Each invoice's packaging &
+// forwarding stays with the delivery it came on; any P&F not tied to a bill
+// rides with the first part. Payments and advances linked to the PO clear the
+// earliest part first. ONE definition for the list and the pay check.
+const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
+async function payableParts(db, pos) {
+  const ids = pos.map(p => p.id);
+  if (!ids.length) return new Map();
+  const rows = await db.all(
+    `SELECT poi.po_id,
+            to_char(COALESCE(poi.received_at, poi.qc_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM') AS month,
+            MIN(COALESCE(poi.received_at, poi.qc_at)) AS received_at,
+            SUM(poi.rate * COALESCE(poi.billed_qty, poi.qc_received_qty + COALESCE(poi.qc_rejected_qty, 0))) AS material
+       FROM purchase_order_items poi
+      WHERE poi.po_id = ANY($1) AND poi.qc_status IN ('approved', 'partial') AND poi.qc_received_qty IS NOT NULL
+      GROUP BY poi.po_id, 2
+      ORDER BY poi.po_id, 2 NULLS LAST`, [ids]);
+  // Each invoice's P&F, counted once per invoice (as settleBillCharges does), in
+  // the month its delivery was received.
+  const pfRows = await db.all(
+    `SELECT poi.po_id, poi.invoice_no, poi.invoice_original_name, poi.billed_pf,
+            to_char(poi.received_at, 'YYYY-MM-DD') AS received_day,
+            to_char(COALESCE(poi.received_at, poi.qc_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM') AS month
+       FROM purchase_order_items poi
+      WHERE poi.po_id = ANY($1) AND poi.received AND poi.billed_pf IS NOT NULL ORDER BY poi.id`, [ids]);
+  const byPo = new Map();
+  for (const po of pos) {
+    const parts = rows.filter(r => r.po_id === po.id && r2(r.material) > 0)
+      .map(r => ({ month: r.month || null, received_at: r.received_at, material: r2(r.material) }));
+    const pfByInvoice = new Map();   // invoice → { pf, month }
+    for (const l of pfRows.filter(x => x.po_id === po.id)) pfByInvoice.set(invoiceKey(l), { pf: Number(l.billed_pf) || 0, month: l.month });
+    const pfMonth = new Map();
+    for (const { pf, month } of pfByInvoice.values()) pfMonth.set(month, (pfMonth.get(month) || 0) + pf);
+    let pfLeft = r2(po.transport_charges);
+    for (const pt of parts) { pt.pf = r2(Math.min(pfLeft, pfMonth.get(pt.month) || 0)); pfLeft = r2(pfLeft - pt.pf); }
+    if (parts.length && pfLeft > 0) parts[0].pf = r2(parts[0].pf + pfLeft);   // P&F not tied to a bill
+    let cleared = Number(po.paid_cleared || 0), pending = Number(po.paid_pending || 0);
+    parts.forEach((pt) => {
+      pt.payable = receivedPayable(pt.material + pt.pf, po.igst_percent);   // GST-incl, rounded
+      pt.paid_cleared = r2(Math.min(cleared, pt.payable)); cleared = r2(cleared - pt.paid_cleared);
+      pt.paid_pending = r2(Math.min(pending, pt.payable - pt.paid_cleared)); pending = r2(pending - pt.paid_pending);
+      pt.remaining = r2(pt.payable - pt.paid_cleared - pt.paid_pending);
+    });
+    byPo.set(po.id, parts);
+  }
+  return byPo;
+}
+const PO_PAID_SQL = `
       COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
                 WHERE pce.po_id = po.id AND pce.entry_type = 'expense' AND pce.payment_method = 'paid_bank'), 0) AS paid_cleared,
       COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
-                WHERE pce.po_id = po.id AND pce.entry_type = 'expense' AND pce.payment_method = 'unpaid_bank'), 0) AS paid_pending
+                WHERE pce.po_id = po.id AND pce.entry_type = 'expense' AND pce.payment_method = 'unpaid_bank'), 0) AS paid_pending`;
+
+router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const db = getDB();
+  const pos = await db.all(`
+    SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.created_at, s.name AS supplier_name, ${PO_PAID_SQL}
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
-    WHERE po.status NOT IN ('draft', 'rejected')
-    ORDER BY received_at DESC NULLS LAST`);
-  const bills = rows.map(r => {
-    const material = Math.round(Number(r.material_value) * 100) / 100;
-    const pf = material > 0 ? Math.round(Number(r.transport_charges || 0) * 100) / 100 : 0;
-    const igst_percent = Number(r.igst_percent || 0);
-    const received_value = receivedPayable(material + pf, igst_percent);   // GST-incl, rounded
-    const paid_cleared = Number(r.paid_cleared), paid_pending = Number(r.paid_pending);
-    const remaining = Math.round((received_value - paid_cleared - paid_pending) * 100) / 100;
-    return {
-      id: r.id, po_number: r.po_number, supplier_name: r.supplier_name,
-      received_at: r.received_at, igst_percent, material_value: material, packaging_forwarding: pf,
-      received_value, paid_cleared, paid_pending, remaining,
-    };
-  }).filter(b => b.material_value > 0 && b.remaining > 0.009);
-  const total_remaining = Math.round(bills.reduce((s, b) => s + b.remaining, 0) * 100) / 100;
+    WHERE po.status NOT IN ('draft', 'rejected')`);
+  const parts = await payableParts(db, pos);
+  const bills = [];
+  for (const po of pos) {
+    const list = parts.get(po.id) || [];
+    list.forEach((pt, i) => {
+      if (!(pt.remaining > 0.009)) return;
+      bills.push({
+        id: `${po.id}-${pt.month || 'undated'}`, po_id: po.id, po_number: po.po_number, supplier_name: po.supplier_name,
+        month: pt.month, received_at: pt.received_at, part_no: i + 1, parts_count: list.length,
+        igst_percent: Number(po.igst_percent || 0), material_value: pt.material, packaging_forwarding: pt.pf,
+        received_value: pt.payable, paid_cleared: pt.paid_cleared, paid_pending: pt.paid_pending, remaining: pt.remaining,
+      });
+    });
+  }
+  bills.sort((a, b) => String(b.month || '').localeCompare(String(a.month || '')) || String(a.po_number).localeCompare(String(b.po_number)));
+  const total_remaining = r2(bills.reduce((s, b) => s + b.remaining, 0));
   res.json({ bills, total_remaining });
 });
 
-// Create this month's purchase payments. Each selected bill posts ONE unpaid-
-// bank Account-Statement entry (Paid To = supplier) linked to the PO. The owner
-// later marks it paid, which deducts the bank. Partial amounts are allowed but
-// never more than the bill's remaining balance.
 router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const payments = Array.isArray(req.body.payments) ? req.body.payments : [];
   const entryDate = req.body.entry_date || new Date().toISOString().slice(0, 10);
@@ -285,18 +328,15 @@ router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'acco
         const amount = Math.round(Number(p.amount) * 100) / 100;
         if (!Number.isInteger(poId) || !(amount > 0)) { errors.push('Invalid payment row skipped'); continue; }
         const po = await client.query(
-          `SELECT po.po_number, po.igst_percent, po.transport_charges, s.name AS supplier_name,
-             ${MATERIAL_VALUE_SQL} AS material_value,
-             COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
-                       WHERE pce.po_id = po.id AND pce.entry_type='expense'
-                         AND pce.payment_method IN ('paid_bank','unpaid_bank')),0) AS allocated
+          `SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, s.name AS supplier_name, ${PO_PAID_SQL}
            FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id=$1`, [poId]);
         const row = po.rows[0];
         if (!row) { errors.push(`PO ${poId} not found`); continue; }
-        const mat = Number(row.material_value) || 0;
-        const pf = mat > 0 ? Number(row.transport_charges) || 0 : 0;   // P&F rides with the goods
-        const receivedValue = receivedPayable(mat + pf, row.igst_percent); // GST-incl, rounded
-        const remaining = Math.round((receivedValue - Number(row.allocated)) * 100) / 100;
+        // The same parts as the list, read inside this transaction so a second
+        // payment on the same PO in this batch sees the first.
+        const tx = { all: async (sql, params = []) => (await client.query(sql, params)).rows };
+        const parts = (await payableParts(tx, [row])).get(row.id) || [];
+        const remaining = r2(parts.reduce((t, pt) => t + pt.remaining, 0));
         if (remaining <= 0) { errors.push(`${row.po_number}: already fully allocated`); continue; }
         if (amount > remaining + 0.009) { errors.push(`${row.po_number}: ₹${amount} exceeds remaining ₹${remaining}`); continue; }
         await client.query(
