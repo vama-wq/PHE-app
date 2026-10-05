@@ -1082,7 +1082,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   const rejQty = parseInt(rejection_qty, 10) || 0;
   const remQty = parseInt(remade_qty, 10) || 0;
 
-  // Coil scrap (Stage 3, grams total) and tube scrap (Stage 5, inches per pc)
+  // Coil scrap (Stage 3, kg total) and tube scrap (Stage 5, inches per pc)
   // are COMPULSORY and numeric — 0 counts, blank doesn't. They drive the
   // spring-gauge / tube FIFO draws, so a skipped field silently under-scraps.
   if (done && !isFg && (stageNo === 3 || stageNo === 5)) {

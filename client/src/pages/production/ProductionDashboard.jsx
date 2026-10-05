@@ -2018,7 +2018,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">
             {scrapRequired
-              ? <>{stageDef.no === 3 ? 'Coil Scrap (g, total)' : 'Tube Scrap (inches, per pc)'} <span className="text-red-500">*</span> <span className="text-xs text-gray-400 font-normal">— enter 0 if none</span></>
+              ? <>{stageDef.no === 3 ? 'Coil Scrap (kg, total)' : 'Tube Scrap (inches, per pc)'} <span className="text-red-500">*</span> <span className="text-xs text-gray-400 font-normal">— enter 0 if none</span></>
               : <>Scrap Value <span className="text-xs text-gray-400 font-normal">(optional)</span></>}
           </label>
           {isDone && stageData.scrap_value ? (

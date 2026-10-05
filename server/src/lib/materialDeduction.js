@@ -10,7 +10,7 @@
 //   • Stage 4 (Spot) done — deducted once Stage 4 completes, using the data entered
 //     at Stage 3 (Ohms): coil used  = coil_weight — the box is KG — taken as kg as typed
 //                                     (it was wrongly ÷1000 until 4 Oct 2026)
-//                        coil scrap = scrap (g, total)        → Kgs (÷1000)
+//                        coil scrap = scrap — also KG, as typed (was ÷1000 as grams until 5 Oct 2026)
 //     Gauge inventory item = Stage 1 gauge pick (item code, category "Spring Guage").
 //   • Stage 6 (Filling):      PVC bush   = 2 pcs per element (qty × elements) — PVC-FB08-M4 (8mm dia) or
 //                                          PVC-FB11-M5 (11mm dia), by the order item's Tube Diameter.
@@ -206,10 +206,10 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
       // kg. Until 4 Oct 2026 it was read as grams, so coil wire left stock at a
       // thousandth of what was used (owner confirmed the fix). Scrap is "(g, total)".
       const usedKg = r4(parseFloat(s3?.coil_weight) || 0);   // total weight of all coils (kg)
-      const scrapG = parseFloat(s3?.scrap_value) || 0;         // total coil scrap (g)
-      const scrapKg = r4(scrapG / 1000);
+      // Coil scrap is kg too — "coil is always put in kgs" (owner, 5 Oct 2026).
+      const scrapKg = r4(parseFloat(s3?.scrap_value) || 0);   // total coil scrap (kg)
       if (usedKg > 0) await consumeFifo(db, gauge.id, usedKg, { type: 'dispatch_to_production', note: `Coil wire ${usedKg} Kgs (total weight of all coils, Stage 3) — ${detail}`, userId });
-      if (scrapKg > 0) await consumeFifo(db, gauge.id, scrapKg, { type: 'scrap', note: `Scrap coil ${scrapKg} Kgs (${scrapG}g) — ${detail}`, userId });
+      if (scrapKg > 0) await consumeFifo(db, gauge.id, scrapKg, { type: 'scrap', note: `Scrap coil ${scrapKg} Kgs (coil scrap, Stage 3) — ${detail}`, userId });
       await db.run('UPDATE job_cards SET coil_deducted=TRUE, coil_used_qty=$1, coil_scrap_qty=$2 WHERE id=$3', [usedKg, scrapKg, jobCardId]);
     } else if (!isDone && jc.coil_deducted) {
       if (gauge) {
