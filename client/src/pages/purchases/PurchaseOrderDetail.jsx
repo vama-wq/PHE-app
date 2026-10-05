@@ -1274,6 +1274,10 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
   const [open, setOpen] = useState(false);
   const [image, setImage] = useState(null);
   const [weight10, setWeight10] = useState('');
+  // How many of the item's unit QC weighed for the conversion — 10 unless fewer
+  // came (owner, 5 Oct 2026: 6 plates arrived, so "6 Pcs = 7.15 kg"). The server
+  // still stores the figure per 10, worked out here.
+  const [convCount, setConvCount] = useState('10');
   const [receivedQty, setReceivedQty] = useState('');   // accepted qty
   const [rejectedQty, setRejectedQty] = useState('');
   const [observations, setObservations] = useState('');
@@ -1376,7 +1380,8 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
     setError('');
     if (mode !== 'rejected') {
       if (!image) return setError('Material image is required');
-      if (!weight10 || Number(weight10) <= 0) return setError(converts ? `Enter what 10 ${stockUnit} come to in ${item.unit}` : 'Weight of 10 pcs is required');
+      if (converts && !(Number(convCount) > 0)) return setError(`Enter how many ${stockUnit} were weighed`);
+      if (!weight10 || Number(weight10) <= 0) return setError(converts ? `Enter what ${convCount || 10} ${stockUnit} come to in ${item.unit}` : 'Weight of 10 pcs is required');
       if (!receivedQty || Number(receivedQty) <= 0) return setError('Enter the accepted quantity');
     }
     if (mode !== 'approved') {
@@ -1388,7 +1393,7 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
     try {
       const fd = new FormData();
       fd.append('result', mode);
-      if (mode !== 'rejected') { fd.append('image', image); fd.append('weight_10', weight10); fd.append('received_qty', receivedQty); fd.append('observations', observations); }
+      if (mode !== 'rejected') { fd.append('image', image); fd.append('weight_10', converts ? String(Number(weight10) * 10 / Number(convCount)) : weight10); fd.append('received_qty', receivedQty); fd.append('observations', observations); }
       if (mode !== 'approved') {
         fd.append('rejection_reason', rejectReason);
         if (rejectedQty) fd.append('rejected_qty', rejectedQty);
@@ -1488,18 +1493,33 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
                 <p className="text-xs text-gray-400 mt-0.5">Only this quantity is added to inventory.</p>
               </div>
               <div>
-                <label className="label text-xs">{converts ? `10 ${stockUnit} = how many ${item.unit}?` : 'Weight of 10 pcs (kg)'} <span className="text-red-500">*</span></label>
-                <input className="input text-sm" type="number" step="any" min="0" value={weight10} onChange={e => setWeight10(e.target.value)} placeholder={converts ? `${item.unit} for 10 ${stockUnit}` : 'e.g. 1.25'} />
+                {converts ? (
+                  <>
+                    <label className="label text-xs">Conversion — how many {stockUnit} weighed, and what they come to <span className="text-red-500">*</span></label>
+                    <div className="flex items-center gap-2">
+                      <input className="input text-sm w-24" type="number" step="any" min="0" value={convCount} onChange={e => setConvCount(e.target.value)} />
+                      <span className="text-sm text-gray-600 whitespace-nowrap">{stockUnit} =</span>
+                      <input className="input text-sm flex-1" type="number" step="any" min="0" value={weight10} onChange={e => setWeight10(e.target.value)} placeholder={`${item.unit} for ${convCount || 10} ${stockUnit}`} />
+                      <span className="text-sm text-gray-600">{item.unit}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label className="label text-xs">Weight of 10 pcs (kg) <span className="text-red-500">*</span></label>
+                    <input className="input text-sm" type="number" step="any" min="0" value={weight10} onChange={e => setWeight10(e.target.value)} placeholder="e.g. 1.25" />
+                  </>
+                )}
                 {/* Bought in one unit, stocked in another: show what will
                     actually go into inventory before QC is submitted. */}
                 {(() => {
                   if (!converts) return null;
-                  const w10 = Number(weight10), acc = Number(receivedQty);
-                  if (!(w10 > 0) || !(acc > 0)) return <p className="text-[11px] text-gray-400 mt-0.5">Stock comes in in {stockUnit}: this converts the {item.unit} received.</p>;
-                  const into = Math.round((acc / (w10 / 10)) * 100) / 100;
+                  const w = Number(weight10), n = Number(convCount), acc = Number(receivedQty);
+                  if (!(w > 0) || !(n > 0) || !(acc > 0)) return <p className="text-[11px] text-gray-400 mt-0.5">Stock comes in in {stockUnit}: this converts the {item.unit} received. Weigh 10, or as many as came.</p>;
+                  // Same arithmetic as the server: per-10 figure, then 2 places.
+                  const into = Math.round((acc / ((w * 10 / n) / 10)) * 100) / 100;
                   return (
                     <p className="text-[11px] text-teal-700 mt-1">
-                      {acc} {item.unit} ÷ {w10} {item.unit} per 10 {stockUnit} → <b>{into.toLocaleString('en-IN')} {stockUnit}</b> into stock
+                      {acc} {item.unit} ÷ ({w} {item.unit} per {n} {stockUnit}) → <b>{into.toLocaleString('en-IN')} {stockUnit}</b> into stock
                     </p>
                   );
                 })()}
