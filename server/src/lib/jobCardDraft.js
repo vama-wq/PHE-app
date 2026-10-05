@@ -85,6 +85,19 @@ async function buildDraft(db, orderItemId, answers = {}) {
   const order = await db.get('SELECT *, order_date::text AS order_date_text FROM orders WHERE id=$1', [item.order_id]);
   if (!order) return { ok: false, error: 'Order not found.' };
 
+  // Pieces already on cards (owner, 5 Oct 2026). When an item's quantity is
+  // raised after its cards were made, only the pieces NOT yet covered get new
+  // cards — it used to split the whole quantity again, so 200 → 250 made five
+  // more cards of 50 on top of the four already running. Same rule as uploads.
+  const cov = await db.get(
+    'SELECT COUNT(*)::int AS n, COALESCE(SUM(qty), 0)::int AS covered FROM job_cards WHERE order_item_id=$1', [item.id]);
+  const itemQty = parseInt(item.quantity, 10) || 0;
+  const topUp = cov.n > 0;
+  const toMake = topUp ? itemQty - cov.covered : itemQty;
+  if (topUp && toMake <= 0) {
+    return { ok: false, error: `This item is already covered by ${cov.n} job card${cov.n > 1 ? 's' : ''} totalling ${cov.covered} of ${itemQty} pcs.` };
+  }
+
   const missing = missingAnswers(answers);
   if (missing.length) return { ok: false, error: `Still needed: ${missing.join(', ')}.`, questions: QUESTIONS };
 
@@ -153,7 +166,7 @@ async function buildDraft(db, orderItemId, answers = {}) {
     notes.push(`Punching set by hand to "${punching}"${derivedPunching ? ` — the wattage and voltage give "${derivedPunching}"` : ''}.`);
   }
 
-  const parts = splitQuantity(item.quantity);
+  const parts = splitQuantity(toMake);
   const base = String(item.drawing_number || item.product_code || `ITEM-${item.id}`).toUpperCase();
   const names = parts.length > 1
     ? parts.map((_, i) => `${base}-${SPLIT_MARKER}${i + 1}`)
@@ -169,10 +182,14 @@ async function buildDraft(db, orderItemId, answers = {}) {
   // Single-element items read as they always did.
   const el = Math.max(1, Number(card.elements) || 1);
   const heaters = (n) => el > 1 ? `${n * el} Nos (${n} nos ${el}in1` : `${n} Nos`;
+  // A top-up batch says so, so the floor reads it against the cards already running.
+  const ofItem = topUp ? `top-up · item ${item.quantity}, ${cov.covered} already on cards` : `item ${item.quantity}`;
   const qtyLine = (i) => parts.length > 1
-    ? (el > 1 ? `${heaters(parts[i])} · ${i + 1} of ${parts.length} · item ${item.quantity})`
-              : `${parts[i]} Nos (${i + 1} of ${parts.length} · item ${item.quantity})`)
-    : (el > 1 ? `${heaters(item.quantity)})` : `${item.quantity} Nos`);
+    ? (el > 1 ? `${heaters(parts[i])} · ${i + 1} of ${parts.length} · ${ofItem})`
+              : `${parts[i]} Nos (${i + 1} of ${parts.length} · ${ofItem})`)
+    : topUp
+      ? (el > 1 ? `${heaters(parts[0])} · ${ofItem})` : `${parts[0]} Nos (${ofItem})`)
+      : (el > 1 ? `${heaters(item.quantity)})` : `${item.quantity} Nos`);
 
   // "Where each figure came from", printed on the page below the sheet (screen
   // only). Derived rather than written by hand, so it always describes what the
@@ -198,9 +215,10 @@ async function buildDraft(db, orderItemId, answers = {}) {
       ? `${card.terminalPinBig.studs}" set by hand — a ${card.coldZoneBigIn}" cold zone gives ${card.terminalPinBig.derivedStuds}"`
       : `ceil(${card.coldZoneBigIn} ÷ ${pinDiv} + 1) = ${card.terminalPinBig.studs}" on a ${card.studLabel} stud`],
     ['Ohms after draw', `${card.voltage}² ÷ ${round(card.wattage, 2)} = ${card.ohmsAfterDraw} Ω, ±5%`],
-    ['Quantity', parts.length > 1
-      ? `${item.quantity} pcs over ${parts.length} cards (${describeSplit(parts)}) — no card runs more than 50`
-      : `${item.quantity} pcs on one card`],
+    ['Quantity', (topUp ? `Top-up: item ${item.quantity} pcs, ${cov.covered} already on ${cov.n} card${cov.n > 1 ? 's' : ''} — ` : '')
+      + (parts.length > 1
+        ? `${toMake} pcs over ${parts.length} cards (${describeSplit(parts)}) — no card runs more than 50`
+        : `${toMake} pcs on one card`)],
   ];
 
   return {
