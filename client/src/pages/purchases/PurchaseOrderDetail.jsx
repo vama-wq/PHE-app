@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
-import { fmtDate, fmtDateTime, ROLE_COLORS, ROLE_LABELS, istTodayInput, sameUnit, weighAllowance } from '../../lib/utils';
+import { fmtDate, fmtDateTime, ROLE_COLORS, ROLE_LABELS, istTodayInput, sameUnit, weighAllowance, fmtDateSpan } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import {
@@ -564,12 +564,29 @@ export default function PurchaseOrderDetail() {
               Material QC approved: {fmtDate(po.material_qc.created_at)} by {po.material_qc.created_by_name}
             </div>
           )}
-          {po.received_at && (
-            <div className="flex items-center gap-2 text-teal-600">
-              <div className="w-2 h-2 rounded-full bg-teal-500" />
-              Goods Received: {fmtDate(po.received_at)}
-            </div>
-          )}
+          {/* From the lines themselves: when goods came in, and when QC passed them. */}
+          {(() => {
+            const items = po.items || [];
+            const live = items.filter(i => !i.short_closed);
+            const rec = items.filter(i => i.received && i.received_at).map(i => i.received_at).sort();
+            const qc = items.filter(i => ['approved', 'partial'].includes(i.qc_status) && i.qc_at).map(i => i.qc_at).sort();
+            return (
+              <>
+                {rec.length > 0 && (
+                  <div className="flex items-center gap-2 text-teal-600">
+                    <div className="w-2 h-2 rounded-full bg-teal-500" />
+                    Goods received: {fmtDateSpan(rec[0], rec[rec.length - 1])}{rec.length < live.length ? ` (${rec.length} of ${live.length} lines)` : ''}
+                  </div>
+                )}
+                {qc.length > 0 && (
+                  <div className="flex items-center gap-2 text-green-700">
+                    <div className="w-2 h-2 rounded-full bg-green-500" />
+                    QC approved: {fmtDateSpan(qc[0], qc[qc.length - 1])}{qc.length < live.length ? ` (${qc.length} of ${live.length} lines)` : ''}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       </div>
 
@@ -1300,6 +1317,8 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
           </span>
         </div>
         <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
+          {item.received_at && <span>Received <b>{fmtDate(item.received_at)}</b></span>}
+          {item.qc_at && <span>QC {item.qc_status === 'rejected' ? 'rejected' : 'approved'} <b>{fmtDate(item.qc_at)}</b></span>}
           {item.qc_status !== 'rejected' && (
             <span>Accepted: <b>{item.qc_received_qty}</b>{converts ? ` ${item.unit}` : ''} · {converts ? <>10 {stockUnit} = <b>{item.qc_weight_10}</b> {item.unit} → <b>{stockQtyIn.toLocaleString('en-IN')} {stockUnit}</b> into stock</> : <>Weight of 10: <b>{item.qc_weight_10}</b></>}{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</span>
           )}
@@ -1410,7 +1429,7 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
         <span className="text-sm font-medium text-gray-800">
           {item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span>
           {drawingLink}
-          <span className="text-xs text-teal-600 ml-2">✓ received</span>
+          <span className="text-xs text-teal-600 ml-2">✓ received{item.received_at ? ` ${fmtDate(item.received_at)}` : ''}</span>
           {item.invoice_file && <> · <a className="text-xs text-brand-600 hover:underline" href={`/uploads/${item.invoice_file}`} target="_blank" rel="noopener noreferrer">invoice</a></>}
           {item.po_doc_file && <> · <a className="text-xs text-brand-600 hover:underline" href={`/uploads/${item.po_doc_file}`} target="_blank" rel="noopener noreferrer">PO copy</a></>}
         </span>

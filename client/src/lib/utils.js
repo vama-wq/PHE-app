@@ -366,3 +366,11 @@ export const isWeightUnit = (u) => { const k = unitKey(u); return k === unitKey(
 export const weighAllowance = (unit, base) => (isWeightUnit(unit) ? Math.abs(Number(base) || 0) * WEIGHT_TOLERANCE : 0);
 // Units a PO line can be bought in (the item's own unit is always offered too).
 export const PO_UNITS = ['pcs', 'kgs', 'foot', 'mtr', 'liters', 'boxes', 'set'];
+
+// A date, or "first – last" when things happened on different days (e.g. the
+// lines of one PO received over several deliveries).
+export const fmtDateSpan = (first, last) => {
+  if (!first && !last) return '';
+  const a = fmtDate(first || last), b = fmtDate(last || first);
+  return a === b ? a : `${a} – ${b}`;
+};

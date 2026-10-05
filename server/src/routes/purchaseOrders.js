@@ -169,10 +169,22 @@ async function nextPoNumber(db) {
 router.get('/', authenticate, async (req, res) => {
   const pos = await getDB().all(
     `SELECT po.*, s.name as supplier_name, u.name as created_by_name,
-       (SELECT COUNT(*) FROM purchase_debit_notes dn WHERE dn.po_id = po.id AND dn.status='pending') AS pending_debit_notes
+       (SELECT COUNT(*) FROM purchase_debit_notes dn WHERE dn.po_id = po.id AND dn.status='pending') AS pending_debit_notes,
+       -- When the goods came and when QC passed them, line by line (owner, 5 Oct 2026)
+       d.line_count, d.received_count, d.qc_count,
+       d.first_received_at, d.last_received_at, d.first_qc_at, d.last_qc_at
      FROM purchase_orders po
      JOIN suppliers s ON s.id = po.supplier_id
      JOIN users u ON u.id = po.created_by
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*) FILTER (WHERE NOT poi.short_closed)::int AS line_count,
+              COUNT(*) FILTER (WHERE poi.received)::int AS received_count,
+              COUNT(*) FILTER (WHERE poi.qc_status IN ('approved','partial'))::int AS qc_count,
+              MIN(poi.received_at) FILTER (WHERE poi.received) AS first_received_at,
+              MAX(poi.received_at) FILTER (WHERE poi.received) AS last_received_at,
+              MIN(poi.qc_at) FILTER (WHERE poi.qc_status IN ('approved','partial')) AS first_qc_at,
+              MAX(poi.qc_at) FILTER (WHERE poi.qc_status IN ('approved','partial')) AS last_qc_at
+         FROM purchase_order_items poi WHERE poi.po_id = po.id) d ON TRUE
      ORDER BY po.created_at DESC`
   );
   res.json(pos);
@@ -338,7 +350,7 @@ router.get('/:id', authenticate, async (req, res) => {
     const po = await db.get('SELECT id, po_number, status, delivery_status FROM purchase_orders WHERE id=$1', [req.params.id]);
     if (!po) return res.status(404).json({ error: 'Not found' });
     const items = await db.all(
-      `SELECT poi.id, poi.description, poi.qty, poi.unit, poi.received, poi.received_at,
+      `SELECT poi.id, poi.description, poi.qty, poi.unit, poi.received, poi.received_at, poi.qc_at,
               poi.qc_status, poi.qc_weight_10, poi.qc_received_qty, poi.qc_rejected_qty, poi.qc_image_file, poi.qc_image_name,
               poi.qc_observations, poi.qc_rejection_reason,
               ii.item_code, ii.name as item_name, ii.unit as item_unit,

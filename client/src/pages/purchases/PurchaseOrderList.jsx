@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
-import { fmtDate } from '../../lib/utils';
+import { fmtDate, fmtDateSpan } from '../../lib/utils';
 import { Plus, Search, ShoppingCart, Trash2, X, Wallet } from 'lucide-react';
 
 const STATUS_STYLES = {
@@ -139,6 +139,8 @@ export default function PurchaseOrderList() {
               <th className="table-header text-left">PO Number</th>
               <th className="table-header text-left">Supplier</th>
               <th className="table-header text-left">Date</th>
+              <th className="table-header text-left">Received</th>
+              <th className="table-header text-left">QC approved</th>
               <th className="table-header text-right">Grand Total</th>
               <th className="table-header text-center">Status</th>
               {['owner', 'admin'].includes(user?.role) && <th className="table-header text-center">Action</th>}
@@ -146,9 +148,9 @@ export default function PurchaseOrderList() {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={['owner', 'admin'].includes(user?.role) ? 6 : 5} className="table-cell text-center text-gray-400 py-12">Loading...</td></tr>
+              <tr><td colSpan={['owner', 'admin'].includes(user?.role) ? 8 : 7} className="table-cell text-center text-gray-400 py-12">Loading...</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={['owner', 'admin'].includes(user?.role) ? 6 : 5} className="table-cell text-center text-gray-400 py-12">No purchase orders found</td></tr>
+              <tr><td colSpan={['owner', 'admin'].includes(user?.role) ? 8 : 7} className="table-cell text-center text-gray-400 py-12">No purchase orders found</td></tr>
             ) : filtered.map(po => (
               <tr key={po.id} className="hover:bg-gray-50">
                 <td className="table-cell">
@@ -158,6 +160,16 @@ export default function PurchaseOrderList() {
                 </td>
                 <td className="table-cell text-gray-700">{po.supplier_name}</td>
                 <td className="table-cell text-gray-500">{fmtDate(po.created_at)}</td>
+                {/* When the goods came and when QC passed them — a span when the
+                    lines came on different days, "(x of n)" while some are still due. */}
+                <td className="table-cell text-gray-600 text-sm whitespace-nowrap">
+                  {po.received_count > 0 ? fmtDateSpan(po.first_received_at, po.last_received_at) : <span className="text-gray-300">—</span>}
+                  {po.received_count > 0 && po.received_count < po.line_count && <span className="text-[11px] text-amber-600 ml-1">({po.received_count} of {po.line_count})</span>}
+                </td>
+                <td className="table-cell text-gray-600 text-sm whitespace-nowrap">
+                  {po.qc_count > 0 ? fmtDateSpan(po.first_qc_at, po.last_qc_at) : <span className="text-gray-300">—</span>}
+                  {po.qc_count > 0 && po.qc_count < po.line_count && <span className="text-[11px] text-amber-600 ml-1">({po.qc_count} of {po.line_count})</span>}
+                </td>
                 <td className="table-cell text-right font-semibold text-gray-900">
                   ₹{Number(po.grand_total).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </td>
