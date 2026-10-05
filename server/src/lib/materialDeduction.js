@@ -12,7 +12,7 @@
 //                                     (it was wrongly ÷1000 until 4 Oct 2026)
 //                        coil scrap = scrap (g, total)        → Kgs (÷1000)
 //     Gauge inventory item = Stage 1 gauge pick (item code, category "Spring Guage").
-//   • Stage 6 (Filling):      PVC bush   = 2 pcs/piece × qty — PVC-FB08-M4 (8mm dia) or
+//   • Stage 6 (Filling):      PVC bush   = 2 pcs per element (qty × elements) — PVC-FB08-M4 (8mm dia) or
 //                                          PVC-FB11-M5 (11mm dia), by the order item's Tube Diameter.
 //                             MGO-65A powder = (cutting length(mm) × qty × elements, as for the
 //                                          tube) → inches ÷25.4, × KG per inch (8mm: 0.018 kg/5in;
@@ -239,14 +239,15 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
       const cut = await cardCutting(db, jc);
       const lenMm = cut ? cut.mm : avgNumbers(s5?.value1);
       const lengths = cut ? qty * cut.elements : qty;
-      const pvcQty = pvc ? r4(2 * qty) : 0; // 2 bushes per piece × qty
+      // 2 filling bushes per element (owner, 5 Oct 2026): a 3in1 heater takes 6.
+      const pvcQty = pvc ? r4(2 * lengths) : 0;
       let mgoKg = 0;
       if (mgo && mgoKgPerInch != null && lenMm > 0) {
         const totalInches = (lenMm * lengths) / 25.4;
         mgoKg = r4(totalInches * mgoKgPerInch);
       }
       const mgoHow = cut ? `${lenMm}mm job card cutting length × ${cut.elements > 1 ? `${lengths} (${qty} × ${cut.elements}in1)` : `${qty} pcs`}` : `${lenMm}mm × ${qty} pcs`;
-      if (pvcQty > 0) await consumeFifo(db, pvc.id, pvcQty, { type: 'dispatch_to_production', note: `Filling bush ${pvcQty} pcs (${dia}mm dia × ${qty} pcs) — ${detail}`, userId });
+      if (pvcQty > 0) await consumeFifo(db, pvc.id, pvcQty, { type: 'dispatch_to_production', note: `Filling bush ${pvcQty} pcs (2 × ${cut && cut.elements > 1 ? `${lengths} elements (${qty} × ${cut.elements}in1)` : `${qty} pcs`}, ${dia}mm dia) — ${detail}`, userId });
       if (mgoKg > 0) await consumeFifo(db, mgo.id, mgoKg, { type: 'dispatch_to_production', note: `MGO powder ${mgoKg} kg (${dia}mm dia, ${mgoHow}) — ${detail}`, userId });
       await db.run('UPDATE job_cards SET fill_deducted=TRUE, fill_pvc_qty=$1, fill_mgo_qty=$2 WHERE id=$3', [pvcQty || null, mgoKg || null, jobCardId]);
     } else if (!isDone && jc.fill_deducted) {
