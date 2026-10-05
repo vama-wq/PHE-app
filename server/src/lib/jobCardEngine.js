@@ -56,6 +56,10 @@ const TUBE_DRAW = {
     steel:   [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.15 } ],
     ss304:   [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.145 } ],
     incoloy: [ { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.16 } ],
+    // Incoloy 1/2" 0.6 mm (owner, 5 Oct 2026): 16% on average below 50"; from
+    // 50" up it stays what was already taken (15.6% to 51", 16% above).
+    // Incoloy 0.5 mm keeps the row above.
+    incoloy_t06: [ { maxTL: 50, pct: 0.16 }, { maxTL: 51, pct: 0.156 }, { maxTL: Infinity, pct: 0.16 } ],
     copper:  [ { maxTL: Infinity, pct: 0.16 } ],
   },
 };
@@ -166,7 +170,8 @@ function materialClass(tubeMaterial) {
 function tubeGrade(tubeMaterial) {
   const s = String(tubeMaterial || '').toLowerCase();
   if (/\bcopper\b|\bcu\b|તાંબુ|तांबा/.test(s)) return 'copper';
-  if (/\bincoloy\b|\binc\b/.test(s)) return 'incoloy';
+  // Incoloy 0.6 mm wall has its own 11 mm row; elsewhere it falls back to 'incoloy'.
+  if (/\bincoloy\b|\binc\b/.test(s)) return /\bt06\b|0\.6\s*mm/.test(s) ? 'incoloy_t06' : 'incoloy';
   if (/\bss[\s-]*316/.test(s)) return 'ss316';
   if (/\bss[\s-]*310/.test(s)) return 'ss310';
   if (/\bss[\s-]*304/.test(s)) return 'ss304';
@@ -176,7 +181,8 @@ function tubeGrade(tubeMaterial) {
 // ── Policy lookups ──────────────────────────────────────────────────────────
 function tubeDrawPct(material, totalLengthIn, dia = 8, grade = null) {
   const table = TUBE_DRAW[dia];
-  const bands = table && ((grade && table[grade]) || table[material]);
+  // A thickness row (incoloy_t06) falls back to its grade (incoloy), then the material.
+  const bands = table && ((grade && table[grade]) || (grade && table[grade.split('_')[0]]) || table[material]);
   if (!bands) return null;
   return bands.find(b => totalLengthIn <= b.maxTL).pct;
 }

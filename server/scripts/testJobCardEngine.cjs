@@ -380,11 +380,18 @@ const REGRESSIONS = [
     pcts => pcts.every(p => p === 0.20)],
   // 11 mm: up to 51" stays 15.6% for every steel; above 51" SS304 14.5%,
   // Incoloy 16%, SS316 / other steel 15%; copper a flat 16% (owner, 2 Oct 2026).
-  ...[['TUB-SS304-12-T06', 0.156, 0.145], ['TUB-INC-12-T06', 0.156, 0.16], ['TUB-SS316-12-T06', 0.156, 0.15],
+  ...[['TUB-SS304-12-T06', 0.156, 0.145], ['TUB-INC-12-T05', 0.156, 0.16], ['TUB-SS316-12-T06', 0.156, 0.15],
       ['TUB-CU-12-T05', 0.16, 0.16]].map(([m, upTo51, above51]) =>
     [`11 mm ${m} tube draw is ${(upTo51 * 100).toFixed(1)}% up to 51" and ${(above51 * 100).toFixed(1)}% above`,
       () => [40, 51, 51.1, 60].map(tl => E.tubeDrawPct(E.materialClass(m), tl, 11, E.tubeGrade(m))),
       ([a, b, c, d]) => a === upTo51 && b === upTo51 && c === above51 && d === above51]),
+  // Incoloy 1/2" 0.6 mm (owner, 5 Oct 2026): 16% below 50"; 15.6% to 51"; 16% above.
+  ['11 mm Incoloy 0.6 mm (TUB-INC-12-T06) is 16% below 50", 15.6% to 51", 16% above',
+    () => [30, 49.9, 50, 50.5, 51, 51.1, 60].map(tl => E.tubeDrawPct(E.materialClass('TUB-INC-12-T06'), tl, 11, E.tubeGrade('TUB-INC-12-T06'))),
+    p => JSON.stringify(p) === JSON.stringify([0.16, 0.16, 0.16, 0.156, 0.156, 0.16, 0.16])],
+  ['the Incoloy 0.6 mm name reads the same as its code, and 8 mm Incoloy 0.6 mm stays 21%',
+    () => [E.tubeGrade('Incoloy 1/2" Tube (OD 12.86, ID 11.12), 0.6mm Thickness'), E.tubeDrawPct('steel', 40, 8, E.tubeGrade('TUB-INC-038-T06'))],
+    ([g, p8]) => g === 'incoloy_t06' && p8 === 0.21],
   // Rows 37/38 of the wire sheet carry a "22 SWG" spool at 2.72 / 2.70 ohm/m —
   // physically a 21 SWG figure (0.71 mm wire runs 3.5-3.7). The owner's own
   // IT-PT-UL-48U7L card picked 21 SWG where the app picked this phantom 22, and
