@@ -4,6 +4,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { uploadDispatch, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { settleItemInventory, resolveJobCardItemId } = require('../lib/inventoryDeduction');
+const { isHeldCard } = require('../lib/countedStock');
 const { syncOrderStatus } = require('./jobCards');
 
 router.get('/job-card/:jobCardId', authenticate, async (req, res) => {
@@ -161,7 +162,9 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
     const itemId = await resolveJobCardItemId(db, jc);
     if (itemId) {
       const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
-      await settleItemInventory(db, itemId, req.user.id, ord?.order_code || `Order #${jc.order_id}`, { atDispatch: true });
+      // Counted stock: held only for a card that was through QC before this
+      // dispatch (jc is the card as read before it was marked dispatched).
+      await settleItemInventory(db, itemId, req.user.id, ord?.order_code || `Order #${jc.order_id}`, { atDispatch: isHeldCard(jc) });
     }
   } catch (e) { console.error('[dispatch] settle inventory failed:', e.message); }
 
