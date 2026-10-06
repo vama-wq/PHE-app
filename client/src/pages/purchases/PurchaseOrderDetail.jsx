@@ -1399,8 +1399,8 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
     setError('');
     if (mode !== 'rejected') {
       if (!image) return setError('Material image is required');
-      if (converts && !(Number(convCount) > 0)) return setError(`Enter how many ${stockUnit} were weighed`);
-      if (!weight10 || Number(weight10) <= 0) return setError(converts ? `Enter what ${convCount || 10} ${stockUnit} come to in ${item.unit}` : 'Weight of 10 pcs is required');
+      if (!(Number(convCount) > 0)) return setError(`Enter how many ${converts ? stockUnit : 'pcs'} were weighed`);
+      if (!weight10 || Number(weight10) <= 0) return setError(converts ? `Enter what ${convCount || 10} ${stockUnit} come to in ${item.unit}` : `Enter the weight of the ${convCount || 10} pcs`);
       if (!receivedQty || Number(receivedQty) <= 0) return setError('Enter the accepted quantity');
     }
     if (mode !== 'approved') {
@@ -1412,7 +1412,7 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
     try {
       const fd = new FormData();
       fd.append('result', mode);
-      if (mode !== 'rejected') { fd.append('image', image); fd.append('weight_10', converts ? String(Number(weight10) * 10 / Number(convCount)) : weight10); fd.append('received_qty', receivedQty); fd.append('observations', observations); }
+      if (mode !== 'rejected') { fd.append('image', image); fd.append('weight_10', String(Number(weight10) * 10 / Number(convCount))); fd.append('received_qty', receivedQty); fd.append('observations', observations); }
       if (mode !== 'approved') {
         fd.append('rejection_reason', rejectReason);
         if (rejectedQty) fd.append('rejected_qty', rejectedQty);
@@ -1524,8 +1524,18 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
                   </>
                 ) : (
                   <>
-                    <label className="label text-xs">Weight of 10 pcs (kg) <span className="text-red-500">*</span></label>
-                    <input className="input text-sm" type="number" step="any" min="0" value={weight10} onChange={e => setWeight10(e.target.value)} placeholder="e.g. 1.25" />
+                    {/* Fewer than 10 may have come in (owner, 7 Oct 2026: "I have
+                        received only 5 nos") — weigh what is there and say how many. */}
+                    <label className="label text-xs">Weight check — how many pcs weighed, and their weight <span className="text-red-500">*</span></label>
+                    <div className="flex items-center gap-2">
+                      <input className="input text-sm w-24" type="number" step="any" min="0" value={convCount} onChange={e => setConvCount(e.target.value)} />
+                      <span className="text-sm text-gray-600 whitespace-nowrap">pcs =</span>
+                      <input className="input text-sm flex-1" type="number" step="any" min="0" value={weight10} onChange={e => setWeight10(e.target.value)} placeholder={`kg for ${convCount || 10} pcs`} />
+                      <span className="text-sm text-gray-600">kg</span>
+                    </div>
+                    {Number(convCount) > 0 && Number(convCount) !== 10 && Number(weight10) > 0 && (
+                      <p className="text-xs text-gray-500 mt-0.5">= {(Number(weight10) * 10 / Number(convCount)).toFixed(3)} kg per 10 pcs (what is recorded)</p>
+                    )}
                   </>
                 )}
                 {/* Bought in one unit, stocked in another: show what will
