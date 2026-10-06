@@ -75,6 +75,7 @@ const KINDS = [
   { type: 'po_over_receipt',    group: 'approval', default: true,  label: 'More arrived than ordered' },
   { type: 'capa_ready',         group: 'approval', default: true,  label: 'CAPA report ready for approval' },
   { type: 'price_request',      group: 'approval', default: true,  label: 'Price requested for a job card' },
+  { type: 'terminals_short',    group: 'approval', default: true,  label: 'Terminal pin short — slip held until OK' },
   { type: 'order_message',      group: 'mention',  default: true,  label: 'Order threads — @mentions, and orders resubmitted for approval' },
   { type: 'po_message',         group: 'mention',  default: true,  label: 'Purchase-order threads — @mentions' },
   { type: 'query_message',      group: 'mention',  default: true,  label: 'Customer-query threads — @mentions' },

@@ -9,6 +9,7 @@ const { consumeFifo, returnFifo, invByCode, pvcCodeFor, MGO_CODE } = require('..
 const { recordMove, r4 } = require('../lib/stockLedger');
 const { clientDb } = require('../lib/bomCorrection');
 const { isCountedItem, isHeldCard } = require('../lib/countedStock');
+const { readTerminals, noTerminals, isTerminalCategory } = require('../lib/terminals');
 
 // Stage names, for readable activity-log lines when work is sent back to a
 // particular stage. Mirrors PRODUCTION_STAGES in client/src/lib/utils.js.
@@ -587,6 +588,11 @@ async function inventoryView(db, cardId) {
            COALESCE(oii.qty_waived,0)::float AS qty_waived, ii.item_code, ii.name, ii.unit, TRIM(ii.category) AS category
       FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
      WHERE oii.order_item_id=$1 ORDER BY ii.item_code`, [item.id]) : [];
+  // The card's own terminal-pin rows (owner, 6 Oct 2026; lib/terminals.js):
+  // what the card took at its last stage under source 'terminal' — the list's
+  // pins for its share, or what design changed for this card. Read as they
+  // stand, never seeded here: QC looks at what really happened.
+  const terminalRows = noTerminals(card) ? [] : await readTerminals(db, card.id);
 
   // Per item: taken / given back / scrap from stock, plus rework-bin draws
   // and what this card put into the rework bin.
@@ -625,10 +631,18 @@ async function inventoryView(db, cardId) {
   // (it inherits the ticked stages), so the list is no guide for them here.
   const splitChild = !!card.parent_job_card_id;
   const stageCats = Object.values(STAGE_CATEGORY_MAP).flat();
+  for (const t of terminalRows) if (!by.has(t.inventory_item_id)) row(t.inventory_item_id, t);
   const items = [...by.values()].map(r => {
     const line = list.find(l => l.inventory_item_id === r.inventory_item_id);
+    const pin = terminalRows.find(t => t.inventory_item_id === r.inventory_item_id) || null;
     let forCard = null, noGuide = null;
-    if (line) {
+    if (pin) {
+      // A pin on the card's own rows: the row is the guide for this card.
+      forCard = Math.round(Number(pin.qty) || 0);
+    } else if (line && terminalRows.length && isTerminalCategory(line.category)) {
+      // On the list but not on this card's rows: design changed this card's pins.
+      forCard = 0; noGuide = 'not used on this card — design changed its terminal pins';
+    } else if (line) {
       if (fgOrder && !fgTakes(line.category)) noGuide = 'inside the heater already — never taken on a finished-goods card';
       else if (splitChild && stageCats.includes(String(line.category || '').trim())) noGuide = 'taken on the card this one was split from';
       else {
@@ -647,6 +661,8 @@ async function inventoryView(db, cardId) {
       list_qty_per_piece: line && itemQty > 0 ? r4(line.qty / itemQty) : null,
       list_qty_for_card: forCard,                                       // null when the list is no guide for this card
       no_guide: noGuide,
+      // the card's own terminal-pin row, when this item is one (source 'list' / 'design')
+      terminal: pin ? { qty: Math.round(Number(pin.qty) || 0), source: pin.source } : null,
       current_stock: stock[r.inventory_item_id]?.current_stock ?? null,
       rework_bin: stock[r.inventory_item_id]?.rework_bin ?? 0,
       material: isMaterial(r),

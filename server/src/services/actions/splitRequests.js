@@ -196,6 +196,12 @@ async function approveSplitRequest(db, { requestId, actor, via = 'app', refuseIf
          FROM production_checklist WHERE job_card_id=$2 AND done=1 AND stage_no <> $3`,
         [childId, jc.id, readyStageNo]);
       await client.query('UPDATE job_cards SET qty = qty - $1 WHERE id=$2', [sr.qty, jc.id]);
+      // The parent's terminal-pin rows were made for its pre-split quantity;
+      // scale them to what remains. The child seeds its own rows when first
+      // read (owner, 6 Oct 2026; lib/terminals.js).
+      const { rescaleAfterSplit } = require('../../lib/terminals');
+      const { clientDb } = require('../../lib/bomCorrection');
+      await rescaleAfterSplit(clientDb(client), jc.id, jc.qty, jc.qty - sr.qty, actor.id);
       await client.query('UPDATE job_card_split_requests SET child_job_card_id=$1 WHERE id=$2', [childId, sr.id]);
       return { sr, jc, childId, childNo, readyDone: !!readyDone };
     });

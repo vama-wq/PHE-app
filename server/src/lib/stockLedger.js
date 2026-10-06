@@ -24,6 +24,10 @@
 const dbmod = require('../db');
 
 const PLACEHOLDER = /TRAIN/i;            // TER-03-WH-TRAIN, TER-3"-WOH-TRAIN
+// Terminal pins are issued per job card (lib/terminals.js); shared here so the
+// correction rules can recognise the category without a require cycle.
+const TERMINAL_CATEGORY = 'Terminal Pin';
+const isTerminalCategory = (cat) => String(cat || '').trim().toLowerCase() === TERMINAL_CATEGORY.toLowerCase();
 const EPS = 1e-6;
 const r4 = (n) => Math.round(Number(n) * 10000) / 10000;
 
@@ -159,4 +163,4 @@ async function progressTargets(db, orderItemId, lines, { stageMap, finsCodes, se
   return { targets: out, allPassed, cards: cards.length };
 }
 
-module.exports = { PLACEHOLDER, PASSED_QC, ledgerColumnsReady, recordMove, ledgerForItem, progressTargets, r4, EPS };
+module.exports = { PLACEHOLDER, PASSED_QC, TERMINAL_CATEGORY, isTerminalCategory, ledgerColumnsReady, recordMove, ledgerForItem, progressTargets, r4, EPS };

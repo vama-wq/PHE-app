@@ -4,7 +4,7 @@
 // one transaction, so a failure part-way leaves nothing half-done.
 
 const { STAGE_CATEGORY_MAP, FINS_CODES, fgTakes } = require('./inventoryDeduction');
-const { ledgerColumnsReady, recordMove, ledgerForItem, progressTargets, r4, EPS } = require('./stockLedger');
+const { ledgerColumnsReady, recordMove, ledgerForItem, progressTargets, isTerminalCategory, r4, EPS } = require('./stockLedger');
 const { isCountedItem, heldSql } = require('./countedStock');
 
 function clientDb(client) {
@@ -109,6 +109,15 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
       const closedByInventoryQc = !!(await tx.get(
         `SELECT 1 FROM job_cards WHERE order_item_id=$1 AND (inventory_qc_at IS NOT NULL OR status = 'inventory_qc') LIMIT 1`, [orderItemId]));
       if (closedByInventoryQc) countedIds = new Set(invIds);
+      // Terminal pins leave stock per card (lib/terminals.js, source 'terminal')
+      // once a card takes its last stage. From then on the list's pin lines are
+      // held: a swapped or added pin must not be taken again from the list.
+      if (!closedByInventoryQc && (await tx.get(
+        'SELECT 1 FROM job_cards WHERE order_item_id=$1 AND last_stage_taken_at IS NOT NULL LIMIT 1', [orderItemId]))) {
+        for (const id of invIds) {
+          if (isTerminalCategory(lineOf[id]?.category || ledgerCats[id])) countedIds.add(id);
+        }
+      }
       for (const id of [...invIds].sort((a, b) => Number(a) - Number(b))) {   // fixed order: no lock cycles
         const code = lineOf[id]?.item_code || ledger.codes[id];
         if (frozen(id, code, lineOf[id]?.category || ledgerCats[id])) continue;

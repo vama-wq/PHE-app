@@ -2332,6 +2332,32 @@ async function initDB(retries = 20, delayMs = 10000) {
       // Inventory QC reads a card's own stock movements by this column.
       await pool.query(`CREATE INDEX IF NOT EXISTS inventory_transactions_job_card ON inventory_transactions (job_card_id)`);
 
+      // Terminal pins per job card (owner, 6 Oct 2026; lib/terminals.js). Each
+      // card has its own pin rows — the list's 'Terminal Pin' lines for its
+      // share by default, or what design changed for that card — taken at the
+      // card's last stage with source 'terminal'. A pin short of stock holds the
+      // card's slip (terminals_short_at) until the owner or Design / QC presses
+      // OK (terminals_ok_*). Each statement simple and idempotent.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS job_card_terminals (
+          id SERIAL PRIMARY KEY,
+          job_card_id INTEGER NOT NULL REFERENCES job_cards(id) ON DELETE CASCADE,
+          inventory_item_id INTEGER NOT NULL REFERENCES inventory_items(id),
+          qty NUMERIC NOT NULL DEFAULT 0,
+          source TEXT NOT NULL DEFAULT 'list',
+          updated_by INTEGER,
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS job_card_terminals_card ON job_card_terminals (job_card_id)`);
+      // One row per pin per card — two first reads at once must not double a pin.
+      await pool.query(`DELETE FROM job_card_terminals a USING job_card_terminals b
+        WHERE a.job_card_id = b.job_card_id AND a.inventory_item_id = b.inventory_item_id AND a.id > b.id`);
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS job_card_terminals_card_item ON job_card_terminals (job_card_id, inventory_item_id)`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS terminals_short_at TIMESTAMPTZ`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS terminals_ok_by INTEGER`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS terminals_ok_at TIMESTAMPTZ`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS terminals_ok_note TEXT`);
+
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
       if (parseInt(rows[0].c, 10) === 0) {

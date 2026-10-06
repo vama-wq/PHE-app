@@ -6,6 +6,7 @@ import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import InventoryQCScreen from '../qc/InventoryQCScreen';
+import TerminalPinsBox from '../../components/TerminalPinsBox';
 import { fmtDate, fmtDateTime, daysUntil, dispatchPending, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor, capaBlocks } from '../../lib/utils';
 import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle, Truck } from 'lucide-react';
 
@@ -198,6 +199,12 @@ export default function JobCardDetail() {
           </div>
         </div>
       )}
+
+      {/* Terminal pins (owner, 6 Oct 2026): this card's own pin rows, the
+          slip hold when one is short, and the OK that releases it. Above the
+          tabs so the owner's notification lands straight on it. A
+          finished-goods card renders nothing here. */}
+      <TerminalPinsBox jobCardId={jc.id} onChanged={() => load()} />
 
       {/* Customer Query Warning Banner — Full Details */}
       {jc.active_query_no && (

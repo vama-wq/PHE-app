@@ -6,6 +6,7 @@ const { createNotification } = require('./notifications');
 const { applyMaterialDeductions } = require('../lib/materialDeduction');
 const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventoryDeduction');
 const { takeLastStage } = require('../lib/lastStageTake');
+const terminals = require('../lib/terminals');
 const { cardLengths, specForCard } = require('../lib/cardSpec');
 const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit } = require('../lib/jobCardSplit');
 const { buildDraft, draftQuestions } = require('../lib/jobCardDraft');
@@ -462,6 +463,70 @@ function cardFromSpec(spec) {
   return require('../lib/jobCardEngine').buildJobCard(spec.input);
 }
 
+// ── Terminal pins of ONE job card (owner, 6 Oct 2026; lib/terminals.js) ──────
+// Rows are seeded from the item's list the first time they are read. The read
+// also runs the stock check, so opening the card is enough for the owner and
+// Design / QC to hear about a short pin.
+const terminalsPayload = (state, req) => ({
+  rows: state.rows,
+  list: state.lines.map(l => ({ inventory_item_id: l.inventory_item_id, item_code: l.item_code, name: l.name,
+    name_gu: l.name_gu, unit: l.unit, qty: Number(l.qty), rework_qty: Number(l.rework_qty) || 0, share: l.share })),
+  short: state.short,
+  short_at: state.short_at || null,
+  ok: state.ok,
+  held: state.held,
+  last_stage_taken_at: state.last_stage_taken_at || null,
+  editable: terminals.EDIT_ROLES.includes(req.user.role) && !state.last_stage_taken_at && !state.no_terminals,
+  can_ok: terminals.OK_ROLES.includes(req.user.role),
+  no_terminals: !!state.no_terminals,
+});
+
+router.get('/:id/terminals', authenticate, authorize('production', 'design', 'admin', 'owner'), async (req, res) => {
+  const db = getDB();
+  const jc = await db.get(
+    'SELECT jc.*, o.order_type FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1', [req.params.id]);
+  if (!jc) return res.status(404).json({ error: 'Job card not found' });
+  const state = await terminals.checkTerminals(db, jc);
+  state.no_terminals = terminals.noTerminals(jc);
+  if (state.ok) {
+    const u = await db.get('SELECT name FROM users WHERE id=$1', [state.ok.by]);
+    state.ok.by_name = u?.name || null;
+  }
+  res.json(terminalsPayload(state, req));
+});
+
+// Body: { rows: [{ inventory_item_id, qty }] } (a bare array is accepted too).
+router.put('/:id/terminals', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
+  const db = getDB();
+  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.id]);
+  if (!jc) return res.status(404).json({ error: 'Job card not found' });
+  const rows = Array.isArray(req.body) ? req.body : req.body?.rows;
+  try {
+    const state = await terminals.saveTerminals(db, jc, rows, req.user);
+    res.json({ message: 'Terminal pins saved', ...terminalsPayload(state, req) });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error('[terminals] save failed:', e);
+    res.status(500).json({ error: 'Could not save the terminal pins' });
+  }
+});
+
+// The owner or Design / QC releasing a slip held for a short pin. Body: { note }.
+router.post('/:id/terminals/ok', authenticate, authorize(...terminals.OK_ROLES), async (req, res) => {
+  const db = getDB();
+  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.id]);
+  if (!jc) return res.status(404).json({ error: 'Job card not found' });
+  try {
+    const state = await terminals.okTerminals(db, jc, req.user, req.body?.note);
+    if (state.ok) state.ok.by_name = state.already ? (await db.get('SELECT name FROM users WHERE id=$1', [state.ok.by]))?.name || null : req.user.name;
+    res.json({ message: state.already ? 'Already OK\'d — the slip is released' : 'OK recorded — the slip is released', ...terminalsPayload(state, req) });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error('[terminals] ok failed:', e);
+    res.status(500).json({ error: 'Could not record the OK' });
+  }
+});
+
 // ── Material slip for ONE job card ───────────────────────────────────────────
 // The slip is the store's issue document and it travels with a card, so it
 // carries that card's share of the item's BOM — never the whole item's, which
@@ -470,10 +535,16 @@ function cardFromSpec(spec) {
 // Recording the print is the point of doing this server-side: a browser cannot
 // be stopped from printing a page twice, so the first print comes out clean and
 // every one after it is stamped REPRINT with the date and who printed it.
+//
+// Terminal pins (owner, 6 Oct 2026): the slip's pin rows are the CARD's own
+// (lib/terminals.js) — exact for this card, not apportioned — and the list's
+// 'Terminal Pin' lines are left out of the apportioned part. A pin short of
+// stock holds the slip (409 TERMINALS_SHORT, no print logged) until the owner
+// or Design / QC presses OK.
 router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin', 'owner'), async (req, res) => {
   const db = getDB();
   const jc = await db.get(
-    `SELECT jc.*, o.order_code, c.customer_code
+    `SELECT jc.*, o.order_code, o.order_type, c.customer_code
        FROM job_cards jc JOIN orders o ON o.id = jc.order_id
        LEFT JOIN customers c ON c.id = o.customer_id
       WHERE jc.id=$1`, [req.params.id]);
@@ -483,11 +554,43 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
   if (!itemId) return res.status(400).json({ error: 'This job card is not linked to an order item, so it has no BOM to issue against' });
   const item = await db.get('SELECT * FROM order_items WHERE id=$1', [itemId]);
 
-  const lines = await db.all(
-    `SELECT ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty, COALESCE(oii.rework_qty,0) AS rework_qty
+  const allLines = await db.all(
+    `SELECT ii.item_code, ii.name, ii.name_gu, ii.unit, TRIM(ii.category) AS category, oii.qty, COALESCE(oii.rework_qty,0) AS rework_qty
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
       WHERE oii.order_item_id=$1 ORDER BY ii.category, ii.item_code`, [itemId]);
-  if (!lines.length) return res.status(400).json({ error: 'This item has no inventory BOM attached — nothing to issue' });
+  if (!allLines.length) return res.status(400).json({ error: 'This item has no inventory BOM attached — nothing to issue' });
+
+  // The card's own terminal pins; a finished-goods card has none (its pins
+  // are inside the heater) and its slip is exactly as before.
+  let terminalRows = [];
+  let lines = allLines;
+  if (!terminals.noTerminals(jc)) {
+    let state;
+    try { state = await terminals.checkTerminals(db, jc); }
+    catch (e) {
+      console.error('[slip] terminal check failed:', e.message);
+      return res.status(500).json({ error: `Could not check the terminal pins: ${e.message}` });
+    }
+    if (state.held) {
+      return res.status(409).json({
+        code: 'TERMINALS_SHORT', short: state.short,
+        can_ok: terminals.OK_ROLES.includes(req.user.role),
+        error: `Slip held — ${state.short.map(s => `pin ${s.item_code} short (need ${s.need}, stock ${s.stock})`).join('; ')}. The owner or Design / QC must press OK.`,
+      });
+    }
+    if (state.rows.length) {
+      lines = allLines.filter(l => !terminals.isTerminalCategory(l.category));
+      terminalRows = state.rows.map(r => {
+        // A rework portion on the list line for the same pin prints as its own
+        // REWORK row, like any other line — the card's share of it, never more
+        // than the row itself.
+        const line = state.lines.find(l => l.inventory_item_id === r.inventory_item_id);
+        const rw = line && Number(line.rework_qty) > 0 ? Math.min(r.qty, terminals.shareFor(line.rework_qty, jc.qty, state.itemQty)) : 0;
+        return { inventory_item_id: r.inventory_item_id, item_code: r.item_code, name: r.name, name_gu: r.name_gu,
+                 unit: r.unit, qty: r.qty, rework_qty: rw, source: r.source, current_stock: r.current_stock };
+      });
+    }
+  }
 
   // Every card of the item, so a line can be apportioned the same way each
   // time: the shares always add back up to exactly the BOM figure.
@@ -529,6 +632,9 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
             product_code: item.product_code, remark: item.remark },
     cardIndex: mine < 0 ? 0 : mine, cardCount: siblings.length, quantities,
     lines,
+    // The card's own pins, exact for this card — printed as they are, not
+    // apportioned. Empty on a finished-goods card (its pins stay in `lines`).
+    terminals: terminalRows,
   });
 });
 

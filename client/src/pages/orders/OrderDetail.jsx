@@ -7,6 +7,7 @@ import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import DrawingUploadModal from '../../components/DrawingUploadModal';
 import InventoryEditModal from '../../components/InventoryEditModal';
+import TerminalPinsBox, { TERMINAL_ROLES } from '../../components/TerminalPinsBox';
 import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati, ORDER_TYPE_COLORS, orderTypeLabel, reuseListNote } from '../../lib/utils';
 import { printJobCardSlip } from '../../lib/printJobCardSlip';
 import { splitQuantity, MAX_CARD_QTY, SPLIT_MARKER } from '../../lib/jobCardSplit';
@@ -838,7 +839,8 @@ export default function OrderDetail() {
                 {order.job_cards.map(jc => {
                   const isImg = /\.(jpg|jpeg|png|gif|webp)$/i.test(jc.file_name || '');
                   return (
-                    <div key={jc.id} className="flex items-center gap-3 p-3 rounded-xl border bg-gray-50 border-gray-200">
+                    <div key={jc.id} className="p-3 rounded-xl border bg-gray-50 border-gray-200 space-y-2">
+                    <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
                         <FileText size={20} className="text-gray-400" />
                       </div>
@@ -878,6 +880,11 @@ export default function OrderDetail() {
                           </button>
                         )}
                       </div>
+                    </div>
+                    {/* This card's terminal pins (owner, 6 Oct 2026): one line, open
+                        to change them (design / admin / owner, until the last stage)
+                        or to press OK on a held slip. */}
+                    {TERMINAL_ROLES.includes(user.role) && <TerminalPinsBox jobCardId={jc.id} compact />}
                     </div>
                   );
                 })}

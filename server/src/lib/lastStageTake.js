@@ -17,6 +17,7 @@
 const { STAGE_CATEGORY_MAP, STAGE_LABEL, FINS_CODES, fgTakes, deductLine, deductFinsByLength, resolveJobCardItemId } = require('./inventoryDeduction');
 const { clientDb } = require('./bomCorrection');
 const { isPieceUnit } = require('./rework');
+const { isTerminalCategory, takeTerminalRows } = require('./terminals');
 
 const r4 = (n) => Math.round(Number(n) * 1e4) / 1e4;
 
@@ -76,6 +77,20 @@ async function runTake(tx, jobCardId, userId) {
     stageTicked[st] = !!(ticked || took);
   }
 
+  // Terminal pins (owner, 6 Oct 2026): a production card takes ITS OWN pin
+  // rows (lib/terminals.js) — the list's pins for its share by default, or what
+  // design changed for this card — not the list's lines. The lines are still
+  // settled for the card's share (qty_waived) so the list bookkeeping is right.
+  // If the card has no rows, today's list share is taken as for any other part.
+  let terminalsByRows = false;
+  if (!fgOrder) {
+    // Also when the list has no pin line at all: design may have put the
+    // pins on the card itself, and those must leave stock too.
+    const tpLines = lines.filter(l => isTerminalCategory(l.category));
+    const r = await takeTerminalRows(tx, card, item, tpLines, orderCode, userId);
+    if (r) { terminalsByRows = true; taken.push(...r.taken); }
+  }
+
   let finsLines = false;
   for (const line of lines) {
     if (fgOrder) {
@@ -83,6 +98,7 @@ async function runTake(tx, jobCardId, userId) {
       if (!fgTakes(line.category)) continue;
     } else {
       if (FINS_CODES.includes(line.item_code)) { finsLines = true; continue; } // by tube length, below
+      if (terminalsByRows && isTerminalCategory(line.category)) continue;      // taken by the card's rows, above
       const st = stageOf(line.category);
       if (st && stageTicked[st]) continue;
     }

@@ -41,13 +41,28 @@ function apportion(total, quantities) {
 // the first print comes out clean and every one after it is stamped REPRINT
 // with the date and who printed it. The store can then tell an original from a
 // copy, which is the whole point of the log.
+//
+// Terminal pins (owner, 6 Oct 2026): a pin short of stock HOLDS the slip. The
+// server answers 409 TERMINALS_SHORT and logs no print; everyone is told why,
+// and the owner or Design / QC get an OK button that records the release and
+// then prints. The pin rows themselves are the card's own (see below).
 export async function printJobCardSlip(jc) {
   let d;
   try {
     d = (await api.post(`/job-cards/${jc.id}/slip`)).data;
   } catch (e) {
-    alert(e.response?.data?.error || 'Could not prepare the material slip');
-    return;
+    const r = e.response?.data;
+    if (e.response?.status !== 409 || r?.code !== 'TERMINALS_SHORT') {
+      alert(r?.error || 'Could not prepare the material slip');
+      return;
+    }
+    if (!(await releaseHeldSlip(jc, r))) return;
+    try {
+      d = (await api.post(`/job-cards/${jc.id}/slip`)).data;
+    } catch (e2) {
+      alert(e2.response?.data?.error || 'Could not prepare the material slip');
+      return;
+    }
   }
 
   const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -64,6 +79,22 @@ export async function printJobCardSlip(jc) {
     if (total - rw > 0 || rw === 0) rows.push({ ...r, share: total - rw, rework: false });
     if (rw > 0) rows.push({ ...r, share: rw, rework: true });
   });
+  // The card's own terminal pins come EXACT for this card — design may have
+  // changed them for this card alone — so they are printed as they are, never
+  // apportioned, and the list's 'Terminal Pin' lines are already left out of
+  // `lines` by the server. They sit where the Terminal Pin category would have
+  // sorted, so the slip reads the same as before.
+  const terminalRows = [];
+  (d.terminals || []).forEach(t => {
+    const total = Math.round(Number(t.qty) || 0);
+    const rw = Math.min(Math.round(Number(t.rework_qty) || 0), total);
+    if (total - rw > 0 || rw === 0) terminalRows.push({ ...t, share: total - rw, rework: false, exact: true });
+    if (rw > 0) terminalRows.push({ ...t, share: rw, rework: true, exact: true });
+  });
+  if (terminalRows.length) {
+    const at = rows.findIndex(r => String(r.category || '').trim().localeCompare('Terminal Pin') > 0);
+    rows.splice(at < 0 ? rows.length : at, 0, ...terminalRows);
+  }
   const dwg = d.item.drawing_number || '';
   const partOfItem = d.cardCount > 1;
 
@@ -112,10 +143,10 @@ export async function printJobCardSlip(jc) {
           <th>Issued / આપ્યું</th><th>Scrap / સ્ક્રેપ</th><th>Sign / સહી</th></tr>
       ${rows.map((r, i) => `<tr${r.rework ? ' style="background:#eff6ff"' : ''}>
         <td>${i + 1}</td><td><b>${r.item_code}</b>${r.rework ? '<br><span style="font-size:10px;color:#1d4ed8;font-weight:bold">REWORK</span>' : ''}</td>
-        <td>${r.name || ''}${r.rework ? ' <span style="color:#1d4ed8">— from rework bin</span>' : ''}</td>
+        <td>${r.name || ''}${r.rework ? ' <span style="color:#1d4ed8">— from rework bin</span>' : ''}${r.exact && r.source === 'design' ? ' <span style="color:#6d28d9;font-size:10px">— changed by design for this card</span>' : ''}</td>
         <td>${r.name_gu || transliterateGujarati(r.name || '')}${r.rework ? ' — રિવર્ક બિનમાંથી' : ''}</td>
         <td>${transliterateHindi(r.name || '')}${r.rework ? ' — रिवर्क बिन से' : ''}</td>
-        <td class="num">${r.share} ${(r.unit || '').trim()}${partOfItem ? ` <span class="of">of ${r.rework ? r.rework_qty : r.qty}</span>` : ''}</td>
+        <td class="num">${r.share} ${(r.unit || '').trim()}${partOfItem && !r.exact ? ` <span class="of">of ${r.rework ? r.rework_qty : r.qty}</span>` : ''}</td>
         <td class="blank"></td><td class="blank"></td><td class="sign"></td>
       </tr>`).join('')}
     </table>
@@ -144,4 +175,26 @@ export async function printJobCardSlip(jc) {
   // Through the view route, so an uploaded card opens the same way it does
   // everywhere else and a generated one is never served from a stale cache.
   if (!merged && (jc.file_path || jc.file_name)) window.open(`/api/job-cards/${jc.id}/view`, '_blank');
+}
+
+// The slip is held because a terminal pin is short of stock. Everyone sees
+// which pin, the need and the stock; only the owner and Design / QC (the
+// server says so in can_ok) get the OK button — the browser's own, so it works
+// from every screen that prints — which records the release on the card's
+// timeline. Resolves true when the slip may now be requested again.
+async function releaseHeldSlip(jc, r) {
+  const what = (r.short || []).map(s => `pin ${s.item_code} short (need ${s.need}, stock ${s.stock})`).join('; ')
+    || 'a terminal pin is short of stock';
+  const msg = `Slip held — ${what}.\nThe owner or Design / QC must press OK.`;
+  if (!r.can_ok) { alert(msg); return false; }
+  if (!window.confirm(`${msg}\n\nPress OK to release this slip and print it. Your OK is written on the card's timeline.`)) return false;
+  try {
+    await api.post(`/job-cards/${jc.id}/terminals/ok`, {});
+    return true;
+  } catch (e) {
+    // NOT_SHORT: stock came in between the two calls — nothing holds the slip now.
+    if (e.response?.data?.code === 'NOT_SHORT') return true;
+    alert(e.response?.data?.error || 'Could not record the OK');
+    return false;
+  }
 }
