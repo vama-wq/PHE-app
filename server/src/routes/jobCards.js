@@ -778,11 +778,22 @@ router.delete('/:id', authenticate, authorize('admin', 'owner'), async (req, res
 });
 
 // ── PUT update status ─────────────────────────────────────────────────────────
+// Product QC and Inventory QC are both compulsory (owner, 6 Oct 2026): the
+// statuses they grant — and dispatch — can only be reached through them.
+const QC_ONLY_STATUSES = ['inventory_qc', 'qc_approved', 'dispatched', 'completed', 'resolved_dispatched', 'repaired_dispatched'];
+const HAND_SET_STATUSES = ['pending', 'in_progress', 'on_hold', 'qc_pending'];
+
 router.put('/:id/status', authenticate, authorize('admin', 'owner', 'production'), async (req, res) => {
   const { status } = req.body;
   const db = getDB();
   const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.id]);
   if (!jc) return res.status(404).json({ error: 'Not found' });
+  if (QC_ONLY_STATUSES.includes(status)) {
+    return res.status(400).json({ error: 'That status is set by Product QC, Inventory QC or Dispatch — both QCs are compulsory and cannot be skipped by hand.' });
+  }
+  if (!HAND_SET_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `Status "${status}" cannot be set by hand.` });
+  }
 
   // Prevent changing away from on_hold if pending holds exist — must use proper approve flow
   if (jc.status === 'on_hold' && status !== 'on_hold') {

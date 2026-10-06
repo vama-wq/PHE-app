@@ -86,6 +86,14 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
   if (jc.status === 'inventory_qc') {
     return res.status(400).json({ error: 'Cannot dispatch — this job card is waiting for Inventory QC.' });
   }
+  // Both QCs are compulsory (owner, 6 Oct 2026): only a card through Inventory
+  // QC — or one approved before Inventory QC went live, or already out and
+  // coming round again (repair, replacement) — can be dispatched.
+  const throughQc = !!jc.inventory_qc_at || !!jc.dispatched_at || !!jc.replacement_query_id
+    || (jc.status === 'qc_approved' && !jc.product_qc_at);   // approved the old way, before Inventory QC existed
+  if (!throughQc) {
+    return res.status(400).json({ error: 'Cannot dispatch — this job card has not been through Product QC and Inventory QC.' });
+  }
 
   // Cards QC-routed entirely into Finished Goods have nothing to dispatch
   if (jc.status === 'qc_approved' && jc.qc_route === 'finished_goods' && (Number(jc.qc_dispatch_qty) || 0) === 0) {

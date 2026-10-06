@@ -9,11 +9,9 @@ import InventoryQCScreen from '../qc/InventoryQCScreen';
 import { fmtDate, fmtDateTime, daysUntil, dispatchPending, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor, capaBlocks } from '../../lib/utils';
 import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle, Truck } from 'lucide-react';
 
-const JC_STATUSES = [
-  'created','drawing_pending','drawing_done','inventory_check',
-  'ready_for_production','in_production','production_complete',
-  'qc_pending','qc_approved','qc_rejected','packaging','ready_for_dispatch','dispatched'
-];
+// Only what can be set by hand: QC approval and dispatch come from Product QC,
+// Inventory QC and Dispatch themselves (both QCs are compulsory).
+const JC_STATUSES = ['pending', 'in_progress', 'on_hold', 'qc_pending'];
 
 export default function JobCardDetail() {
   const { id } = useParams();
