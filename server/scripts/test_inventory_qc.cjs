@@ -247,20 +247,22 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     };
     s0 = await snap(allA);
     r = await adjust([{ inventory_item_id: NUT, kind: 'take', qty: 2 }, { inventory_item_id: WIRE, kind: 'give_back', qty: 0.5 }]);
-    ok('A5. take more: 2 more nuts out of stock, the line now counts 26',
-      r.status === 200 && near(await stock(NUT), s0[NUT] - 2) && near((await line(oiA, NUT)).d, 26), JSON.stringify(r.body));
-    ok('A5. give back: 0.5 kg wire back to stock, the line now counts 1', near(await stock(WIRE), s0[WIRE] + 0.5) && near((await line(oiA, WIRE)).d, 1));
+    // QC's changes are the card's own: the order line's figures stay as the
+    // last stage left them, so sister cards take exactly their share.
+    ok('A5. take more: 2 more nuts out of stock, as this card\'s own — the line still counts 24',
+      r.status === 200 && near(await stock(NUT), s0[NUT] - 2) && near((await line(oiA, NUT)).d, 24), JSON.stringify(r.body));
+    ok('A5. give back: 0.5 kg wire back to stock, the line still counts 1.5', near(await stock(WIRE), s0[WIRE] + 0.5) && near((await line(oiA, WIRE)).d, 1.5));
     r = await adjust([{ inventory_item_id: NIP, kind: 'give_back', qty: 3 }, { inventory_item_id: WSH, kind: 'take', qty: 3, note: 'washers fitted, not nipple washers' }]);
     const wshRow = await q1(`SELECT order_item_id, source FROM inventory_transactions WHERE item_id=$1 AND job_card_id=$2 ORDER BY id DESC LIMIT 1`, [WSH, A1]);
-    ok('A6. swap a wrong item: 3 nipple washers back, 3 washers taken (tied to the card and the order line, not added to the list)',
-      r.status === 200 && near(await stock(NIP), s0[NIP] + 3) && near(await stock(WSH), s0[WSH] - 3) && near((await line(oiA, NIP)).d, 3)
-      && wshRow?.order_item_id === oiA && wshRow?.source === 'bom' && !(await line(oiA, WSH)), JSON.stringify(r.body));
+    ok('A6. swap a wrong item: 3 nipple washers back, 3 washers taken (tied to the card and the order line as an Inventory QC change, not added to the list)',
+      r.status === 200 && near(await stock(NIP), s0[NIP] + 3) && near(await stock(WSH), s0[WSH] - 3) && near((await line(oiA, NIP)).d, 6)
+      && wshRow?.order_item_id === oiA && wshRow?.source === 'inventory_qc' && !(await line(oiA, WSH)), JSON.stringify(r.body));
     ok('A6. stock may go below zero — saved, and the answer flags it',
       (r.body.negative || []).some(n => n.inventory_item_id === WSH && near(n.current_stock, -1)), JSON.stringify(r.body.negative));
     r = await adjust([{ inventory_item_id: NUT, kind: 'scrap', qty: 1, note: 'dropped' }]);
     const scrapRow = await q1(`SELECT transaction_type FROM inventory_transactions WHERE item_id=$1 AND job_card_id=$2 ORDER BY id DESC LIMIT 1`, [NUT, A1]);
-    ok('A7. scrap: 1 nut more out of stock, as scrap; the line\'s count stays 26',
-      r.status === 200 && scrapRow?.transaction_type === 'scrap' && near(await stock(NUT), s0[NUT] - 3) && near((await line(oiA, NUT)).d, 26), JSON.stringify(scrapRow));
+    ok('A7. scrap: 1 nut more out of stock, as scrap; the line\'s count stays 24',
+      r.status === 200 && scrapRow?.transaction_type === 'scrap' && near(await stock(NUT), s0[NUT] - 3) && near((await line(oiA, NUT)).d, 24), JSON.stringify(scrapRow));
     r = await adjust([{ inventory_item_id: NUT, kind: 'rework', qty: 5 }]);
     ok('A8. rework: 5 recovered nuts into the rework bin, tied to the card; normal stock unchanged',
       r.status === 200 && (await bin(NUT)) === 5 && near(await stock(NUT), s0[NUT] - 3)
@@ -272,7 +274,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     s0 = await snap(allA);
     r = await adjust([{ inventory_item_id: NUT, kind: 'take', qty: 1 }, { inventory_item_id: NUT, kind: 'rework', qty: 100 }]);
     ok('A9. reworking 100 nuts, more than the card used, is refused — and the whole batch with it (its take of 1 is undone too)',
-      r.status === 400 && /more than this card used/.test(r.body.error || '') && !(await moved(s0)) && near((await line(oiA, NUT)).d, 26)
+      r.status === 400 && /more than this card used/.test(r.body.error || '') && !(await moved(s0)) && near((await line(oiA, NUT)).d, 24)
       && (await bin(NUT)) === 5 && (await iqcLog(A1)) === n0, r.body.error);
     r = await adjust([{ inventory_item_id: WIRE, kind: 'rework', qty: 1 }]);
     ok('A9. rework of an item counted in kg is refused', r.status === 400 && /only counted parts can be reworked/.test(r.body.error || ''), r.body.error);
@@ -308,9 +310,11 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('A13. the timeline carries the same approval line as before', logs.some(l => l.jc === A1 && l.desc === 'Job card ZZT-IQC-A1 QC Approved — 5 units going to dispatch'));
     ok('A13. done itself moves no stock', !(await moved(s0)), await moved(s0));
     const LN = await line(oiA, NUT), LW = await line(oiA, WIRE), LF = await line(oiA, FLG), LP = await line(oiA, NIP), LFin = await line(oiA, FIN);
-    ok('A14. the item settles WITHOUT taking: never-carded pieces and give-backs settled without stock (nuts 22, wire 2, flanges 12, nipple washers 9); fins as the card took them',
-      (await settledFlag(oiA)) === true && near(LN.d, 26) && near(LN.w, 22) && near(LW.d, 1) && near(LW.w, 2) && near(LF.d, 12) && near(LF.w, 12)
-      && near(LP.d, 3) && near(LP.w, 9) && near(LFin.d, 0.66) && near(LFin.w, 0), JSON.stringify({ LN, LW, LF, LP, LFin }));
+    // Only 6 of the 12 ordered pieces have a card: the item is NOT settled yet,
+    // so a top-up card for the other 6 still takes its own share later.
+    ok('A14. half the item has no card yet: nothing settled, nothing taken, the line keeps the card\'s take (nuts 24, wire 1.5, flanges 12, nipple washers 6)',
+      (await settledFlag(oiA)) === false && near(LN.d, 24) && near(LN.w, 0) && near(LW.d, 1.5) && near(LW.w, 0) && near(LF.d, 12) && near(LF.w, 0)
+      && near(LP.d, 6) && near(LP.w, 0) && near(LFin.d, 0.66) && near(LFin.w, 0), JSON.stringify({ LN, LW, LF, LP, LFin }));
 
     r = await adjust([{ inventory_item_id: NUT, kind: 'take', qty: 1 }]);
     const rDone2 = await call('PUT', `/api/qc/${A1}/inventory-done`);
@@ -488,7 +492,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('G3. at Inventory QC with no last-stage take yet: it is made now and QC is asked to look again (409); the change itself is not applied',
       r.status === 409 && r.body.code === 'LAST_STAGE_JUST_TAKEN' && near(await stock(NUT), s0[NUT] - 40) && !!(await cardRow(M1)).last_stage_taken_at, JSON.stringify(r.body));
     r = await call('POST', `/api/qc/${M1}/inventory/adjust`, { changes: [{ inventory_item_id: NUT, kind: 'take', qty: 1 }] });
-    ok('G3. sent again, the change is saved', r.status === 200 && near(await stock(NUT), s0[NUT] - 41) && near((await line(oiM, NUT)).d, 41), JSON.stringify(r.body));
+    ok('G3. sent again, the change is saved (the line still counts the last stage\'s 40)', r.status === 200 && near(await stock(NUT), s0[NUT] - 41) && near((await line(oiM, NUT)).d, 40), JSON.stringify(r.body));
 
     const oL = await mkOrder('ZZT-IQC-L');
     const oiL = await mkLine(oL, 10, 'ZZTEST-DWG-L');
