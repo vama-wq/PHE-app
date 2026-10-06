@@ -5,6 +5,7 @@
 
 const { STAGE_CATEGORY_MAP, FINS_CODES, fgTakes } = require('./inventoryDeduction');
 const { ledgerColumnsReady, recordMove, ledgerForItem, progressTargets, r4, EPS } = require('./stockLedger');
+const { isCountedItem, dispatchedSql } = require('./countedStock');
 
 function clientDb(client) {
   return {
@@ -19,6 +20,8 @@ function clientDb(client) {
 }
 
 const fmt = (n) => String(r4(n));
+const heldText = (held) => held.map(h =>
+  `${h.code} left as it stands — this line has dispatched job cards (the plain rules would have ${h.dir} ${fmt(h.qty)}${h.unit ? ` ${h.unit}` : ''})`).join('; ');
 
 // sels: [{ id, qty, rework_qty }] already validated by the route.
 // Returns { mode: 'record'|'difference', why, moves:[{code,dir,qty,unit}], short:[{code,need,stock,unit}], summary }.
@@ -69,8 +72,11 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
     // finished-goods orders, everything that is not a prep part.
     const frozen = (id, code, category) => (fgOrder ? !fgTakes(category) : FINS_CODES.includes(code));
     // What the old lines already counted as settled without taking stock.
-    const oldWaived = {};
-    for (const l of oldLines) oldWaived[String(l.inventory_item_id)] = (oldWaived[String(l.inventory_item_id)] || 0) + (Number(l.qty_waived) || 0);
+    const oldWaived = {}, oldQty = {};
+    for (const l of oldLines) {
+      oldWaived[String(l.inventory_item_id)] = (oldWaived[String(l.inventory_item_id)] || 0) + (Number(l.qty_waived) || 0);
+      oldQty[String(l.inventory_item_id)] = (oldQty[String(l.inventory_item_id)] || 0) + (Number(l.qty) || 0);
+    }
     const reworkInvolved = oldLines.some(l => Number(l.rework_qty) > 0 || Number(l.rework_deducted) > 0)
       || newLines.some(l => l.rework_qty > 0);
 
@@ -83,9 +89,19 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
     const moves = [], short = [];
     const actual = {};        // really taken through the line, after this save
     const waivedNow = {};     // settled without stock, after this save
+    // Counted stock (owner, 5 Oct 2026; lib/countedStock.js): on a line with a
+    // dispatched job card, a corrected list never moves a counted item. What the
+    // line has reached is settled as it stands; cards still in production take
+    // by the new list at QC as usual. A line with no dispatched card is unchanged.
+    const counted = {};       // ids held on this save
+    const held = [];          // counted items left as they stand
     if (mode === 'difference') {
       const lineOf = Object.fromEntries(newLines.map(l => [String(l.inventory_item_id), l]));
       const invIds = new Set([...newLines.map(l => String(l.inventory_item_id)), ...Object.keys(ledger.net)]);
+      let countedIds = new Set([...invIds].filter(id => isCountedItem(lineOf[id]?.item_code || ledger.codes[id])));
+      if (countedIds.size && !(await tx.get(`SELECT 1 FROM job_cards WHERE order_item_id=$1 AND ${dispatchedSql()} LIMIT 1`, [orderItemId]))) {
+        countedIds = new Set();   // no dispatched card on the line: nothing to hold
+      }
       for (const id of [...invIds].sort((a, b) => Number(a) - Number(b))) {   // fixed order: no lock cycles
         const code = lineOf[id]?.item_code || ledger.codes[id];
         if (frozen(id, code, lineOf[id]?.category || ledgerCats[id])) continue;
@@ -97,6 +113,13 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
         // done, and a lowered quantity is absorbed there before any real give-back.
         let diff = r4(target - have - waived);
         if (diff < 0 && waived > 0) { const w = Math.min(waived, -diff); waived = r4(waived - w); diff = r4(diff + w); }
+        if (countedIds.has(id)) {
+          // Noted when this save changes the item's quantity on the list.
+          const changed = Math.abs((line ? line.qty : 0) - (oldQty[id] || 0)) > EPS;
+          if (changed && Math.abs(diff) > EPS) held.push({ code, dir: diff > 0 ? 'taken' : 'given back', qty: Math.abs(diff), unit: line?.unit || '' });
+          counted[id] = true;
+          diff = 0;
+        }
         actual[id] = have;
         waivedNow[id] = waived;
         if (Math.abs(diff) < EPS) continue;
@@ -149,6 +172,14 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
         deducted = Math.min(oldTaken, l.qty, realCap);
         const prior = oldTaken + (Number(old?.qty_waived) || 0);
         waived = Math.max(0, Math.min(l.qty, Math.max(t, prior)) - deducted);
+      } else if (counted[k]) {
+        // Counted item held: what the line has reached is settled at the new
+        // list's need for it — taken as far as it really was, the rest without
+        // stock, any surplus left out — so later QC takes only for cards still
+        // in production, by the new list.
+        const reached = Math.min(l.qty, Number(t) || 0);
+        deducted = Math.min(reached, Number(actual[k]) || 0);
+        waived = Math.max(0, r4(reached - deducted));
       } else {
         deducted = Math.min(Number(actual[k]) || 0, l.qty);
         waived = Math.max(0, Math.min(Number(waivedNow[k]) || 0, l.qty - deducted));
@@ -184,7 +215,9 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
     } else if (mode === 'record') {
       summary = `list corrected only — stock not changed (${why})`;
     } else if (!moves.length && !short.length) {
-      summary = 'stock already matches the corrected list — nothing moved';
+      summary = held.length
+        ? `nothing moved — ${heldText(held)}`
+        : 'stock already matches the corrected list — nothing moved';
     } else {
       const parts = [];
       const took = moves.filter(m => m.dir === 'took').map(m => `${fmt(m.qty)} ${m.code}`);
@@ -192,9 +225,10 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
       if (took.length) parts.push(`took ${took.join(', ')}`);
       if (back.length) parts.push(`gave back ${back.join(', ')}`);
       for (const s of short) parts.push(`not taken: ${s.code} (needs ${fmt(s.need)}, only ${fmt(s.stock)} in stock)`);
+      if (held.length) parts.push(heldText(held));
       summary = `auto-corrected by inventory rules: ${parts.join('; ')}`;
     }
-    return { mode, why, moves, short, summary, fresh, orderId: item.order_id };
+    return { mode, why, moves, short, held, summary, fresh, orderId: item.order_id };
   });
 }
 

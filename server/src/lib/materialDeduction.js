@@ -7,6 +7,9 @@
 //                                          card with no generated spec (owner, 4 Oct 2026)
 //                             tube scrap = scrap (inches)× qty  → feet  (÷12)
 //     Tube inventory item = the order item's Tube Material (item code, category "Tube").
+//     A dispatched card never changes tube stock again (counted stock,
+//     lib/countedStock.js): its Stage 5 takes nothing and its undo puts nothing
+//     back; a split parent's undo keeps the share of its dispatched split cards.
 //   • Stage 4 (Spot) done — deducted once Stage 4 completes, using the data entered
 //     at Stage 3 (Ohms): coil used  = coil_weight — the box is KG — taken as kg as typed
 //                                     (it was wrongly ÷1000 until 4 Oct 2026)
@@ -22,6 +25,7 @@
 
 const { resolveJobCardItemId } = require('./inventoryDeduction');
 const { cardLengths, specForCard } = require('./cardSpec');
+const { isCountedItem, isDispatchedCard } = require('./countedStock');
 const { logActivity } = require('../db');
 
 const r4 = (n) => Math.round(Number(n) * 1e4) / 1e4;
@@ -47,6 +51,45 @@ const isIncoloy = (tube) => /incoloy/i.test(tube?.name || '') || /^TUB-INC/i.tes
 async function cardCutting(db, jc) {
   const L = cardLengths(await specForCard(db, jc));
   return L && L.cutMm ? { mm: L.cutMm, elements: L.elements } : null;
+}
+
+// The share of a card's Stage 5 tube that left with split cards since
+// dispatched. Split cards made after its latest tube take were cut with it
+// (they get tube_deducted copied and no quantity of their own) — unless one
+// later took its own tube, which then paid for its pieces and its own split
+// cards'. Split cards made before the take, and theirs, were never in it.
+async function dispatchedSplitShare(db, jc) {
+  const suffix = '%JC ' + String(jc.job_card_no).replace(/[\\%_]/g, '\\$&');
+  const took = await db.get(
+    `SELECT MAX(created_at) AS at FROM inventory_transactions
+      WHERE (notes LIKE 'Tube used %' OR notes LIKE 'Scrap tube %') AND notes LIKE $1`, [suffix]);
+  if (!took?.at) return 0;
+  const kids = await db.all(
+    `WITH RECURSIVE d AS (
+        SELECT id, parent_job_card_id, qty, status, dispatched_at, created_at FROM job_cards WHERE parent_job_card_id = $1 AND created_at > $2
+        UNION ALL
+        SELECT j.id, j.parent_job_card_id, j.qty, j.status, j.dispatched_at, j.created_at FROM job_cards j JOIN d ON j.parent_job_card_id = d.id)
+     SELECT * FROM d`, [jc.id, took.at]);
+  if (!kids.length) return 0;
+  // Each split card's latest own take since the parent's.
+  const ownAt = new Map((await db.all(
+    `SELECT c.id, MAX(t.created_at) AS at FROM job_cards c JOIN inventory_transactions t
+        ON (t.notes LIKE 'Tube used %' OR t.notes LIKE 'Scrap tube %') AND t.quantity > 0 AND t.created_at > $2
+       AND right(t.notes, length('JC ' || c.job_card_no)) = 'JC ' || c.job_card_no
+      WHERE c.id = ANY($1) GROUP BY c.id`, [kids.map(k => k.id), took.at])).map(r => [r.id, new Date(r.at)]));
+  const byId = new Map(kids.map(k => [k.id, k]));
+  // A card's own take covers its own pieces, and those of split cards made
+  // from it after that take — not ones split off before it.
+  const paidOwn = (k) => {
+    for (let prev = null, c = k, n = 0; c && n < 20; prev = c, c = byId.get(c.parent_job_card_id), n++) {
+      const at = ownAt.get(c.id);
+      if (at && (!prev || new Date(prev.created_at) > at)) return true;
+    }
+    return false;
+  };
+  const batch = (Number(jc.qty) || 0) + kids.reduce((a, k) => a + (Number(k.qty) || 0), 0);
+  const gone = kids.filter(k => isDispatchedCard(k) && !paidOwn(k)).reduce((a, k) => a + (Number(k.qty) || 0), 0);
+  return batch > 0 ? Math.min(1, gone / batch) : 0;
 }
 
 async function invByCode(db, code, category) {
@@ -148,6 +191,14 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
     const tube = await invByCode(db, oi?.tube_material, 'tube');
     if (isDone && !jc.tube_deducted) {
       if (!tube) return; // Tube Material isn't a "Tube" inventory code — nothing to deduct
+      // Counted stock (owner, 5 Oct 2026): a dispatched card never changes tube
+      // stock again — ticking its Stage 5 (e.g. back for repair) takes nothing.
+      if (isDispatchedCard(jc) && isCountedItem(tube.item_code)) {
+        await logActivity(jc.order_id, jobCardId, 'tube_not_taken',
+          `${tube.item_code} not taken from stock at Stage 5 — this card was dispatched, so it no longer changes tube stock (owner, 5 Oct 2026) — ${detail}`, userId);
+        await db.run('UPDATE job_cards SET tube_deducted=TRUE, tube_used_qty=0, tube_scrap_qty=0 WHERE id=$1', [jobCardId]);
+        return;
+      }
       // Incoloy (owner, 4 Oct 2026): every Incoloy tube was set to 0 because tube
       // had been taken without its purchases ever received. Until that tube's next
       // purchase comes in, Stage 5 takes none of it — work goes on, stock stays at
@@ -184,9 +235,30 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
       if (scrapFt > 0) await consumeFifo(db, tube.id, scrapFt, { type: 'scrap', note: `Scrap tube ${scrapFt} ft (${scrapIn}in × ${qty} pcs) — ${detail}`, userId });
       await db.run('UPDATE job_cards SET tube_deducted=TRUE, tube_used_qty=$1, tube_scrap_qty=$2 WHERE id=$3', [usedFt, scrapFt, jobCardId]);
     } else if (!isDone && jc.tube_deducted) {
+      // Counted stock (owner, 5 Oct 2026): a dispatched card never changes tube
+      // stock again — undoing its Stage 5 puts nothing back, and the card keeps
+      // its tube as taken so ticking Stage 5 again takes nothing more.
+      if (isDispatchedCard(jc) && (!tube || isCountedItem(tube.item_code))) {
+        const qtyFt = r4((Number(jc.tube_used_qty) || 0) + (Number(jc.tube_scrap_qty) || 0));
+        if (qtyFt > 0) {
+          await logActivity(jc.order_id, jobCardId, 'tube_not_returned',
+            `${tube?.item_code || 'Tube'}: ${qtyFt} ft not put back on Stage 5 undo — this card was dispatched, so it no longer changes tube stock (owner, 5 Oct 2026) — ${detail}`, userId);
+        }
+        return;
+      }
       if (tube) {
-        if (Number(jc.tube_used_qty) > 0) await returnFifo(db, tube.id, jc.tube_used_qty, { note: `Reverted tube (Stage 5 undone) — ${detail}`, userId });
-        if (Number(jc.tube_scrap_qty) > 0) await returnFifo(db, tube.id, jc.tube_scrap_qty, { note: `Reverted tube scrap (Stage 5 undone) — ${detail}`, userId });
+        // A card split after its tube was cut holds its split cards' tube too;
+        // the share of those since dispatched stays taken (counted stock).
+        const keep = isCountedItem(tube.item_code) ? await dispatchedSplitShare(db, jc) : 0;
+        const backUsed = r4((Number(jc.tube_used_qty) || 0) * (1 - keep));
+        const backScrap = r4((Number(jc.tube_scrap_qty) || 0) * (1 - keep));
+        if (backUsed > 0) await returnFifo(db, tube.id, backUsed, { note: `Reverted tube (Stage 5 undone) — ${detail}`, userId });
+        if (backScrap > 0) await returnFifo(db, tube.id, backScrap, { note: `Reverted tube scrap (Stage 5 undone) — ${detail}`, userId });
+        const kept = r4((Number(jc.tube_used_qty) || 0) + (Number(jc.tube_scrap_qty) || 0) - backUsed - backScrap);
+        if (kept > 0) {
+          await logActivity(jc.order_id, jobCardId, 'tube_not_returned',
+            `${tube.item_code}: ${kept} ft kept as taken on Stage 5 undo — it was cut for split cards since dispatched (owner, 5 Oct 2026) — ${detail}`, userId);
+        }
       }
       await db.run('UPDATE job_cards SET tube_deducted=FALSE, tube_used_qty=NULL, tube_scrap_qty=NULL WHERE id=$1', [jobCardId]);
     }
