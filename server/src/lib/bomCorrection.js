@@ -5,7 +5,7 @@
 
 const { STAGE_CATEGORY_MAP, FINS_CODES, fgTakes } = require('./inventoryDeduction');
 const { ledgerColumnsReady, recordMove, ledgerForItem, progressTargets, r4, EPS } = require('./stockLedger');
-const { isCountedItem, dispatchedSql } = require('./countedStock');
+const { isCountedItem, heldSql } = require('./countedStock');
 
 function clientDb(client) {
   return {
@@ -21,7 +21,7 @@ function clientDb(client) {
 
 const fmt = (n) => String(r4(n));
 const heldText = (held) => held.map(h =>
-  `${h.code} left as it stands — this line has dispatched job cards (the plain rules would have ${h.dir} ${fmt(h.qty)}${h.unit ? ` ${h.unit}` : ''})`).join('; ');
+  `${h.code} left as it stands — this line has job cards through QC or dispatched (the plain rules would have ${h.dir} ${fmt(h.qty)}${h.unit ? ` ${h.unit}` : ''})`).join('; ');
 
 // sels: [{ id, qty, rework_qty }] already validated by the route.
 // Returns { mode: 'record'|'difference', why, moves:[{code,dir,qty,unit}], short:[{code,need,stock,unit}], summary }.
@@ -89,18 +89,18 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
     const moves = [], short = [];
     const actual = {};        // really taken through the line, after this save
     const waivedNow = {};     // settled without stock, after this save
-    // Counted stock (owner, 5 Oct 2026; lib/countedStock.js): on a line with a
-    // dispatched job card, a corrected list never moves a counted item. What the
-    // line has reached is settled as it stands; cards still in production take
-    // by the new list at QC as usual. A line with no dispatched card is unchanged.
+    // Counted stock (owner, 5–6 Oct 2026; lib/countedStock.js): on a line with a
+    // job card through QC or dispatched, a corrected list never moves a counted
+    // item. What the line has reached is settled as it stands; cards still in
+    // production take by the new list at QC as usual. Other lines are unchanged.
     const counted = {};       // ids held on this save
     const held = [];          // counted items left as they stand
     if (mode === 'difference') {
       const lineOf = Object.fromEntries(newLines.map(l => [String(l.inventory_item_id), l]));
       const invIds = new Set([...newLines.map(l => String(l.inventory_item_id)), ...Object.keys(ledger.net)]);
       let countedIds = new Set([...invIds].filter(id => isCountedItem(lineOf[id]?.item_code || ledger.codes[id])));
-      if (countedIds.size && !(await tx.get(`SELECT 1 FROM job_cards WHERE order_item_id=$1 AND ${dispatchedSql()} LIMIT 1`, [orderItemId]))) {
-        countedIds = new Set();   // no dispatched card on the line: nothing to hold
+      if (countedIds.size && !(await tx.get(`SELECT 1 FROM job_cards WHERE order_item_id=$1 AND ${heldSql()} LIMIT 1`, [orderItemId]))) {
+        countedIds = new Set();   // no card through QC on the line: nothing to hold
       }
       for (const id of [...invIds].sort((a, b) => Number(a) - Number(b))) {   // fixed order: no lock cycles
         const code = lineOf[id]?.item_code || ledger.codes[id];

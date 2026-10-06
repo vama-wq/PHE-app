@@ -28,7 +28,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
   dbmod.logActivity = async (orderId, jc, type, desc) => { logs.push({ jc, type, desc }); };
   const { applyBomCorrection } = require(S + '/src/lib/bomCorrection.js');
   const { applyMaterialDeductions } = require(S + '/src/lib/materialDeduction.js');
-  const { isCountedItem, isDispatchedCard } = require(S + '/src/lib/countedStock.js');
+  const { isCountedItem, isHeldCard } = require(S + '/src/lib/countedStock.js');
 
   const q1 = async (q, p = []) => (await client.query(q, p)).rows[0];
   let failed = false;
@@ -40,8 +40,9 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
   try {
     ok('counted items: every TUB- code and NUT-BR-M4-08 only',
       isCountedItem('TUB-SS304-038-T06') && isCountedItem(' nut-br-m4-08 ') && !isCountedItem('NUT-BR-M5-11') && !isCountedItem('NUT-SS-M4-08'));
-    ok('a dispatched card: one with a dispatch time, or a dispatched status set by hand',
-      isDispatchedCard({ dispatched_at: new Date() }) && isDispatchedCard({ status: 'dispatched' }) && !isDispatchedCard({ status: 'qc_approved' }));
+    ok('a held card: through QC (approved) or dispatched (time or status); not one in production or at QC',
+      isHeldCard({ dispatched_at: new Date() }) && isHeldCard({ status: 'dispatched' }) && isHeldCard({ status: 'qc_approved' })
+      && !isHeldCard({ status: 'in_progress' }) && !isHeldCard({ status: 'qc_pending' }));
 
     const mkItem = async (code, cat, s = 1000, unit = 'pcs') => (await q1(
       `INSERT INTO inventory_items (item_code, name, unit, category, current_stock, unit_cost) VALUES ($1,$1,$2,$3,$4,1) RETURNING id`, [code, unit, cat, s])).id;
@@ -59,7 +60,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const save = (oi, list) => applyBomCorrection(txDb, { orderItemId: oi, userId: 1, userRole: 'owner', sels: list.map(([id, qty]) => ({ id, qty })) });
 
     const ded = require(S + '/src/lib/inventoryDeduction.js');
-    const held = (r) => /left as it stands — this line has dispatched job cards/.test(r.summary);
+    const held = (r) => /left as it stands — this line has job cards through QC or dispatched/.test(r.summary);
 
     // ── A line of 100 pcs: C1 (50) dispatched, C2 (50) QC-approved, not dispatched. 4 a piece. ──
     const CNT = await mkItem('TUB-ZZTEST-CNT', 'Nut');
@@ -107,13 +108,30 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       ok(`${label}: counted item unchanged, plain item moves ${wantPlain}`, near(await stock(CNT), s0.c) && near(await stock(PLN), s0.p + wantPlain), `cnt ${s0.c}→${await stock(CNT)} plain ${s0.p}→${await stock(PLN)} | ${r.summary}`);
     }
 
-    // ── G. No dispatched card on the line: the counted item moves exactly like any other ──
+    // ── G. Every card still in production: the counted item moves exactly like any other ──
+    // (a Stage-15 part, so production has reached it: Brazing ticked on the card)
+    const CNTF = await mkItem('TUB-ZZTEST-FLG', 'Flange');
+    const PLNF = await mkItem('ZZTEST-FLG', 'Flange');
+    const inProd = async (oiX, no) => {
+      const id = await mkCard(oiX, no, 50, 'in_progress', false);
+      await client.query('UPDATE job_cards SET qc_dispatch_qty=NULL WHERE id=$1', [id]);
+      await client.query(`INSERT INTO production_checklist (job_card_id, stage_no, done, done_at) VALUES ($1,15,1,NOW())`, [id]);
+      return id;
+    };
     const oiG = await mkLine(50, 'ZZT-G');
-    await mkCard(oiG, 'ZZT-G1', 50, 'qc_approved', false);
-    for (const inv of [CNT, PLN]) { await takeOn(inv, oiG, 100, 'Order: ZZT-CNT-1 | Dwg: ZZT-G | Partial dispatch QC-approved (JC ZZT-G1)'); await putLine(oiG, inv, 100, 100); }
+    await inProd(oiG, 'ZZT-G1');
+    for (const inv of [CNTF, PLNF]) { await takeOn(inv, oiG, 100, 'Order: ZZT-CNT-1 | Dwg: ZZT-G | Stage 15 Brazing (JC ZZT-G1)'); await putLine(oiG, inv, 100, 100); }
+    s0 = { c: await stock(CNTF), p: await stock(PLNF) };
+    r = await save(oiG, [[CNTF, 150], [PLNF, 150]]);
+    ok('G. every card in production: counted and plain both take 50', near(await stock(CNTF), s0.c - 50) && near(await stock(PLNF), s0.p - 50), r.summary);
+
+    // ── T. A card approved at QC, none dispatched yet: the counted item is held ──
+    const oiT2 = await mkLine(50, 'ZZT-T');
+    await mkCard(oiT2, 'ZZT-TA1', 50, 'qc_approved', false);
+    for (const inv of [CNT, PLN]) { await takeOn(inv, oiT2, 100, 'Order: ZZT-CNT-1 | Dwg: ZZT-T | Partial dispatch QC-approved (JC ZZT-TA1)'); await putLine(oiT2, inv, 100, 100); }
     s0 = { c: await stock(CNT), p: await stock(PLN) };
-    r = await save(oiG, [[CNT, 150], [PLN, 150]]);
-    ok('G. nothing dispatched yet: counted and plain both take 50', near(await stock(CNT), s0.c - 50) && near(await stock(PLN), s0.p - 50), r.summary);
+    r = await save(oiT2, [[CNT, 150], [PLN, 150]]);
+    ok('T. card through QC, waiting at dispatch: counted item held, plain takes 50', near(await stock(CNT), s0.c) && near(await stock(PLN), s0.p - 50) && held(r), r.summary);
 
     // ── H. A card still in production takes by the new list at QC ──
     for (const [label, perPc, want] of [['H. list raised 4 → 5', 5, 250], ['H. list lowered 4 → 3', 3, 150]]) {
@@ -145,6 +163,23 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       ok('S. a card set to dispatched by hand counts as dispatched: nothing moves', near(await stock(CNT5), s0.c) && held(r), r.summary);
     }
 
+    // ── U. The whole-line settle: at dispatch a counted remainder is settled, not taken; at QC it is taken ──
+    for (const [label, atDispatch, wantCnt] of [['U. settle at dispatch', true, 0], ['U. settle at QC approval', false, 100]]) {
+      const oiU = await mkLine(100, `ZZT-U${atDispatch ? 'D' : 'Q'}`);
+      const u1 = await mkCard(oiU, `ZZT-U${atDispatch ? 'D' : 'Q'}1`, 50, 'dispatched', true);
+      await mkCard(oiU, `ZZT-U${atDispatch ? 'D' : 'Q'}2`, 50, 'dispatched', true);
+      for (const inv of [CNT, PLN]) {
+        await takeOn(inv, oiU, 300, `Order: ZZT-CNT-1 | Dwg: ZZT-U | Partial dispatch QC-approved (JC ZZT-U${atDispatch ? 'D' : 'Q'}1)`);
+        await putLine(oiU, inv, 400, 300);
+      }
+      s0 = { c: await stock(CNT), p: await stock(PLN) };
+      await ded.settleItemInventory(txDb, oiU, 1, 'ZZT-CNT-1', { atDispatch });
+      L = await line(oiU, CNT);
+      ok(`${label}: counted item −${wantCnt}, plain item −100${atDispatch ? '; the 100 is settled without stock' : ''}`,
+        near(await stock(CNT), s0.c - wantCnt) && near(await stock(PLN), s0.p - 100) && (!atDispatch || near(L.w, 100)),
+        `cnt ${s0.c}→${await stock(CNT)} plain ${s0.p}→${await stock(PLN)} ${JSON.stringify(L)}`);
+    }
+
     // ── N. A card dispatched between two saves: nothing moves on either ──
     const oiNN = await mkLine(100, 'ZZT-N');
     await mkCard(oiNN, 'ZZT-N1', 50, 'dispatched', true);
@@ -158,15 +193,15 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('N. raised, then the other card dispatched and saved again: nothing moves', near(await stock(CNT), s0.c), r.summary);
 
     // ── O. A plain correction made while nothing was dispatched, then a card dispatched ──
-    const CNT4 = await mkItem('TUB-ZZTEST-CNT4', 'Nut');
+    const CNT4 = await mkItem('TUB-ZZTEST-CNT4', 'Flange');
     const oiO = await mkLine(100, 'ZZT-O');
-    const o1 = await mkCard(oiO, 'ZZT-O1', 50, 'qc_approved', false);
-    await mkCard(oiO, 'ZZT-O2', 50, 'qc_approved', false);
-    for (const no of ['ZZT-O1', 'ZZT-O2']) await takeOn(CNT4, oiO, 100, `Order: ZZT-CNT-1 | Dwg: ZZT-O | Partial dispatch QC-approved (JC ${no})`);
+    const o1 = await inProd(oiO, 'ZZT-O1');
+    await inProd(oiO, 'ZZT-O2');
+    for (const no of ['ZZT-O1', 'ZZT-O2']) await takeOn(CNT4, oiO, 100, `Order: ZZT-CNT-1 | Dwg: ZZT-O | Stage 15 Brazing (JC ${no})`);
     await putLine(oiO, CNT4, 200, 200);
     s0 = { c: await stock(CNT4) };
     r = await save(oiO, [[CNT4, 400]]);
-    ok('O. 2 → 4 a piece with nothing dispatched: takes 200 as usual', near(await stock(CNT4), s0.c - 200), r.summary);
+    ok('O. 2 → 4 a piece with every card in production: takes 200 as usual', near(await stock(CNT4), s0.c - 200), r.summary);
     await client.query('UPDATE job_cards SET status=$1, dispatched_at=NOW() WHERE id=$2', ['dispatched', o1]);
     s0 = { c: await stock(CNT4) };
     r = await save(oiO, [[CNT4, 400]]);
@@ -277,6 +312,14 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       t0 = await stock(TUBE);
       await undo(P);
       ok('R4. the middle card re-took only for itself: the dispatched grandchild\'s 10/50 stays — 44 of 55 ft back', near(await stock(TUBE), t0 + 44), `${t0} → ${await stock(TUBE)}`);
+    }
+
+    // V. Stage 5 undone on a card approved at QC, not dispatched: held
+    {
+      const tV = await tubeCard('ZZT-T11', oiT, TUBE, false, 'qc_approved');
+      t0 = await stock(TUBE);
+      await undo(tV);
+      ok('V. Stage 5 undone on a card through QC (waiting at dispatch): nothing back', near(await stock(TUBE), t0) && (await flags(tV)).tube_deducted === true);
     }
 
     // S2. Stage 5 undone on a card set to dispatched by hand: held

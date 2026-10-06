@@ -15,6 +15,8 @@
 const rework = require('./rework');
 const { cardLengths, specForCard } = require('./cardSpec');
 const { recordMove } = require('./stockLedger');
+const { isCountedItem } = require('./countedStock');
+const dbmod = require('../db');
 
 const STAGE_CATEGORY_MAP = {
   15: ['Flange', 'Flange Cap', 'Flange Spare', 'Brazing EQ'],
@@ -274,9 +276,12 @@ async function deductFinsByLength(db, jc, userId) {
 // genuinely put on again while preparing it for dispatch may be consumed a
 // second time — nuts and washers. Anything else on an FG item's BOM is already
 // in the heater, so deducting it would take the same part out of stock twice.
-async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = 'Consumed for production') {
+// opts.holdCounted: the settle at dispatch — every card is through QC, so a
+// counted item (tube / NUT-BR-M4-08, lib/countedStock.js) is settled without
+// stock instead of taken (owner, 6 Oct 2026).
+async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = 'Consumed for production', { holdCounted = false } = {}) {
   const item = await db.get(
-    `SELECT oi.id, oi.drawing_number, oi.inventory_deducted, o.order_type
+    `SELECT oi.id, oi.order_id, oi.drawing_number, oi.inventory_deducted, o.order_type
        FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id=$1`, [itemId]);
   if (!item || item.inventory_deducted) return; // never double-deduct
   const fgOrder = item.order_type === 'finished_goods';
@@ -295,6 +300,12 @@ async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = '
     if (!fgOrder && FINS_CODES.includes(sel.item_code)) continue; // length-based, handled separately
     const remaining = parseFloat(sel.qty || 0) - parseFloat(sel.qty_deducted || 0) - parseFloat(sel.qty_waived || 0);
     if (remaining <= 1e-4) continue; // rounding dust is not a take
+    if (holdCounted && isCountedItem(sel.item_code)) {
+      await db.run('UPDATE order_item_inventory SET qty_waived = COALESCE(qty_waived,0) + $1 WHERE id=$2', [remaining, sel.id]);
+      await dbmod.logActivity(item.order_id, null, 'inventory_held',
+        `${sel.item_code}: ${Math.round(remaining * 1e4) / 1e4} not taken at dispatch — ${orderCode}${item.drawing_number ? ` · ${item.drawing_number}` : ''} is through QC, so it no longer changes ${sel.item_code} stock (owner, 6 Oct 2026)`, userId);
+      continue;
+    }
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
     noteParts.push(reasonNote);
@@ -444,7 +455,8 @@ async function resolveJobCardItemId(db, jc) {
 //     settled, i.e. dispatched OR QC-approved entirely into Finished Goods with
 //     nothing left to dispatch. Finished Goods counts as "done".
 // Idempotent — the inventory_deducted flag prevents a second deduction.
-async function settleItemInventory(db, orderItemId, userId, orderCode) {
+// opts.atDispatch: called when a card is dispatched (routes/dispatch.js).
+async function settleItemInventory(db, orderItemId, userId, orderCode, { atDispatch = false } = {}) {
   if (!orderItemId) return;
   const item = await db.get('SELECT id, inventory_deducted FROM order_items WHERE id=$1', [orderItemId]);
   if (!item || item.inventory_deducted) return;
@@ -462,7 +474,7 @@ async function settleItemInventory(db, orderItemId, userId, orderCode) {
     ? ['qc_approved', 'dispatched', 'completed'].includes(cards[0].status)
     : cards.every(settled);
 
-  if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)');
+  if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)', { holdCounted: atDispatch });
 }
 
 module.exports = { STAGE_CATEGORY_MAP, FG_PREP_CATEGORIES, fgTakes, buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, replayDeductions, FINS_CODES };

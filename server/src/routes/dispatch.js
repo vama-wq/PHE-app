@@ -161,7 +161,7 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
     const itemId = await resolveJobCardItemId(db, jc);
     if (itemId) {
       const ord = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
-      await settleItemInventory(db, itemId, req.user.id, ord?.order_code || `Order #${jc.order_id}`);
+      await settleItemInventory(db, itemId, req.user.id, ord?.order_code || `Order #${jc.order_id}`, { atDispatch: true });
     }
   } catch (e) { console.error('[dispatch] settle inventory failed:', e.message); }
 
