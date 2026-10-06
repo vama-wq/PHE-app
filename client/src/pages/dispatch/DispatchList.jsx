@@ -344,7 +344,6 @@ export default function DispatchList() {
       {showNewQuery && (
         <NewQueryModal
           jc={showNewQuery}
-          siblings={cards}
           onClose={() => setShowNewQuery(null)}
           onCreated={(queryId) => { setShowNewQuery(null); navigate(`/customer-queries/${queryId}`); }} />
       )}
@@ -888,12 +887,15 @@ function EditDocModal({ doc, onClose, onSave }) {
 // document, product name and drawing no on that new card ("just in case they
 // were wrong completely") — the same corrections never apply to the original
 // card from here, so the expander only shows when a split will happen.
-function NewQueryModal({ jc, siblings = [], onClose, onCreated }) {
+function NewQueryModal({ jc, onClose, onCreated }) {
   // The pieces that went out on this card — what QC routed to dispatch, or the
   // card qty for a card dispatched before QC routing existed (same rule as the server)
   const pieces = Number(jc.qc_dispatch_qty) > 0 ? Number(jc.qc_dispatch_qty) : Number(jc.qty) || 0;
-  // What the new card will be called: -Q1, -Q2… after the -Q children already cut off this card
-  const nextQNo = `${jc.job_card_no}-Q${siblings.filter(c => String(c.job_card_no).startsWith(`${jc.job_card_no}-Q`)).length + 1}`;
+  // What the new card will be called: -Q1, -Q2… The server numbers it by ALL
+  // the -Q children already cut off this card; this list only sees the ones in
+  // dispatch statuses, so the number is shown as "-Q…" and the real card no
+  // comes back with the created query.
+  const nextQNo = `${jc.job_card_no}-Q…`;
 
   const [f, setF] = useState({
     subject: '', description: '', category: 'general',

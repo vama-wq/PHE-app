@@ -858,12 +858,17 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   useEffect(() => { loadBom(); }, [card.id]);
   useEffect(() => { api.get('/finished-goods/locations').then(r => setLocations(r.data.filter(l => l.active))).catch(() => {}); }, []);
 
+  // Every piece rejected in production: nothing to route, so no destination is
+  // asked. The card still goes through Inventory QC (its material must be
+  // settled) and then closes as Rejected (owner, 7 Oct 2026).
+  const allRejected = (card.net_qty ?? card.qty) === 0;
+
   const handleSubmit = async () => {
     setError('');
     if (!qcPhoto) return setError('A photo of the approved material is required');
-    if (destination === 'finished_goods' && (!fgQty || parseInt(fgQty) <= 0))
+    if (!allRejected && destination === 'finished_goods' && (!fgQty || parseInt(fgQty) <= 0))
       return setError('Finished Goods quantity is required');
-    if (destination === 'both') {
+    if (!allRejected && destination === 'both') {
       if (!fgQty || parseInt(fgQty) <= 0) return setError('Finished Goods quantity is required');
       if (!dispatchQty || parseInt(dispatchQty) <= 0) return setError('Dispatch quantity is required');
     }
@@ -893,7 +898,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
 
   return (
     <>
-    <Modal open title="QC Approval — Where are these heaters going?" onClose={onClose} size="sm">
+    <Modal open title={allRejected ? 'QC — all pieces rejected' : 'QC Approval — Where are these heaters going?'} onClose={onClose} size="sm">
       <div className="space-y-4">
         {/* Job card info + qty summary */}
         <div className={`border rounded-lg p-3 text-sm ${card.net_qty < card.qty ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-100'}`}>
@@ -988,8 +993,17 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
           )}
         </div>
 
-        {/* Destination selector — FG-order inventory cards always go to dispatch */}
-        {card.order_type !== 'finished_goods' && <div>
+        {allRejected && (
+          <div className="rounded-lg px-3 py-2 text-sm bg-red-50 border border-red-200 text-red-800">
+            <b>All {card.qty} pieces were rejected in production.</b> Approving sends this card to
+            Inventory QC to settle what it used; after that it closes as <b>Rejected</b>. Nothing is
+            re-made on its own — the owner decides.
+          </div>
+        )}
+
+        {/* Destination selector — FG-order inventory cards always go to dispatch;
+            a card with nothing left has nowhere to go */}
+        {!allRejected && card.order_type !== 'finished_goods' && <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Heater Destination <span className="text-red-500">*</span>
           </label>
@@ -1020,7 +1034,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
         </div>}
 
         {/* Qty inputs for FG / Both */}
-        {(destination === 'finished_goods' || destination === 'both') && (
+        {!allRejected && (destination === 'finished_goods' || destination === 'both') && (
           <>
             <div>
               <label className="label">Qty → Finished Goods <span className="text-red-500">*</span></label>
@@ -1038,7 +1052,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
             </div>
           </>
         )}
-        {destination === 'both' && (
+        {!allRejected && destination === 'both' && (
           <div>
             <label className="label">Qty → Dispatch <span className="text-red-500">*</span></label>
             <input className="input" type="number" min="1"
@@ -1078,7 +1092,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
         <div className="flex gap-3 pt-1">
           <button className="btn-secondary flex-1" onClick={onClose} disabled={saving}>Cancel</button>
           <button className="btn-primary flex-1" onClick={handleSubmit} disabled={saving || !qcPhoto}>
-            {saving ? 'Approving...' : 'Approve product → Inventory QC'}
+            {saving ? 'Approving...' : allRejected ? 'Approve → Inventory QC (closes as Rejected)' : 'Approve product → Inventory QC'}
           </button>
         </div>
       </div>

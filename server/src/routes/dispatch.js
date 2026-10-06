@@ -86,6 +86,11 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
   if (jc.status === 'inventory_qc') {
     return res.status(400).json({ error: 'Cannot dispatch — this job card is waiting for Inventory QC.' });
   }
+  // Every piece was rejected and the card is closed (owner, 7 Oct 2026):
+  // there is nothing on it to send.
+  if (jc.status === 'rejected') {
+    return res.status(400).json({ error: 'Cannot dispatch — this job card was closed as Rejected (all pieces rejected in production).' });
+  }
   // Both QCs are compulsory (owner, 6 Oct 2026): only a card through Inventory
   // QC — or one approved before Inventory QC went live, or already out and
   // coming round again (repair, replacement) — can be dispatched.
@@ -112,12 +117,16 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
   // A partial dispatch splits a child card off the parent; the repair query
   // stays on the parent, so look there too — otherwise the child is treated as
   // a fresh dispatch and wrongly demands an invoice.
+  // The card's OWN repair query comes first: a -Q card (pieces of a dispatched
+  // card that came back) carries its own query, and its parent may be under
+  // another one at the same time — re-dispatching the -Q card must close ITS
+  // query, not the parent's.
   const repairQuery = await db.get(
-    `SELECT id, query_no, job_card_id FROM customer_queries
+    `SELECT id, query_no, job_card_id, created_at FROM customer_queries
      WHERE job_card_id = ANY($1) AND status='product_return' AND return_type='repair'
        AND return_status NOT IN ('repaired_dispatched','debit_note_issued')
-     ORDER BY id DESC LIMIT 1`,
-    [[Number(req.params.jobCardId), jc.parent_job_card_id].filter(Boolean)]
+     ORDER BY (job_card_id = $2) DESC, id DESC LIMIT 1`,
+    [[Number(req.params.jobCardId), jc.parent_job_card_id].filter(Boolean), Number(req.params.jobCardId)]
   );
   const isRepairDispatch = !!repairQuery;
 
@@ -154,11 +163,15 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
     // and its splits) has actually gone out — a partial dispatch leaves the
     // rest still in repair, and closing early would strip the invoice
     // exemption from the pieces still to come.
+    // A child that carries a customer query of its own (a -Q card: pieces cut
+    // off a dispatched card for an earlier or later query) is not part of this
+    // repair — only the card itself and the -P pieces split off it count.
     const pending = await db.get(
-      `SELECT COUNT(*)::int AS n FROM job_cards
-        WHERE (id=$1 OR parent_job_card_id=$1)
-          AND status NOT IN ('dispatched','resolved_dispatched','repaired_dispatched')`,
-      [repairQuery.job_card_id]);
+      `SELECT COUNT(*)::int AS n FROM job_cards c
+        WHERE (c.id=$1 OR c.parent_job_card_id=$1)
+          AND c.status NOT IN ('dispatched','resolved_dispatched','repaired_dispatched')
+          AND NOT EXISTS (SELECT 1 FROM customer_queries x WHERE x.split_job_card_id = c.id AND x.id <> $2)`,
+      [repairQuery.job_card_id, repairQuery.id]);
     if (!pending.n) {
       await db.run(
         `UPDATE customer_queries SET status='resolved', return_status='repaired_dispatched', updated_at=NOW() WHERE id=$1`,

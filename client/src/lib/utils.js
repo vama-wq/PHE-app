@@ -75,7 +75,8 @@ export function getStageLabel(stageNo, jc) {
 // "Xd overdue / Xd to dispatch" badges are meaningless for them.
 export function dispatchPending(jc) {
   if (!jc) return false;
-  if (['dispatched', 'completed', 'repaired_dispatched', 'resolved_dispatched'].includes(jc.status)) return false;
+  // 'rejected': every piece failed in production, closed after Inventory QC — nothing to dispatch
+  if (['dispatched', 'completed', 'repaired_dispatched', 'resolved_dispatched', 'rejected'].includes(jc.status)) return false;
   if (jc.qc_route === 'finished_goods' && (Number(jc.qc_dispatch_qty) || 0) === 0) return false;
   return true;
 }

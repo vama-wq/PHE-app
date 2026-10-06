@@ -24,6 +24,8 @@ export function routeText(route, dispQty, fgQty) {
   if (route === 'finished_goods') return `${fgQty ?? '—'} → Finished Goods`;
   if (route === 'both')           return `${fgQty ?? '—'} → Finished Goods + ${dispQty ?? '—'} → Dispatch`;
   if (route === 'split')          return `${fgQty ?? '—'} → Finished Goods (IO) + ${dispQty ?? '—'} → Dispatch`;
+  // every piece rejected in production — nothing goes anywhere (owner, 7 Oct 2026)
+  if (route === 'rejected')       return 'Nothing to send — all pieces rejected, closes as Rejected';
   return route;
 }
 
@@ -199,6 +201,13 @@ export default function InventoryQCScreen({ cardId, onClose, onChanged }) {
               {card.inventory_qc_at
                 ? 'Inventory QC is done for this card — its inventory can no longer change. This screen is read-only.'
                 : 'This card is not waiting for Inventory QC — read-only.'}
+            </div>
+          )}
+
+          {view.routing?.route === 'rejected' && (
+            <div className="rounded-lg px-3 py-2 text-sm bg-red-50 border border-red-200 text-red-800">
+              <b>All {view.card.qty} pieces rejected</b> — this card closes as <b>Rejected</b> after Inventory QC done.
+              Settle what it used here as for any card; nothing is dispatched or stocked, and nothing is re-made on its own.
             </div>
           )}
 
@@ -381,7 +390,7 @@ export default function InventoryQCScreen({ cardId, onClose, onChanged }) {
             {canFinish && (
               <button className="btn-primary bg-indigo-600 hover:bg-indigo-700 border-indigo-600"
                 onClick={() => setShowDone(true)}>
-                <CheckCircle size={15} /> Inventory QC done → send to Dispatch / Finished Goods
+                <CheckCircle size={15} /> {view.routing?.route === 'rejected' ? 'Inventory QC done → close as Rejected' : 'Inventory QC done → send to Dispatch / Finished Goods'}
               </button>
             )}
           </div>
@@ -778,13 +787,14 @@ function DoneModal({ view, negativeItems, onClose, onConfirm }) {
         </div>
 
         <div className="border border-gray-200 rounded-lg p-3 text-sm">
-          <div className="font-semibold text-gray-700 mb-1">Then the card goes on</div>
+          <div className="font-semibold text-gray-700 mb-1">{r.route === 'rejected' ? 'Then the card closes' : 'Then the card goes on'}</div>
           <ul className="text-xs text-gray-700 space-y-0.5">
+            {r.route === 'rejected' && <li>• Closed as <b>Rejected</b> — all {view.card.qty} pieces rejected at production. Nothing to dispatch or stock; the owner decides about the pieces.</li>}
             {toFg && <li>• {fgQty} piece{fgQty !== 1 ? 's' : ''} into Finished Goods{r.fg_location ? ` (${r.fg_location})` : ''}</li>}
             {(r.route === 'dispatch' || r.route === 'both' || r.route === 'split' || !r.route) && dispQty > 0 && (
               <li>• {dispQty} piece{dispQty !== 1 ? 's' : ''} to Dispatch</li>
             )}
-            {!toFg && dispQty === 0 && <li>• {routeText(r.route, r.dispatch_qty, r.fg_qty) || 'Dispatch'}</li>}
+            {r.route !== 'rejected' && !toFg && dispQty === 0 && <li>• {routeText(r.route, r.dispatch_qty, r.fg_qty) || 'Dispatch'}</li>}
           </ul>
         </div>
 
@@ -806,7 +816,7 @@ function DoneModal({ view, negativeItems, onClose, onConfirm }) {
           <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
           <button className="btn-primary bg-indigo-600 hover:bg-indigo-700 border-indigo-600" onClick={confirm} disabled={saving}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-            {saving ? 'Sending...' : 'Confirm — Inventory QC done'}
+            {saving ? 'Sending...' : r.route === 'rejected' ? 'Confirm — Inventory QC done, close as Rejected' : 'Confirm — Inventory QC done'}
           </button>
         </div>
       </div>

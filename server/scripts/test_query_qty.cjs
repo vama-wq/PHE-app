@@ -203,6 +203,8 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     await client.query(`UPDATE order_item_inventory SET qty_waived=55 WHERE order_item_id=$1 AND inventory_item_id=$2`, [oiA, PIN]);
     const A = await dispatchedCard(oA, oiA, 'ZZT-QA1', 50, { drawing_no: 'ZZTEST-DWG-QA', product_name: 'ZZTEST Heater 1kW' });
     await tick(A, ALL);
+    // The Ready-for-Dispatch row carries the dispatched count the lists show
+    await client.query('UPDATE production_checklist SET dispatched_qty=50 WHERE job_card_id=$1 AND stage_no=29', [A]);
     await client.query(`INSERT INTO job_card_terminals (job_card_id, inventory_item_id, qty, source) VALUES ($1,$2,50,'list')`, [A, PIN]);
     const P1 = await dispatchedCard(oA, oiA, 'ZZT-QA1-P1', 5, { drawing_no: 'ZZTEST-DWG-QA', product_name: 'ZZTEST Heater 1kW', parent_job_card_id: A });
     await tick(P1, ALL);
@@ -259,6 +261,9 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('A4. the checklist is copied onto -Q1 — all 29 done stages INCLUDING 29 Ready for Dispatch (the pieces were finished), with the readings and the worker',
       same(st, ALL) && !!s29 && Number(s29.done) === 1 && !!s8 && s8.value1 === 'v8' && s8.worker_name === 'ZZTEST Worker', `stages ${JSON.stringify(st)} s29 ${JSON.stringify(s29)}`);
     ok('A4. the parent\'s checklist is untouched: 29 stages still done', same(await doneStages(A), ALL));
+    ok('A4. the dispatched count on the Ready-for-Dispatch row follows the pieces: parent 47, -Q1 3 (the dispatch list and job card page read it)',
+      Number((await stageRow(A, 29))?.dispatched_qty) === 47 && Number(s29?.dispatched_qty) === 3,
+      JSON.stringify({ parent: (await stageRow(A, 29))?.dispatched_qty, child: s29?.dispatched_qty }));
     let s1 = await snapshot();
     ok('A5. NOTHING moved in stock: item stock, the list\'s taken / waived, stock rows, rework bins, Finished Goods — all exactly as before',
       !diff(s0, s1), diff(s0, s1));
@@ -407,6 +412,12 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('C5. nor with all its pieces (blank qty)', v.status === 400 && /has not been dispatched/.test(v.body.error || ''), v.body.error);
     ok('C5. the card is untouched: in_progress, 10 pcs, no child, no query on its order',
       (await cardRow(C)).status === 'in_progress' && Number((await cardRow(C)).qty) === 10 && (await kidsOf(C)).length === 0 && (await queriesOf(oC)).length === 0);
+    // A card once dispatched but back on the floor for repair keeps its
+    // dispatched_at — its pieces are not at the customer, so no new query on it.
+    const CR = await dispatchedCard(oC, oiC, 'ZZT-QC2', 10, { status: 'repair_in_progress' });
+    v = await raise({ order_id: oC, job_card_id: CR, subject: 'ZZTEST back for repair', assigned_department: 'production', qty: 2 });
+    ok('C6. a dispatched card back in repair (repair_in_progress, dispatched_at set) cannot be queried again — its pieces are on the floor',
+      v.status === 400 && /has not been dispatched/.test(v.body.error || '') && (await kidsOf(CR)).length === 0, `${v.status} ${v.body.error}`);
     v = await raise({ order_id: oC, subject: 'ZZTEST order-level query', assigned_department: 'accounts' });
     ok('C6. a query on the order with no job card still works as today: no qty, no card, no split',
       v.status === 201 && v.body.job_card_id === null && v.body.qty === null && v.body.qty_of === null && v.body.split_job_card_id === null && (await orderStatus(oC)) === 'customer_query',

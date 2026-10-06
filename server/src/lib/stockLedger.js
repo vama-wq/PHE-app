@@ -33,9 +33,11 @@ const r4 = (n) => Math.round(Number(n) * 10000) / 10000;
 
 // A card in any of these has been through QC: what it was built with is used up.
 // 'inventory_qc' (Product QC passed, Inventory QC still to do) counts too — its
-// whole list was taken when it finished its last stage.
+// whole list was taken when it finished its last stage. So does 'rejected'
+// (every piece rejected, closed after Inventory QC): the material went into
+// pieces that failed, it is not coming back.
 const PASSED_QC = new Set(['inventory_qc', 'qc_approved', 'dispatched', 'completed', 'customer_query', 'product_return',
-  'repair_in_progress', 'resolved_dispatched', 'repaired_dispatched']);
+  'repair_in_progress', 'resolved_dispatched', 'repaired_dispatched', 'rejected']);
 
 // ── Columns this needs (added in initDB; checked here so that a request in the
 // seconds before the migration ran degrades instead of failing) ─────────────

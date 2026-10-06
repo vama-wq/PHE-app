@@ -313,7 +313,15 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   // plan: { route, fgQty, dispQty, splitNotes } — recorded now, carried out at
   // Inventory QC done.
   let plan;
-  if (orderType === 'local_he' || orderType === 'export_he' ||
+  if (netQty === 0) {
+    // Every piece was rejected in production: there is nothing to route, so no
+    // destination is asked. The card still goes through Inventory QC (its
+    // material was used and must be settled) and then closes as Rejected —
+    // "the one that has zero dispatchable will just say rejected after the
+    // inventory is approved" (owner, 7 Oct 2026). Nothing is re-made
+    // automatically: "just close it, I will decide".
+    plan = { route: 'rejected', fgQty: 0, dispQty: 0 };
+  } else if (orderType === 'local_he' || orderType === 'export_he' ||
       ((orderType === 'io_export_he' || orderType === 'io_local_he') && heater_destination)) {
     const dest = heater_destination || 'dispatch';
 
@@ -369,10 +377,16 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   catch (e) { console.error('[qc] last-stage take at Product QC failed:', e.message); }
 
   await logActivity(jc.order_id, jc.id, 'status_changed',
-    `Job card ${jc.job_card_no} Product QC approved — ${plan.dispQty} to dispatch / ${plan.fgQty} to Finished Goods — waiting for Inventory QC`, req.user.id);
+    plan.route === 'rejected'
+      ? `Job card ${jc.job_card_no} Product QC: all ${jc.qty} pieces rejected — waiting for Inventory QC, then closed as Rejected`
+      : `Job card ${jc.job_card_no} Product QC approved — ${plan.dispQty} to dispatch / ${plan.fgQty} to Finished Goods — waiting for Inventory QC`,
+    req.user.id);
   await syncOrderStatus(db, jc.order_id, req.user.id);
   res.json({
-    message: 'Product QC approved — waiting for Inventory QC', status: 'inventory_qc',
+    message: plan.route === 'rejected'
+      ? 'All pieces rejected — waiting for Inventory QC, then the card closes as Rejected'
+      : 'Product QC approved — waiting for Inventory QC',
+    status: 'inventory_qc',
     route: plan.route, dispatch_qty: plan.dispQty, fg_qty: plan.fgQty,
     // the names the old response used, for callers that read them
     qty: plan.route === 'finished_goods' ? plan.fgQty : plan.dispQty, io_qty: plan.fgQty,
@@ -911,8 +925,12 @@ router.put('/:id/inventory-done', authenticate, authorize('design', 'owner', 'ad
     done = await db.withTransaction(async (client) => {
       const tx = clientDb(client);
       // Claimed in one step, so a double press can never take Finished Goods in twice.
+      // A card whose every piece was rejected has nothing to send or stock: it
+      // closes as Rejected right here (owner, 7 Oct 2026) — the material was
+      // settled by Inventory QC, the pieces are decided by the owner.
       const won = await tx.get(
-        `UPDATE job_cards SET status='qc_approved', inventory_qc_at=NOW(), inventory_qc_by=$2
+        `UPDATE job_cards SET status = CASE WHEN qc_route='rejected' THEN 'rejected' ELSE 'qc_approved' END,
+                inventory_qc_at=NOW(), inventory_qc_by=$2
           WHERE id=$1 AND status='inventory_qc' RETURNING id`, [req.params.id, req.user.id]);
       if (!won) throw httpError(400, 'This job card is not waiting for Inventory QC.');
       const jc = await loadCardFull(tx, req.params.id);
@@ -933,7 +951,9 @@ router.put('/:id/inventory-done', authenticate, authorize('design', 'owner', 'ad
   const { jc, route, fgQty, dispQty, fgId } = done;
 
   // The same approval line as before Inventory QC existed.
-  const text = route === 'finished_goods'
+  const text = route === 'rejected'
+    ? `Job card ${jc.job_card_no} closed as Rejected — all ${jc.qty} pieces rejected at production (QC)`
+    : route === 'finished_goods'
     ? `Job card ${jc.job_card_no} QC Approved — ${fgQty} units added to Finished Goods`
     : (route === 'both' || route === 'split')
       ? `Job card ${jc.job_card_no} QC Approved — ${fgQty} units to Finished Goods, ${dispQty} to dispatch`
@@ -948,7 +968,10 @@ router.put('/:id/inventory-done', authenticate, authorize('design', 'owner', 'ad
     if (itemId) await settleItemInventory(db, itemId, req.user.id, jc.order_code || `Order #${jc.order_id}`);
   } catch (e) { console.error('[qc] settle after Inventory QC failed:', e.message); }
 
-  res.json({ message: 'Inventory QC done', status: 'qc_approved', route, dispatch_qty: dispQty, fg_qty: fgQty, finished_good_id: fgId });
+  res.json({
+    message: route === 'rejected' ? 'Inventory QC done — job card closed as Rejected' : 'Inventory QC done',
+    status: jc.status, route, dispatch_qty: dispQty, fg_qty: fgQty, finished_good_id: fgId,
+  });
 });
 
 module.exports = router;

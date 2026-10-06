@@ -5,7 +5,7 @@ const { authenticate, authorize, withCustomerVisibility } = require('../middlewa
 const { uploadToStorage, deleteFromStorage, uploadChatAttachments, uploadJobCard } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { postQueryMessage } = require('../services/actions/customerQueries');
-const { cloneChildCard } = require('../lib/childCard');
+const { cloneChildCard, readyStageFor } = require('../lib/childCard');
 const { clientDb } = require('../lib/bomCorrection');
 const { rescaleAfterSplit } = require('../lib/terminals');
 const multer = require('multer');
@@ -162,8 +162,11 @@ router.get('/:id', authenticate, async (req, res) => {
 // for a card dispatched before QC routing existed.
 const piecesOut = (jc) => (Number(jc.qc_dispatch_qty) > 0 ? Number(jc.qc_dispatch_qty) : Number(jc.qty) || 0);
 // Queries are for pieces at the customer — a card still on the floor has none.
+// Decided by STATUS: a card once dispatched keeps its dispatched_at even after
+// a query brought it back for repair, and pieces in the repair batch on the
+// floor are not at the customer (they are already under a query).
 const WENT_OUT = ['dispatched', 'resolved_dispatched', 'repaired_dispatched'];
-const wentOut = (jc) => !!jc.dispatched_at || WENT_OUT.includes(jc.status);
+const wentOut = (jc) => WENT_OUT.includes(jc.status);
 // Timeline lines written INSIDE the split's transaction, so they go only if the
 // split does (db.logActivity writes through the pool and would survive a rollback).
 const logInTx = (tx, orderId, jobCardId, type, text, userId) => tx.run(
@@ -283,6 +286,19 @@ router.post('/', authenticate, authorize('accounts', 'owner', 'admin'), ...uploa
             `UPDATE job_cards SET qty = GREATEST(1, qty - $1),
                     qc_dispatch_qty = CASE WHEN qc_dispatch_qty IS NULL THEN NULL ELSE GREATEST(0, qc_dispatch_qty - $1) END
               WHERE id=$2`, [qty, parent.id]);
+          // The Ready-for-Dispatch row carries its own dispatched count, which
+          // the dispatch list, the job card page and the Excel export read
+          // ahead of qc_dispatch_qty for a dispatched card — so the parent's
+          // count comes down by the pieces that left it and the -Q card's
+          // copied row says how many it carries. Otherwise the parent keeps
+          // showing "50 dispatched" against a 47-piece card.
+          const readyStage = readyStageFor(parent);
+          await tx.run(
+            `UPDATE production_checklist SET dispatched_qty = GREATEST(0, dispatched_qty - $1)
+              WHERE job_card_id=$2 AND stage_no=$3 AND dispatched_qty IS NOT NULL`, [qty, parent.id, readyStage]);
+          await tx.run(
+            `UPDATE production_checklist SET dispatched_qty = $1 WHERE job_card_id=$2 AND stage_no=$3`,
+            [qty, splitId, readyStage]);
           // Terminal pins: a dispatched card is past pins, and rescaleAfterSplit
           // leaves a card with a last-stage take alone; only an older card with
           // no take has rows to scale. Stock: NOTHING moves on a query split —

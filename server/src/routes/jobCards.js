@@ -892,7 +892,7 @@ router.delete('/:id', authenticate, authorize('admin', 'owner'), async (req, res
 // ── PUT update status ─────────────────────────────────────────────────────────
 // Product QC and Inventory QC are both compulsory (owner, 6 Oct 2026): the
 // statuses they grant — and dispatch — can only be reached through them.
-const QC_ONLY_STATUSES = ['inventory_qc', 'qc_approved', 'dispatched', 'completed', 'resolved_dispatched', 'repaired_dispatched'];
+const QC_ONLY_STATUSES = ['inventory_qc', 'qc_approved', 'dispatched', 'completed', 'resolved_dispatched', 'repaired_dispatched', 'rejected'];
 const HAND_SET_STATUSES = ['pending', 'in_progress', 'on_hold', 'qc_pending'];
 
 router.put('/:id/status', authenticate, authorize('admin', 'owner', 'production'), async (req, res) => {
@@ -978,8 +978,14 @@ router.post('/:id/daily-report', authenticate, authorize('production', 'owner', 
 //   in_progress  → any card in_progress or on_hold
 //   job_card_created → otherwise (cards exist but none started)
 async function syncOrderStatus(db, orderId, userId) {
-  const cards = await db.all(
-    'SELECT status, qc_route, qc_dispatch_qty FROM job_cards WHERE order_id=$1', [orderId]);
+  // A card closed as Rejected (every piece failed, Inventory QC done — owner,
+  // 7 Oct 2026) is out of the order's reckoning: it never dispatches, so it
+  // must not hold the order open, and it is not "done" either — the owner
+  // decides what happens to those pieces. With only rejected cards left the
+  // order keeps the status it has.
+  const cards = (await db.all(
+    'SELECT status, qc_route, qc_dispatch_qty FROM job_cards WHERE order_id=$1', [orderId]))
+    .filter(c => c.status !== 'rejected');
   if (!cards.length) return;
 
   const statuses = cards.map(c => c.status);
@@ -1063,6 +1069,7 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   if (jc.status === 'on_hold')     newStatus = 'on_hold';     // preserve hold — owner must approve
   else if (jc.status === 'qc_approved') newStatus = 'qc_approved'; // preserve QC approval
   else if (jc.status === 'inventory_qc') newStatus = 'inventory_qc'; // Product QC passed — waiting for Inventory QC
+  else if (jc.status === 'rejected')     newStatus = 'rejected';     // closed — every piece rejected
   else if (readyDone)              newStatus = 'qc_pending';  // ready → awaiting QC
   else if (maxStage)               newStatus = 'in_progress';
   else                             newStatus = 'pending';
