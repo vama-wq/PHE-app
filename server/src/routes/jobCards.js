@@ -1635,9 +1635,16 @@ router.put('/:id/hold/approve', authenticate, authorize('owner', 'admin'), async
     WHERE job_card_id=$2 AND status='pending'
   `, [req.user.id, req.params.id]);
 
-  await db.run("UPDATE job_cards SET status='in_progress' WHERE id=$1", [req.params.id]);
+  // Back to where the hold found it: QC pending if its last stage was already
+  // done, else in progress (owner, 7 Oct 2026).
+  const resumed = await db.get(`UPDATE job_cards SET status = CASE WHEN EXISTS (
+          SELECT 1 FROM production_checklist pc
+           WHERE pc.job_card_id = job_cards.id AND pc.done = 1
+             AND pc.stage_no = CASE WHEN job_cards.is_fg THEN 4 ELSE 29 END)
+        THEN 'qc_pending' ELSE 'in_progress' END
+      WHERE id=$1 RETURNING status`, [req.params.id]);
   await logActivity(jc.order_id, jc.id, 'status_changed',
-    `Job card ${jc.job_card_no} hold approved by ${req.user.name} — work resumed`, req.user.id);
+    `Job card ${jc.job_card_no} hold approved by ${req.user.name} — ${resumed?.status === 'qc_pending' ? 'back in QC' : 'work resumed'}`, req.user.id);
   await syncOrderStatus(db, jc.order_id, req.user.id);
 
   res.json({ message: 'Hold approved, work resumed' });

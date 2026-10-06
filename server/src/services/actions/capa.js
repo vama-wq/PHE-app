@@ -101,10 +101,17 @@ async function alreadyDone(db, id) {
 // stopped with nothing on screen to explain why. Shared by approve and waive.
 // Runs inside the caller's transaction (q = get/all/run on that client) and
 // returns the released cards; log them with logReleased AFTER the commit.
+// A card goes back to where the hold found it: a card that had already
+// finished its last stage was waiting for QC, not in production (owner,
+// 7 Oct 2026 — two cards showed "In Progress" on the QC list after a release).
 async function releaseRejectionHold(q, capa, jc) {
   if (capa.trigger_type !== 'rejections') return [];
   return q.all(
-    `UPDATE job_cards SET status='in_progress'
+    `UPDATE job_cards SET status = CASE WHEN EXISTS (
+          SELECT 1 FROM production_checklist pc
+           WHERE pc.job_card_id = job_cards.id AND pc.done = 1
+             AND pc.stage_no = CASE WHEN job_cards.is_fg THEN 4 ELSE 29 END)
+        THEN 'qc_pending' ELSE 'in_progress' END
       WHERE status='on_hold'
         AND (id = $1 OR (order_item_id IS NOT NULL AND order_item_id = $2))
       RETURNING id, job_card_no`,
