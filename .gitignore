@@ -21,3 +21,7 @@ Thumbs.db
 
 # Local uploads (files are in Supabase Storage in production)
 server/uploads/
+
+# a symlinked node_modules (worktrees) must be ignored too — the slash rule only matches a real directory
+server/node_modules
+client/node_modules
