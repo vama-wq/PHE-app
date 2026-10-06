@@ -32,6 +32,7 @@ const STATUS_LABELS = {
   in_progress: 'In Progress',
   on_hold: 'On Hold',
   qc_pending: 'QC Pending',
+  inventory_qc: 'Inventory QC',
   qc_approved: 'QC Approved',
   fg_qc_pending: 'FG QC Pending',
   fg_qc_approved: 'FG QC Approved',

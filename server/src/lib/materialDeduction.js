@@ -22,10 +22,13 @@
 //                                          11mm: 0.027 kg/5in). No ÷1000 — 18 g per 5 inches.
 //     A split child or a replacement card uses the job card it came from (cardSpec.specForCard).
 // Only runs for orders flagged material_deduction=TRUE (created after this feature).
+// A card through Inventory QC (inventory_qc_at set) is closed for good (owner,
+// 6 Oct 2026): its Stage 4/5/6 tick takes nothing and its undo puts nothing back.
 
 const { resolveJobCardItemId } = require('./inventoryDeduction');
 const { cardLengths, specForCard } = require('./cardSpec');
 const { isCountedItem, isHeldCard } = require('./countedStock');
+const { recordMove } = require('./stockLedger');
 const { logActivity } = require('../db');
 
 const r4 = (n) => Math.round(Number(n) * 1e4) / 1e4;
@@ -116,19 +119,30 @@ async function recomputeItemCost(db, itemId, newStock) {
   }
 }
 
+// The stock row for a FIFO move. jobCardId ties it to the card it went to, so
+// Inventory QC reads a card's movements by column; orderItemId + source only
+// when the item is on the card's order line (Inventory QC), so the line's
+// history reads it back exactly (lib/stockLedger.js).
+async function logFifoMove(db, { itemId, type, q, newStock, note, userId, jobCardId = null, orderItemId = null, source = null }) {
+  if (orderItemId) {
+    return recordMove(db, { itemId, type, qty: q, balanceAfter: newStock, notes: note, userId, orderItemId, source, jobCardId });
+  }
+  return db.insert(
+    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by, job_card_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [itemId, type, q, newStock, note, userId, jobCardId]
+  );
+}
+
 // Consume `qty` from an item, drawing down the oldest FIFO lots first. Stock may go
 // negative (shortage stays visible) if lots are insufficient. Logs one transaction.
-async function consumeFifo(db, itemId, qty, { type, note, userId }) {
+async function consumeFifo(db, itemId, qty, { type, note, userId, jobCardId = null, orderItemId = null, source = null }) {
   const q = r4(qty);
   if (!(q > 0)) return;
   const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [itemId]);
   const newStock = r4((Number(inv.current_stock) || 0) - q);
   // Log the transaction FIRST — if it's rejected, stock/lots stay untouched.
-  await db.insert(
-    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6)`,
-    [itemId, type, q, newStock, note, userId]
-  );
+  await logFifoMove(db, { itemId, type, q, newStock, note, userId, jobCardId, orderItemId, source });
   const lots = await db.all(
     'SELECT id, qty_remaining FROM inventory_fifo_lots WHERE item_id=$1 AND qty_remaining > 0 ORDER BY received_at ASC, id ASC',
     [itemId]
@@ -144,16 +158,12 @@ async function consumeFifo(db, itemId, qty, { type, note, userId }) {
 }
 
 // Reverse a consumption: add `qty` back to the oldest lots (up to their original size).
-async function returnFifo(db, itemId, qty, { note, userId }) {
+async function returnFifo(db, itemId, qty, { note, userId, jobCardId = null, orderItemId = null, source = null }) {
   const q = r4(qty);
   if (!(q > 0)) return;
   const inv = await db.get('SELECT current_stock FROM inventory_items WHERE id=$1', [itemId]);
   const newStock = r4((Number(inv.current_stock) || 0) + q);
-  await db.insert(
-    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-     VALUES ($1,'return_from_production',$2,$3,$4,$5)`,
-    [itemId, q, newStock, note, userId]
-  );
+  await logFifoMove(db, { itemId, type: 'return_from_production', q, newStock, note, userId, jobCardId, orderItemId, source });
   const lots = await db.all(
     'SELECT id, qty_original, qty_remaining FROM inventory_fifo_lots WHERE item_id=$1 ORDER BY received_at ASC, id ASC',
     [itemId]
@@ -184,6 +194,17 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
   const orderCode = jc.order_code || `Order #${jc.order_id}`;
   const qty = Number(jc.qty) || 0;
   const detail = `${orderCode}${jc.drawing_no ? ` · ${jc.drawing_no}` : ''} · JC ${jc.job_card_no}`;
+  // Inventory QC done was the final change to this card's inventory (owner,
+  // 6 Oct 2026): ticking Stage 4/5/6 again (e.g. back for repair) takes no
+  // coil, tube, PVC bush or MgO, and undoing one puts none back. The card's
+  // figures stay as Inventory QC left them.
+  if (jc.inventory_qc_at) {
+    const what = { 4: 'coil wire', 5: 'tube', 6: 'filling bush / MgO' }[stageNo];
+    await logActivity(jc.order_id, jobCardId, 'inventory_locked',
+      `Stage ${stageNo} ${isDone ? 'ticked' : 'undone'}: no ${what} ${isDone ? 'taken from' : 'put back to'} stock — this card's inventory was closed at Inventory QC (owner, 6 Oct 2026) — ${detail}`, userId);
+    return;
+  }
+  const jcId = jobCardId;
 
   if (stageNo === 5) {
     const itemId = await resolveJobCardItemId(db, jc);
@@ -231,8 +252,8 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
       const howCut = cut
         ? `${lenMm}mm job card cutting length × ${cut.elements > 1 ? `${lengths} (${qty} × ${cut.elements}in1)` : `${qty} pcs`}`
         : `${lenMm}mm as typed at Stage 5 × ${qty} pcs`;
-      if (usedFt > 0) await consumeFifo(db, tube.id, usedFt, { type: 'dispatch_to_production', note: `Tube used ${usedFt} ft (${howCut}) — ${detail}`, userId });
-      if (scrapFt > 0) await consumeFifo(db, tube.id, scrapFt, { type: 'scrap', note: `Scrap tube ${scrapFt} ft (${scrapIn}in × ${qty} pcs) — ${detail}`, userId });
+      if (usedFt > 0) await consumeFifo(db, tube.id, usedFt, { type: 'dispatch_to_production', jobCardId: jcId, note: `Tube used ${usedFt} ft (${howCut}) — ${detail}`, userId });
+      if (scrapFt > 0) await consumeFifo(db, tube.id, scrapFt, { type: 'scrap', jobCardId: jcId, note: `Scrap tube ${scrapFt} ft (${scrapIn}in × ${qty} pcs) — ${detail}`, userId });
       await db.run('UPDATE job_cards SET tube_deducted=TRUE, tube_used_qty=$1, tube_scrap_qty=$2 WHERE id=$3', [usedFt, scrapFt, jobCardId]);
     } else if (!isDone && jc.tube_deducted) {
       // Counted stock (owner, 5–6 Oct 2026): a card through QC or dispatched never
@@ -252,8 +273,8 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
         const keep = isCountedItem(tube.item_code) ? await dispatchedSplitShare(db, jc) : 0;
         const backUsed = r4((Number(jc.tube_used_qty) || 0) * (1 - keep));
         const backScrap = r4((Number(jc.tube_scrap_qty) || 0) * (1 - keep));
-        if (backUsed > 0) await returnFifo(db, tube.id, backUsed, { note: `Reverted tube (Stage 5 undone) — ${detail}`, userId });
-        if (backScrap > 0) await returnFifo(db, tube.id, backScrap, { note: `Reverted tube scrap (Stage 5 undone) — ${detail}`, userId });
+        if (backUsed > 0) await returnFifo(db, tube.id, backUsed, { jobCardId: jcId, note: `Reverted tube (Stage 5 undone) — ${detail}`, userId });
+        if (backScrap > 0) await returnFifo(db, tube.id, backScrap, { jobCardId: jcId, note: `Reverted tube scrap (Stage 5 undone) — ${detail}`, userId });
         const kept = r4((Number(jc.tube_used_qty) || 0) + (Number(jc.tube_scrap_qty) || 0) - backUsed - backScrap);
         if (kept > 0) {
           await logActivity(jc.order_id, jobCardId, 'tube_not_returned',
@@ -280,13 +301,13 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
       const usedKg = r4(parseFloat(s3?.coil_weight) || 0);   // total weight of all coils (kg)
       // Coil scrap is kg too — "coil is always put in kgs" (owner, 5 Oct 2026).
       const scrapKg = r4(parseFloat(s3?.scrap_value) || 0);   // total coil scrap (kg)
-      if (usedKg > 0) await consumeFifo(db, gauge.id, usedKg, { type: 'dispatch_to_production', note: `Coil wire ${usedKg} Kgs (total weight of all coils, Stage 3) — ${detail}`, userId });
-      if (scrapKg > 0) await consumeFifo(db, gauge.id, scrapKg, { type: 'scrap', note: `Scrap coil ${scrapKg} Kgs (coil scrap, Stage 3) — ${detail}`, userId });
+      if (usedKg > 0) await consumeFifo(db, gauge.id, usedKg, { type: 'dispatch_to_production', jobCardId: jcId, note: `Coil wire ${usedKg} Kgs (total weight of all coils, Stage 3) — ${detail}`, userId });
+      if (scrapKg > 0) await consumeFifo(db, gauge.id, scrapKg, { type: 'scrap', jobCardId: jcId, note: `Scrap coil ${scrapKg} Kgs (coil scrap, Stage 3) — ${detail}`, userId });
       await db.run('UPDATE job_cards SET coil_deducted=TRUE, coil_used_qty=$1, coil_scrap_qty=$2 WHERE id=$3', [usedKg, scrapKg, jobCardId]);
     } else if (!isDone && jc.coil_deducted) {
       if (gauge) {
-        if (Number(jc.coil_used_qty) > 0) await returnFifo(db, gauge.id, jc.coil_used_qty, { note: `Reverted coil wire (Stage 4 undone) — ${detail}`, userId });
-        if (Number(jc.coil_scrap_qty) > 0) await returnFifo(db, gauge.id, jc.coil_scrap_qty, { note: `Reverted coil scrap (Stage 4 undone) — ${detail}`, userId });
+        if (Number(jc.coil_used_qty) > 0) await returnFifo(db, gauge.id, jc.coil_used_qty, { jobCardId: jcId, note: `Reverted coil wire (Stage 4 undone) — ${detail}`, userId });
+        if (Number(jc.coil_scrap_qty) > 0) await returnFifo(db, gauge.id, jc.coil_scrap_qty, { jobCardId: jcId, note: `Reverted coil scrap (Stage 4 undone) — ${detail}`, userId });
       }
       await db.run('UPDATE job_cards SET coil_deducted=FALSE, coil_used_qty=NULL, coil_scrap_qty=NULL WHERE id=$1', [jobCardId]);
     }
@@ -319,15 +340,19 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
         mgoKg = r4(totalInches * mgoKgPerInch);
       }
       const mgoHow = cut ? `${lenMm}mm job card cutting length × ${cut.elements > 1 ? `${lengths} (${qty} × ${cut.elements}in1)` : `${qty} pcs`}` : `${lenMm}mm × ${qty} pcs`;
-      if (pvcQty > 0) await consumeFifo(db, pvc.id, pvcQty, { type: 'dispatch_to_production', note: `Filling bush ${pvcQty} pcs (2 × ${cut && cut.elements > 1 ? `${lengths} elements (${qty} × ${cut.elements}in1)` : `${qty} pcs`}, ${dia}mm dia) — ${detail}`, userId });
-      if (mgoKg > 0) await consumeFifo(db, mgo.id, mgoKg, { type: 'dispatch_to_production', note: `MGO powder ${mgoKg} kg (${dia}mm dia, ${mgoHow}) — ${detail}`, userId });
+      if (pvcQty > 0) await consumeFifo(db, pvc.id, pvcQty, { type: 'dispatch_to_production', jobCardId: jcId, note: `Filling bush ${pvcQty} pcs (2 × ${cut && cut.elements > 1 ? `${lengths} elements (${qty} × ${cut.elements}in1)` : `${qty} pcs`}, ${dia}mm dia) — ${detail}`, userId });
+      if (mgoKg > 0) await consumeFifo(db, mgo.id, mgoKg, { type: 'dispatch_to_production', jobCardId: jcId, note: `MGO powder ${mgoKg} kg (${dia}mm dia, ${mgoHow}) — ${detail}`, userId });
       await db.run('UPDATE job_cards SET fill_deducted=TRUE, fill_pvc_qty=$1, fill_mgo_qty=$2 WHERE id=$3', [pvcQty || null, mgoKg || null, jobCardId]);
     } else if (!isDone && jc.fill_deducted) {
-      if (pvc && Number(jc.fill_pvc_qty) > 0) await returnFifo(db, pvc.id, jc.fill_pvc_qty, { note: `Reverted filling bush (Stage 6 undone) — ${detail}`, userId });
-      if (mgo && Number(jc.fill_mgo_qty) > 0) await returnFifo(db, mgo.id, jc.fill_mgo_qty, { note: `Reverted MGO powder (Stage 6 undone) — ${detail}`, userId });
+      if (pvc && Number(jc.fill_pvc_qty) > 0) await returnFifo(db, pvc.id, jc.fill_pvc_qty, { jobCardId: jcId, note: `Reverted filling bush (Stage 6 undone) — ${detail}`, userId });
+      if (mgo && Number(jc.fill_mgo_qty) > 0) await returnFifo(db, mgo.id, jc.fill_mgo_qty, { jobCardId: jcId, note: `Reverted MGO powder (Stage 6 undone) — ${detail}`, userId });
       await db.run('UPDATE job_cards SET fill_deducted=FALSE, fill_pvc_qty=NULL, fill_mgo_qty=NULL WHERE id=$1', [jobCardId]);
     }
   }
 }
 
-module.exports = { applyMaterialDeductions };
+// The PVC filling bush Stage 6 uses for a tube diameter, and the MgO code.
+const pvcCodeFor = (dia) => (String(dia || '').trim() === '8' ? 'PVC-FB08-M4' : String(dia || '').trim() === '11' ? 'PVC-FB11-M5' : null);
+const MGO_CODE = 'MGO-65A';
+
+module.exports = { applyMaterialDeductions, consumeFifo, returnFifo, invByCode, pvcCodeFor, MGO_CODE, r4 };

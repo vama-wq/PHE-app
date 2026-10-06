@@ -68,6 +68,7 @@ function rules(role, uid) {
   // ── Quality Check ──
   if (is('design', 'owner', 'admin')) {
     add('qc', 'job cards pending QC', `SELECT COUNT(*)::int n FROM job_cards jc WHERE jc.status='qc_pending' OR (jc.status='in_progress' AND EXISTS (SELECT 1 FROM production_checklist WHERE job_card_id=jc.id AND stage_no=29 AND done=1))`);
+    add('qc', 'job cards waiting for Inventory QC', `SELECT COUNT(*)::int n FROM job_cards WHERE status='inventory_qc'`);
     add('qc', 'received materials awaiting QC', `SELECT COUNT(*)::int n FROM purchase_order_items WHERE received=TRUE AND qc_status IS NULL`);
     add('qc', 'returns awaiting QC check', `SELECT COUNT(*)::int n FROM customer_queries WHERE status='product_return' AND return_status='qc_check'`);
   }

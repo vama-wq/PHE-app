@@ -5,6 +5,7 @@ const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromSto
 const { createNotification } = require('./notifications');
 const { applyMaterialDeductions } = require('../lib/materialDeduction');
 const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventoryDeduction');
+const { takeLastStage } = require('../lib/lastStageTake');
 const { cardLengths, specForCard } = require('../lib/cardSpec');
 const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit } = require('../lib/jobCardSplit');
 const { buildDraft, draftQuestions } = require('../lib/jobCardDraft');
@@ -67,11 +68,23 @@ router.get('/', authenticate, async (req, res) => {
       cq_active.debit_note_no as active_query_debit_note_no,
       cq_active.created_at as active_query_created_at,
       (SELECT COUNT(*) FROM quotations WHERE order_id = jc.order_id) as quotation_count,
-      (SELECT COUNT(*) FROM activity_log WHERE job_card_id = jc.id AND activity_type = 'price_requested') as price_requested
+      (SELECT COUNT(*) FROM activity_log WHERE job_card_id = jc.id AND activity_type = 'price_requested') as price_requested,
+      -- Who passed the card at Product QC and at Inventory QC, and what
+      -- Inventory QC changed — shown on the dispatch screens (owner, 6 Oct 2026).
+      pqc.name as product_qc_by_name,
+      iqc.name as inventory_qc_by_name,
+      CASE WHEN jc.inventory_qc_at IS NOT NULL THEN
+        (SELECT COUNT(*) FROM activity_log WHERE job_card_id = jc.id AND activity_type = 'inventory_qc') END::int as inventory_qc_changes,
+      CASE WHEN jc.inventory_qc_at IS NOT NULL THEN
+        (SELECT COUNT(*) FROM activity_log WHERE job_card_id = jc.id AND activity_type = 'inventory_qc' AND description LIKE 'Inventory QC: rework%') END::int as inventory_qc_rework,
+      CASE WHEN jc.inventory_qc_at IS NOT NULL THEN
+        (SELECT COUNT(*) FROM activity_log WHERE job_card_id = jc.id AND activity_type = 'inventory_qc' AND description LIKE 'Inventory QC: scrap%') END::int as inventory_qc_scrap
     FROM job_cards jc
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
     LEFT JOIN users u ON jc.uploaded_by = u.id
+    LEFT JOIN users pqc ON pqc.id = jc.product_qc_by
+    LEFT JOIN users iqc ON iqc.id = jc.inventory_qc_by
     LEFT JOIN customer_queries cq_active
       ON cq_active.job_card_id = COALESCE(jc.parent_job_card_id, jc.id)
       AND cq_active.status IN ('open','in_progress','product_return')
@@ -838,7 +851,7 @@ router.post('/:id/daily-report', authenticate, authorize('production', 'owner', 
 // Priority (highest wins):
 //   dispatched   → all job cards dispatched
 //   qc_approved  → any card qc_approved (and not all dispatched)
-//   qc_pending   → any card qc_pending
+//   qc_pending   → any card qc_pending (or waiting for Inventory QC)
 //   in_progress  → any card in_progress or on_hold
 //   job_card_created → otherwise (cards exist but none started)
 async function syncOrderStatus(db, orderId, userId) {
@@ -879,7 +892,9 @@ async function syncOrderStatus(db, orderId, userId) {
   } else if (nonDispatched.length > 0 && nonDispatched.every(s => s === 'qc_approved')) {
     // All remaining (non-dispatched) cards must be qc_approved
     newOrderStatus = 'qc_approved';
-  } else if (statuses.some(s => s === 'qc_pending')) {
+  } else if (statuses.some(s => s === 'qc_pending' || s === 'inventory_qc')) {
+    // A card past Product QC but waiting for Inventory QC is still in QC as
+    // far as the order is concerned — no separate order status for it.
     newOrderStatus = 'qc_pending';
   } else if (statuses.some(s => s === 'in_progress' || s === 'on_hold')) {
     newOrderStatus = 'in_progress';
@@ -924,6 +939,7 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   let newStatus;
   if (jc.status === 'on_hold')     newStatus = 'on_hold';     // preserve hold — owner must approve
   else if (jc.status === 'qc_approved') newStatus = 'qc_approved'; // preserve QC approval
+  else if (jc.status === 'inventory_qc') newStatus = 'inventory_qc'; // Product QC passed — waiting for Inventory QC
   else if (readyDone)              newStatus = 'qc_pending';  // ready → awaiting QC
   else if (maxStage)               newStatus = 'in_progress';
   else                             newStatus = 'pending';
@@ -977,7 +993,8 @@ async function checkCumulativeRejections(db, jobCardId, userId) {
   // Hold the whole family. The siblings share a drawing, tooling and operator,
   // so a cause found on one almost certainly applies to the rest — letting them
   // run means building more of the same defect while the cause is unknown.
-  // Cards already dispatched or QC-approved are past production and left alone.
+  // Cards already dispatched or QC-approved are past production and left alone,
+  // and so is a card waiting for Inventory QC (its Product QC has passed).
   const held = await db.all(
     `UPDATE job_cards SET status='on_hold'
       WHERE id = ANY($1) AND status IN ('pending','in_progress','qc_pending')
@@ -1300,6 +1317,15 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     }
   }
 
+  // Last stage (owner, 6 Oct 2026): completing it takes the rest of the card's
+  // list — stage 29 on a production card, stage 4 on a finished-goods card.
+  // Once per card, never blocks saving the stage, and runs whether or not this
+  // tick puts the card on hold below.
+  if (done && ((stageNo === 29 && !isFg) || (stageNo === 4 && isFg))) {
+    try { await takeLastStage(db, jcCard, req.user.id); }
+    catch (e) { console.error('[checklist] last-stage take failed:', e.message); }
+  }
+
   // Rejections now gate through the CAPA (3+ total, which covers 3+ at a
   // single stage too) — the old per-stage quick-approve hold is retired.
   if (done) {
@@ -1358,7 +1384,7 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
 
     const db = getDB();
 
-    const jcRow = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);
+    const jcRow = await db.get('SELECT id, status, is_fg FROM job_cards WHERE id=$1', [jobCardId]);
     const jcStatus = jcRow?.status;
     if (jcStatus === 'on_hold') {
       return res.status(400).json({ error: 'Work is on hold. Owner must approve before continuing.', code: 'ON_HOLD' });
@@ -1453,6 +1479,12 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
     }
 
     if (markDone) {
+      // Marking the last stage done here takes the rest of the card's list,
+      // as on the checklist route (owner, 6 Oct 2026).
+      if (jcRow && ((stageNo === 29 && !jcRow.is_fg) || (stageNo === 4 && jcRow.is_fg))) {
+        try { await takeLastStage(db, jcRow, req.user.id); }
+        catch (e) { console.error('[checklist photo] last-stage take failed:', e.message); }
+      }
       // Rejections gate through the CAPA (3+ total) — per-stage hold retired.
       await checkCumulativeRejections(db, jobCardId, req.user.id);
       const jcCheck = await db.get('SELECT status FROM job_cards WHERE id=$1', [jobCardId]);

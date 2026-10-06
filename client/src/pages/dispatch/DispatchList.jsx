@@ -19,6 +19,32 @@ function routeLabel(route, dispQty, fgQty) {
   return route;
 }
 
+// Who passed the card at Product QC and at Inventory QC, and what Inventory QC
+// changed (owner, 6 Oct 2026) — so dispatch sees the card was checked twice.
+// Cards approved before Inventory QC existed show neither line.
+function QcPassInfo({ jc, className = '' }) {
+  if (!jc.product_qc_at && !jc.inventory_qc_at) return null;
+  const n = Number(jc.inventory_qc_changes) || 0;
+  const extra = [
+    Number(jc.inventory_qc_rework) > 0 && `rework ${jc.inventory_qc_rework}`,
+    Number(jc.inventory_qc_scrap) > 0 && `scrap ${jc.inventory_qc_scrap}`,
+  ].filter(Boolean);
+  return (
+    <div className={`text-xs text-gray-500 space-y-0.5 ${className}`}>
+      {jc.product_qc_at && (
+        <div>Product QC: {jc.product_qc_by_name || '—'}, {fmtDateTime(jc.product_qc_at)}</div>
+      )}
+      {jc.inventory_qc_at && (
+        <div>
+          Inventory QC: {jc.inventory_qc_by_name || '—'}, {fmtDateTime(jc.inventory_qc_at)}
+          {' · '}{n === 0 ? 'no changes' : `${n} change${n !== 1 ? 's' : ''}`}
+          {extra.length > 0 && ` (${extra.join(', ')})`}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DispatchList() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
@@ -240,7 +266,10 @@ export default function DispatchList() {
                               <div className="text-xs text-green-600 font-medium">Dispatched {fmtDate(jc.dispatched_at)}</div>
                             )}
                           </td>
-                          <td className="table-cell"><StatusBadge jc={jc} /></td>
+                          <td className="table-cell">
+                            <StatusBadge jc={jc} />
+                            <QcPassInfo jc={jc} className="mt-1" />
+                          </td>
                           <td className="table-cell text-right">
                             <div className="flex items-center justify-end gap-2">
                               <button
@@ -376,6 +405,7 @@ function ChecklistSummaryModal({ jc, onClose }) {
                 <span className="text-sm text-green-700">
                   {routeLabel(jc.qc_route, jc.qc_dispatch_qty, jc.qc_fg_qty)}
                 </span>
+                <QcPassInfo jc={jc} className="mt-0.5" />
               </div>
             </div>
           )}
@@ -669,6 +699,7 @@ function DispatchDocModal({ jc, onClose, onSave }) {
         {jc.qc_route && (
           <span className="text-blue-600 ml-2">({routeLabel(jc.qc_route, jc.qc_dispatch_qty, jc.qc_fg_qty)})</span>
         )}
+        <QcPassInfo jc={jc} className="mt-1" />
       </div>
 
       <div className="space-y-5">

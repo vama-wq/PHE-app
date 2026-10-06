@@ -1514,11 +1514,24 @@ async function initDB(retries = 20, delayMs = 10000) {
         -- middle of an order's life rather than an exception.
         'partially_dispatched'
       ))`);
-      await pool.query(`ALTER TABLE job_cards DROP CONSTRAINT IF EXISTS job_cards_status_check`);
-      await pool.query(`ALTER TABLE job_cards ADD CONSTRAINT job_cards_status_check CHECK(status IN (
-        'pending','in_progress','on_hold','qc_pending','qc_approved','completed','dispatched',
-        'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'
-      ))`);
+      // 'inventory_qc' (owner, 6 Oct 2026): Product QC passed, waiting for
+      // Inventory QC. It must be in THIS list too — this runs on every boot, and
+      // re-adding the constraint without it would fail once any card is there,
+      // silently skipping every migration after it. Dropped and re-added in one
+      // transaction, so the table is never left without the check.
+      {
+        const c = await pool.connect();
+        try {
+          await c.query(`BEGIN`);
+          await c.query(`ALTER TABLE job_cards DROP CONSTRAINT IF EXISTS job_cards_status_check`);
+          await c.query(`ALTER TABLE job_cards ADD CONSTRAINT job_cards_status_check CHECK(status IN (
+            'pending','in_progress','on_hold','qc_pending','inventory_qc','qc_approved','completed','dispatched',
+            'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched'
+          ))`);
+          await c.query(`COMMIT`);
+        } catch (e) { await c.query(`ROLLBACK`).catch(() => {}); throw e; }
+        finally { c.release(); }
+      }
 
       // ── Kotak reconciliation, 13 – 24 Aug 2026 ───────────────────────────────
       // Tallied line by line against the Kotak statement (a/c XX5595, 13–24 Aug:
@@ -2299,6 +2312,25 @@ async function initDB(retries = 20, delayMs = 10000) {
       } catch (e) {
         console.error('[short-close] one-time settle failed (will retry next start):', e.message);
       }
+
+      // Inventory QC (owner, 6 Oct 2026). Product QC → Inventory QC → Dispatch:
+      // the rest of a card's list is taken when it completes its last stage
+      // (last_stage_taken_at — once per card), Product QC records where the
+      // pieces go (qc_route / qty, plus the FG location and split note it used
+      // to apply at once), and Inventory QC reviews and corrects everything the
+      // card took, then sends it on. inventory_qc_at marks the final change to
+      // the card's inventory, ever. Each statement simple and idempotent.
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS last_stage_taken_at TIMESTAMPTZ`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS product_qc_at TIMESTAMPTZ`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS product_qc_by INTEGER`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS inventory_qc_at TIMESTAMPTZ`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS inventory_qc_by INTEGER`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS qc_fg_location TEXT`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS qc_split_notes TEXT`);
+      // The new card status 'inventory_qc' is allowed by job_cards_status_check
+      // above (with the order statuses), which is re-applied on every boot.
+      // Inventory QC reads a card's own stock movements by this column.
+      await pool.query(`CREATE INDEX IF NOT EXISTS inventory_transactions_job_card ON inventory_transactions (job_card_id)`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');

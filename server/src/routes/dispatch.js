@@ -81,6 +81,12 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
     return res.status(400).json({ error: 'Cannot dispatch — job card is on hold. Owner must approve the hold first.' });
   }
 
+  // Product QC passed but Inventory QC not done: the card is not ready for
+  // dispatch yet — Inventory QC done sends it on (owner, 6 Oct 2026).
+  if (jc.status === 'inventory_qc') {
+    return res.status(400).json({ error: 'Cannot dispatch — this job card is waiting for Inventory QC.' });
+  }
+
   // Cards QC-routed entirely into Finished Goods have nothing to dispatch
   if (jc.status === 'qc_approved' && jc.qc_route === 'finished_goods' && (Number(jc.qc_dispatch_qty) || 0) === 0) {
     return res.status(400).json({ error: 'Nothing to dispatch — QC sent the entire quantity to Finished Goods.' });

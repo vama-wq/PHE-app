@@ -32,7 +32,7 @@ const viaSuffix = (via) => (via === 'whatsapp' ? ' (via WhatsApp)' : '');
 // Card statuses in the words the factory uses.
 const STATUS_WORDS = {
   pending: 'not started', in_progress: 'in production', on_hold: 'on hold',
-  qc_pending: 'waiting for QC', qc_approved: 'QC approved', completed: 'completed',
+  qc_pending: 'waiting for QC', inventory_qc: 'waiting for Inventory QC', qc_approved: 'QC approved', completed: 'completed',
   dispatched: 'dispatched', resolved_dispatched: 'dispatched', repaired_dispatched: 'dispatched',
   customer_query: 'under a customer query', product_return: 'returned by the customer',
   repair_in_progress: 'under repair', packaging: 'in packaging',
@@ -161,8 +161,8 @@ async function approveSplitRequest(db, { requestId, actor, via = 'app', refuseIf
       const childNo = `${jc.job_card_no}-P${parseInt(childCount.n, 10) + 1}`;
 
       const { rows } = await client.query(
-        `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name, replacement_query_id, tube_deducted, coil_deducted, fill_deducted, is_fg, fg_source_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
+        `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name, replacement_query_id, tube_deducted, coil_deducted, fill_deducted, is_fg, fg_source_id, last_stage_taken_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING id`,
         [childNo, jc.order_id, sr.qty, jc.dispatch_date, jc.current_stage || 0, jc.punching, jc.drawing_no, jc.product_name,
          childStatus,
          `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id, jc.order_item_id,
@@ -178,7 +178,11 @@ async function approveSplitRequest(db, { requestId, actor, via = 'app', refuseIf
          // card. Without these the child falls back to the full 29-stage
          // production checklist for material it never produced — it was drawn
          // from FG stock. fg_source_id keeps it pointing at the same FG row.
-         jc.is_fg || false, jc.fg_source_id || null]);
+         jc.is_fg || false, jc.fg_source_id || null,
+         // Same for the last-stage take (owner, 6 Oct 2026): if the parent has
+         // already completed its last stage, its take covered the pre-split
+         // quantity — the split pieces included — so the child takes nothing more.
+         jc.last_stage_taken_at || null]);
       const childId = rows[0].id;
       // The split pieces went through the parent's completed stages as part of the
       // batch — copy those rows (values, worker, time, notes) so their records

@@ -5,6 +5,10 @@
 //   • Stage 21 (Nipple Press) completes  → nipple categories deduct
 //   • Stage 15 (Brazing)      completes  → flange + brazing categories deduct
 //   • QC clearance (split-aware)         → everything still remaining deducts
+//     (legacy cards). From 6 Oct 2026 (owner) the rest of a card's list is taken
+//     when the card completes its LAST stage instead (lib/lastStageTake.js), and
+//     QC reviews and corrects it at Inventory QC — the item then settles at QC /
+//     dispatch without taking anything more.
 // order_item_inventory.qty_deducted tracks how much of each BOM line has been
 // consumed so far (stage triggers prorate by job-card qty / item qty), and
 // order_items.inventory_deducted marks the item fully settled.
@@ -71,7 +75,8 @@ const FINS_CODES = Object.keys(FINS_WEIGHT_PER_BASE);
 // bin turns out short, the rest comes from stock with a note and the line's
 // rework portion shrinks to what was really taken, so no phantom reservation
 // lingers. Production is never blocked here.
-async function deductLine(db, sel, dedQty, note, userId) {
+// opts.jobCardId: the card this take is for, written on the stock row.
+async function deductLine(db, sel, dedQty, note, userId, { jobCardId = null } = {}) {
   const inv = await db.get('SELECT * FROM inventory_items WHERE id=$1', [sel.inventory_item_id]);
   if (!inv || !(dedQty > 0)) return;
 
@@ -82,7 +87,7 @@ async function deductLine(db, sel, dedQty, note, userId) {
     fromRework = Math.min(dedQty, wantRework, available);
     if (fromRework > 0) {
       await rework.move(db, { itemId: sel.inventory_item_id, kind: 'draw', qty: fromRework,
-        ref: await lineRef(db, sel), notes: note, userId });
+        ref: { ...(await lineRef(db, sel)), job_card_id: jobCardId }, notes: note, userId });
       await db.run('UPDATE order_item_inventory SET rework_deducted = COALESCE(rework_deducted,0) + $1 WHERE id=$2',
         [fromRework, sel.id]);
     }
@@ -102,7 +107,7 @@ async function deductLine(db, sel, dedQty, note, userId) {
       [fromStock, sel.inventory_item_id])).current_stock);
     await recordMove(db, { itemId: sel.inventory_item_id, type: 'dispatch_to_production', qty: fromStock, balanceAfter: newStock,
       notes: fromRework > 0 ? `${note} | ${fromRework} from rework bin` : note, userId,
-      orderItemId: sel.order_item_id || null, source: 'bom' });
+      orderItemId: sel.order_item_id || null, source: 'bom', jobCardId });
   }
   await db.run('UPDATE order_item_inventory SET qty_deducted = COALESCE(qty_deducted,0) + $1 WHERE id=$2', [dedQty, sel.id]);
 }
@@ -121,6 +126,9 @@ async function lineRef(db, sel) {
 async function deductStageCategories(db, jc, stageNo, userId) {
   const cats = STAGE_CATEGORY_MAP[stageNo];
   if (!cats || !jc) return;
+  // Inventory QC done is the final change to a card's inventory (owner, 6 Oct
+  // 2026): re-ticking a stage on it later (e.g. a repair) takes nothing.
+  if (jc.inventory_qc_at) return;
   const itemId = await resolveJobCardItemId(db, jc);
   if (!itemId) return;
   const item = await db.get('SELECT id, drawing_number, quantity, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
@@ -143,7 +151,7 @@ async function deductStageCategories(db, jc, stageNo, userId) {
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
     noteParts.push(`${STAGE_LABEL[stageNo]} (JC ${jc.job_card_no})`);
-    await deductLine(db, sel, ded, noteParts.join(' | '), userId);
+    await deductLine(db, sel, ded, noteParts.join(' | '), userId, { jobCardId: jc.id });
   }
 }
 
@@ -195,14 +203,18 @@ async function deductPartialAtQC(db, jc, userId) {
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
     noteParts.push(`Partial dispatch QC-approved (JC ${jc.job_card_no})`);
-    await deductLine(db, sel, ded, noteParts.join(' | '), userId);
+    await deductLine(db, sel, ded, noteParts.join(' | '), userId, { jobCardId: jc.id });
   }
 }
 
 // Fins by tube length: at QC approval, each fins BOM line deducts kgs computed
 // from the job card's finished length (else this card's Stage-8 Total Length) —
 // not the BOM qty.
-async function deductFinsByLength(db, jc, userId) {
+// opts.qty: the last-stage take (owner, 6 Oct 2026) — fins for the card's FULL
+// quantity, every piece built, taken when the card completes its last stage
+// rather than on the QC-approved qty. Rejected / remade differences are
+// corrected at Inventory QC.
+async function deductFinsByLength(db, jc, userId, { qty = null } = {}) {
   if (!jc || jc.is_fg) return; // FG inventory cards have no Draw stage
   // Once per card. Nothing used to stop this running again on a second QC
   // cycle, and a rejection that returns work to stage 29 settles too — so a
@@ -210,8 +222,14 @@ async function deductFinsByLength(db, jc, userId) {
   // pieces that were rejected.
   const guard = await db.get('SELECT fins_deducted, status, qc_dispatch_qty, qc_fg_qty FROM job_cards WHERE id=$1', [jc.id]);
   if (guard?.fins_deducted) return;
-  const approved = (Number(guard?.qc_dispatch_qty) || 0) + (Number(guard?.qc_fg_qty) || 0);
-  if (guard?.status !== 'qc_approved' || !(approved > 0)) return;
+  let approved;
+  if (qty != null) {
+    approved = Number(qty) || 0;
+    if (!(approved > 0)) return;
+  } else {
+    approved = (Number(guard?.qc_dispatch_qty) || 0) + (Number(guard?.qc_fg_qty) || 0);
+    if (guard?.status !== 'qc_approved' || !(approved > 0)) return;
+  }
   const itemId = await resolveJobCardItemId(db, jc);
   if (!itemId) return;
   const item = await db.get('SELECT id, drawing_number, inventory_deducted FROM order_items WHERE id=$1', [itemId]);
@@ -248,8 +266,9 @@ async function deductFinsByLength(db, jc, userId) {
     return;
   }
 
-  // Per-piece weight × QC-approved qty of THIS card (dispatch + FG). A partial
-  // dispatch therefore deducts fins only for the pieces actually approved.
+  // Per-piece weight × QC-approved qty of THIS card (dispatch + FG) — or, at the
+  // last stage, the card's full qty. A partial dispatch therefore deducts fins
+  // only for its own pieces.
   const pcs = fromCard ? approved * spec.elements : approved;
 
   const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
@@ -262,7 +281,7 @@ async function deductFinsByLength(db, jc, userId) {
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
     noteParts.push(`Fins by tube length: ${lengthMm}mm${fromCard ? ' (job card)' : ' (Stage 8)'} × ${perBase}kg/${FINS_MM_BASE}mm × ${pcs}${fromCard && spec.elements > 1 ? ` (${approved} × ${spec.elements}in1)` : ''} pcs = ${kgs}kg (JC ${jc.job_card_no})`);
-    await deductLine(db, sel, kgs, noteParts.join(' | '), userId);
+    await deductLine(db, sel, kgs, noteParts.join(' | '), userId, { jobCardId: jc.id });
     totalKg += kgs;
   }
   await db.run('UPDATE job_cards SET fins_deducted=TRUE, fins_kg=$1 WHERE id=$2', [totalKg, jc.id]);
@@ -371,7 +390,7 @@ async function applyRemakeExtras(db, jc, extras, userId) {
       [qty, invId])).current_stock);
     await recordMove(db, { itemId: invId, type: 'dispatch_to_production', qty, balanceAfter: newStock,
       notes: `Order: ${orderCode} | Extra consumption for remade qty (QC approval, JC ${jc.job_card_no})`, userId,
-      orderItemId: await resolveJobCardItemId(db, jc), source: 'remake' });
+      orderItemId: await resolveJobCardItemId(db, jc), source: 'remake', jobCardId: jc.id });
   }
 }
 
@@ -462,7 +481,7 @@ async function settleItemInventory(db, orderItemId, userId, orderCode, { atDispa
   if (!item || item.inventory_deducted) return;
 
   const cards = await db.all(
-    'SELECT status, qc_dispatch_qty FROM job_cards WHERE order_item_id=$1', [orderItemId]
+    'SELECT status, qc_dispatch_qty, last_stage_taken_at FROM job_cards WHERE order_item_id=$1', [orderItemId]
   );
   if (!cards.length) return;
 
@@ -474,7 +493,71 @@ async function settleItemInventory(db, orderItemId, userId, orderCode, { atDispa
     ? ['qc_approved', 'dispatched', 'completed'].includes(cards[0].status)
     : cards.every(settled);
 
-  if (ready) await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)', { holdCounted: atDispatch });
+  if (!ready) return;
+  // New flow (owner, 6 Oct 2026): every card took the rest of its list at its
+  // last stage, and QC corrected it at Inventory QC — that was the final change.
+  // The item settles WITHOUT taking anything more: what is left on a line
+  // (rounding, pieces never carded) is settled without stock. An item with any
+  // card made before this (no last-stage take) keeps the old settle below.
+  if (cards.every(c => c.last_stage_taken_at)) {
+    await settleWithoutTaking(db, orderItemId);
+    return;
+  }
+  // Mixed item (older cards and new-flow ones): the new-flow cards' share is
+  // settled first — their takes were final at Inventory QC — so the old sweep
+  // only takes the older cards' remainder and never undoes QC's give-backs.
+  if (cards.some(c => c.last_stage_taken_at)) await settleNewFlowShares(db, orderItemId);
+  await deductItemInventory(db, orderItemId, orderCode, userId, 'Consumed (QC/dispatch)', { holdCounted: atDispatch });
 }
 
-module.exports = { STAGE_CATEGORY_MAP, FG_PREP_CATEGORIES, fgTakes, buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, replayDeductions, FINS_CODES };
+// On a mixed item, the share of each line that belongs to the cards that took
+// at their last stage is settled as it stands: whatever of it is not yet taken
+// on the line is written to qty_waived, so the old sweep leaves it alone.
+async function settleNewFlowShares(db, orderItemId) {
+  const item = await db.get(
+    `SELECT oi.quantity, o.order_type,
+            (SELECT COALESCE(SUM(qty),0) FROM job_cards WHERE order_item_id = oi.id AND last_stage_taken_at IS NOT NULL) AS new_qty
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id=$1`, [orderItemId]);
+  const itemQty = Number(item?.quantity) || 0;
+  const share = itemQty > 0 ? Math.min(1, Number(item.new_qty) / itemQty) : 0;
+  if (!(share > 0)) return;
+  const fgOrder = item?.order_type === 'finished_goods';
+  const sels = await db.all(
+    `SELECT oii.*, ii.item_code FROM order_item_inventory oii
+       JOIN inventory_items ii ON ii.id = oii.inventory_item_id WHERE oii.order_item_id=$1`, [orderItemId]);
+  for (const sel of sels) {
+    if (!fgOrder && FINS_CODES.includes(sel.item_code)) continue;
+    const total = parseFloat(sel.qty || 0);
+    const settledNow = parseFloat(sel.qty_deducted || 0) + parseFloat(sel.qty_waived || 0);
+    // What the line must count as settled so the sweep takes only the older
+    // cards' remainder: at least the new-flow share, never more than the line.
+    const newShare = total * share;
+    const extra = Math.min(total, Math.max(settledNow, newShare)) - settledNow;
+    if (extra > 1e-4) await db.run('UPDATE order_item_inventory SET qty_waived = COALESCE(qty_waived,0) + $1 WHERE id=$2', [extra, sel.id]);
+  }
+}
+
+// Mark an item settled, writing each line's untaken remainder to qty_waived —
+// counted as done, never as taken, so nothing later takes or gives it back.
+// Fins lines are left as their cards took them (by tube length), as before.
+// Only once every piece of the item is on a card that has taken its share: a
+// top-up card made later still takes its own share at its last stage.
+async function settleWithoutTaking(db, orderItemId) {
+  const item = await db.get(
+    `SELECT oi.quantity, o.order_type,
+            (SELECT COALESCE(SUM(qty),0) FROM job_cards WHERE order_item_id = oi.id AND replacement_query_id IS NULL) AS carded
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id=$1`, [orderItemId]);
+  if (!item || Number(item.carded) + 1e-9 < Number(item.quantity)) return;
+  const fgOrder = item?.order_type === 'finished_goods';
+  const sels = await db.all(
+    `SELECT oii.*, ii.item_code FROM order_item_inventory oii
+       JOIN inventory_items ii ON ii.id = oii.inventory_item_id WHERE oii.order_item_id=$1`, [orderItemId]);
+  for (const sel of sels) {
+    if (!fgOrder && FINS_CODES.includes(sel.item_code)) continue;
+    const rest = parseFloat(sel.qty || 0) - parseFloat(sel.qty_deducted || 0) - parseFloat(sel.qty_waived || 0);
+    if (rest > 1e-4) await db.run('UPDATE order_item_inventory SET qty_waived = COALESCE(qty_waived,0) + $1 WHERE id=$2', [rest, sel.id]);
+  }
+  await db.run('UPDATE order_items SET inventory_deducted=TRUE WHERE id=$1', [orderItemId]);
+}
+
+module.exports = { STAGE_CATEGORY_MAP, STAGE_LABEL, deductLine, FINS_WEIGHT_PER_BASE, FG_PREP_CATEGORIES, fgTakes, buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, replayDeductions, FINS_CODES };

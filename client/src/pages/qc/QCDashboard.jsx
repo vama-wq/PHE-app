@@ -5,13 +5,14 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import InventoryEditModal from '../../components/InventoryEditModal';
+import InventoryQCScreen, { routeText } from './InventoryQCScreen';
 import { fmtDate, fmtDateTime, daysUntil, stagesFor } from '../../lib/utils';
 import { compressImage } from '../../lib/compressImage';
 import { downloadExcel } from '../../lib/utils';
 import {
   FlaskConical, CheckCircle, XCircle, Upload, FileText,
   ExternalLink, AlertTriangle, ChevronDown, ChevronUp, Download,
-  Package, Loader2, RotateCcw
+  Package, Loader2, RotateCcw, Boxes
 } from 'lucide-react';
 
 export default function QCDashboard() {
@@ -22,6 +23,10 @@ export default function QCDashboard() {
   const [rejectModal, setRejectModal] = useState(null); // card to reject
   const [approveModal, setApproveModal] = useState(null); // card to approve (destination modal)
   const [expandedId, setExpandedId] = useState(null);
+  // Product QC → Inventory QC → Dispatch (owner, 6 Oct 2026): two lists.
+  const [tab, setTab] = useState('product'); // 'product' | 'inventory'
+  const [invCards, setInvCards] = useState([]);     // cards waiting for Inventory QC
+  const [invScreen, setInvScreen] = useState(null); // card open on the Inventory QC screen
 
   // Purchase material QC
   const [materialPOs, setMaterialPOs] = useState([]);
@@ -30,11 +35,13 @@ export default function QCDashboard() {
   const load = async () => {
     setLoading(true);
     try {
-      const [qcRes, matRes] = await Promise.all([
+      const [qcRes, invRes, matRes] = await Promise.all([
         api.get('/qc'),
+        api.get('/qc/inventory-queue'),
         api.get('/purchase-orders/pending-material-qc'),
       ]);
       setCards(qcRes.data);
+      setInvCards(invRes.data);
       setMaterialPOs(matRes.data);
     } finally {
       setLoading(false);
@@ -57,7 +64,7 @@ export default function QCDashboard() {
             Quality Check
           </h1>
           <p className="text-gray-500 text-sm mt-0.5">
-            Job cards awaiting QC approval · {cards.length} pending
+            Product QC · {cards.length} pending · Inventory QC · {invCards.length} waiting
             {materialPOs.length > 0 && <span className="ml-2 text-purple-600">· {materialPOs.length} material QC pending</span>}
           </p>
         </div>
@@ -110,7 +117,28 @@ export default function QCDashboard() {
         </div>
       )}
 
-      {loading ? (
+      {/* Product QC / Inventory QC */}
+      <div className="flex gap-1 mb-5 bg-gray-100 p-1 rounded-lg overflow-x-auto">
+        {[
+          { key: 'product',   label: `Product QC (${cards.length})` },
+          { key: 'inventory', label: `Inventory QC (${invCards.length})` },
+        ].map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
+              tab === t.key ? 'bg-white text-brand-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'inventory' ? (
+        loading ? (
+          <div className="text-center text-gray-400 py-16">Loading...</div>
+        ) : (
+          <InventoryQueue cards={invCards} onOpen={setInvScreen} />
+        )
+      ) : loading ? (
         <div className="text-center text-gray-400 py-16">Loading...</div>
       ) : cards.length === 0 ? (
         <div className="text-center py-16">
@@ -363,6 +391,84 @@ export default function QCDashboard() {
         />
       )}
 
+      {invScreen && (
+        <InventoryQCScreen
+          cardId={invScreen.id}
+          onClose={() => { setInvScreen(null); load(); }}
+          onChanged={load}
+        />
+      )}
+
+    </div>
+  );
+}
+
+// ── Inventory QC list ─────────────────────────────────────────────────────────
+// Cards whose product passed QC, waiting for QC to review every item they took
+// before they go on to Dispatch / Finished Goods.
+function InventoryQueue({ cards, onOpen }) {
+  if (cards.length === 0) return (
+    <div className="text-center py-16">
+      <CheckCircle size={48} className="mx-auto mb-3 text-green-200" />
+      <p className="text-gray-500 font-medium">No job cards waiting for Inventory QC.</p>
+      <p className="text-gray-400 text-sm mt-1">Cards arrive here once Product QC approves them.</p>
+    </div>
+  );
+  return (
+    <div className="space-y-3">
+      {cards.map(jc => {
+        const days = daysUntil(jc.dispatch_date);
+        const isOverdue = days < 0;
+        const isUrgent  = days >= 0 && days <= 3;
+        return (
+          <div key={jc.id} className={`card border-l-4 p-5 ${
+            isOverdue ? 'border-l-red-500' : isUrgent ? 'border-l-orange-400' : 'border-l-indigo-400'
+          }`}>
+            <div className="flex items-start gap-4 flex-wrap">
+              <div className="flex-1 min-w-[240px]">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <span className="font-bold text-gray-900 text-base">{jc.job_card_no}</span>
+                  <StatusBadge jc={jc} />
+                  {isOverdue && (
+                    <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                      <AlertTriangle size={11} /> Overdue
+                    </span>
+                  )}
+                  {jc.inventory_qc_changes > 0 && (
+                    <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+                      {jc.inventory_qc_changes} change{jc.inventory_qc_changes !== 1 ? 's' : ''} so far
+                    </span>
+                  )}
+                </div>
+                <div className="text-sm text-gray-600 mb-1">
+                  <Link to={`/orders/${jc.order_id}`} className="text-brand-600 hover:underline font-medium">{jc.order_code}</Link>
+                  {' · '}{jc.customer_code}
+                  {jc.qty && <span className="text-gray-400">{' · '}Qty: {jc.qty}</span>}
+                  {jc.drawing_no && <span className="text-gray-400">{' · '}{jc.drawing_no}</span>}
+                </div>
+                <div className="text-xs text-gray-500">
+                  Product QC{jc.product_qc_by_name ? ` by ${jc.product_qc_by_name}` : ''}
+                  {jc.product_qc_at && ` · ${fmtDateTime(jc.product_qc_at)}`}
+                  {jc.qc_route && <> · <span className="text-gray-700 font-medium">{routeText(jc.qc_route, jc.qc_dispatch_qty, jc.qc_fg_qty)}</span></>}
+                </div>
+                <div className={`text-sm font-medium mt-1 ${isOverdue ? 'text-red-600' : isUrgent ? 'text-orange-500' : 'text-gray-500'}`}>
+                  {isOverdue
+                    ? `⚠️ ${Math.abs(days)}d overdue · Dispatch was ${fmtDate(jc.dispatch_date)}`
+                    : days === 0
+                      ? `🔔 Dispatch today — ${fmtDate(jc.dispatch_date)}`
+                      : `Dispatch: ${fmtDate(jc.dispatch_date)} (${days}d left)`}
+                </div>
+              </div>
+              <button
+                className="btn-primary btn-sm flex items-center gap-1 bg-indigo-600 hover:bg-indigo-700 border-indigo-600"
+                onClick={() => onOpen(jc)}
+              >
+                <Boxes size={13} /> Inventory QC
+              </button>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -749,8 +855,6 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   const [showInvEdit,  setShowInvEdit] = useState(false);
   const [fgLocation,   setFgLocation]  = useState('');   // storage location for FG intake
   const [locations,    setLocations]   = useState([]);
-  const [remakeExtras, setRemakeExtras] = useState({});  // inventory_item_id -> extra qty for remade pcs
-  const [reworkItems,  setReworkItems]  = useState({});  // inventory_item_id -> pieces recovered into the rework bin
 
   const loadBom = () => api.get(`/qc/${card.id}/bom`).then(r => setBom(r.data)).catch(() => setBom(null));
   useEffect(() => { loadBom(); }, [card.id]);
@@ -773,14 +877,8 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
       if (destination === 'finished_goods' || destination === 'both') fd.append('io_qty', parseInt(fgQty));
       if (destination === 'both') fd.append('dispatch_qty', parseInt(dispatchQty));
       if ((destination === 'finished_goods' || destination === 'both') && fgLocation) fd.append('fg_location', fgLocation);
-      const extras = Object.entries(remakeExtras)
-        .map(([id, q]) => ({ inventory_item_id: parseInt(id), qty: parseFloat(q) }))
-        .filter(x => x.qty > 0);
-      if (extras.length) fd.append('remake_extras', JSON.stringify(extras));
-      const rw = Object.entries(reworkItems)
-        .map(([id, q]) => ({ inventory_item_id: parseInt(id), qty: parseInt(q, 10) }))
-        .filter(x => x.qty > 0);
-      if (rw.length) fd.append('rework_items', JSON.stringify(rw));
+      // Remake extras and rework pieces are no longer entered here — they are
+      // entered at Inventory QC, the next step (owner, 6 Oct 2026).
       await api.put(`/qc/${card.id}/approve`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSaved();
     } catch (e) {
@@ -843,11 +941,12 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
                 onClick={() => setShowInvEdit(true)}>Edit inventory</button>
             )}
           </div>
-          {/* Finished-goods cards: only the prep parts are taken at QC (owner,
-              2 Oct 2026); everything else on the list is inside the heater. */}
+          {/* Finished-goods cards: only the prep parts are taken (owner,
+              2 Oct 2026) — at the card's last stage since 6 Oct 2026;
+              everything else on the list is inside the heater. */}
           {bom?.fg_build_only?.length > 0 && (
             <div className="text-xs rounded-lg px-3 py-2 mb-2 bg-sky-50 border border-sky-200 text-sky-900">
-              <b>Finished-goods card.</b> Only the parts fitted while preparing it are taken from stock at QC —
+              <b>Finished-goods card.</b> Only the parts fitted while preparing it are taken from stock —
               wire, lugs, fins, thermostats, nuts and washers, heavy terminal nut/washer/pin and brackets.
               These lines are already inside the heater and will <b>not</b> be taken:
               <ul className="mt-1 ml-4 list-disc">
@@ -868,12 +967,12 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
                   <span><span className="font-mono">{i.item_code}</span> — {i.name}</span>
                   <span className="font-medium">
                     {(i.category || '').trim().toLowerCase() === 'finns' ? (
-                      <span className="text-emerald-700" title="Deducts by tube length (stage 8) × approved qty on approval">auto — by tube length</span>
+                      <span className="text-emerald-700" title="Taken by tube length × card qty when the card completes its last stage">auto — by tube length</span>
                     ) : (
                       <>
                         {i.qty} {i.unit}
                         {Number(i.qty_deducted) > 0 && Number(i.qty_deducted) < Number(i.qty) && (
-                          <span className="text-gray-400 font-normal"> ({i.qty_deducted} deducted at stage)</span>
+                          <span className="text-gray-400 font-normal"> ({i.qty_deducted} taken so far)</span>
                         )}
                       </>
                     )}
@@ -884,79 +983,15 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
           )}
           {bom && bom.inventory_items.length > 0 && (
             <p className="text-[11px] mt-2 pt-2 border-t border-gray-100 text-gray-500">
+              {/* Product QC → Inventory QC → Dispatch (owner, 6 Oct 2026): the
+                  list is taken at the stages and the card's last stage, and QC
+                  corrects what really left stock at Inventory QC — not here. */}
               {bom.deducted
                 ? '✓ Inventory already deducted for this item.'
-                : bom.is_split
-                  ? 'Partially dispatched — inventory deducts once the whole qty is dispatched.'
-                  : 'Approving will deduct the remaining inventory from stock.'}
+                : 'The rest of the list is taken when the card completes its last stage. Every quantity is reviewed at Inventory QC next — take more, give back, rework and scrap are entered there.'}
             </p>
           )}
         </div>
-
-        {/* Remade qty — extra inventory consumed (if any) */}
-        {bom?.inventory_items?.length > 0 && (
-          <div className="border border-amber-200 bg-amber-50/40 rounded-lg p-3">
-            <span className="text-sm font-medium text-gray-700">Remade pieces — extra inventory used <span className="text-gray-400 font-normal">(if any)</span></span>
-            <p className="text-[11px] text-gray-500 mt-0.5 mb-2">If pieces were remade, enter the additional inventory consumed. It deducts on approval, on top of the BOM.</p>
-            <ul className="space-y-1.5">
-              {bom.inventory_items.map(i => (
-                <li key={i.id} className="flex items-center justify-between gap-2 text-xs text-gray-700">
-                  <span className="truncate"><span className="font-mono">{i.item_code}</span> — {i.name}</span>
-                  <span className="flex items-center gap-1 flex-shrink-0">
-                    <input type="number" min="0" step="any" placeholder="0"
-                      className="input w-20 text-xs py-1 text-right"
-                      value={remakeExtras[i.id] || ''}
-                      onChange={e => setRemakeExtras(p => ({ ...p, [i.id]: e.target.value }))} />
-                    <span className="text-gray-400 w-8">{i.unit}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Rework pieces — recovered from this card into the part's rework bin */}
-        {bom?.inventory_items?.length > 0 && (() => {
-          const PIECE = new Set(['pcs','pc','nos','no','piece','pieces','set','sets','box','boxes']);
-          const isPiece = (u) => PIECE.has(String(u || '').trim().toLowerCase().replace(/\.$/, ''));
-          const share = bom.item_qty > 0 ? Math.min(1, (Number(card.qty) || 0) / Number(bom.item_qty)) : 1;
-          const lines = bom.inventory_items.filter(i => isPiece(i.unit) && (i.category || '').trim().toLowerCase() !== 'finns');
-          const already = Object.fromEntries((bom.rework_deposited || []).map(d => [d.inventory_item_id, Number(d.qty)]));
-          const readOnly = Object.keys(already).length > 0;
-          if (!lines.length) return null;
-          return (
-            <div className="border border-sky-200 bg-sky-50/40 rounded-lg p-3">
-              <span className="text-sm font-medium text-gray-700">Rework pieces recovered from this card <span className="text-gray-400 font-normal">(if any)</span></span>
-              <p className="text-[11px] text-gray-500 mt-0.5 mb-2">
-                Parts pulled from this card that can be reused after rework. They go into that part's <b>rework bin</b> — kept apart from stock — and a later order can draw on them.
-                {readOnly && <span className="text-sky-700"> Already deposited from this card.</span>}
-              </p>
-              <ul className="space-y-1.5">
-                {lines.map(i => {
-                  const extra = parseFloat(remakeExtras[i.id]) || 0;
-                  const cap = Math.floor(Number(i.qty) * share + extra + 1e-9);
-                  return (
-                    <li key={i.id} className="flex items-center justify-between gap-2 text-xs text-gray-700">
-                      <span className="truncate"><span className="font-mono">{i.item_code}</span> — {i.name}
-                        {Number(i.rework_bin) > 0 && <span className="ml-1.5 text-sky-700">(bin: {i.rework_bin})</span>}</span>
-                      <span className="flex items-center gap-1 flex-shrink-0">
-                        {readOnly ? (
-                          <span className="w-20 text-right font-medium">{already[i.id] || 0}</span>
-                        ) : (
-                          <input type="number" min="0" max={cap} step="1" placeholder="0"
-                            className="input w-20 text-xs py-1 text-right"
-                            value={reworkItems[i.id] || ''}
-                            onChange={e => setReworkItems(p => ({ ...p, [i.id]: e.target.value }))} />
-                        )}
-                        <span className="text-gray-400 w-14">max {cap}</span>
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          );
-        })()}
 
         {/* Destination selector — FG-order inventory cards always go to dispatch */}
         {card.order_type !== 'finished_goods' && <div>
@@ -1048,7 +1083,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
         <div className="flex gap-3 pt-1">
           <button className="btn-secondary flex-1" onClick={onClose} disabled={saving}>Cancel</button>
           <button className="btn-primary flex-1" onClick={handleSubmit} disabled={saving || !qcPhoto}>
-            {saving ? 'Approving...' : 'Confirm & Approve'}
+            {saving ? 'Approving...' : 'Approve product → Inventory QC'}
           </button>
         </div>
       </div>

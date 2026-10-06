@@ -16,6 +16,9 @@
 //     (lib/materialDeduction.js);
 //   • the whole-line settle at dispatch takes no counted item
 //     (lib/inventoryDeduction.js).
+// A card waiting at Inventory QC ('inventory_qc', owner 6 Oct 2026) is NOT held:
+// QC may still correct its tube / NUT-BR-M4-08 there. Once Inventory QC is done
+// the card is closed for every item, not only these (inventory_qc_at).
 
 const isCountedItem = (code) => {
   const c = String(code || '').trim().toUpperCase();

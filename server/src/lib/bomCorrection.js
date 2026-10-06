@@ -21,7 +21,7 @@ function clientDb(client) {
 
 const fmt = (n) => String(r4(n));
 const heldText = (held) => held.map(h =>
-  `${h.code} left as it stands — this line has job cards through QC or dispatched (the plain rules would have ${h.dir} ${fmt(h.qty)}${h.unit ? ` ${h.unit}` : ''})`).join('; ');
+  `${h.code} left as it stands — ${h.why || 'this line has job cards through QC or dispatched'} (the plain rules would have ${h.dir} ${fmt(h.qty)}${h.unit ? ` ${h.unit}` : ''})`).join('; ');
 
 // sels: [{ id, qty, rework_qty }] already validated by the route.
 // Returns { mode: 'record'|'difference', why, moves:[{code,dir,qty,unit}], short:[{code,need,stock,unit}], summary }.
@@ -102,6 +102,13 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
       if (countedIds.size && !(await tx.get(`SELECT 1 FROM job_cards WHERE order_item_id=$1 AND ${heldSql()} LIMIT 1`, [orderItemId]))) {
         countedIds = new Set();   // no card through QC on the line: nothing to hold
       }
+      // From Product QC on, a card's inventory is QC's to settle (owner, 6 Oct
+      // 2026): while a card waits at Inventory QC, and for good once Inventory
+      // QC is done. On a line with such a card NO item moves — every item is
+      // held and settled as it stands, exactly like a counted item above.
+      const closedByInventoryQc = !!(await tx.get(
+        `SELECT 1 FROM job_cards WHERE order_item_id=$1 AND (inventory_qc_at IS NOT NULL OR status = 'inventory_qc') LIMIT 1`, [orderItemId]));
+      if (closedByInventoryQc) countedIds = new Set(invIds);
       for (const id of [...invIds].sort((a, b) => Number(a) - Number(b))) {   // fixed order: no lock cycles
         const code = lineOf[id]?.item_code || ledger.codes[id];
         if (frozen(id, code, lineOf[id]?.category || ledgerCats[id])) continue;
@@ -116,7 +123,8 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
         if (countedIds.has(id)) {
           // Noted when this save changes the item's quantity on the list.
           const changed = Math.abs((line ? line.qty : 0) - (oldQty[id] || 0)) > EPS;
-          if (changed && Math.abs(diff) > EPS) held.push({ code, dir: diff > 0 ? 'taken' : 'given back', qty: Math.abs(diff), unit: line?.unit || '' });
+          if (changed && Math.abs(diff) > EPS) held.push({ code, dir: diff > 0 ? 'taken' : 'given back', qty: Math.abs(diff), unit: line?.unit || '',
+            why: closedByInventoryQc ? 'this line has a job card at or through Inventory QC, where QC settles its inventory' : null });
           counted[id] = true;
           diff = 0;
         }
@@ -232,4 +240,4 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
   });
 }
 
-module.exports = { applyBomCorrection };
+module.exports = { applyBomCorrection, clientDb };

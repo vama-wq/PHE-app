@@ -5,6 +5,7 @@ import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
+import InventoryQCScreen from '../qc/InventoryQCScreen';
 import { fmtDate, fmtDateTime, daysUntil, dispatchPending, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor, capaBlocks } from '../../lib/utils';
 import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle, Truck } from 'lucide-react';
 
@@ -477,7 +478,7 @@ export default function JobCardDetail() {
           canUploadPackage={canUploadPackage} onUploadPackage={() => setShowPackageModal(true)} />
       )}
       {activeTab === 'qc' && (
-        <QCTab jc={jc} canAdd={canAddQC} onAdd={() => setShowQCModal(true)} />
+        <QCTab jc={jc} canAdd={canAddQC} onAdd={() => setShowQCModal(true)} userRole={user.role} onReload={load} />
       )}
       {activeTab === 'dispatch' && <DispatchTab jc={jc} userRole={user.role} onReload={load} />}
       {activeTab === 'timeline' && <TimelineTab activity={jc.activity} />}
@@ -1385,13 +1386,36 @@ function ProductionTab({ jc, canAdd, onAdd, canUploadPackage, onUploadPackage })
   );
 }
 
-function QCTab({ jc, canAdd, onAdd }) {
+function QCTab({ jc, canAdd, onAdd, userRole, onReload }) {
+  // Product QC → Inventory QC → Dispatch (owner, 6 Oct 2026). The Inventory QC
+  // screen is QC's (design / owner / admin); after it is done it is read-only.
+  const [showInvQC, setShowInvQC] = useState(false);
+  const canInvQC = ['design', 'owner', 'admin'].includes(userRole);
+  const inInvQC = jc.status === 'inventory_qc';
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
         <h2 className="section-title">Quality Control</h2>
         {canAdd && <button className="btn-primary btn-sm" onClick={onAdd}><Plus size={14} /> Add QC Report</button>}
       </div>
+      {(jc.product_qc_at || jc.inventory_qc_at || inInvQC) && (
+        <div className="card p-4 mb-4 flex items-start justify-between gap-3 flex-wrap">
+          <div className="text-sm text-gray-700 space-y-0.5">
+            {jc.product_qc_at && <div><span className="text-gray-500">Product QC:</span> approved {fmtDateTime(jc.product_qc_at)}</div>}
+            {jc.inventory_qc_at
+              ? <div><span className="text-gray-500">Inventory QC:</span> done {fmtDateTime(jc.inventory_qc_at)}</div>
+              : inInvQC && <div><span className="text-gray-500">Inventory QC:</span> <span className="text-indigo-700 font-medium">waiting</span></div>}
+          </div>
+          {canInvQC && (
+            <button className="btn-secondary btn-sm" onClick={() => setShowInvQC(true)}>
+              {inInvQC ? 'Open Inventory QC' : 'View Inventory QC'}
+            </button>
+          )}
+        </div>
+      )}
+      {showInvQC && (
+        <InventoryQCScreen cardId={jc.id} onClose={() => { setShowInvQC(false); onReload?.(); }} />
+      )}
       {!jc.qc_report ? (
         <div className="card p-8 text-center text-gray-400">No QC report yet.</div>
       ) : (

@@ -79,6 +79,7 @@ export default function JobCardList() {
           <option value="pending">Pending</option>
           <option value="in_progress">In Progress</option>
           <option value="qc_pending">QC Pending</option>
+          <option value="inventory_qc">Inventory QC</option>
           <option value="qc_approved">QC Approved</option>
           <option value="completed">Completed</option>
           <option value="dispatched">Dispatched</option>

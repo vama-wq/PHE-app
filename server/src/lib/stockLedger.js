@@ -28,7 +28,9 @@ const EPS = 1e-6;
 const r4 = (n) => Math.round(Number(n) * 10000) / 10000;
 
 // A card in any of these has been through QC: what it was built with is used up.
-const PASSED_QC = new Set(['qc_approved', 'dispatched', 'completed', 'customer_query', 'product_return',
+// 'inventory_qc' (Product QC passed, Inventory QC still to do) counts too — its
+// whole list was taken when it finished its last stage.
+const PASSED_QC = new Set(['inventory_qc', 'qc_approved', 'dispatched', 'completed', 'customer_query', 'product_return',
   'repair_in_progress', 'resolved_dispatched', 'repaired_dispatched']);
 
 // ── Columns this needs (added in initDB; checked here so that a request in the
@@ -52,17 +54,19 @@ async function ledgerColumnsReady() {
 // Every stock movement tied to an order line goes through here, so the line's
 // history can be read back exactly. source: 'bom' (production), 'correction'
 // (a corrected list), 'remake' (QC extras).
-async function recordMove(db, { itemId, type, qty, balanceAfter, notes, userId, orderItemId = null, source = null }) {
+// jobCardId: the card the stock went to (or came back from), so Inventory QC
+// can read a card's own movements by column rather than by its notes.
+async function recordMove(db, { itemId, type, qty, balanceAfter, notes, userId, orderItemId = null, source = null, jobCardId = null }) {
   if (await ledgerColumnsReady()) {
     return db.insert(
-      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by, order_item_id, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [itemId, type, qty, balanceAfter, notes, userId, orderItemId, source]);
+      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by, order_item_id, source, job_card_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [itemId, type, qty, balanceAfter, notes, userId, orderItemId, source, jobCardId]);
   }
   return db.insert(
-    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6)`,
-    [itemId, type, qty, balanceAfter, notes, userId]);
+    `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by, job_card_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [itemId, type, qty, balanceAfter, notes, userId, jobCardId]);
 }
 
 // ── What really happened to an order line ─────────────────────────────────────
@@ -114,14 +118,16 @@ async function ledgerForItem(db, orderItemId) {
 async function progressTargets(db, orderItemId, lines, { stageMap, finsCodes, settled = false }) {
   const item = await db.get('SELECT id, quantity FROM order_items WHERE id=$1', [orderItemId]);
   const cards = await db.all(
-    'SELECT id, job_card_no, qty, status, fins_deducted, qc_dispatch_qty, qc_fg_qty FROM job_cards WHERE order_item_id=$1', [orderItemId]);
+    'SELECT id, job_card_no, qty, status, fins_deducted, qc_dispatch_qty, qc_fg_qty, last_stage_taken_at FROM job_cards WHERE order_item_id=$1', [orderItemId]);
   const cardIds = cards.map(c => c.id);
   // A card sent back after QC (owner reversal, repair, debit-note return) has
   // still used its parts: it counts as through QC if it ever got there.
   const qcTook = new Set((await db.all(
     `SELECT DISTINCT substring(notes from '\\(JC ([^)]+)\\)') AS jc FROM inventory_transactions
       WHERE order_item_id=$1 AND source='bom' AND notes LIKE '%QC-approved (JC %'`, [orderItemId])).map(r => r.jc));
-  const everPassed = (c) => PASSED_QC.has(c.status) || !!c.fins_deducted
+  // A card whose last stage took the rest of its list has used its share too
+  // (owner, 6 Oct 2026) — a correction must never give that back.
+  const everPassed = (c) => PASSED_QC.has(c.status) || !!c.fins_deducted || !!c.last_stage_taken_at
     || (Number(c.qc_dispatch_qty) || 0) + (Number(c.qc_fg_qty) || 0) > 0 || qcTook.has(c.job_card_no);
   const done = cardIds.length ? await db.all(
     `SELECT job_card_id, stage_no FROM production_checklist

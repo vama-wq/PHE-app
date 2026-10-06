@@ -1202,7 +1202,9 @@ function ProductionDashboard() {
   const inProgress = pool.filter(jc => jc.status === 'in_progress');
   const pending    = pool.filter(jc => jc.status === 'pending');
   const onHold     = pool.filter(jc => jc.status === 'on_hold');
-  const qcPending  = pool.filter(jc => jc.status === 'qc_pending');
+  // A card waiting for Inventory QC is still in QC — counted with QC Pending,
+  // as the order status does.
+  const qcPending  = pool.filter(jc => jc.status === 'qc_pending' || jc.status === 'inventory_qc');
   const urgent     = pool.filter(jc => {
     const d = daysUntil(jc.dispatch_date);
     return d !== null && d <= 5 && awaitingDispatch(jc);

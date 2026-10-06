@@ -125,6 +125,8 @@ export const STATUS_LABELS = {
   in_progress:      'In Progress',
   on_hold:          'On Hold',
   qc_pending:       'QC Pending',
+  // Product QC passed, waiting for Inventory QC (owner, 6 Oct 2026)
+  inventory_qc:     'Inventory QC',
   qc_approved:      'QC Approved',
   in_finished_goods: 'In Finished Goods',
   packaging:        'Packaging',
@@ -148,6 +150,7 @@ export const STATUS_COLORS = {
   in_progress:      'bg-orange-100 text-orange-800',
   on_hold:          'bg-red-100 text-red-800',
   qc_pending:       'bg-purple-100 text-purple-800',
+  inventory_qc:     'bg-indigo-100 text-indigo-800',
   qc_approved:      'bg-green-100 text-green-800',
   in_finished_goods: 'bg-teal-100 text-teal-800',
   packaging:        'bg-teal-100 text-teal-800',
