@@ -20,7 +20,9 @@ export const NAV_ITEMS = [
   { id: 'qc',            to: '/qc',            icon: FlaskConical,    label: 'Quality Check',   roles: ['design','owner','admin'], badge: 'qc' },
   { id: 'dispatch',      to: '/dispatch',      icon: Truck,           label: 'Dispatch',        roles: null, badge: 'dispatch' },
   { id: 'customer-queries', to: '/customer-queries', icon: HelpCircle,   label: 'Customer Queries', roles: null, badge: 'customer-queries' },
-  { id: 'finished-goods',to: '/finished-goods',icon: Warehouse,       label: 'Finished Goods',  roles: ['owner','admin','production'], badge: 'finished-goods' },
+  // Design / QC sees Finished Goods too (owner, 7 Oct 2026) — view only; stock
+  // in/out stays with owner, admin and accounts on the server.
+  { id: 'finished-goods',to: '/finished-goods',icon: Warehouse,       label: 'Finished Goods',  roles: ['owner','admin','production','design'], badge: 'finished-goods' },
   { id: 'inventory',     to: '/inventory',     icon: Package,         label: 'Inventory',       roles: ['owner','admin','design'], badge: 'inventory' },
   { id: 'purchases',     to: '/purchases',     icon: ShoppingCart,    label: 'Purchases',       roles: ['owner','admin','accounts'], badge: 'purchases' },
   { id: 'petty-cash',    to: '/petty-cash',    icon: Wallet,          label: 'Account Statement', roles: ['owner','accounts'], badge: 'petty-cash' },

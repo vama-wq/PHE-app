@@ -4,7 +4,6 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
-import InventoryEditModal from '../../components/InventoryEditModal';
 import InventoryQCScreen, { routeText } from './InventoryQCScreen';
 import { fmtDate, fmtDateTime, daysUntil, stagesFor } from '../../lib/utils';
 import { compressImage } from '../../lib/compressImage';
@@ -852,7 +851,6 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   const [saving,       setSaving]      = useState(false);
   const [error,        setError]       = useState('');
   const [bom,          setBom]         = useState(null); // inventory the item consumes
-  const [showInvEdit,  setShowInvEdit] = useState(false);
   const [fgLocation,   setFgLocation]  = useState('');   // storage location for FG intake
   const [locations,    setLocations]   = useState([]);
 
@@ -934,12 +932,9 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
             <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
               <Package size={14} className="text-brand-500" /> Inventory to consume
             </span>
-            {/* Always allow adding inventory when nothing is selected yet — the "already
-                deducted" lock only makes sense once there's a real BOM to protect. */}
-            {bom?.item_id && (bom.inventory_items.length === 0 || !bom?.deducted) && (
-              <button type="button" className="text-xs text-brand-600 hover:underline"
-                onClick={() => setShowInvEdit(true)}>Edit inventory</button>
-            )}
+            {/* No list editing from Product QC (owner, 7 Oct 2026): the item's
+                list is held once a card reaches QC, and what THIS card used is
+                corrected at Inventory QC next. The list is shown for reference. */}
           </div>
           {/* Finished-goods cards: only the prep parts are taken (owner,
               2 Oct 2026) — at the card's last stage since 6 Oct 2026;
@@ -959,7 +954,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
           {!bom ? (
             <p className="text-xs text-gray-400">Loading inventory…</p>
           ) : bom.inventory_items.length === 0 ? (
-            <p className="text-xs text-orange-600">No inventory selected for this item. Use "Edit inventory" to add it before approving.</p>
+            <p className="text-xs text-orange-600">No inventory list on this item — design adds it on the order; this card's takes are reviewed at Inventory QC.</p>
           ) : (
             <ul className="space-y-1">
               {bom.inventory_items.map(i => (
@@ -1088,15 +1083,6 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
         </div>
       </div>
     </Modal>
-    {showInvEdit && bom?.item_id && (
-      <InventoryEditModal
-        orderId={bom.order_id}
-        fgOrder={!!bom.is_fg}
-        item={{ id: bom.item_id, drawing_number: bom.drawing_number, inventory_items: bom.inventory_items }}
-        onClose={() => setShowInvEdit(false)}
-        onDone={() => { setShowInvEdit(false); loadBom(); }}
-      />
-    )}
     </>
   );
 }
