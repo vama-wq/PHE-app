@@ -233,6 +233,24 @@ export default function CustomerQueryDetail() {
                 </Link>
               </div>
             )}
+            {/* How many of the card's dispatched pieces this query is about.
+                Older queries have no qty — they are for the whole card. */}
+            {query.job_card_no && query.qty != null && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Pieces</span>
+                <span className="font-medium text-amber-700 text-right">
+                  {query.qty} of {query.qty_of} pcs
+                  {query.parent_job_card_no && (
+                    <span className="text-gray-500 font-normal">
+                      {' '}cut off{' '}
+                      <Link to={`/job-cards/${query.parent_job_card_id}`} className="text-brand-700 hover:underline">
+                        {query.parent_job_card_no}
+                      </Link>
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
             {query.product_name && (
               <div className="flex justify-between">
                 <span className="text-gray-500">Product</span>

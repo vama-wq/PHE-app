@@ -181,6 +181,15 @@ export default function OrderTimeline() {
                   <StatusBadge status={q.status} />
                 </div>
                 <p className="text-xs text-gray-600">{q.description || '—'}</p>
+                {/* Pieces this query is about, on the card it is tied to (the -Q
+                    card when only some came back); older queries have no qty */}
+                {q.qty != null && (
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    {q.qty} of {q.qty_of} pcs
+                    {jobCards.find(c => c.id === q.job_card_id)?.job_card_no
+                      ? ` · ${jobCards.find(c => c.id === q.job_card_id).job_card_no}` : ''}
+                  </p>
+                )}
                 {q.resolution_summary && (
                   <p className="text-xs text-green-700 mt-1 bg-green-50 px-2 py-1 rounded">
                     Resolution: {q.resolution_summary}

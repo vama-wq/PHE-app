@@ -344,6 +344,7 @@ export default function DispatchList() {
       {showNewQuery && (
         <NewQueryModal
           jc={showNewQuery}
+          siblings={cards}
           onClose={() => setShowNewQuery(null)}
           onCreated={(queryId) => { setShowNewQuery(null); navigate(`/customer-queries/${queryId}`); }} />
       )}
@@ -879,28 +880,65 @@ function EditDocModal({ doc, onClose, onSave }) {
 }
 
 // ── New Customer Query Modal ──────────────────────────────────────────────────
-function NewQueryModal({ jc, onClose, onCreated }) {
+// A query names the pieces that came back, not the whole card (owner, 6 Oct
+// 2026: "out of 50 nos only 3 are coming back for repair, return or
+// replacement"). Fewer than all the pieces → the server cuts them onto their
+// own card <orig>-Q<n> and ties the query to that card, so repair / debit note /
+// replacement act on 3 pieces, not 50. The owner may also correct the job card
+// document, product name and drawing no on that new card ("just in case they
+// were wrong completely") — the same corrections never apply to the original
+// card from here, so the expander only shows when a split will happen.
+function NewQueryModal({ jc, siblings = [], onClose, onCreated }) {
+  // The pieces that went out on this card — what QC routed to dispatch, or the
+  // card qty for a card dispatched before QC routing existed (same rule as the server)
+  const pieces = Number(jc.qc_dispatch_qty) > 0 ? Number(jc.qc_dispatch_qty) : Number(jc.qty) || 0;
+  // What the new card will be called: -Q1, -Q2… after the -Q children already cut off this card
+  const nextQNo = `${jc.job_card_no}-Q${siblings.filter(c => String(c.job_card_no).startsWith(`${jc.job_card_no}-Q`)).length + 1}`;
+
   const [f, setF] = useState({
     subject: '', description: '', category: 'general',
     priority: 'medium', assigned_department: 'production',
   });
+  const [qty, setQty] = useState(String(pieces));
+  const [showFix, setShowFix] = useState(false);
+  const [fix, setFix] = useState({ product_name: jc.product_name || '', drawing_no: jc.drawing_no || '' });
+  const [cardFile, setCardFile] = useState(null);
   const [photos, setPhotos] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+  const setFixField = k => e => setFix(p => ({ ...p, [k]: e.target.value }));
+
+  const qtyNum = /^\d+$/.test(qty.trim()) ? parseInt(qty.trim(), 10) : NaN;
+  const qtyOk = Number.isInteger(qtyNum) && qtyNum >= 1 && qtyNum <= pieces;
+  const willSplit = qtyOk && qtyNum < pieces;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!f.subject.trim()) { setError('Subject is required'); return; }
     if (!f.assigned_department) { setError('Please select a department'); return; }
+    if (!/^\d+$/.test(qty.trim())) { setError('Pieces affected must be a whole number'); return; }
+    if (!qtyOk) { setError(`Pieces affected must be between 1 and ${pieces} — ${jc.job_card_no} sent out ${pieces} pcs.`); return; }
     setSaving(true);
     setError('');
     try {
-      const r = await api.post('/customer-queries', {
-        order_id: jc.order_id,
-        job_card_id: jc.id,
-        ...f,
-      });
+      const body = { order_id: jc.order_id, job_card_id: jc.id, qty: String(qtyNum), ...f };
+      // Corrections go on the -Q card only, so they are sent only when a split
+      // will happen; the server refuses them otherwise.
+      if (willSplit) {
+        if (fix.product_name.trim() && fix.product_name.trim() !== (jc.product_name || '')) body.product_name = fix.product_name.trim();
+        if (fix.drawing_no.trim() && fix.drawing_no.trim() !== (jc.drawing_no || '')) body.drawing_no = fix.drawing_no.trim();
+      }
+      let r;
+      if (willSplit && cardFile) {
+        // A job card document rides along as multipart (field `file`, like POST /job-cards)
+        const fd = new FormData();
+        Object.entries(body).forEach(([k, v]) => { if (v != null && v !== '') fd.append(k, v); });
+        fd.append('file', cardFile);
+        r = await api.post('/customer-queries', fd);
+      } else {
+        r = await api.post('/customer-queries', body);
+      }
       if (photos.length) {
         try {
           const fd = new FormData();
@@ -933,6 +971,59 @@ function NewQueryModal({ jc, onClose, onCreated }) {
           <textarea className="input" rows={3} value={f.description} onChange={set('description')}
             placeholder="Detailed description of the customer's complaint..." />
         </div>
+
+        {/* Pieces affected — how many of the card's dispatched pieces came back */}
+        <div>
+          <label className="label">Pieces affected <span className="text-red-500">*</span></label>
+          <div className="flex items-center gap-2">
+            <input type="number" className="input w-28" min={1} max={pieces} step={1}
+              value={qty} onChange={e => setQty(e.target.value)} />
+            <span className="text-sm text-gray-600">of <span className="font-semibold text-gray-800">{pieces}</span> pcs sent out on {jc.job_card_no}</span>
+          </div>
+          {willSplit ? (
+            <p className="text-xs text-amber-700 mt-1.5">
+              Only {qtyNum} of {pieces} affected — these pieces get their own job card <span className="font-semibold">{nextQNo}</span>; the other {pieces - qtyNum} stay on {jc.job_card_no} as dispatched.
+            </p>
+          ) : qtyOk ? (
+            <p className="text-xs text-gray-500 mt-1.5">All {pieces} pieces affected — the query goes on {jc.job_card_no} itself.</p>
+          ) : (
+            <p className="text-xs text-red-600 mt-1.5">Whole number from 1 to {pieces}.</p>
+          )}
+        </div>
+
+        {/* Corrections for the -Q card — only when a split will happen */}
+        {willSplit && (
+          <div className="border border-gray-200 rounded-xl overflow-hidden">
+            <button type="button"
+              className="w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 transition-colors"
+              onClick={() => setShowFix(v => !v)}>
+              <span>Only these pieces — the job card or product was wrong?</span>
+              <span className="text-xs text-gray-400">{showFix ? 'Hide' : 'Show'}</span>
+            </button>
+            {showFix && (
+              <div className="p-4 space-y-3 bg-white">
+                <p className="text-xs text-gray-500">
+                  Whatever you change here goes on <span className="font-semibold">{nextQNo}</span> only; {jc.job_card_no} keeps its own document, product name and drawing no.
+                </p>
+                <div>
+                  <label className="label">Job card document <span className="text-gray-400 font-normal">(optional)</span></label>
+                  <FileUpload onFile={setCardFile} accept=".pdf,.jpg,.jpeg,.png" label="Upload a different job card document" current={jc.original_name} />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Product name</label>
+                    <input className="input" value={fix.product_name} onChange={setFixField('product_name')} placeholder={jc.product_name || '—'} />
+                  </div>
+                  <div>
+                    <label className="label">Drawing no</label>
+                    <input className="input" value={fix.drawing_no} onChange={setFixField('drawing_no')} placeholder={jc.drawing_no || '—'} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div>
           <label className="label">Photos <span className="text-gray-400 font-normal">(optional)</span></label>
           <label className="flex items-center gap-2 cursor-pointer border border-gray-200 rounded-lg px-3 py-2 hover:border-brand-400 transition-colors bg-gray-50">

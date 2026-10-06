@@ -11,6 +11,7 @@
 //   data.reason (on failures) names the exact case so the app route can give
 //   the same response it always gave.
 const dbmod = require('../../db');
+const { cloneChildCard, readyStageFor } = require('../../lib/childCard');
 
 // Required when used, not at load: notifications pulls in lib/whatsapp, and the
 // WhatsApp dispatcher pulls in this file — a load-time require would be a cycle.
@@ -148,10 +149,7 @@ async function approveSplitRequest(db, { requestId, actor, via = 'app', refuseIf
       // gets its OWN checklist: it inherits the parent's completed stages and
       // continues from the current stage to Ready-for-Dispatch, which then triggers
       // QC exactly like any card. Inventory timing unchanged.
-      // Ready-for-Dispatch is stage 29 on a production card but stage 4 on an FG
-      // inventory card, which runs the short 4-stage checklist — asking about 29 on
-      // an FG card can only ever answer "not finished".
-      const readyStageNo = jc.is_fg ? 4 : 29;
+      const readyStageNo = readyStageFor(jc);
       const readyDone = (await client.query(
         'SELECT id FROM production_checklist WHERE job_card_id=$1 AND stage_no=$2 AND done=1',
         [jc.id, readyStageNo])).rows[0] || null;
@@ -160,48 +158,21 @@ async function approveSplitRequest(db, { requestId, actor, via = 'app', refuseIf
       const childCount = (await client.query('SELECT COUNT(*) AS n FROM job_cards WHERE parent_job_card_id=$1', [jc.id])).rows[0];
       const childNo = `${jc.job_card_no}-P${parseInt(childCount.n, 10) + 1}`;
 
-      const { rows } = await client.query(
-        `INSERT INTO job_cards (job_card_no, order_id, qty, dispatch_date, current_stage, punching, drawing_no, product_name, status, notes, uploaded_by, parent_job_card_id, order_item_id, file_path, file_name, original_name, replacement_query_id, tube_deducted, coil_deducted, fill_deducted, is_fg, fg_source_id, last_stage_taken_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING id`,
-        [childNo, jc.order_id, sr.qty, jc.dispatch_date, jc.current_stage || 0, jc.punching, jc.drawing_no, jc.product_name,
-         childStatus,
-         `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`, jc.uploaded_by, jc.id, jc.order_item_id,
-         // Carry the parent's job-card document so the shopfloor can open it on the child too
-         jc.file_path, jc.file_name, jc.original_name,
-         // Inherit the replacement link so a split replacement card stays invoice-exempt
-         jc.replacement_query_id || null,
-         // Inherit the material-deduction flags: the parent's stage 3/5/6 draws
-         // covered the whole batch (child pieces included), so re-ticking those
-         // stages on the child must NOT deduct tube/coil/filling a second time.
-         jc.tube_deducted || false, jc.coil_deducted || false, jc.fill_deducted || false,
-         // A split of a Finished Goods inventory card is still a Finished Goods
-         // card. Without these the child falls back to the full 29-stage
-         // production checklist for material it never produced — it was drawn
-         // from FG stock. fg_source_id keeps it pointing at the same FG row.
-         jc.is_fg || false, jc.fg_source_id || null,
-         // Same for the last-stage take (owner, 6 Oct 2026): if the parent has
-         // already completed its last stage, its take covered the pre-split
-         // quantity — the split pieces included — so the child takes nothing more.
-         jc.last_stage_taken_at || null]);
-      const childId = rows[0].id;
-      // The split pieces went through the parent's completed stages as part of the
-      // batch — copy those rows (values, worker, time, notes) so their records
-      // travel with them and the mandatory-stage gate sees them as done.
-      // Rejection/remade/dispatched/scrap quantities stay with the parent (its
-      // accounting); the Ready-for-Dispatch stage is never copied so the child's
-      // dispatch is its own — 29 on a production card, 4 on an FG card.
-      await client.query(
-        `INSERT INTO production_checklist (job_card_id, stage_no, done, value1, value2, worker_name, done_at, notes, coil_weight)
-         SELECT $1, stage_no, done, value1, value2, worker_name, done_at, notes, coil_weight
-         FROM production_checklist WHERE job_card_id=$2 AND done=1 AND stage_no <> $3`,
-        [childId, jc.id, readyStageNo]);
+      // The child inherits the parent's document, item, flags and completed
+      // stages (lib/childCard.js — shared with the customer-query split). The
+      // Ready-for-Dispatch stage is never copied so the child's dispatch is its own.
+      const { clientDb } = require('../../lib/bomCorrection');
+      const tx = clientDb(client);
+      const childId = await cloneChildCard(tx, jc, {
+        childNo, qty: sr.qty, status: childStatus,
+        notes: `Partial dispatch of ${sr.qty} split from ${jc.job_card_no}. Reason: ${sr.reason}`,
+      });
       await client.query('UPDATE job_cards SET qty = qty - $1 WHERE id=$2', [sr.qty, jc.id]);
       // The parent's terminal-pin rows were made for its pre-split quantity;
       // scale them to what remains. The child seeds its own rows when first
       // read (owner, 6 Oct 2026; lib/terminals.js).
       const { rescaleAfterSplit } = require('../../lib/terminals');
-      const { clientDb } = require('../../lib/bomCorrection');
-      await rescaleAfterSplit(clientDb(client), jc.id, jc.qty, jc.qty - sr.qty, actor.id);
+      await rescaleAfterSplit(tx, jc.id, jc.qty, jc.qty - sr.qty, actor.id);
       await client.query('UPDATE job_card_split_requests SET child_job_card_id=$1 WHERE id=$2', [childId, sr.id]);
       return { sr, jc, childId, childNo, readyDone: !!readyDone };
     });

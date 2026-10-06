@@ -167,7 +167,20 @@ export default function CustomerQueryList() {
                 </td>
                 <td className="table-cell text-sm">
                   <div className="text-gray-700">{q.order_code}</div>
-                  {q.job_card_no && <div className="text-xs text-gray-400">{q.job_card_no}</div>}
+                  {q.job_card_no && (
+                    <div className="text-xs text-gray-400">
+                      {/* The tied card — the -Q card when only some pieces came back */}
+                      <Link to={`/job-cards/${q.job_card_id}`} className="hover:underline hover:text-brand-700"
+                        onClick={e => e.stopPropagation()}>
+                        {q.job_card_no}
+                      </Link>
+                      {q.qty != null && (
+                        <span className="ml-1 text-amber-700">
+                          · {q.qty} of {q.qty_of} pcs{q.parent_job_card_no ? ` of ${q.parent_job_card_no}` : ''}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </td>
                 <td className="table-cell text-sm">{q.customer_code}</td>
                 <td className="table-cell">

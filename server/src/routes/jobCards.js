@@ -86,9 +86,15 @@ router.get('/', authenticate, async (req, res) => {
     LEFT JOIN users u ON jc.uploaded_by = u.id
     LEFT JOIN users pqc ON pqc.id = jc.product_qc_by
     LEFT JOIN users iqc ON iqc.id = jc.inventory_qc_by
+    -- The card's own active query first (a -Q card carries the query for the
+    -- pieces cut off it), else its parent's (a -P child split off a card under
+    -- repair stays in that repair). One row either way.
     LEFT JOIN customer_queries cq_active
-      ON cq_active.job_card_id = COALESCE(jc.parent_job_card_id, jc.id)
-      AND cq_active.status IN ('open','in_progress','product_return')
+      ON cq_active.id = (
+        SELECT id FROM customer_queries
+         WHERE job_card_id IN (jc.id, jc.parent_job_card_id)
+           AND status IN ('open','in_progress','product_return')
+         ORDER BY (job_card_id = jc.id) DESC, created_at DESC LIMIT 1)
     ORDER BY jc.dispatch_date ASC
   `, [today]);
   res.json(cards);
@@ -172,9 +178,9 @@ router.get('/:id', authenticate, async (req, res) => {
       (SELECT COUNT(*) FROM customer_query_photos WHERE query_id = cq.id) as photo_count
     FROM customer_queries cq
     LEFT JOIN users u_created ON cq.created_by = u_created.id
-    WHERE cq.job_card_id = (SELECT COALESCE(parent_job_card_id, id) FROM job_cards WHERE id=$1)
+    WHERE cq.job_card_id IN (SELECT id FROM job_cards WHERE id=$1 UNION SELECT parent_job_card_id FROM job_cards WHERE id=$1)
       AND cq.status IN ('open','in_progress','product_return')
-    ORDER BY cq.created_at DESC LIMIT 1
+    ORDER BY (cq.job_card_id = $1) DESC, cq.created_at DESC LIMIT 1
   `, [req.params.id]);
   if (activeQuery) {
     jc.active_query_id = activeQuery.id;

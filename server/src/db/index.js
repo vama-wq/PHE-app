@@ -2358,6 +2358,16 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS terminals_ok_at TIMESTAMPTZ`);
       await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS terminals_ok_note TEXT`);
 
+      // Customer query on PART of a job card (owner, 6 Oct 2026): "out of 50
+      // nos only 3 are coming back". qty = pieces affected, qty_of = the pieces
+      // that had gone out on the card when the query was raised (so the query
+      // reads "3 of 50 pcs" for good), split_job_card_id = the -Q<n> card the
+      // affected pieces were split off into, when fewer than all were affected.
+      // Older queries keep NULL = the whole card. Each statement simple and idempotent.
+      await pool.query(`ALTER TABLE customer_queries ADD COLUMN IF NOT EXISTS qty INTEGER`);
+      await pool.query(`ALTER TABLE customer_queries ADD COLUMN IF NOT EXISTS qty_of INTEGER`);
+      await pool.query(`ALTER TABLE customer_queries ADD COLUMN IF NOT EXISTS split_job_card_id INTEGER`);
+
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
       if (parseInt(rows[0].c, 10) === 0) {

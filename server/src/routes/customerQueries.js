@@ -5,6 +5,9 @@ const { authenticate, authorize, withCustomerVisibility } = require('../middlewa
 const { uploadToStorage, deleteFromStorage, uploadChatAttachments, uploadJobCard } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { postQueryMessage } = require('../services/actions/customerQueries');
+const { cloneChildCard } = require('../lib/childCard');
+const { clientDb } = require('../lib/bomCorrection');
+const { rescaleAfterSplit } = require('../lib/terminals');
 const multer = require('multer');
 
 const memStorage = multer.memoryStorage();
@@ -49,6 +52,7 @@ router.get('/', authenticate, async (req, res) => {
     SELECT cq.*, o.order_code, c.customer_code,
            ${canSeeName ? "c.name as customer_name," : ''}
            jc.job_card_no, jc.drawing_no, jc.product_name,
+           pjc.job_card_no as parent_job_card_no,
            u.name as created_by_name,
            ru.name as resolved_by_name,
            (SELECT COUNT(*) FROM customer_query_messages WHERE query_id = cq.id) as message_count,
@@ -57,6 +61,8 @@ router.get('/', authenticate, async (req, res) => {
     JOIN orders o ON cq.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
     LEFT JOIN job_cards jc ON cq.job_card_id = jc.id
+    -- The card the pieces were cut off (a -Q card's parent): "3 of 50 pcs of JC-123"
+    LEFT JOIN job_cards pjc ON pjc.id = jc.parent_job_card_id AND cq.split_job_card_id = jc.id
     LEFT JOIN users u ON cq.created_by = u.id
     LEFT JOIN users ru ON cq.resolved_by = ru.id
     WHERE 1=1
@@ -104,10 +110,12 @@ router.put('/mentions/:mentionId/read', authenticate, async (req, res) => {
 // ── Get queries for a specific order ────────────────────────────────────────
 router.get('/order/:orderId', authenticate, async (req, res) => {
   const queries = await getDB().all(`
-    SELECT cq.*, u.name as created_by_name,
+    SELECT cq.*, u.name as created_by_name, jc.job_card_no, pjc.job_card_no as parent_job_card_no,
            (SELECT COUNT(*) FROM customer_query_messages WHERE query_id = cq.id) as message_count
     FROM customer_queries cq
     LEFT JOIN users u ON cq.created_by = u.id
+    LEFT JOIN job_cards jc ON jc.id = cq.job_card_id
+    LEFT JOIN job_cards pjc ON pjc.id = jc.parent_job_card_id AND cq.split_job_card_id = jc.id
     WHERE cq.order_id = $1
     ORDER BY cq.created_at DESC
   `, [req.params.orderId]);
@@ -123,12 +131,14 @@ router.get('/:id', authenticate, async (req, res) => {
            c.customer_code,
            ${canSeeName ? "c.name as customer_name," : ''}
            jc.job_card_no, jc.drawing_no, jc.product_name, jc.qty as jc_qty, jc.status as jc_status,
+           pjc.id as parent_job_card_id, pjc.job_card_no as parent_job_card_no,
            u.name as created_by_name, u.role as created_by_role,
            ru.name as resolved_by_name
     FROM customer_queries cq
     JOIN orders o ON cq.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
     LEFT JOIN job_cards jc ON cq.job_card_id = jc.id
+    LEFT JOIN job_cards pjc ON pjc.id = jc.parent_job_card_id AND cq.split_job_card_id = jc.id
     LEFT JOIN users u ON cq.created_by = u.id
     LEFT JOIN users ru ON cq.resolved_by = ru.id
     WHERE cq.id = $1
@@ -138,7 +148,29 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // ── Create a new customer query ────────────────────────────────────────────
-router.post('/', authenticate, authorize('accounts', 'owner', 'admin'), async (req, res) => {
+// A query names the pieces that came back, not the whole card (owner, 6 Oct
+// 2026: "out of 50 nos only 3 are coming back for repair, return or
+// replacement"). When fewer than all of a card's dispatched pieces are
+// affected, those pieces are split off into their own card <orig>-Q<n> and the
+// query is tied to THAT card, so everything downstream — repair, debit-note
+// return to Finished Goods, replacement — works on 3 pieces, not 50. The owner
+// may also give the -Q card a different job card document / product name /
+// drawing no ("just in case they were wrong completely"), which is why this
+// route takes multipart like POST /job-cards; plain JSON still works.
+
+// The pieces a card sent out: what QC routed to dispatch, or the card's qty
+// for a card dispatched before QC routing existed.
+const piecesOut = (jc) => (Number(jc.qc_dispatch_qty) > 0 ? Number(jc.qc_dispatch_qty) : Number(jc.qty) || 0);
+// Queries are for pieces at the customer — a card still on the floor has none.
+const WENT_OUT = ['dispatched', 'resolved_dispatched', 'repaired_dispatched'];
+const wentOut = (jc) => !!jc.dispatched_at || WENT_OUT.includes(jc.status);
+// Timeline lines written INSIDE the split's transaction, so they go only if the
+// split does (db.logActivity writes through the pool and would survive a rollback).
+const logInTx = (tx, orderId, jobCardId, type, text, userId) => tx.run(
+  `INSERT INTO activity_log (order_id, job_card_id, activity_type, description, created_by) VALUES ($1,$2,$3,$4,$5)`,
+  [orderId || null, jobCardId || null, type, text, userId || null]);
+
+router.post('/', authenticate, authorize('accounts', 'owner', 'admin'), ...uploadJobCard, async (req, res) => {
   const { order_id, job_card_id, subject, description, category, priority, assigned_department } = req.body;
   if (!order_id) return res.status(400).json({ error: 'Order ID is required' });
   if (!subject?.trim()) return res.status(400).json({ error: 'Subject is required' });
@@ -150,35 +182,163 @@ router.post('/', authenticate, authorize('accounts', 'owner', 'admin'), async (r
   const order = await db.get('SELECT * FROM orders WHERE id=$1', [order_id]);
   if (!order) return res.status(404).json({ error: 'Order not found' });
 
-  const queryNo = await genQueryNo(db);
-  const r = await db.insert(`
-    INSERT INTO customer_queries (query_no, order_id, job_card_id, subject, description, category, priority, assigned_department, status, created_by)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9)
-  `, [queryNo, order_id, job_card_id || null, subject.trim(), description || null,
-      category || 'general', priority || 'medium', assigned_department, req.user.id]);
-
-  // Update order status to customer_query
-  await db.run("UPDATE orders SET status='customer_query' WHERE id=$1", [order_id]);
-
-  // If job card specified, update its status too
+  // Pieces affected — required when a job card is named. Whole number from 1
+  // to the pieces that went out on that card; left blank = all of them.
+  let jc = null, qty = null, pieces = null;
   if (job_card_id) {
-    await db.run("UPDATE job_cards SET status='customer_query' WHERE id=$1", [job_card_id]);
+    jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [job_card_id]);
+    if (!jc) return res.status(404).json({ error: 'Job card not found' });
+    if (!wentOut(jc)) {
+      return res.status(400).json({ error: `${jc.job_card_no} has not been dispatched — a customer query is for pieces that went out.` });
+    }
+    pieces = piecesOut(jc);
+    const raw = req.body.qty;
+    if (raw === undefined || raw === null || String(raw).trim() === '') {
+      qty = pieces;
+    } else {
+      if (!/^\d+$/.test(String(raw).trim())) {
+        return res.status(400).json({ error: 'Pieces affected must be a whole number' });
+      }
+      qty = parseInt(String(raw).trim(), 10);
+      if (qty < 1 || qty > pieces) {
+        return res.status(400).json({ error: `Pieces affected must be between 1 and ${pieces} — ${jc.job_card_no} sent out ${pieces} pcs.` });
+      }
+    }
   }
 
-  await logActivity(order_id, job_card_id || null, 'customer_query_raised',
-    `Customer query raised: ${queryNo} — ${subject.trim()}`, req.user.id);
-
-  // A production-site failure reached the customer — a CAPA must be completed
-  // (and owner-approved) before any repair work starts on this card.
-  if (job_card_id) {
-    const { ensureCapa } = require('./capa');
-    await ensureCapa(db, {
-      jobCardId: job_card_id, orderId: order_id, triggerType: 'customer_query',
-      customerQueryId: r.lastInsertRowid, userId: req.user.id,
+  // A different document / product name / drawing no is for the split-off
+  // pieces only: with every piece affected there is no new card to put them
+  // on, and the original card is corrected from its own screen, not from here.
+  const newName = typeof req.body.product_name === 'string' && req.body.product_name.trim() !== ''
+    && req.body.product_name.trim() !== (jc?.product_name || '') ? req.body.product_name.trim() : null;
+  const newDrawing = typeof req.body.drawing_no === 'string' && req.body.drawing_no.trim() !== ''
+    && req.body.drawing_no.trim() !== (jc?.drawing_no || '') ? req.body.drawing_no.trim() : null;
+  const corrections = !!(req.file || newName || newDrawing);
+  if (corrections && !(jc && qty < pieces)) {
+    return res.status(400).json({
+      error: jc
+        ? 'A different job card document, product name or drawing no applies only when fewer than all the pieces are affected — edit the job card itself otherwise.'
+        : 'A different job card document, product name or drawing no needs a job card on the query.',
     });
   }
 
-  res.status(201).json({ id: r.lastInsertRowid, query_no: queryNo });
+  let made;
+  try {
+    made = await db.withTransaction(async (client) => {
+      const tx = clientDb(client);
+      const queryNo = await genQueryNo(tx);
+      let cardId = jc?.id || null, splitId = null, childNo = null, piecesNow = pieces;
+
+      if (jc) {
+        // Lock the card so its pieces cannot change under us (a second query
+        // or a split approving at the same moment) before we re-check and cut.
+        const parent = (await client.query('SELECT * FROM job_cards WHERE id=$1 FOR UPDATE', [jc.id])).rows[0];
+        if (!parent) throw Object.assign(new Error('Job card not found'), { status: 404 });
+        piecesNow = piecesOut(parent);
+        if (qty > piecesNow) {
+          throw Object.assign(new Error(`Pieces affected must be between 1 and ${piecesNow} — ${parent.job_card_no} sent out ${piecesNow} pcs.`), { status: 400 });
+        }
+
+        if (qty < piecesNow) {
+          // Only some pieces came back: they get their own card. Numbered
+          // -Q1, -Q2… by the -Q children already cut off this card.
+          const kids = await tx.all('SELECT job_card_no FROM job_cards WHERE parent_job_card_id=$1', [parent.id]);
+          const n = kids.filter(k => String(k.job_card_no).startsWith(`${parent.job_card_no}-Q`)).length + 1;
+          childNo = `${parent.job_card_no}-Q${n}`;
+
+          const changed = [];
+          if (req.file) changed.push(`job card document ${req.file.originalname}`);
+          if (newName) changed.push(`product name "${parent.product_name || '—'}" → "${newName}"`);
+          if (newDrawing) changed.push(`drawing no "${parent.drawing_no || '—'}" → "${newDrawing}"`);
+
+          splitId = await cloneChildCard(tx, parent, {
+            childNo, qty, status: 'customer_query',
+            notes: `Customer query ${queryNo}: ${qty} of ${parent.job_card_no} affected`,
+            // The pieces were finished and went out, so the Ready-for-Dispatch row travels with them
+            copyReadyStage: true,
+            columns: {
+              // The pieces DID go out — the -Q card still counts as dispatched,
+              // with the whole of its quantity routed to dispatch and none to FG.
+              dispatched_at: parent.dispatched_at, qc_route: parent.qc_route,
+              qc_dispatch_qty: qty, qc_fg_qty: 0,
+              // Made and settled on the parent: fins were drawn, both QCs were
+              // passed, plating was done — the -Q card must not ask for any of
+              // it again. (Tube/coil/fill/last-stage flags come with the clone.)
+              fins_deducted: parent.fins_deducted || false,
+              product_qc_at: parent.product_qc_at, product_qc_by: parent.product_qc_by,
+              inventory_qc_at: parent.inventory_qc_at, inventory_qc_by: parent.inventory_qc_by,
+              plating_status: parent.plating_status,
+              // The owner's corrections, when given, replace the parent's
+              ...(req.file ? { file_path: req.file.storagePath, file_name: req.file.filename, original_name: req.file.originalname } : {}),
+              ...(newName ? { product_name: newName } : {}),
+              ...(newDrawing ? { drawing_no: newDrawing } : {}),
+            },
+          });
+          cardId = splitId;
+
+          // The parent keeps the rest and stays dispatched — those pieces are
+          // fine and with the customer. Its qty never drops below 1, its
+          // dispatched count never below 0.
+          await tx.run(
+            `UPDATE job_cards SET qty = GREATEST(1, qty - $1),
+                    qc_dispatch_qty = CASE WHEN qc_dispatch_qty IS NULL THEN NULL ELSE GREATEST(0, qc_dispatch_qty - $1) END
+              WHERE id=$2`, [qty, parent.id]);
+          // Terminal pins: a dispatched card is past pins, and rescaleAfterSplit
+          // leaves a card with a last-stage take alone; only an older card with
+          // no take has rows to scale. Stock: NOTHING moves on a query split —
+          // the pieces were made and their material was taken on the parent.
+          await rescaleAfterSplit(tx, parent.id, parent.qty, parent.qty - qty, req.user.id);
+
+          await logInTx(tx, parent.order_id, parent.id, 'customer_query_split',
+            `${qty} of this card raised as query ${queryNo} → ${childNo}`, req.user.id);
+          await logInTx(tx, parent.order_id, splitId, 'customer_query_split',
+            `${childNo}: ${qty} of ${parent.job_card_no} (${piecesNow} sent out) raised as query ${queryNo}`
+            + (changed.length ? `. Changed on this card: ${changed.join('; ')}` : ''), req.user.id);
+        } else {
+          // Every piece affected: the card itself carries the query, as before
+          await tx.run("UPDATE job_cards SET status='customer_query' WHERE id=$1", [parent.id]);
+        }
+      }
+
+      const r = await tx.insert(`
+        INSERT INTO customer_queries (query_no, order_id, job_card_id, subject, description, category, priority, assigned_department, status, created_by,
+                                      qty, qty_of, split_job_card_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11,$12)
+      `, [queryNo, order_id, cardId, subject.trim(), description || null,
+          category || 'general', priority || 'medium', assigned_department, req.user.id,
+          qty, piecesNow, splitId]);
+
+      // Update order status to customer_query
+      await tx.run("UPDATE orders SET status='customer_query' WHERE id=$1", [order_id]);
+
+      await logInTx(tx, order_id, cardId, 'customer_query_raised',
+        `Customer query raised: ${queryNo} — ${subject.trim()}`
+        + (jc ? ` (${qty} of ${piecesNow} pcs${childNo ? `, as ${childNo}` : ''})` : ''), req.user.id);
+
+      return { id: r.lastInsertRowid, queryNo, cardId, splitId, childNo, qty, piecesNow };
+    });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('Customer query create failed:', err);
+    return res.status(500).json({ error: 'Could not raise the query — please try again' });
+  }
+
+  // A production-site failure reached the customer — a CAPA must be completed
+  // (and owner-approved) before any repair work starts. It sits on the card the
+  // query is tied to: the -Q card when the pieces were split off.
+  if (made.cardId) {
+    const { ensureCapa } = require('./capa');
+    await ensureCapa(db, {
+      jobCardId: made.cardId, orderId: order_id, triggerType: 'customer_query',
+      customerQueryId: made.id, userId: req.user.id,
+    });
+  }
+
+  res.status(201).json({
+    id: made.id, query_no: made.queryNo, job_card_id: made.cardId,
+    qty: made.qty, qty_of: made.piecesNow,
+    split_job_card_id: made.splitId, split_job_card_no: made.childNo,
+  });
 });
 
 // ── Upload photos to a query ─────────────────────────────────────────────
