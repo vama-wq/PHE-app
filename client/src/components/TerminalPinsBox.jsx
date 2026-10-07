@@ -216,8 +216,10 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
                     <span className="font-semibold text-gray-900 whitespace-nowrap">{fmtQty(r.qty)} {(r.unit || '').trim()}</span>
                     <SourceBadge source={r.source} />
                     <span className="text-xs whitespace-nowrap w-40 text-right">
+                      {/* the part the list takes from the rework bin needs no stock */}
+                      {Number(r.from_rework) > 0 && <span className="block text-sky-700 font-medium">{fmtQty(r.from_rework)} from rework bin</span>}
                       {r.short
-                        ? <span className="text-red-700 font-medium flex items-center justify-end gap-1"><AlertTriangle size={11} /> stock {fmtQty(r.current_stock)} — short {fmtQty(Number(r.qty) - Number(r.current_stock))}</span>
+                        ? <span className="text-red-700 font-medium flex items-center justify-end gap-1"><AlertTriangle size={11} /> stock {fmtQty(r.current_stock)} — short {fmtQty(Number(r.qty) - Number(r.from_rework || 0) - Number(r.current_stock))}</span>
                         : <span className="text-gray-500">stock {fmtQty(r.current_stock)}</span>}
                       {Number(r.rework_free) > 0 && <span className="block text-[10px] text-sky-700">rework bin: {fmtQty(r.rework_free)} free</span>}
                     </span>
@@ -262,8 +264,13 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
 
               {draft.length ? draft.map(r => {
                 const q = parseInt(r.qty, 10);
-                const shortBy = Number.isInteger(q) && q > Number(r.current_stock) ? q - Number(r.current_stock) : 0;
                 const listLine = (data.list || []).find(l => l.inventory_item_id === r.inventory_item_id);
+                // The list's rework portion for this pin comes from the bin, not stock (same rule as the server)
+                const binCover = Number.isInteger(q) && listLine
+                  ? Math.min(q, Math.max(0, Number(listLine.rework_qty || 0) - Number(listLine.rework_deducted || 0)),
+                             Number(rows.find(x => x.inventory_item_id === r.inventory_item_id)?.rework_bin ?? r.rework_free ?? 0))
+                  : 0;
+                const shortBy = Number.isInteger(q) && q - binCover > Number(r.current_stock) ? q - binCover - Number(r.current_stock) : 0;
                 return (
                   <div key={r.inventory_item_id} className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 ${shortBy > 0 ? 'bg-red-50' : 'bg-gray-50'}`}>
                     <span className="text-sm flex-1 truncate"><span className="font-mono">{r.item_code}</span> — {r.name}</span>
@@ -271,6 +278,7 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
                       value={r.qty} onChange={e => setQty(r.inventory_item_id, e.target.value)} />
                     <span className="text-xs text-gray-400 w-8">{(r.unit || '').trim()}</span>
                     <span className="text-xs whitespace-nowrap w-36 text-right">
+                      {binCover > 0 && <span className="block text-sky-700 font-medium">{fmtQty(binCover)} from rework bin</span>}
                       {shortBy > 0
                         ? <span className="text-red-700 font-medium">stock {fmtQty(r.current_stock)} — short {fmtQty(shortBy)}</span>
                         : <span className="text-gray-500">stock {fmtQty(r.current_stock)}</span>}

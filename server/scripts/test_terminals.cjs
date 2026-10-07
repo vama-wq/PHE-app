@@ -164,7 +164,8 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const TRN = await mkItem('ZZTEST-TP-TRAIN', 'Terminal Pin', 1000, 'pcs');     // TRAIN placeholder
     const HV  = await mkItem('ZZTEST-TP-HV', 'Heavy Terminal Pin', 500, 'pcs');   // stays on the list as today
     const NUT = await mkItem('ZZTEST-TP-NUT', 'Nut', 2000, 'pcs');
-    const pins = [WH, WO, X, LOW, TRN, HV, NUT];
+    const RW  = await mkItem('ZZTEST-TP-RW', 'Terminal Pin', 0, 'pcs');            // none in stock — the list takes it from the rework bin
+    const pins = [WH, WO, X, LOW, TRN, HV, NUT, RW];
 
     // ════ A. Two cards of 50 on an item of 100: lazy seed, design's change, the slip, the last stage, a correction ════
     // List per piece: 1 WH + 1 WO terminal pin, 1 heavy pin, 4 nuts.
@@ -449,6 +450,30 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('C2. the bin\'s history shows the draw against this card',
       (await qa(`SELECT 1 FROM inventory_rework_moves WHERE item_id=$1 AND job_card_id=$2 AND kind='draw' AND qty=4`, [WO, C1])).length === 1);
 
+    // ════ C3. Stock 0, the list takes the whole pin from the rework bin (owner, 7 Oct 2026) ════
+    // 18 RW on an item of 6, all 18 from RW's rework bin; one card of 6. Stock 0.
+    const oR = await mkOrder('ZZT-TR');
+    const oiR = await mkLine(oR, 6, 'ZZTEST-DWG-TR');
+    await putLine(oiR, RW, 18, 18); await putLine(oiR, NUT, 24);
+    const R1 = await mkCard(oR, oiR, 'ZZT-TR1', 6, { dwg: 'ZZTEST-DWG-TR' });
+    await rework.move(txDb, { itemId: RW, kind: 'deposit', qty: 10, ref: {}, notes: 'test deposit', userId: uid });
+    r = await call('GET', terminals(R1));
+    ok('C3. bin holds 10 of the 18 the list takes from rework, stock 0: short by the 8 the bin cannot cover — need 8 from stock, 10 from the bin',
+      r.status === 200 && r.body.held === true && r.body.short.length === 1 && r.body.short[0].need === 8 && r.body.short[0].from_rework === 10
+      && r.body.short[0].stock === 0 && r.body.rows[0]?.from_rework === 10 && r.body.rows[0]?.short === true, JSON.stringify(r.body.short));
+    await rework.move(txDb, { itemId: RW, kind: 'deposit', qty: 10, ref: {}, notes: 'test deposit', userId: uid });
+    r = await call('GET', terminals(R1));
+    c = await cardRow(R1);
+    ok('C3. bin now 20: the 18 are covered by the bin — NOT short, slip not held, the short state cleared, the row says 18 from the rework bin',
+      r.status === 200 && r.body.held === false && r.body.short.length === 0 && r.body.rows[0]?.from_rework === 18 && r.body.rows[0]?.short === false
+      && c.terminals_short_at === null, JSON.stringify({ short: r.body.short, row: r.body.rows[0] }));
+    await tick(R1, MANDATORY);
+    s0 = await snap(pins);
+    r = await call('PUT', `/api/job-cards/${R1}/checklist/29`, { done: true }, floor);
+    ok('C3. stage 29: all 18 come out of the bin (20 → 2), stock untouched at 0',
+      r.status === 200 && (await bin(RW)) === 2 && near(await stock(RW), 0) && (await termRows(R1, RW)).length === 0,
+      `${r.status} bin ${await bin(RW)} | ${await moved(s0)}`);
+
     // ════ D. No real pin on the list yet (TRAIN placeholder): nothing seeded, the old take; whole pieces ════
     const oD = await mkOrder('ZZT-TD');
     const oiD = await mkLine(oD, 10, 'ZZTEST-DWG-TD');
@@ -526,7 +551,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
 
     // ════ G. Nothing leaked past the stubs ════
     ok('G1. every WhatsApp copy recorded was a terminals_short alert for one of the test cards',
-      waCalls.every(w => w.type === 'terminals_short' && [B1].includes(w.ref?.id)), JSON.stringify(waCalls.map(w => [w.type, w.ref?.id])));
+      waCalls.every(w => w.type === 'terminals_short' && [B1, R1].includes(w.ref?.id)), JSON.stringify(waCalls.map(w => [w.type, w.ref?.id])));
   } catch (e) {
     failed = true;
     console.error('ERROR', e);

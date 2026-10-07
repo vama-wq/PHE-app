@@ -145,10 +145,20 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
     `SELECT jc.*, o.order_type FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1`, [jc.id]);
   if (!card) return { rows: [], lines: [], short: [], held: false, ok: null };
   const { rows, lines, item, itemQty } = await ensureTerminals(db, card);
+  // A pin whose list line takes part of it from the REWORK BIN needs only the
+  // rest from stock: the last-stage take draws the bin first (takeTerminalRows
+  // below). The check follows the same rule, so pins the bin covers never read
+  // short (owner, 7 Oct 2026 — card set to take its pins from rework still
+  // showed "stock 0 — short 18").
+  const fromBin = (r) => {
+    const l = lines.find(x => x.inventory_item_id === r.inventory_item_id);
+    const want = l ? Math.max(0, Number(l.rework_qty || 0) - Number(l.rework_deducted || 0)) : 0;
+    return Math.min(Number(r.qty) || 0, want, Number(r.rework_bin) || 0);
+  };
   const short = pastPins(card) ? [] : rows
-    .filter(r => Number(r.current_stock) < Number(r.qty))
+    .filter(r => Number(r.current_stock) < Number(r.qty) - fromBin(r))
     .map(r => ({ inventory_item_id: r.inventory_item_id, item_code: r.item_code, name: r.name, unit: r.unit || '',
-                 need: Number(r.qty), stock: Number(r.current_stock) }));
+                 need: Number(r.qty) - fromBin(r), from_rework: fromBin(r), stock: Number(r.current_stock) }));
   let ok = okState(card);
   let shortAt = card.terminals_short_at;
 
@@ -165,7 +175,8 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
     shortAt = null; ok = null;
   }
   return {
-    rows: rows.map(r => ({ ...r, short: short.some(s => s.inventory_item_id === r.inventory_item_id) })),
+    rows: rows.map(r => ({ ...r, from_rework: pastPins(card) ? 0 : fromBin(r),
+                           short: short.some(s => s.inventory_item_id === r.inventory_item_id) })),
     lines, item, itemQty, short, short_at: shortAt, ok,
     held: short.length > 0 && !ok,
     last_stage_taken_at: card.last_stage_taken_at,
