@@ -76,7 +76,7 @@ export function getStageLabel(stageNo, jc) {
 export function dispatchPending(jc) {
   if (!jc) return false;
   // 'rejected': every piece failed in production, closed after Inventory QC — nothing to dispatch
-  if (['dispatched', 'completed', 'repaired_dispatched', 'resolved_dispatched', 'rejected'].includes(jc.status)) return false;
+  if (['dispatched', 'completed', 'repaired_dispatched', 'resolved_dispatched', 'rejected', 'scrapped'].includes(jc.status)) return false;
   if (jc.qc_route === 'finished_goods' && (Number(jc.qc_dispatch_qty) || 0) === 0) return false;
   return true;
 }
@@ -140,6 +140,8 @@ export const STATUS_LABELS = {
   resolved_dispatched: 'Query Resolved',
   repair_in_progress:  'Repair In Progress',
   repaired_dispatched: 'Repaired & Dispatched',
+  // a returned heater that failed QC and was scrapped (owner, 7 Oct 2026)
+  scrapped:            'Scrapped',
 };
 
 export const STATUS_COLORS = {
@@ -168,6 +170,7 @@ export const STATUS_COLORS = {
   resolved_dispatched: 'bg-green-100 text-green-700',
   repair_in_progress:  'bg-orange-100 text-orange-800',
   repaired_dispatched: 'bg-teal-100 text-teal-800',
+  scrapped:            'bg-red-100 text-red-800',
 };
 
 export const ROLE_LABELS = {

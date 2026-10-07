@@ -54,6 +54,14 @@ async function settleAfterQC(db, jc, userId) {
 // orders drifted that way.
 const { syncOrderStatus } = require('./jobCards');
 
+// A debit-note return that failed QC and was sent back for repair goes into
+// Finished Goods when it is done, not to dispatch (owner, 7 Oct 2026). Its open
+// query, when the card is one.
+const debitNoteRepair = (db, cardId) => db.get(
+  `SELECT id, query_no, qty FROM customer_queries
+    WHERE job_card_id=$1 AND status='product_return' AND return_type='debit_note' AND return_status='in_repair'
+    ORDER BY id DESC LIMIT 1`, [cardId]);
+
 // A job card with the order and customer details QC and Finished Goods need.
 function loadCardFull(db, id) {
   return db.get(`
@@ -312,8 +320,16 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   // forced-split branch below only handles old calls without heater_destination.
   // plan: { route, fgQty, dispQty, splitNotes } — recorded now, carried out at
   // Inventory QC done.
+  const dnRepair = await debitNoteRepair(db, jc.id);
   let plan;
-  if (netQty === 0) {
+  if (dnRepair) {
+    // Back into Finished Goods, whatever the order type: the pieces that came
+    // back — the query's count, else what the card had sent out.
+    const back = Number(dnRepair.qty) > 0 ? Number(dnRepair.qty)
+      : (Number(jc.qc_dispatch_qty) > 0 ? Number(jc.qc_dispatch_qty) : Number(jc.qty) || 0);
+    plan = { route: 'finished_goods', fgQty: back, dispQty: 0,
+      splitNotes: `Debit-note return ${dnRepair.query_no} repaired — back into Finished Goods` };
+  } else if (netQty === 0) {
     // Every piece was rejected in production: there is nothing to route, so no
     // destination is asked. The card still goes through Inventory QC (its
     // material was used and must be settled) and then closes as Rejected —
@@ -935,6 +951,16 @@ router.put('/:id/inventory-done', authenticate, authorize('design', 'owner', 'ad
       if (!won) throw httpError(400, 'This job card is not waiting for Inventory QC.');
       const jc = await loadCardFull(tx, req.params.id);
       const route = jc.qc_route || 'dispatch';
+      // A repaired debit-note return: its pieces go back into Finished Goods
+      // below and the card is done — Completed, as a return that passed QC —
+      // and Accounts then completes the debit note.
+      const dn = await debitNoteRepair(tx, jc.id);
+      if (dn) {
+        await tx.run("UPDATE job_cards SET status='completed' WHERE id=$1", [jc.id]);
+        await tx.run("UPDATE customer_queries SET return_status='qc_pass', updated_at=NOW() WHERE id=$1", [dn.id]);
+        jc.status = 'completed';
+        jc.dn_query_no = dn.query_no;
+      }
       const fgQty = Number(jc.qc_fg_qty) || 0;
       const dispQty = Number(jc.qc_dispatch_qty) || 0;
       let fgId = null;
@@ -951,7 +977,9 @@ router.put('/:id/inventory-done', authenticate, authorize('design', 'owner', 'ad
   const { jc, route, fgQty, dispQty, fgId } = done;
 
   // The same approval line as before Inventory QC existed.
-  const text = route === 'rejected'
+  const text = jc.dn_query_no
+    ? `Job card ${jc.job_card_no} repaired after debit-note return ${jc.dn_query_no} — ${fgQty} units back into Finished Goods`
+    : route === 'rejected'
     ? `Job card ${jc.job_card_no} closed as Rejected — all ${jc.qty} pieces rejected at production (QC)`
     : route === 'finished_goods'
     ? `Job card ${jc.job_card_no} QC Approved — ${fgQty} units added to Finished Goods`

@@ -892,7 +892,7 @@ router.delete('/:id', authenticate, authorize('admin', 'owner'), async (req, res
 // ── PUT update status ─────────────────────────────────────────────────────────
 // Product QC and Inventory QC are both compulsory (owner, 6 Oct 2026): the
 // statuses they grant — and dispatch — can only be reached through them.
-const QC_ONLY_STATUSES = ['inventory_qc', 'qc_approved', 'dispatched', 'completed', 'resolved_dispatched', 'repaired_dispatched', 'rejected'];
+const QC_ONLY_STATUSES = ['inventory_qc', 'qc_approved', 'dispatched', 'completed', 'resolved_dispatched', 'repaired_dispatched', 'rejected', 'scrapped'];
 const HAND_SET_STATUSES = ['pending', 'in_progress', 'on_hold', 'qc_pending'];
 
 router.put('/:id/status', authenticate, authorize('admin', 'owner', 'production'), async (req, res) => {
@@ -985,7 +985,7 @@ async function syncOrderStatus(db, orderId, userId) {
   // order keeps the status it has.
   const cards = (await db.all(
     'SELECT status, qc_route, qc_dispatch_qty FROM job_cards WHERE order_id=$1', [orderId]))
-    .filter(c => c.status !== 'rejected');
+    .filter(c => c.status !== 'rejected' && c.status !== 'scrapped');   // a scrapped return is out of it too
   if (!cards.length) return;
 
   const statuses = cards.map(c => c.status);
@@ -1070,6 +1070,7 @@ async function updateJobCardAfterStageChange(db, jobCardId, userId) {
   else if (jc.status === 'qc_approved') newStatus = 'qc_approved'; // preserve QC approval
   else if (jc.status === 'inventory_qc') newStatus = 'inventory_qc'; // Product QC passed — waiting for Inventory QC
   else if (jc.status === 'rejected')     newStatus = 'rejected';     // closed — every piece rejected
+  else if (jc.status === 'scrapped')     newStatus = 'scrapped';     // a returned heater, scrapped
   else if (readyDone)              newStatus = 'qc_pending';  // ready → awaiting QC
   else if (maxStage)               newStatus = 'in_progress';
   else                             newStatus = 'pending';

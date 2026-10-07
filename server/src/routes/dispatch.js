@@ -91,6 +91,9 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
   if (jc.status === 'rejected') {
     return res.status(400).json({ error: 'Cannot dispatch — this job card was closed as Rejected (all pieces rejected in production).' });
   }
+  if (jc.status === 'scrapped') {
+    return res.status(400).json({ error: 'Cannot dispatch — this returned heater was scrapped.' });
+  }
   // Both QCs are compulsory (owner, 6 Oct 2026): only a card through Inventory
   // QC — or one approved before Inventory QC went live, or already out and
   // coming round again (repair, replacement) — can be dispatched.

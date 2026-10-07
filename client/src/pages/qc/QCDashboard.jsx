@@ -862,13 +862,17 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   // asked. The card still goes through Inventory QC (its material must be
   // settled) and then closes as Rejected (owner, 7 Oct 2026).
   const allRejected = (card.net_qty ?? card.qty) === 0;
+  // A debit-note return that failed QC and was repaired goes back into
+  // Finished Goods — the server routes it there, so no destination is asked.
+  const dnRepair = card.return_query_type === 'debit_note' && card.return_query_return_status === 'in_repair';
+  const noDestination = allRejected || dnRepair;
 
   const handleSubmit = async () => {
     setError('');
     if (!qcPhoto) return setError('A photo of the approved material is required');
-    if (!allRejected && destination === 'finished_goods' && (!fgQty || parseInt(fgQty) <= 0))
+    if (!noDestination && destination === 'finished_goods' && (!fgQty || parseInt(fgQty) <= 0))
       return setError('Finished Goods quantity is required');
-    if (!allRejected && destination === 'both') {
+    if (!noDestination && destination === 'both') {
       if (!fgQty || parseInt(fgQty) <= 0) return setError('Finished Goods quantity is required');
       if (!dispatchQty || parseInt(dispatchQty) <= 0) return setError('Dispatch quantity is required');
     }
@@ -993,6 +997,13 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
           )}
         </div>
 
+        {dnRepair && !allRejected && (
+          <div className="rounded-lg px-3 py-2 text-sm bg-sky-50 border border-sky-200 text-sky-900">
+            <b>Debit-note return {card.return_query_no}, repaired.</b> Approving sends it to Inventory QC;
+            after that its pieces go back into <b>Finished Goods</b> — not to dispatch.
+          </div>
+        )}
+
         {allRejected && (
           <div className="rounded-lg px-3 py-2 text-sm bg-red-50 border border-red-200 text-red-800">
             <b>All {card.qty} pieces were rejected in production.</b> Approving sends this card to
@@ -1003,7 +1014,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
 
         {/* Destination selector — FG-order inventory cards always go to dispatch;
             a card with nothing left has nowhere to go */}
-        {!allRejected && card.order_type !== 'finished_goods' && <div>
+        {!noDestination && card.order_type !== 'finished_goods' && <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Heater Destination <span className="text-red-500">*</span>
           </label>
@@ -1034,7 +1045,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
         </div>}
 
         {/* Qty inputs for FG / Both */}
-        {!allRejected && (destination === 'finished_goods' || destination === 'both') && (
+        {!noDestination && (destination === 'finished_goods' || destination === 'both') && (
           <>
             <div>
               <label className="label">Qty → Finished Goods <span className="text-red-500">*</span></label>
@@ -1052,7 +1063,7 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
             </div>
           </>
         )}
-        {!allRejected && destination === 'both' && (
+        {!noDestination && destination === 'both' && (
           <div>
             <label className="label">Qty → Dispatch <span className="text-red-500">*</span></label>
             <input className="input" type="number" min="1"

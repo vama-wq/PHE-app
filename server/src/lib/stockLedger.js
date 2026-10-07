@@ -37,7 +37,7 @@ const r4 = (n) => Math.round(Number(n) * 10000) / 10000;
 // (every piece rejected, closed after Inventory QC): the material went into
 // pieces that failed, it is not coming back.
 const PASSED_QC = new Set(['inventory_qc', 'qc_approved', 'dispatched', 'completed', 'customer_query', 'product_return',
-  'repair_in_progress', 'resolved_dispatched', 'repaired_dispatched', 'rejected']);
+  'repair_in_progress', 'resolved_dispatched', 'repaired_dispatched', 'rejected', 'scrapped']);
 
 // ── Columns this needs (added in initDB; checked here so that a request in the
 // seconds before the migration ran degrades instead of failing) ─────────────

@@ -8,6 +8,9 @@ const { postQueryMessage } = require('../services/actions/customerQueries');
 const { cloneChildCard, readyStageFor } = require('../lib/childCard');
 const { clientDb } = require('../lib/bomCorrection');
 const { rescaleAfterSplit } = require('../lib/terminals');
+const rework = require('../lib/rework');
+const { resolveJobCardItemId } = require('../lib/inventoryDeduction');
+const { PLACEHOLDER } = require('../lib/stockLedger');
 const multer = require('multer');
 
 const memStorage = multer.memoryStorage();
@@ -636,6 +639,98 @@ router.put('/:id/debit-note', authenticate, authorize('accounts', 'owner'), asyn
 });
 
 // ── Mark material as received — triggers QC or production based on return_type ──
+// ── Repair: the CAPA gate and reopening the checklist ───────────────────────
+// Shared by a repair return (material received) and a debit-note return that
+// failed QC and is sent back for repair (owner, 7 Oct 2026) — "just like how
+// we do repair".
+
+// The CAPA on the card must be owner-approved before repair work starts — the
+// cause has to be understood before the rework happens. Returns the refusal,
+// or null when the repair may start.
+async function capaBlock(db, jobCardId) {
+  if (!jobCardId) return null;
+  const { activeCapaFor } = require('./capa');
+  const capa = await activeCapaFor(db, jobCardId);
+  if (!capa) return null;
+  return {
+    error: capa.status === 'awaiting_approval'
+      ? 'The CAPA report is awaiting owner approval — approve it before starting the repair.'
+      : 'A CAPA report must be completed and approved before repair work can start.',
+    code: 'CAPA_REQUIRED', capa_id: capa.id,
+  };
+}
+
+// Send the card to production for repair, restarting at the stage the repair
+// actually begins from. Everything BEFORE that stage stays done — the work is
+// still good and must not be redone. From that stage on the ticks are cleared
+// so the work is done again, but the recorded values (readings, weights,
+// worker) are left in place so production can see what was there last time.
+// fromStage 1 = redo the whole card.
+async function reopenForRepair(db, jobCardId, fromStage) {
+  // Stage 30 (Kharoch) is numbered out of band but runs between Bending
+  // (14) and Brazing (15), so it must follow its POSITION, not its number:
+  // reopen it only when the repair restarts at or before Bending.
+  await db.run(
+    `UPDATE production_checklist SET done=0, done_at=NULL
+      WHERE job_card_id=$1 AND ((stage_no >= $2 AND stage_no < 30) OR (stage_no = 30 AND $2 <= 14))`,
+    [jobCardId, fromStage]);
+  // current_stage is the LAST COMPLETED stage, so recompute it from what
+  // is still ticked rather than assuming.
+  const maxDone = await db.get(
+    'SELECT MAX(stage_no) AS m FROM production_checklist WHERE job_card_id=$1 AND done=1 AND stage_no < 30',
+    [jobCardId]);
+  await db.run("UPDATE job_cards SET status='repair_in_progress', current_stage=$2 WHERE id=$1",
+    [jobCardId, maxDone?.m || 0]);
+}
+
+// What can come off a scrapped heater for reuse (owner, 7 Oct 2026): the
+// counted parts on its item's list — pins, nuts, washers, flanges; not kg
+// items, which are not reworked as a count — plus any pin design put on the
+// card itself, each up to what the returned pieces carried.
+async function scrapParts(db, q, jc) {
+  const pieces = Number(q.qty) > 0 ? Number(q.qty) : piecesOut(jc);
+  const out = new Map();
+  const add = (r, perPiece) => {
+    if (!rework.isPieceUnit(r.unit) || PLACEHOLDER.test(r.item_code || '')) return;
+    const max = Math.round(perPiece * pieces);
+    if (!(max > 0)) return;
+    const was = out.get(r.inventory_item_id);
+    if (!was || max > was.max) {
+      out.set(r.inventory_item_id, { inventory_item_id: r.inventory_item_id, item_code: r.item_code, name: r.name,
+                                     unit: r.unit, category: r.category, max });
+    }
+  };
+  const itemId = await resolveJobCardItemId(db, jc);
+  const item = itemId ? await db.get('SELECT quantity FROM order_items WHERE id=$1', [itemId]) : null;
+  const itemQty = Number(item?.quantity) || 0;
+  if (itemId && itemQty > 0) {
+    const lines = await db.all(
+      `SELECT oii.inventory_item_id, oii.qty::float AS qty, ii.item_code, ii.name, ii.unit, TRIM(ii.category) AS category
+         FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+        WHERE oii.order_item_id=$1`, [itemId]);
+    for (const l of lines) add(l, l.qty / itemQty);
+  }
+  const cardQty = Number(jc.qty) || 0;
+  if (cardQty > 0) {
+    const pins = await db.all(
+      `SELECT t.inventory_item_id, t.qty::float AS qty, ii.item_code, ii.name, ii.unit, TRIM(ii.category) AS category
+         FROM job_card_terminals t JOIN inventory_items ii ON ii.id = t.inventory_item_id
+        WHERE t.job_card_id=$1`, [jc.id]);
+    for (const t of pins) add(t, t.qty / cardQty);
+  }
+  return { pieces, parts: [...out.values()].sort((a, b) => String(a.item_code).localeCompare(String(b.item_code))) };
+}
+
+// The parts QC may put back from a scrapped heater, for the Scrap form.
+router.get('/:id/scrap-parts', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
+  const db = getDB();
+  const q = await db.get('SELECT * FROM customer_queries WHERE id=$1', [req.params.id]);
+  if (!q) return res.status(404).json({ error: 'Query not found' });
+  const jc = q.job_card_id ? await db.get('SELECT * FROM job_cards WHERE id=$1', [q.job_card_id]) : null;
+  if (!jc) return res.json({ pieces: 0, parts: [] });
+  res.json(await scrapParts(db, q, jc));
+});
+
 router.put('/:id/material-received', authenticate, authorize('accounts', 'owner', 'admin'), async (req, res) => {
   const db = getDB();
   const q = await db.get('SELECT * FROM customer_queries WHERE id=$1', [req.params.id]);
@@ -648,44 +743,12 @@ router.put('/:id/material-received', authenticate, authorize('accounts', 'owner'
   }
 
   if (q.return_type === 'repair') {
-    // The CAPA on this card must be owner-approved before repair work starts —
-    // the cause has to be understood before the rework happens.
-    if (q.job_card_id) {
-      const { activeCapaFor } = require('./capa');
-      const capa = await activeCapaFor(db, q.job_card_id);
-      if (capa) {
-        return res.status(400).json({
-          error: capa.status === 'awaiting_approval'
-            ? 'The CAPA report is awaiting owner approval — approve it before starting the repair.'
-            : 'A CAPA report must be completed and approved before repair work can start.',
-          code: 'CAPA_REQUIRED', capa_id: capa.id,
-        });
-      }
-    }
-    // Send to production for repair, restarting at the stage the repair
-    // actually begins from. Everything BEFORE that stage stays done — the work
-    // is still good and must not be redone. From that stage on the ticks are
-    // cleared so the work is done again, but the recorded values (readings,
-    // weights, worker) are left in place so production can see what was there
-    // last time. Default 1 = redo the whole card, the old behaviour.
+    const block = await capaBlock(db, q.job_card_id);
+    if (block) return res.status(400).json(block);
+    // Default 1 = redo the whole card, the old behaviour.
     const raw = parseInt(req.body?.repair_from_stage, 10);
     const fromStage = Number.isInteger(raw) && raw >= 1 ? raw : 1;
-    if (q.job_card_id) {
-      // Stage 30 (Kharoch) is numbered out of band but runs between Bending
-      // (14) and Brazing (15), so it must follow its POSITION, not its number:
-      // reopen it only when the repair restarts at or before Bending.
-      await db.run(
-        `UPDATE production_checklist SET done=0, done_at=NULL
-          WHERE job_card_id=$1 AND ((stage_no >= $2 AND stage_no < 30) OR (stage_no = 30 AND $2 <= 14))`,
-        [q.job_card_id, fromStage]);
-      // current_stage is the LAST COMPLETED stage, so recompute it from what
-      // is still ticked rather than assuming.
-      const maxDone = await db.get(
-        'SELECT MAX(stage_no) AS m FROM production_checklist WHERE job_card_id=$1 AND done=1 AND stage_no < 30',
-        [q.job_card_id]);
-      await db.run("UPDATE job_cards SET status='repair_in_progress', current_stage=$2 WHERE id=$1",
-        [q.job_card_id, maxDone?.m || 0]);
-    }
+    if (q.job_card_id) await reopenForRepair(db, q.job_card_id, fromStage);
     await db.run(`UPDATE customer_queries SET return_status='in_repair', updated_at=NOW() WHERE id=$1`, [req.params.id]);
     const stageLabel = fromStage > 1 ? ` Repair restarts at stage ${fromStage}.` : ' Full checklist reopened.';
     await logActivity(q.order_id, q.job_card_id, 'material_received',
@@ -797,18 +860,79 @@ router.put('/:id/qc-result', authenticate, authorize('design', 'owner', 'admin')
     return res.json({ message: 'QC passed — added to finished goods' });
   }
 
-  // QC fail — send back to production for repair
-  await db.run(`UPDATE customer_queries SET return_status='qc_fail', updated_at=NOW() WHERE id=$1`, [req.params.id]);
+  // Failed (owner, 7 Oct 2026): QC decides what happens to the heater.
+  // REPAIR — from the stage QC picks, just like a repair; it then runs the
+  // whole flow (production, Product QC, Inventory QC) and goes back into
+  // Finished Goods, not to dispatch. SCRAP — the counted parts that can be
+  // reused go into their rework bins and the card reads Scrapped.
+  const action = req.body.action;
+  if (!['repair', 'scrap'].includes(action)) {
+    return res.status(400).json({ error: 'A failed return is either repaired or scrapped — choose one.' });
+  }
+  const jc = q.job_card_id ? await db.get('SELECT * FROM job_cards WHERE id=$1', [q.job_card_id]) : null;
+  if (!jc) return res.status(400).json({ error: 'This return has no job card to repair or scrap.' });
 
-  if (q.job_card_id) {
-    await db.run("UPDATE production_checklist SET done=0, done_at=NULL WHERE job_card_id=$1", [q.job_card_id]);
-    await db.run("UPDATE job_cards SET status='repair_in_progress' WHERE id=$1", [q.job_card_id]);
+  if (action === 'repair') {
+    const block = await capaBlock(db, jc.id);
+    if (block) return res.status(400).json(block);
+    const raw = parseInt(req.body.repair_from_stage, 10);
+    const fromStage = Number.isInteger(raw) && raw >= 1 && raw < 30 ? raw : 1;
+    // Claimed first, so a double press cannot reopen the card twice
+    const won = await db.get(
+      `UPDATE customer_queries SET return_status='in_repair', updated_at=NOW() WHERE id=$1 AND return_status='qc_check' RETURNING id`, [q.id]);
+    if (!won) return res.status(400).json({ error: 'This return is not waiting for its QC result.' });
+    await reopenForRepair(db, jc.id, fromStage);
+    await logActivity(q.order_id, jc.id, 'return_qc_fail',
+      `Returned product QC failed (${q.query_no}) — sent to production for repair ${fromStage > 1 ? `from stage ${fromStage}` : '(whole checklist)'}; after Product QC and Inventory QC it goes back into Finished Goods`,
+      req.user.id);
+    return res.json({ message: `QC failed — sent to production for repair${fromStage > 1 ? ` from stage ${fromStage}` : ''}; it comes back into Finished Goods`, action });
   }
 
-  await logActivity(q.order_id, q.job_card_id, 'return_qc_fail',
-    `Returned product QC failed — sent back to production for repair`, req.user.id);
-
-  res.json({ message: 'QC failed — sent to production for repair' });
+  // Scrap: what QC took off for reuse, each within what the heater carried.
+  const { pieces, parts } = await scrapParts(db, q, jc);
+  const allowed = new Map(parts.map(p => [p.inventory_item_id, p]));
+  const clean = [];
+  const seen = new Set();
+  for (const w of (Array.isArray(req.body.parts) ? req.body.parts : [])) {
+    const id = parseInt(w?.inventory_item_id, 10);
+    const raw = w?.qty;
+    if (raw === undefined || raw === null || String(raw).trim() === '' || Number(raw) === 0) continue;   // nothing taken off
+    const qty = Number(raw);
+    const p = allowed.get(id);
+    if (!p) return res.status(400).json({ error: "Only counted parts on this heater's list can go into the rework bin." });
+    if (seen.has(id)) return res.status(400).json({ error: `${p.item_code} is listed twice — give it one row with the total.` });
+    if (!Number.isInteger(qty) || qty < 0) return res.status(400).json({ error: `${p.item_code}: enter a whole number of pieces.` });
+    if (qty > p.max) return res.status(400).json({ error: `${p.item_code}: at most ${p.max} came back on ${pieces} pcs.` });
+    seen.add(id);
+    clean.push({ ...p, qty });
+  }
+  try {
+    await db.withTransaction(async (client) => {
+      const tx = clientDb(client);
+      const won = await tx.get(
+        `UPDATE customer_queries SET return_status='scrapped', updated_at=NOW() WHERE id=$1 AND return_status='qc_check' RETURNING id`, [q.id]);
+      if (!won) throw Object.assign(new Error('This return is not waiting for its QC result.'), { status: 400 });
+      const order = await tx.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
+      for (const p of clean) {
+        await rework.move(tx, { itemId: p.inventory_item_id, kind: 'deposit', qty: p.qty,
+          ref: { order_id: jc.order_id, order_item_id: jc.order_item_id, job_card_id: jc.id, order_code: order?.order_code,
+                 job_card_no: jc.job_card_no, drawing_number: jc.drawing_no },
+          notes: `Taken off scrapped heater ${jc.job_card_no} — debit-note return ${q.query_no} failed QC`, userId: req.user.id });
+      }
+      await tx.run("UPDATE job_cards SET status='scrapped' WHERE id=$1", [jc.id]);
+      await logInTx(tx, jc.order_id, jc.id, 'return_scrapped',
+        `Returned product QC failed (${q.query_no}) — ${jc.job_card_no} scrapped. `
+        + (clean.length ? `Into the rework bin: ${clean.map(p => `${p.item_code} × ${p.qty}`).join(', ')}` : 'Nothing taken off for reuse'),
+        req.user.id);
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
+  res.json({
+    message: `Scrapped — ${clean.length ? `${clean.length} part${clean.length === 1 ? '' : 's'} into the rework bin` : 'nothing taken off for reuse'}`,
+    action, parts: clean.map(p => ({ inventory_item_id: p.inventory_item_id, item_code: p.item_code, qty: p.qty })),
+  });
 });
 
 // ── Mark repair complete & dispatch ─────────────────────────────────────────
@@ -846,7 +970,8 @@ router.put('/:id/debit-note-complete', authenticate, authorize('owner', 'account
   `, [req.params.id]);
 
   if (q.job_card_id) {
-    await db.run("UPDATE job_cards SET status='dispatched', dispatched_at=NOW() WHERE id=$1", [q.job_card_id]);
+    // A scrapped heater stays Scrapped — nothing of it went back out.
+    await db.run("UPDATE job_cards SET status='dispatched', dispatched_at=NOW() WHERE id=$1 AND status <> 'scrapped'", [q.job_card_id]);
   }
   await syncOrderStatus(db, q.order_id, req.user.id);
 

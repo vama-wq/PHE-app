@@ -25,7 +25,7 @@ const RETURN_STATUS_LABELS = {
   pending_return: 'Pending Return', received: 'Received', qc_check: 'QC Check',
   qc_pass: 'QC Passed', qc_fail: 'QC Failed', in_repair: 'In Repair',
   repaired_dispatched: 'Repaired & Dispatched', debit_note_issued: 'Debit Note Issued',
-  replacement_issued: 'Replacement Issued',
+  replacement_issued: 'Replacement Issued', scrapped: 'Scrapped',
 };
 const RETURN_STATUS_COLORS = {
   pending_return: 'bg-yellow-100 text-yellow-800',
@@ -37,6 +37,7 @@ const RETURN_STATUS_COLORS = {
   repaired_dispatched: 'bg-teal-100 text-teal-800',
   debit_note_issued: 'bg-gray-100 text-gray-800',
   replacement_issued: 'bg-blue-100 text-blue-800',
+  scrapped: 'bg-red-100 text-red-800',
 };
 const ROLE_COLORS_CHAT = {
   owner: 'bg-purple-50 border-purple-200', admin: 'bg-blue-50 border-blue-200',
@@ -407,7 +408,9 @@ export default function CustomerQueryDetail() {
                 {query.return_status === 'in_repair' && (
                   <div className="w-full text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg p-2.5 text-center flex items-start gap-1.5">
                     <Truck size={13} className="flex-shrink-0 mt-0.5" />
-                    <span>In repair in <strong>Production</strong>. Complete its production checklist → it goes to <strong>QC</strong> for approval, then <strong>Dispatch</strong> (no new invoice needed).</span>
+                    {query.return_type === 'debit_note'
+                      ? <span>Failed QC — in repair in <strong>Production</strong>. Complete its production checklist → <strong>Product QC</strong> and <strong>Inventory QC</strong>, then it goes back into <strong>Finished Goods</strong>.</span>
+                      : <span>In repair in <strong>Production</strong>. Complete its production checklist → it goes to <strong>QC</strong> for approval, then <strong>Dispatch</strong> (no new invoice needed).</span>}
                   </div>
                 )}
                 {canManage && query.return_type === 'debit_note' && query.debit_note_no && query.return_status !== 'debit_note_issued' && (
@@ -947,13 +950,58 @@ function DebitNoteModal({ query, onClose, onDone }) {
 }
 
 // ── QC Result Modal ────────────────────────────────────────────────────────
+// A returned heater that fails QC is either REPAIRED — from the stage QC
+// picks, back through the whole flow and into Finished Goods — or SCRAPPED,
+// with the counted parts that can be reused going into their rework bins
+// (owner, 7 Oct 2026).
 function QCResultModal({ query, onClose, onDone }) {
   const [result, setResult] = useState('pass');
+  const [action, setAction] = useState('repair');
+  const [stageNo, setStageNo] = useState(1);
+  const [scrap, setScrap] = useState(null);      // { pieces, parts: [{ inventory_item_id, item_code, name, unit, max }] }
+  const [taken, setTaken] = useState({});        // item id → pieces put in the rework bin
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const stages = PRODUCTION_STAGES.filter(s => s.no < 30);
+
+  useEffect(() => {
+    if (result !== 'fail' || action !== 'scrap' || scrap) return;
+    api.get(`/customer-queries/${query.id}/scrap-parts`)
+      .then(r => setScrap(r.data))
+      .catch(e => setError(e.response?.data?.error || 'Could not load the parts on this heater'));
+  }, [result, action, scrap, query.id]);
+
+  const submit = async () => {
+    setError('');
+    const body = { result };
+    if (result === 'fail') {
+      body.action = action;
+      if (action === 'repair') body.repair_from_stage = stageNo;
+      else {
+        const parts = [];
+        for (const p of scrap?.parts || []) {
+          const raw = String(taken[p.inventory_item_id] ?? '').trim();
+          if (!raw) continue;
+          const q = Number(raw);
+          if (!Number.isInteger(q) || q < 0) return setError(`${p.item_code}: enter a whole number of pieces.`);
+          if (q > p.max) return setError(`${p.item_code}: at most ${p.max}.`);
+          if (q > 0) parts.push({ inventory_item_id: p.inventory_item_id, qty: q });
+        }
+        body.parts = parts;
+      }
+    }
+    setSaving(true);
+    try {
+      await api.put(`/customer-queries/${query.id}/qc-result`, body);
+      onDone();
+    } catch (err) { setError(err.response?.data?.error || 'Failed'); setSaving(false); }
+  };
+
+  const reopened = stages.filter(s => s.no >= stageNo);
+  const label = result === 'pass' ? 'QC Pass' : action === 'repair' ? 'QC Fail — send for repair' : 'QC Fail — scrap';
 
   return (
-    <Modal open title="QC Inspection Result" onClose={onClose} size="sm">
+    <Modal open title="QC Inspection Result" onClose={onClose} size={result === 'fail' ? 'md' : 'sm'}>
       <div className="space-y-4">
         <p className="text-sm text-gray-600">Inspect the returned product and submit QC result:</p>
         <div className="grid grid-cols-2 gap-3">
@@ -969,21 +1017,72 @@ function QCResultModal({ query, onClose, onDone }) {
           }`} onClick={() => setResult('fail')}>
             <XCircle size={24} className={`mx-auto ${result === 'fail' ? 'text-red-600' : 'text-gray-400'}`} />
             <div className="font-semibold mt-1">Fail</div>
-            <div className="text-xs text-gray-500">Send to Production for repair</div>
+            <div className="text-xs text-gray-500">Repair it, or scrap it</div>
           </button>
         </div>
+
+        {result === 'fail' && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <button className={`p-3 rounded-xl border-2 text-left ${action === 'repair' ? 'border-orange-500 bg-orange-50' : 'border-gray-200'}`}
+                onClick={() => setAction('repair')}>
+                <div className="font-semibold text-sm flex items-center gap-1.5"><Wrench size={14} /> Repair</div>
+                <div className="text-xs text-gray-500 mt-0.5">Back to production from a stage; after QC it goes into Finished Goods</div>
+              </button>
+              <button className={`p-3 rounded-xl border-2 text-left ${action === 'scrap' ? 'border-red-500 bg-red-50' : 'border-gray-200'}`}
+                onClick={() => setAction('scrap')}>
+                <div className="font-semibold text-sm flex items-center gap-1.5"><X size={14} /> Scrap</div>
+                <div className="text-xs text-gray-500 mt-0.5">Reusable parts into the rework bin; the card shows Scrapped</div>
+              </button>
+            </div>
+
+            {action === 'repair' ? (
+              <div className="space-y-2">
+                <label className="label">Restart production from</label>
+                <select className="input" value={stageNo} onChange={e => setStageNo(parseInt(e.target.value, 10))}>
+                  {stages.map(s => <option key={s.no} value={s.no}>Stage {s.no}: {s.name}</option>)}
+                </select>
+                <p className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                  {stageNo === 1
+                    ? <>The <b>whole checklist</b> reopens — all {reopened.length} stages are done again.</>
+                    : <>Stages before <b>{stages.find(s => s.no === stageNo)?.name}</b> stay completed; <b>{reopened.length}</b> reopen.</>}
+                  {' '}Then Product QC and Inventory QC, and the pieces go back into <b>Finished Goods</b>.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-gray-700">Parts taken off for reuse → rework bin</div>
+                {!scrap ? (
+                  <p className="text-xs text-gray-400">Loading the parts on this heater…</p>
+                ) : scrap.parts.length === 0 ? (
+                  <p className="text-xs text-gray-500">No counted parts on this heater's list — it is scrapped with nothing put back.</p>
+                ) : (
+                  <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg">
+                    {scrap.parts.map(p => (
+                      <div key={p.inventory_item_id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                        <span className="flex-1 truncate"><span className="font-mono">{p.item_code}</span> — {p.name}</span>
+                        <input className="input w-20 text-sm py-1" type="number" min="0" max={p.max} step="1" placeholder="0"
+                          value={taken[p.inventory_item_id] ?? ''}
+                          onChange={e => setTaken(t => ({ ...t, [p.inventory_item_id]: e.target.value }))} />
+                        <span className="text-xs text-gray-400 w-20 text-right">of {p.max} {(p.unit || '').trim()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <p className="text-[11px] text-gray-500">
+                  Up to what {scrap?.pieces ? `the ${scrap.pieces} returned pcs` : 'the returned pieces'} carried. Leave blank what can't be reused.
+                </p>
+              </div>
+            )}
+          </>
+        )}
+
         {error && <p className="text-red-600 text-sm">{error}</p>}
         <div className="flex gap-3">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button className={`flex-1 ${result === 'pass' ? 'btn-primary' : 'bg-red-600 text-white rounded-lg py-2 font-medium hover:bg-red-700'}`}
-            disabled={saving} onClick={async () => {
-              setSaving(true);
-              try {
-                await api.put(`/customer-queries/${query.id}/qc-result`, { result });
-                onDone();
-              } catch (err) { setError(err.response?.data?.error || 'Failed'); setSaving(false); }
-            }}>
-            {saving ? 'Saving...' : result === 'pass' ? 'QC Pass' : 'QC Fail'}
+            disabled={saving || (result === 'fail' && action === 'scrap' && !scrap)} onClick={submit}>
+            {saving ? 'Saving...' : label}
           </button>
         </div>
       </div>

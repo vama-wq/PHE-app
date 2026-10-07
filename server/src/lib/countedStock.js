@@ -29,7 +29,8 @@ const DISPATCHED_STATUSES = ['dispatched', 'resolved_dispatched', 'repaired_disp
   'customer_query', 'product_return', 'repair_in_progress', 'completed'];
 // A card closed as Rejected (every piece failed, Inventory QC done) is as
 // final as a dispatched one — its tube / NUT-BR-M4-08 never change again.
-const HELD_STATUSES = ['qc_approved', 'rejected', ...DISPATCHED_STATUSES];
+// So is a returned heater that was scrapped.
+const HELD_STATUSES = ['qc_approved', 'rejected', 'scrapped', ...DISPATCHED_STATUSES];
 const isHeldCard = (card) => !!card?.dispatched_at || HELD_STATUSES.includes(card?.status);
 // The same test in SQL, for a job_cards row aliased as given.
 const heldSql = (a = 'job_cards') => `(${a}.dispatched_at IS NOT NULL OR ${a}.status = ANY(ARRAY['${HELD_STATUSES.join("','")}']))`;

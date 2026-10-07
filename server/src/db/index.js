@@ -1516,7 +1516,9 @@ async function initDB(retries = 20, delayMs = 10000) {
       ))`);
       // 'inventory_qc' (owner, 6 Oct 2026): Product QC passed, waiting for
       // Inventory QC. 'rejected' (owner, 7 Oct 2026): every piece rejected in
-      // production, closed after Inventory QC. They must be in THIS list too —
+      // production, closed after Inventory QC. 'scrapped' (7 Oct 2026): a
+      // debit-note return that failed QC and was scrapped, its reusable parts
+      // into the rework bin. They must be in THIS list too —
       // this runs on every boot, and re-adding the constraint without them
       // would fail once any card is there, silently skipping every migration
       // after it. Dropped and re-added in one transaction, so the table is
@@ -1528,7 +1530,7 @@ async function initDB(retries = 20, delayMs = 10000) {
           await c.query(`ALTER TABLE job_cards DROP CONSTRAINT IF EXISTS job_cards_status_check`);
           await c.query(`ALTER TABLE job_cards ADD CONSTRAINT job_cards_status_check CHECK(status IN (
             'pending','in_progress','on_hold','qc_pending','inventory_qc','qc_approved','completed','dispatched',
-            'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched','rejected'
+            'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched','rejected','scrapped'
           ))`);
           await c.query(`COMMIT`);
         } catch (e) { await c.query(`ROLLBACK`).catch(() => {}); throw e; }
