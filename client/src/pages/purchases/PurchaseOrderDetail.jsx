@@ -187,6 +187,27 @@ export default function PurchaseOrderDetail() {
               <Truck size={11} className="mr-1" /> {deliveryLabel(po.delivery_status)}
             </span>
           )}
+          {/* "Don't add to inventory" (owner, 7 Oct 2026): QC passes the goods
+              and Payments Due bills them, but no stock is added. */}
+          {po.no_stock && (
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800"
+              title="QC will not add these goods to stock — they still show on Payments Due">
+              Not added to inventory
+            </span>
+          )}
+          {user?.role === 'owner' && !(po.items || []).some(i => ['approved', 'partial'].includes(i.qc_status)) && (
+            <button className="btn-secondary btn-sm"
+              onClick={async () => {
+                const on = !po.no_stock;
+                if (!window.confirm(on
+                  ? `Don't add ${po.po_number} to inventory?\n\nQC will pass the goods and they will show on Payments Due, but nothing goes into stock.`
+                  : `Add ${po.po_number} to inventory again when it passes QC?`)) return;
+                try { await api.put(`/purchase-orders/${id}/no-stock`, { no_stock: on }); load(); }
+                catch (e) { alert(e.response?.data?.error || 'Could not change it'); }
+              }}>
+              {po.no_stock ? 'Add to inventory at QC' : "Don't add to inventory"}
+            </button>
+          )}
 
           {['draft', 'rejected'].includes(po.status) && canManagePO && (
             <Link to={`/purchases/${id}/edit`} className="btn-secondary btn-sm flex items-center gap-1.5">

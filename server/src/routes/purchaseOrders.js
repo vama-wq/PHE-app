@@ -38,6 +38,14 @@ async function receiveItemStock(db, po, item, userId, qty) {
   if (!item.inventory_item_id) return;
   const q = Number(qty);
   if (!(q > 0)) return;
+  // "Don't add to inventory" (owner, 7 Oct 2026 — P PHE 46): the goods pass QC
+  // and show on Payments Due like any other, but nothing goes into stock — no
+  // lot, no cost change, no "purchase in" line on the item.
+  if (po.no_stock) {
+    await logActivity(null, null, 'purchase_no_stock',
+      `${po.po_number}: "${item.description}" passed QC (${q} ${item.unit || ''}) — not added to inventory (owner's setting on this PO)`, userId);
+    return;
+  }
   const now = new Date().toISOString();
   const supplier = await db.get('SELECT name FROM suppliers WHERE id=$1', [po.supplier_id]);
 
@@ -379,6 +387,27 @@ router.post('/:id/advance', authenticate, authorize('owner', 'admin', 'accounts'
     [entryDate, `Advance for ${po.po_number}${note ? ` — ${note}` : ''}`, po.supplier_name, amount, poId, req.user.id]);
   await logActivity(null, null, 'purchase_advance', `Advance ₹${amount} logged for ${po.po_number} (unpaid bank)`, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid });
+});
+
+// "Don't add to inventory" on a PO (owner, 7 Oct 2026): the owner turns it on
+// or off until the first line passes QC. After that the stock has (or has not)
+// been added, and switching would leave the PO and the stock out of step.
+router.put('/:id/no-stock', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const on = req.body.no_stock === true || req.body.no_stock === 'true';
+  const po = await db.get('SELECT id, po_number, no_stock FROM purchase_orders WHERE id=$1', [req.params.id]);
+  if (!po) return res.status(404).json({ error: 'PO not found' });
+  const passed = await db.get(
+    "SELECT COUNT(*)::int AS n FROM purchase_order_items WHERE po_id=$1 AND qc_status IN ('approved','partial')", [po.id]);
+  if (passed.n) {
+    return res.status(400).json({ error: `A line on ${po.po_number} has already passed QC, so whether it went into stock is settled — this can't be changed now.` });
+  }
+  if (!!po.no_stock === on) return res.json({ no_stock: on });
+  await db.run('UPDATE purchase_orders SET no_stock=$1 WHERE id=$2', [on, po.id]);
+  await logActivity(null, null, 'purchase_no_stock', on
+    ? `${po.po_number}: "Don't add to inventory" turned ON — QC will not add these goods to stock; they still show on Payments Due`
+    : `${po.po_number}: "Don't add to inventory" turned OFF — QC adds these goods to stock as usual`, req.user.id);
+  res.json({ no_stock: on });
 });
 
 router.get('/:id', authenticate, async (req, res) => {
@@ -1387,8 +1416,8 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
       : extra > 0 ? ` — billed ${billed}, ${arrived} came: ${extra} extra in stock at no cost` : '';
     await logActivity(null, null, 'purchase_qc',
       `PO ${po.po_number}: item QC ${result}${rejectedQty > 0 ? ` (${rejectedQty} rejected → debit note pending)` : ''}${billNote}`, req.user.id);
-    res.json({ message: (result === 'approved' ? 'Item QC approved — stock added'
-      : result === 'partial' ? `Partial: ${acceptedQty} accepted to stock, ${rejectedQty} rejected — debit note pending`
+    res.json({ message: (result === 'approved' ? `Item QC approved — ${po.no_stock ? 'not added to inventory (this PO is set not to)' : 'stock added'}`
+      : result === 'partial' ? `Partial: ${acceptedQty} accepted${po.no_stock ? ' (not added to inventory)' : ' to stock'}, ${rejectedQty} rejected — debit note pending`
       : 'Item QC rejected — debit note pending') + billNote, allResolved });
    } catch (err) {
     console.error('[po/item-qc] error:', err);

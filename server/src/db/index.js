@@ -2372,6 +2372,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE customer_queries ADD COLUMN IF NOT EXISTS qty_of INTEGER`);
       await pool.query(`ALTER TABLE customer_queries ADD COLUMN IF NOT EXISTS split_job_card_id INTEGER`);
 
+      // "Don't add to inventory" on a PO (owner, 7 Oct 2026 — P PHE 46): QC
+      // passes the goods and Payments Due bills them, but no stock is added.
+      await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS no_stock BOOLEAN NOT NULL DEFAULT FALSE`);
+
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
       if (parseInt(rows[0].c, 10) === 0) {
