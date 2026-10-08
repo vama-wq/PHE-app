@@ -131,6 +131,44 @@ router.get('/inventory', authenticate, authorize('owner', 'admin', 'accounts', '
   sendXlsx(res, wb, `inventory_${Date.now()}.xlsx`);
 });
 
+// ── Finished Goods (owner, 8 Oct 2026) ──────────────────────────────────────
+// The Finished Goods list as it stands: one row per product, the same figures
+// the page shows, plus where it is stored and when stock last came in / went out.
+router.get('/finished-goods', authenticate, async (req, res) => {
+  const rows = await getDB().all(`
+    SELECT COALESCE(fg.base_drawing_no, fg.drawing_no) AS item_code, fg.drawing_no, fg.product_code,
+           fg.tube_material, fg.tube_diameter, fg.wattage, fg.voltage, fg.plating_instructions,
+           fg.location, fg.qty_in, fg.qty_available, fg.notes,
+           (SELECT COUNT(*) FROM finished_goods_log l WHERE l.finished_good_id = fg.id AND l.movement_type = 'inward')::int AS inward_batches,
+           (SELECT MAX(l.created_at) FROM finished_goods_log l WHERE l.finished_good_id = fg.id AND l.movement_type = 'inward') AS last_in,
+           (SELECT MAX(l.created_at) FROM finished_goods_log l WHERE l.finished_good_id = fg.id AND l.movement_type <> 'inward') AS last_out
+      FROM finished_goods fg
+     ORDER BY (fg.qty_available > 0) DESC, COALESCE(fg.base_drawing_no, fg.drawing_no)`);
+  const day = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }) : '';
+  const data = rows.map(r => ({
+    'Item Code':       r.item_code || '',
+    'Product Code':    r.product_code || '',
+    'Tube':            r.tube_material || '',
+    'Tube Dia (mm)':   r.tube_diameter ?? '',
+    'Wattage':         r.wattage ?? '',
+    'Voltage':         r.voltage ?? '',
+    'Plating':         r.plating_instructions || '',
+    'Location':        r.location || '',
+    'Total Inward':    Number(r.qty_in) || 0,
+    'In Stock':        Number(r.qty_available) || 0,
+    'Status':          Number(r.qty_available) > 0 ? 'In stock' : 'Out of stock',
+    'Inward Batches':  r.inward_batches || 0,
+    'Last In':         day(r.last_in),
+    'Last Out':        day(r.last_out),
+    'Notes':           r.notes || '',
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  autoWidth(ws);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Finished Goods');
+  sendXlsx(res, wb, `finished_goods_${new Date().toISOString().slice(0, 10)}.xlsx`);
+});
+
 // ── Customers ─────────────────────────────────────────────────────────────────
 router.get('/customers', authenticate, authorize('owner', 'admin'), async (req, res) => {
   const rows = await getDB().all(`

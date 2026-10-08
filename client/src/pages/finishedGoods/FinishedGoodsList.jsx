@@ -4,7 +4,8 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import ImportModal from '../../components/ui/ImportModal';
-import { Search, AlertTriangle, ClipboardList, Upload, Plus, MapPin, X, Check } from 'lucide-react';
+import { Search, AlertTriangle, ClipboardList, Upload, Plus, MapPin, X, Check, Download } from 'lucide-react';
+import { downloadExcel } from '../../lib/utils';
 
 export default function FinishedGoodsList() {
   const navigate  = useNavigate();
@@ -81,6 +82,12 @@ export default function FinishedGoodsList() {
             className="btn-secondary flex items-center gap-1.5 text-sm">
             <ClipboardList size={15} /> Movement Log
           </Link>
+          {/* The whole list as an Excel sheet (owner, 8 Oct 2026) */}
+          <button
+            className="btn-secondary flex items-center gap-1.5 text-sm"
+            onClick={() => downloadExcel('finished-goods', `finished_goods_${new Date().toISOString().slice(0, 10)}.xlsx`)}>
+            <Download size={15} /> Export Excel
+          </button>
         </div>
       </div>
 
