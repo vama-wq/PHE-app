@@ -54,6 +54,8 @@ async function cloneChildCard(tx, parent, { childNo, qty, status, notes, columns
     // already completed its last stage, its take covered the pre-split
     // quantity — the split pieces included — so the child takes nothing more.
     last_stage_taken_at: parent.last_stage_taken_at || null,
+    // Pins taken at Spot covered the whole batch, split pieces included (owner, 8 Oct 2026).
+    pins_taken_at: parent.pins_taken_at || null,
     ...columns,
   };
   const keys = Object.keys(row);

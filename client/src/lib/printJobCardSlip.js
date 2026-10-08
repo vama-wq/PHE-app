@@ -53,6 +53,7 @@ export async function printJobCardSlip(jc) {
   } catch (e) {
     const r = e.response?.data;
     if (e.response?.status !== 409 || r?.code !== 'TERMINALS_SHORT') {
+      // TERMINALS_UNSET (owner, 8 Oct 2026): no pins set — design chooses them; no OK releases it.
       alert(r?.error || 'Could not prepare the material slip');
       return;
     }

@@ -27,7 +27,30 @@
 // — a pin design changed for one card; the list's Terminal Pin share for the
 // card is written to qty_waived instead, so the line is settled.
 
+// FROM 8 OCT 2026 (owner): "i should not be asked to add terminal pin anymore,
+// just like we dont add tube, and it should be deducted at the spot stage".
+//   • A card's pins come from the JOB CARD: an app-made card names the stud
+//     (M4-SS / M5-SS) and the pin length at each end, so each element takes one
+//     With-Head pin at the Big stud length and one Without-Head pin at the
+//     Small stud length (TP-SS-M4-03-WH + TP-SS-M4-03-WO …), × elements × qty.
+//     An uploaded job card names nothing the app can read: design picks the
+//     pins in Change pins, and the slip is held until they are set. An older
+//     list that still names a pin is used for such a card as before.
+//   • The pins leave stock when Stage 4 (Spot) is ticked; unticking it gives
+//     them back, ticking it again takes them again (owner). A card whose Spot
+//     was ticked before this went live takes them at its last stage as before.
+
+//   • ONLY for orders made after ORD-160-26 (owner: "this will only be for the
+//     new jobs I make after ORD-160-26 and beyond, as till 160 the jobs have
+//     already gone to the shopfloor"). Orders up to ORD-160 keep the list's
+//     pins, Change pins and the last-stage take exactly as before.
+
 const rework = require('./rework');
+
+// The last order on the old rules: ORD-160-26 (orders.id 452). Mutable only so
+// the test scripts can exercise both sides.
+const PINS_RULE = { afterOrderId: 452 };
+const newRule = (card) => Number(card?.order_id) > PINS_RULE.afterOrderId;
 const { recordMove, PLACEHOLDER, PASSED_QC, TERMINAL_CATEGORY, isTerminalCategory } = require('./stockLedger');
 const { logActivity } = require('../db');
 const EDIT_ROLES = ['design', 'admin', 'owner'];
@@ -40,8 +63,43 @@ const noTerminals = (card) => !!card?.is_fg || card?.order_type === 'finished_go
 // was through QC / dispatched (cards from before this went live took their
 // pins at QC). Such a card gets no rows, no stock check and no alert — only
 // what it already has is read.
-const pastPins = (card) => !!card?.last_stage_taken_at || !!card?.dispatched_at || !!card?.inventory_qc_at
+const pastPins = (card) => !!card?.pins_taken_at || !!card?.last_stage_taken_at || !!card?.dispatched_at || !!card?.inventory_qc_at
   || PASSED_QC.has(card?.status) || card?.status === 'qc_pending';
+
+// A pin length as the stock codes write it: 3 → "03", 3.5 → "03.5", 10 → "10".
+const pinLen = (n) => {
+  const v = Number(n);
+  const [i, f] = String(v).split('.');
+  return `${i.padStart(2, '0')}${f ? `.${f}` : ''}`;
+};
+
+// The pins an app-made job card names (its own spec, or the card it came from):
+// per element one With-Head pin at the Big stud length and one Without-Head pin
+// at the Small stud length, on the card's stud — every list so far took exactly
+// one of each per element. null when the card has no spec (uploaded) or the
+// spec names no pin. missing: codes the card asks for that are not in stock's
+// item list at all (design picks another pin then).
+async function cardSpecPins(db, card) {
+  const { specForCard } = require('./cardSpec');
+  let g = await specForCard(db, card);
+  try { g = typeof g === 'string' ? JSON.parse(g) : g; } catch { g = null; }
+  const c = g?.computed;
+  const stud = String(c?.studLabel || '').match(/M\d+/i)?.[0]?.toUpperCase();
+  const big = Number(c?.terminalPinBig?.studs), small = Number(c?.terminalPinSmall?.studs);
+  if (!c || !stud || !(big > 0) || !(small > 0)) return null;
+  const elements = Math.max(1, parseInt(c.elements, 10) || 1);
+  const pieces = (Number(card.qty) || 0) * elements;
+  const wanted = [{ code: `TP-SS-${stud}-${pinLen(big)}-WH`, end: 'big' }, { code: `TP-SS-${stud}-${pinLen(small)}-WO`, end: 'small' }];
+  const rows = [], missing = [];
+  for (const w of wanted) {
+    const inv = await db.get(
+      `SELECT id, item_code FROM inventory_items WHERE UPPER(TRIM(item_code)) = UPPER($1) AND LOWER(TRIM(category)) = LOWER($2) LIMIT 1`,
+      [w.code, TERMINAL_CATEGORY]);
+    if (!inv) { missing.push(w.code); continue; }
+    if (pieces > 0) rows.push({ inventory_item_id: inv.id, qty: pieces, item_code: inv.item_code });
+  }
+  return { rows, missing, label: `${stud} ${big}"${small !== big ? ` / ${small}"` : ''} × ${elements} element${elements === 1 ? '' : 's'}` };
+}
 
 // This card's share of a list line, in whole pieces.
 function shareFor(lineQty, cardQty, itemQty) {
@@ -109,37 +167,52 @@ async function itemFor(db, card) {
 // hand for the card are left exactly as design set them.
 async function ensureTerminals(db, card, { seed = true } = {}) {
   const { itemId, item, itemQty } = await itemFor(db, card);
-  if (noTerminals(card)) return { rows: [], lines: [], item, itemQty };
+  if (noTerminals(card)) return { rows: [], lines: [], item, itemQty, from: null, missing: [] };
   const lines = await listTerminalLines(db, itemId, card, itemQty);
   let rows = await readTerminals(db, card.id);
-  if (!seed || pastPins(card)) return { rows, lines, item, itemQty };
-  const want = lines.filter(l => l.share > 0 && !PLACEHOLDER.test(l.item_code || ''))
-    .map(l => ({ inventory_item_id: l.inventory_item_id, qty: l.share, item_code: l.item_code }));
+  if (!seed || pastPins(card)) return { rows, lines, item, itemQty, from: null, missing: [] };
+  // Where the pins come from (owner, 8 Oct 2026): the job card when the app
+  // made it; else an older list that still names a pin; else nothing — an
+  // uploaded job card — and design picks them.
+  const spec = newRule(card) ? await cardSpecPins(db, card) : null;
+  let from = null, want = [], missing = [];
+  if (spec && (spec.rows.length || spec.missing.length)) {
+    from = 'card'; want = spec.rows; missing = spec.missing;
+  } else {
+    want = lines.filter(l => l.share > 0 && !PLACEHOLDER.test(l.item_code || ''))
+      .map(l => ({ inventory_item_id: l.inventory_item_id, qty: l.share, item_code: l.item_code }));
+    from = want.length ? 'list' : null;
+  }
   const key = (r) => `${r.inventory_item_id}:${Math.round(Number(r.qty))}`;
-  // A row marked to come from the rework bin is design's choice for this card —
-  // a list correction must not redo it and drop the mark.
-  const allFromList = rows.every(r => r.source === 'list' && !(Number(r.rework_qty) > 0));
+  // Rows made automatically (from the card or the list) follow their source
+  // until Spot. A row design changed, or marked to come from the rework bin,
+  // is design's choice for this card and is left exactly as design set it.
+  const auto = rows.every(r => (r.source === 'list' || r.source === 'card') && !(Number(r.rework_qty) > 0));
   const differs = rows.length !== want.length || want.some(w => !rows.some(r => key(r) === key(w)));
-  if (allFromList && differs && (rows.length || want.length)) {
+  if (auto && differs && (rows.length || want.length)) {
     const before = rows.map(r => `${r.item_code} × ${r.qty}`).join(', ') || 'none';
     await db.run('DELETE FROM job_card_terminals WHERE job_card_id=$1', [card.id]);
     for (const w of want) {
       await db.run(
-        `INSERT INTO job_card_terminals (job_card_id, inventory_item_id, qty, source) VALUES ($1,$2,$3,'list')
-         ON CONFLICT (job_card_id, inventory_item_id) DO UPDATE SET qty = EXCLUDED.qty, source = 'list'`,
-        [card.id, w.inventory_item_id, w.qty]);
+        `INSERT INTO job_card_terminals (job_card_id, inventory_item_id, qty, source) VALUES ($1,$2,$3,$4)
+         ON CONFLICT (job_card_id, inventory_item_id) DO UPDATE SET qty = EXCLUDED.qty, source = EXCLUDED.source`,
+        [card.id, w.inventory_item_id, w.qty, from]);
     }
     if (rows.length) {
-      // The list changed under rows made from it: a new set of pins is a new question.
+      // The source changed under rows made from it: a new set of pins is a new question.
       await db.run(
         'UPDATE job_cards SET terminals_short_at = NULL, terminals_ok_by = NULL, terminals_ok_at = NULL, terminals_ok_note = NULL WHERE id=$1',
         [card.id]);
       await logActivity(card.order_id, card.id, 'terminals_changed',
-        `Terminal pins for ${card.job_card_no} follow the corrected list: ${want.map(w => `${w.item_code} × ${w.qty}`).join(', ') || 'none'} (was: ${before})`, null);
+        `Terminal pins for ${card.job_card_no} ${from === 'card' ? `now come from the job card (${spec.label})` : from === 'list' ? 'follow the corrected list' : 'are no longer named by the list — design must choose them'}: ${want.map(w => `${w.item_code} × ${w.qty}`).join(', ') || 'none'} (was: ${before})`, null);
     }
     rows = await readTerminals(db, card.id);
+  } else if (auto && from && rows.some(r => r.source !== from)) {
+    // Same pins, now known to come from the job card: just say so.
+    await db.run(`UPDATE job_card_terminals SET source=$2 WHERE job_card_id=$1 AND source IN ('list','card')`, [card.id, from]);
+    rows = await readTerminals(db, card.id);
   }
-  return { rows, lines, item, itemQty };
+  return { rows, lines, item, itemQty, from, missing };
 }
 
 // Where the OK state stands, from the card row.
@@ -158,7 +231,14 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
   const card = await db.get(
     `SELECT jc.*, o.order_type FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1`, [jc.id]);
   if (!card) return { rows: [], lines: [], short: [], held: false, ok: null };
-  const { rows, lines, item, itemQty } = await ensureTerminals(db, card);
+  const { rows, lines, item, itemQty, from, missing } = await ensureTerminals(db, card);
+  // Pins not set (owner, 8 Oct 2026): an uploaded job card names none, so
+  // design picks them; the slip is held until they are set. Same when the job
+  // card asks for a pin stock has no item for and design has not picked one.
+  const past = pastPins(card);
+  const designSet = rows.some(r => r.source === 'design' || Number(r.rework_qty) > 0);
+  const unset = newRule(card) && !past && !noTerminals(card) && rows.length === 0;
+  const missingNow = past || designSet ? [] : (missing || []);
   // A pin whose list line takes part of it from the REWORK BIN needs only the
   // rest from stock: the last-stage take draws the bin first (takeTerminalRows
   // below). The check follows the same rule, so pins the bin covers never read
@@ -187,11 +267,11 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
   let ok = okState(card);
   let shortAt = card.terminals_short_at;
 
-  if (short.length) {
+  if (short.length || unset || missingNow.length) {
     if (!ok && !shortAt) {
       await db.run('UPDATE job_cards SET terminals_short_at = NOW() WHERE id=$1 AND terminals_short_at IS NULL', [card.id]);
       shortAt = new Date();
-      if (notify) await notifyShort(db, card, short);
+      if (notify) await notifyShort(db, card, short, { unset, missing: missingNow });
     }
   } else if (shortAt || ok) {
     await db.run(
@@ -203,21 +283,31 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
     rows: rows.map(r => ({ ...r, from_rework: pastPins(card) ? 0 : fromBin(r),
                            short: short.some(s => s.inventory_item_id === r.inventory_item_id) })),
     lines, item, itemQty, short, short_at: shortAt, ok,
-    held: short.length > 0 && !ok,
+    // An OK releases a shortage only — pins that are not set are never released by it.
+    held: (short.length > 0 && !ok) || unset || missingNow.length > 0,
+    unset, missing: missingNow, from,
+    // Pins are NOT edited on the card (owner, 8 Oct 2026: "non editable here,
+    // the change can only happen at Inventory QC"). Only where there is nothing
+    // to read — an uploaded job card, or a pin the card names that stock has
+    // no item for — does design choose them, before Spot.
+    pickable: !past && (!newRule(card) || from === null || (missing || []).length > 0),
     last_stage_taken_at: card.last_stage_taken_at,
+    pins_taken_at: card.pins_taken_at || null,
   };
 }
 
 // "Job card <no>: terminal pin <code> short — need <q>, stock <s>. Press OK to
 // release the slip." — to every owner and every Design / QC login, on the
 // dashboard and through the WhatsApp follow-through (routes/notifications.js).
-async function notifyShort(db, card, short) {
+async function notifyShort(db, card, short, { unset = false, missing = [] } = {}) {
   const { notifyRole } = require('../routes/notifications');
-  const what = short.map(s => `terminal pin ${s.item_code} short — need ${s.need}, stock ${s.stock}`).join('; ');
+  const what = unset ? 'no terminal pins are set — it is an uploaded job card, so design chooses them in Change pins'
+    : missing.length ? `the job card asks for ${missing.join(', ')}, which has no inventory item — design chooses the pin in Change pins`
+    : short.map(s => `terminal pin ${s.item_code} short — need ${s.need}, stock ${s.stock}`).join('; ');
   const payload = {
     type: 'terminals_short',
-    title: `Terminal pin short — ${card.job_card_no}`,
-    body: `Job card ${card.job_card_no}: ${what}. Press OK to release the slip.`,
+    title: unset || missing.length ? `Terminal pins to choose — ${card.job_card_no}` : `Terminal pin short — ${card.job_card_no}`,
+    body: `Job card ${card.job_card_no}: ${what}. ${unset || missing.length ? 'The slip is held until they are set.' : 'Press OK to release the slip.'}`,
     link: `/job-cards/${card.id}`,
     ref: { type: 'terminals_short', id: card.id },
   };
@@ -225,8 +315,9 @@ async function notifyShort(db, card, short) {
     try { await notifyRole(db, role, payload); }
     catch (e) { console.error(`[terminals] could not notify ${role}:`, e.message); }
   }
-  await logActivity(card.order_id, card.id, 'terminals_short',
-    `Terminal pin short on ${card.job_card_no}: ${what} — slip held until the owner or Design / QC presses OK`, null);
+  await logActivity(card.order_id, card.id, 'terminals_short', unset || missing.length
+    ? `Terminal pins for ${card.job_card_no}: ${what} — slip held until they are set`
+    : `Terminal pin short on ${card.job_card_no}: ${what} — slip held until the owner or Design / QC presses OK`, null);
 }
 
 // Design's replacement of a card's rows. rows: [{ inventory_item_id, qty }].
@@ -239,6 +330,9 @@ async function saveTerminals(db, jc, rows, user) {
     `SELECT jc.*, o.order_type, o.order_code FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1`, [jc.id]);
   if (!card) throw httpError(404, 'Job card not found');
   if (noTerminals(card)) throw httpError(400, 'A finished-goods card has no terminal pins of its own — they are inside the heater.');
+  if (card.pins_taken_at && !card.last_stage_taken_at && !card.inventory_qc_at) {
+    throw httpError(400, `${card.job_card_no}'s pins were taken at Spot (stage 4). Untick Spot to change them — they go back to stock — or correct them at Inventory QC.`);
+  }
   if (pastPins(card)) {
     throw httpError(400, `${card.job_card_no} is past the point where pins are issued — any difference is fixed at Inventory QC.`);
   }
@@ -271,7 +365,15 @@ async function saveTerminals(db, jc, rows, user) {
   const lines = await listTerminalLines(db, itemId, card, itemQty);
   // A row that is exactly the list's share is still "from list"; anything
   // else is design's change for this card.
-  const sourceOf = (r) => lines.some(l => l.inventory_item_id === r.inventory_item_id && l.share === r.qty) ? 'list' : 'design';
+  const spec = newRule(card) ? await cardSpecPins(db, card) : null;
+  const fromList = lines.some(l => l.share > 0 && !PLACEHOLDER.test(l.item_code || ''));
+  if (newRule(card) && ((spec && spec.rows.length && !spec.missing.length) || (!spec && fromList))) {
+    throw httpError(400, `${card.job_card_no}'s terminal pins come from the ${spec ? 'job card' : 'list'} and are not changed here — any change is made at Inventory QC, which moves the stock.`, 'PINS_FIXED');
+  }
+  // Exactly what the job card names is still "from job card"; exactly the
+  // list's share is "from list"; anything else is design's change.
+  const sourceOf = (r) => spec?.rows?.some(w => w.inventory_item_id === r.inventory_item_id && w.qty === r.qty) ? 'card'
+    : lines.some(l => l.inventory_item_id === r.inventory_item_id && l.share === r.qty) ? 'list' : 'design';
   // Where the item's list already takes this pin from the rework bin, the list
   // decides — a second mark on the card would hold the same pieces twice.
   for (const r of clean) {
@@ -304,6 +406,9 @@ async function saveTerminals(db, jc, rows, user) {
 // silently release a later shortage.
 async function okTerminals(db, jc, user, note) {
   const state = await checkTerminals(db, jc);
+  if (state.unset || state.missing?.length) {
+    throw httpError(400, 'The terminal pins for this job card are not set — design must choose them in Change pins; an OK cannot release that.', 'PINS_NOT_SET');
+  }
   if (!state.short.length) throw httpError(400, 'No terminal pin is short for this job card — the slip is not held.', 'NOT_SHORT');
   if (state.ok) return { ...state, held: false, already: true };
   const card = await db.get('SELECT * FROM job_cards WHERE id=$1', [jc.id]);
@@ -325,16 +430,18 @@ async function okTerminals(db, jc, user, note) {
 // bookkeeping and BOM corrections see it as settled without ever touching
 // the design-changed pin. Returns null when the card has no rows (seed failed
 // / nothing on the list): the caller then falls back to today's list share.
-async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId) {
-  // The take runs on the stage-29 tick, when the card already reads as QC
-  // pending — so the seed / list follow-up is forced here, once, before taking.
-  const { rows } = await ensureTerminals(tx, { ...card, status: 'in_progress', last_stage_taken_at: null });
+async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId, { at = 'last stage' } = {}) {
+  // The take may run when the card already reads as QC pending (the stage-29
+  // tick) — so the seed / follow-up is forced here, once, before taking.
+  const { rows } = await ensureTerminals(tx, { ...card, status: 'in_progress', last_stage_taken_at: null, pins_taken_at: null });
   if (!rows.length) return null;
   const itemQty = Number(item.quantity) || 0;
   const taken = [];
+  // What left, so unticking Spot can put back exactly this (owner, 8 Oct 2026).
+  const record = { rows: [], waived: [] };
   const noteParts = [`Order: ${orderCode}`];
   if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
-  noteParts.push(`Terminal pins (JC ${card.job_card_no})`);
+  noteParts.push(`Terminal pins${at === 'Spot' ? ' at Spot' : ''} (JC ${card.job_card_no})`);
   const baseNote = noteParts.join(' | ');
 
   for (const row of rows) {
@@ -343,6 +450,8 @@ async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId) {
     const line = tpLines.find(l => l.inventory_item_id === row.inventory_item_id) || null;
     let note = baseNote;
     let fromRework = 0;
+    const rec = { inventory_item_id: row.inventory_item_id, item_code: row.item_code, from_stock: 0, from_rework: 0,
+                  rework_line_id: null, rework_qty_was: null };
     const wantRework = line ? Math.max(0, Number(line.rework_qty || 0) - Number(line.rework_deducted || 0)) : 0;
     if (wantRework > 0) {
       const available = await rework.binQty(tx, row.inventory_item_id);
@@ -354,10 +463,12 @@ async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId) {
           notes: note, userId });
         await tx.run('UPDATE order_item_inventory SET rework_deducted = COALESCE(rework_deducted,0) + $1 WHERE id=$2',
           [fromRework, line.id]);
+        rec.rework_line_id = line.id;
       }
       const shortBin = Math.min(need, wantRework) - fromRework;
       if (shortBin > 0) {
         // Bin short: the rest comes from stock, and the reservation is released.
+        rec.rework_line_id = line.id; rec.rework_qty_was = Number(line.rework_qty) || 0;
         await tx.run('UPDATE order_item_inventory SET rework_qty = COALESCE(rework_deducted,0) WHERE id=$1', [line.id]);
         note = `${note} | rework bin short by ${shortBin} — taken from stock`;
       }
@@ -387,6 +498,8 @@ async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId) {
         notes: fromRework > 0 ? `${note} | ${fromRework} from rework bin` : note, userId,
         orderItemId: item.id, source: 'terminal', jobCardId: card.id });
     }
+    rec.from_stock = Math.max(0, fromStock); rec.from_rework = fromRework;
+    record.rows.push(rec);
     taken.push({ inventory_item_id: row.inventory_item_id, item_code: row.item_code, qty: need, unit: row.unit || '', source: row.source });
   }
 
@@ -399,9 +512,106 @@ async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId) {
     const waive = Math.min(share, Math.max(0, left));
     if (waive > 1e-4) {
       await tx.run('UPDATE order_item_inventory SET qty_waived = COALESCE(qty_waived,0) + $1 WHERE id=$2', [waive, line.id]);
+      record.waived.push({ line_id: line.id, qty: waive });
     }
   }
-  return { taken };
+  return { taken, record };
+}
+
+// A transaction-bound db, the same shape as the pool's (lib/bomCorrection
+// clientDb — not required from there, it requires this file).
+const txDb = (client) => ({
+  get: async (sql, params = []) => (await client.query(sql, params)).rows[0] || null,
+  all: async (sql, params = []) => (await client.query(sql, params)).rows,
+  run: (sql, params = []) => client.query(sql, params),
+  insert: async (sql, params = []) => {
+    const { rows } = await client.query(sql.trimEnd().replace(/;?\s*$/, '') + ' RETURNING id', params);
+    return { lastInsertRowid: rows[0]?.id || null };
+  },
+});
+
+// The card, its order line and the line's pin lines, locked, for Spot.
+async function spotContext(tx, jobCardId) {
+  const card = await tx.get(
+    `SELECT jc.*, o.order_code, o.order_type FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1 FOR UPDATE OF jc`, [jobCardId]);
+  if (!card) return {};
+  const { resolveJobCardItemId } = require('./inventoryDeduction');
+  const itemId = await resolveJobCardItemId(tx, card);
+  const item = itemId ? await tx.get('SELECT id, drawing_number, quantity, inventory_deducted FROM order_items WHERE id=$1 FOR UPDATE', [itemId]) : null;
+  const tpLines = item ? await tx.all(
+    `SELECT oii.*, ii.item_code, ii.unit, TRIM(ii.category) AS category
+       FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+      WHERE oii.order_item_id=$1 AND LOWER(TRIM(ii.category)) = LOWER($2)`, [item.id, TERMINAL_CATEGORY]) : [];
+  return { card, item, tpLines, orderCode: card.order_code || `Order #${card.order_id}` };
+}
+
+// Stage 4 (Spot) ticked: the card's pins leave stock now (owner, 8 Oct 2026).
+// Once per tick; nothing for a finished-goods card, a card past pins (its last
+// stage taken, through QC, dispatched, under a repair), a settled order line
+// (a replacement / repair card), or a card with no pins set — that one takes
+// its pins at the last stage once design sets them, as a catch-up.
+async function takePinsAtSpot(db, jobCardId, userId) {
+  return db.withTransaction(async (client) => {
+    const tx = txDb(client);
+    const { card, item, tpLines, orderCode } = await spotContext(tx, jobCardId);
+    if (!card || !newRule(card) || noTerminals(card) || pastPins(card) || !item || item.inventory_deducted) return null;
+    const r = await takeTerminalRows(tx, card, item, tpLines, orderCode, userId, { at: 'Spot' });
+    if (!r || !r.taken.length) return null;
+    await tx.run('UPDATE job_cards SET pins_taken_at = NOW(), pins_taken = $2 WHERE id=$1', [card.id, JSON.stringify(r.record)]);
+    await client.query(`INSERT INTO activity_log (order_id, job_card_id, activity_type, description, created_by) VALUES ($1,$2,'terminals_taken',$3,$4)`,
+      [card.order_id, card.id, `Spot ticked: terminal pins taken from stock for ${card.job_card_no} — ${r.taken.map(t => `${t.item_code} × ${t.qty}`).join(', ')}`, userId || null]);
+    return r;
+  });
+}
+
+// Stage 4 (Spot) unticked: exactly what the tick took goes back — stock to
+// stock, rework-bin pins to the bin, the list's settled share reopened — and the
+// card's pins can be changed again; ticking Spot again takes them again.
+async function givePinsBackAtSpot(db, jobCardId, userId) {
+  return db.withTransaction(async (client) => {
+    const tx = txDb(client);
+    const { card, item, orderCode } = await spotContext(tx, jobCardId);
+    if (!card || !card.pins_taken_at || card.last_stage_taken_at || card.inventory_qc_at) return null;
+    let rec = card.pins_taken;
+    try { rec = typeof rec === 'string' ? JSON.parse(rec) : rec; } catch { rec = null; }
+    if (!rec?.rows) return null;
+    // Pieces split off after Spot took their pins inside this take: giving the
+    // whole take back would leave the split card without pins. Kept as taken.
+    const kids = await tx.get('SELECT COUNT(*)::int AS n FROM job_cards WHERE parent_job_card_id=$1 AND pins_taken_at IS NOT NULL', [card.id]);
+    if (kids.n) {
+      await client.query(`INSERT INTO activity_log (order_id, job_card_id, activity_type, description, created_by) VALUES ($1,$2,'terminals_kept',$3,$4)`,
+        [card.order_id, card.id, `Spot unticked on ${card.job_card_no}: pins NOT given back — pieces were split off after Spot and carry these pins; correct at Inventory QC if needed`, userId || null]);
+      return null;
+    }
+    const note = `Order: ${orderCode}${item?.drawing_number ? ` | Dwg: ${item.drawing_number}` : ''} | Spot undone — terminal pins back (JC ${card.job_card_no})`;
+    for (const r of rec.rows) {
+      if (Number(r.from_stock) > 0) {
+        const after = Number((await tx.get(
+          'UPDATE inventory_items SET current_stock = current_stock + $1 WHERE id=$2 RETURNING current_stock', [r.from_stock, r.inventory_item_id])).current_stock);
+        await recordMove(tx, { itemId: r.inventory_item_id, type: 'return_from_production', qty: r.from_stock, balanceAfter: after,
+          notes: note, userId, orderItemId: item?.id || null, source: 'terminal', jobCardId: card.id });
+      }
+      if (Number(r.from_rework) > 0) {
+        await rework.move(tx, { itemId: r.inventory_item_id, kind: 'return', qty: r.from_rework,
+          ref: { order_id: card.order_id, order_item_id: item?.id || null, job_card_id: card.id, order_code: orderCode,
+                 job_card_no: card.job_card_no, drawing_number: item?.drawing_number || null },
+          notes: note, userId });
+      }
+      if (r.rework_line_id) {
+        await tx.run(
+          `UPDATE order_item_inventory SET rework_deducted = GREATEST(0, COALESCE(rework_deducted,0) - $1),
+                  rework_qty = COALESCE($3, rework_qty) WHERE id=$2`,
+          [Number(r.from_rework) || 0, r.rework_line_id, r.rework_qty_was]);
+      }
+    }
+    for (const w of rec.waived || []) {
+      await tx.run('UPDATE order_item_inventory SET qty_waived = GREATEST(0, COALESCE(qty_waived,0) - $1) WHERE id=$2', [w.qty, w.line_id]);
+    }
+    await tx.run('UPDATE job_cards SET pins_taken_at = NULL, pins_taken = NULL WHERE id=$1', [card.id]);
+    await client.query(`INSERT INTO activity_log (order_id, job_card_id, activity_type, description, created_by) VALUES ($1,$2,'terminals_returned',$3,$4)`,
+      [card.order_id, card.id, `Spot unticked: terminal pins given back to stock for ${card.job_card_no} — ${rec.rows.map(r => `${r.item_code} × ${Number(r.from_stock) + Number(r.from_rework)}`).join(', ')}`, userId || null]);
+    return rec;
+  });
 }
 
 // A partial-dispatch split leaves the parent with fewer pieces. Its rows were
@@ -410,8 +620,8 @@ async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId) {
 // which seeds its own rows when first read. Nothing to do once the parent has
 // taken its last stage (the child inherits that flag and takes nothing).
 async function rescaleAfterSplit(tx, parentId, oldQty, newQty, userId) {
-  const card = await tx.get('SELECT id, job_card_no, order_id, last_stage_taken_at FROM job_cards WHERE id=$1', [parentId]);
-  if (!card || card.last_stage_taken_at || !(Number(oldQty) > 0) || !(Number(newQty) > 0)) return;
+  const card = await tx.get('SELECT id, job_card_no, order_id, last_stage_taken_at, pins_taken_at FROM job_cards WHERE id=$1', [parentId]);
+  if (!card || card.last_stage_taken_at || card.pins_taken_at || !(Number(oldQty) > 0) || !(Number(newQty) > 0)) return;
   const rows = await tx.all(
     `SELECT t.id, t.qty::float AS qty, ii.item_code FROM job_card_terminals t JOIN inventory_items ii ON ii.id = t.inventory_item_id
       WHERE t.job_card_id=$1`, [parentId]);
@@ -444,5 +654,5 @@ function httpError(status, message, code) {
 module.exports = {
   TERMINAL_CATEGORY, isTerminalCategory, noTerminals, shareFor, EDIT_ROLES, OK_ROLES,
   readTerminals, listTerminalLines, ensureTerminals, checkTerminals, saveTerminals, okTerminals,
-  takeTerminalRows, rescaleAfterSplit, okState, pastPins,
+  takeTerminalRows, rescaleAfterSplit, okState, pastPins, cardSpecPins, takePinsAtSpot, givePinsBackAtSpot, PINS_RULE, newRule,
 };

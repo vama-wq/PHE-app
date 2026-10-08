@@ -25,7 +25,7 @@ const { getDB } = require('../db');
 const CARD_HOLDS = (itemExpr, excl = '') => `COALESCE((
   SELECT SUM(t.rework_qty) FROM job_card_terminals t JOIN job_cards jc ON jc.id = t.job_card_id
    WHERE t.inventory_item_id = ${itemExpr} AND t.rework_qty > 0 ${excl}
-     AND jc.last_stage_taken_at IS NULL AND jc.dispatched_at IS NULL AND jc.inventory_qc_at IS NULL), 0)`;
+     AND jc.last_stage_taken_at IS NULL AND jc.pins_taken_at IS NULL AND jc.dispatched_at IS NULL AND jc.inventory_qc_at IS NULL), 0)`;
 
 async function binQty(db, itemId) {
   const b = await db.get('SELECT qty FROM inventory_rework_bins WHERE item_id=$1', [itemId]);

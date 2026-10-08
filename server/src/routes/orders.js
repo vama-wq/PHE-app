@@ -30,8 +30,37 @@ async function finsIdSet(db, ids) {
 // item's remark: any variation of "heavy terminal pin" there → the 'Heavy
 // Terminal Pin' category is required; otherwise the regular 'Terminal Pin'.
 const HEAVY_PIN_REMARK_RE = /heavy[\s\-_.]*terminal[\s\-_.]*pin/i;
-const requiredPinCategory = (remark) =>
-  HEAVY_PIN_REMARK_RE.test(remark || '') ? 'Heavy Terminal Pin' : 'Terminal Pin';
+// From 8 Oct 2026 the regular terminal pin is NOT asked for on the list any
+// more — each job card's pins come from the job card and leave stock at Spot,
+// as the tube does at Stage 5 (owner: "i should not be asked to add terminal
+// pin anymore, just like we dont add tube"). A Heavy Terminal Pin is still
+// required when the remark calls for one: the job card does not name those.
+// Orders up to ORD-160-26 keep the old rule (a regular pin on every list).
+const { PINS_RULE } = require('../lib/terminals');
+const pinsFromCard = (orderId) => Number(orderId) > PINS_RULE.afterOrderId;
+const requiredPinCategory = (remark, orderId) =>
+  HEAVY_PIN_REMARK_RE.test(remark || '') ? 'Heavy Terminal Pin' : (pinsFromCard(orderId) ? null : 'Terminal Pin');
+// No regular terminal pin on any list from 8 Oct 2026 (owner: "remove
+// terminals from any inventory here forward, even when they are taken from
+// previous orders"). They come from the job card and leave stock at Spot.
+async function dropTerminalPins(db, sels, orderId) {
+  if (!pinsFromCard(orderId)) return sels;
+  const ids = sels.map(s => parseInt(s.id, 10)).filter(Boolean);
+  if (!ids.length) return sels;
+  const pins = new Set((await db.all(
+    `SELECT id FROM inventory_items WHERE id = ANY($1) AND LOWER(TRIM(category)) = 'terminal pin'`, [ids])).map(r => r.id));
+  return sels.filter(s => !pins.has(parseInt(s.id, 10)));
+}
+// The pins each item's job cards carry — shown on the item, read-only.
+async function itemTerminalPins(db, itemId) {
+  return db.all(
+    `SELECT ii.item_code, ii.unit, SUM(t.qty)::float AS qty, COUNT(DISTINCT t.job_card_id)::int AS cards,
+            BOOL_OR(t.source = 'card') AS from_card
+       FROM job_card_terminals t JOIN job_cards jc ON jc.id = t.job_card_id JOIN inventory_items ii ON ii.id = t.inventory_item_id
+      WHERE jc.order_item_id = $1 AND NOT COALESCE(jc.is_fg, FALSE)
+      GROUP BY ii.item_code, ii.unit ORDER BY ii.item_code`, [itemId]);
+}
+
 async function hasPinCategory(db, ids, category) {
   if (!ids.length) return false;
   const row = await db.get(
@@ -268,15 +297,18 @@ router.get('/:id', authenticate, async (req, res) => {
     [order.id]
   );
   order.has_price_request = !!priceReq;
+  // Terminal pins from the job card, at Spot — orders after ORD-160-26 only (owner, 8 Oct 2026).
+  order.pins_from_card = pinsFromCard(order.id);
 
   const rawItems = await db.all('SELECT * FROM order_items WHERE order_id = $1 ORDER BY id ASC', [order.id]);
   order.items = await Promise.all(rawItems.map(async item => ({
     ...item,
     images: await db.all('SELECT * FROM order_item_images WHERE item_id = $1 ORDER BY created_at ASC', [item.id]),
     inventory_items: await db.all(
-      `SELECT ii.id, ii.item_code, ii.name, ii.name_gu, ii.unit, oii.qty, COALESCE(oii.rework_qty,0) AS rework_qty
+      `SELECT ii.id, ii.item_code, ii.name, ii.name_gu, ii.unit, TRIM(ii.category) AS category, oii.qty, COALESCE(oii.rework_qty,0) AS rework_qty
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
        WHERE oii.order_item_id = $1 ORDER BY ii.item_code`, [item.id]),
+    terminal_pins: await itemTerminalPins(db, item.id),
   })));
 
   order.order_drawings = await db.all(
@@ -533,7 +565,7 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
     const srcInv = listSrc ? await db.all(
       `SELECT oii.inventory_item_id, oii.qty, ii.unit, ii.item_code
          FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
-        WHERE oii.order_item_id=$1`, [listSrc.id]) : [];
+        WHERE oii.order_item_id=$1 AND ($2::boolean = FALSE OR LOWER(TRIM(ii.category)) <> 'terminal pin')`, [listSrc.id, pinsFromCard(req.params.id)]) : [];   // pins come from the job card on new orders
     const scaleNotes = [];
     for (const s of srcInv) {
       const r = scaleBomQty(s.qty, fromQty, toQty, s.unit);
@@ -759,14 +791,14 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
   const raw = (req.body.inventory_item_ids || []).filter(s => s && s.id);
   // Fins consume by tube length at QC — they carry no qty in the BOM
   const fins = await finsIdSet(db, raw.map(s => parseInt(s.id)));
-  const sels = raw.filter(s => parseFloat(s.qty) > 0 || fins.has(parseInt(s.id)));
-  if (!sels.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity)' });
+  const sels = await dropTerminalPins(db, raw.filter(s => parseFloat(s.qty) > 0 || fins.has(parseInt(s.id))), req.params.id);
+  if (!sels.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) — terminal pins are not added to the list, they come from the job card' });
   const item = await db.get('SELECT id, inventory_deducted, remark FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
   const ord = await db.get('SELECT order_code, order_type FROM orders WHERE id=$1', [req.params.id]);
   if (ord?.order_type !== 'finished_goods') {
-    const pinCat = requiredPinCategory(item.remark);
-    if (!(await hasPinCategory(db, sels.map(s => parseInt(s.id)), pinCat))) {
+    const pinCat = requiredPinCategory(item.remark, req.params.id);
+    if (pinCat && !(await hasPinCategory(db, sels.map(s => parseInt(s.id)), pinCat))) {
       return res.status(400).json({
         error: pinCat === 'Heavy Terminal Pin'
           ? 'This item\'s remark calls for a Heavy Terminal Pin — add one from the Heavy Terminal Pin category'
@@ -848,12 +880,12 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     invSelections = (invSelections || []).filter(s => s && s.id);
     // Fins lines carry no qty — they deduct by tube length at QC approval
     const finsIds = await finsIdSet(db, invSelections.map(s => parseInt(s.id)));
-    invSelections = invSelections.filter(s => parseFloat(s.qty) > 0 || finsIds.has(parseInt(s.id)));
-    if (!invSelections.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing' });
+    invSelections = await dropTerminalPins(db, invSelections.filter(s => parseFloat(s.qty) > 0 || finsIds.has(parseInt(s.id))), req.params.id);
+    if (!invSelections.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing — terminal pins are not added to the list, they come from the job card' });
     if (!isFgOrder) {
       const itemRow = await db.get('SELECT remark FROM order_items WHERE id=$1 AND order_id=$2', [parseInt(item_id), req.params.id]);
-      const pinCat = requiredPinCategory(itemRow?.remark);
-      if (!(await hasPinCategory(db, invSelections.map(s => parseInt(s.id)), pinCat))) {
+      const pinCat = requiredPinCategory(itemRow?.remark, req.params.id);
+      if (pinCat && !(await hasPinCategory(db, invSelections.map(s => parseInt(s.id)), pinCat))) {
         return res.status(400).json({
           error: pinCat === 'Heavy Terminal Pin'
             ? 'This item\'s remark calls for a Heavy Terminal Pin — add one from the Heavy Terminal Pin category'

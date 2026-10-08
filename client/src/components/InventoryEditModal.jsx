@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../lib/api';
+import { pinsFromCard } from '../lib/utils';
 import Modal from './ui/Modal';
 import StockTag, { StockNote } from './StockTag';
 import { Package, X } from 'lucide-react';
@@ -33,7 +34,9 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
     api.get(`/orders/${orderId}/items/${item.id}/fg-fins-length`).then(r => setFgLength(r.data?.length_mm ? r.data : null)).catch(() => setFgLength(null));
   }, [fgOrder, orderId, item?.id]);
 
-  const filtered = inventoryItems.filter(i =>
+  // Terminal pins are not on the list any more — they come from the job card (owner, 8 Oct 2026).
+  const isRegularPin = (i) => pinsFromCard(orderId) && (i?.category || '').trim().toLowerCase() === 'terminal pin';
+  const filtered = inventoryItems.filter(i => !isRegularPin(i)).filter(i =>
     (i.item_code || '').toLowerCase().includes(invSearch.toLowerCase()) ||
     (i.name || '').toLowerCase().includes(invSearch.toLowerCase()) ||
     (i.category || '').toLowerCase().includes(invSearch.toLowerCase())
@@ -47,7 +50,7 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
   // already holds (that reservation is released and re-made on save).
   const reworkMax = (i) => (Number(i.rework_free) || 0) + (Number((item?.inventory_items || []).find(x => x.id === i.id)?.rework_qty) || 0);
   const setQty = (id, qty) => setSelected(prev => ({ ...prev, [id]: qty }));
-  const selectedList = inventoryItems.filter(i => i.id in selected);
+  const selectedList = inventoryItems.filter(i => i.id in selected && !isRegularPin(i));
   // Fins need no qty — they deduct automatically by tube length at QC approval
   // On a finished-goods order they go by the store heaters' length when one is on
   // record (owner, 8 Oct 2026); otherwise typed in kg (owner, 2 Oct 2026).

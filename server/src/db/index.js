@@ -2380,6 +2380,11 @@ async function initDB(retries = 20, delayMs = 10000) {
       // 8 Oct 2026). NULL = nothing marked for this card.
       await pool.query(`ALTER TABLE job_card_terminals ADD COLUMN IF NOT EXISTS rework_qty NUMERIC`);
 
+      // Terminal pins leave stock at Spot (stage 4) from 8 Oct 2026 (owner):
+      // when, and exactly what, so unticking Spot can put it back.
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS pins_taken_at TIMESTAMPTZ`);
+      await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS pins_taken JSONB`);
+
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
       if (parseInt(rows[0].c, 10) === 0) {

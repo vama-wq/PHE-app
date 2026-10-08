@@ -115,7 +115,7 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
       // once a card takes its last stage. From then on the list's pin lines are
       // held: a swapped or added pin must not be taken again from the list.
       if (!closedByInventoryQc && (await tx.get(
-        'SELECT 1 FROM job_cards WHERE order_item_id=$1 AND last_stage_taken_at IS NOT NULL LIMIT 1', [orderItemId]))) {
+        'SELECT 1 FROM job_cards WHERE order_item_id=$1 AND (last_stage_taken_at IS NOT NULL OR pins_taken_at IS NOT NULL) LIMIT 1', [orderItemId]))) {
         for (const id of invIds) {
           if (isTerminalCategory(lineOf[id]?.category || ledgerCats[id])) countedIds.add(id);
         }

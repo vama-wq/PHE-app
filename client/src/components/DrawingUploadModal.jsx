@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import api, { uploadApi } from '../lib/api';
+import { pinsFromCard } from '../lib/utils';
 import Modal from './ui/Modal';
 import StockTag, { StockNote } from './StockTag';
 import { Upload, Package, X, FileText } from 'lucide-react';
@@ -36,7 +37,9 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
     }
   }, [orderId, item]);
 
-  const filteredInventory = inventoryItems.filter(i =>
+  // Terminal pins are not on the list any more — they come from the job card (owner, 8 Oct 2026).
+  const isRegularPin = (i) => pinsFromCard(orderId) && (i?.category || '').trim().toLowerCase() === 'terminal pin';
+  const filteredInventory = inventoryItems.filter(i => !isRegularPin(i)).filter(i =>
     (i.item_code || '').toLowerCase().includes(invSearch.toLowerCase()) ||
     (i.name || '').toLowerCase().includes(invSearch.toLowerCase()) ||
     (i.category || '').toLowerCase().includes(invSearch.toLowerCase())
@@ -50,7 +53,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   // line already holds (re-uploading a rejected drawing keeps the claim).
   const reworkMax = (i) => (Number(i.rework_free) || 0) + (Number(reworkOf[i.id]) || 0);
   const setQty = (id, qty) => setSelected(prev => ({ ...prev, [id]: qty }));
-  const selectedList = inventoryItems.filter(i => i.id in selected);
+  const selectedList = inventoryItems.filter(i => i.id in selected && !isRegularPin(i));
   // Fins need no qty — they deduct automatically by tube length at QC approval
   // On a finished-goods order there is no tube length, so fins are typed in kg (owner, 2 Oct 2026).
   const isFins = (i) => !fgOrder && (i?.category || '').trim().toLowerCase() === 'finns';
@@ -59,9 +62,13 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   // fileOptional marks FG orders, where the heater is already built). Which pin
   // depends on the item's remark: any variation of "heavy terminal pin" there
   // means the Heavy Terminal Pin category is required; otherwise the regular one.
+  // From 8 Oct 2026 the regular pin comes from the job card and leaves stock at
+  // Spot — only a Heavy Terminal Pin the remark calls for is still asked for.
   const needsHeavyPin = /heavy[\s\-_.]*terminal[\s\-_.]*pin/i.test(item?.remark || '');
-  const requiredPinCat = needsHeavyPin ? 'heavy terminal pin' : 'terminal pin';
-  const hasTerminalPin = selectedList.some(i => (i?.category || '').trim().toLowerCase() === requiredPinCat);
+  // Orders up to ORD-160-26 keep the old rule: a regular pin on every list.
+  const newPins = pinsFromCard(orderId);
+  const requiredPinCat = needsHeavyPin ? 'heavy terminal pin' : (newPins ? null : 'terminal pin');
+  const hasTerminalPin = !requiredPinCat || selectedList.some(i => (i?.category || '').trim().toLowerCase() === requiredPinCat);
 
   // A blank Qty with a number in the rework box means the whole line comes
   // from the rework bin, so the rework number is the line's Qty (owner, 3 Oct 2026).
@@ -161,15 +168,17 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
           <label className="label flex items-center gap-1.5">
             <Package size={13} /> Inventory consumed by this item <span className="text-red-500">*</span>
           </label>
-          {!fileOptional && (
+          {!fileOptional && (requiredPinCat ? (
             <p className={`text-[11px] mb-1.5 rounded-lg px-2 py-1 border ${hasTerminalPin ? 'text-green-700 bg-green-50 border-green-200' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
-              {hasTerminalPin
-                ? `✓ ${needsHeavyPin ? 'Heavy Terminal Pin' : 'Terminal Pin'} included`
-                : needsHeavyPin
-                  ? 'This item\'s remark calls for a HEAVY Terminal Pin — one from the Heavy Terminal Pin category is compulsory.'
-                  : 'A Terminal Pin part is compulsory in every item\'s inventory.'}
+              {hasTerminalPin ? `✓ ${needsHeavyPin ? 'Heavy Terminal Pin' : 'Terminal Pin'} included`
+                : needsHeavyPin ? 'This item\'s remark calls for a HEAVY Terminal Pin — one from the Heavy Terminal Pin category is compulsory.'
+                : 'A Terminal Pin part is compulsory in every item\'s inventory.'}
             </p>
-          )}
+          ) : (
+            <p className="text-[11px] mb-1.5 rounded-lg px-2 py-1 border text-gray-600 bg-gray-50 border-gray-200">
+              Terminal pins are not added here — each job card's pins come from the job card and leave stock at Spot (stage 4), like the tube.
+            </p>
+          ))}
           <div className="relative">
             <input className="input" placeholder="Search inventory by code or name..."
               value={invSearch}

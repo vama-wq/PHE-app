@@ -288,6 +288,12 @@ export function transliterateGujarati(text) {
   return result;
 }
 
+// Terminal pins come from the job card (taken at Spot, not on the list) for
+// orders after ORD-160-26 (orders.id 452) — owner, 8 Oct 2026. Same cut-off as
+// the server's lib/terminals.js PINS_RULE.
+export const PINS_FROM_CARD_AFTER_ORDER_ID = 452;
+export const pinsFromCard = (orderId) => Number(orderId) > PINS_FROM_CARD_AFTER_ORDER_ID;
+
 export async function downloadExcel(exportType, filename) {
   // Uses fetch directly to avoid circular import with api.js
   const r = await fetch(`/api/export/${exportType}`, { credentials: 'include' });

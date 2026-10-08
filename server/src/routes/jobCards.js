@@ -482,8 +482,10 @@ const terminalsPayload = (state, req) => ({
   short_at: state.short_at || null,
   ok: state.ok,
   held: state.held,
+  unset: !!state.unset, missing: state.missing || [], from: state.from || null,
   last_stage_taken_at: state.last_stage_taken_at || null,
-  editable: terminals.EDIT_ROLES.includes(req.user.role) && !state.last_stage_taken_at && !state.no_terminals,
+  pins_taken_at: state.pins_taken_at || null,
+  editable: terminals.EDIT_ROLES.includes(req.user.role) && !!state.pickable && !state.last_stage_taken_at && !state.pins_taken_at && !state.no_terminals,
   can_ok: terminals.OK_ROLES.includes(req.user.role),
   no_terminals: !!state.no_terminals,
 });
@@ -577,6 +579,15 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
     catch (e) {
       console.error('[slip] terminal check failed:', e.message);
       return res.status(500).json({ error: `Could not check the terminal pins: ${e.message}` });
+    }
+    if (state.unset || state.missing?.length) {
+      // Pins not set (owner, 8 Oct 2026): design chooses them — no OK releases this.
+      return res.status(409).json({
+        code: 'TERMINALS_UNSET', missing: state.missing || [], can_ok: false,
+        error: state.unset
+          ? 'Slip held — no terminal pins are set for this job card (an uploaded job card names none). Design must choose them in Change pins.'
+          : `Slip held — the job card asks for ${state.missing.join(', ')}, which has no inventory item. Design must choose the pin in Change pins.`,
+      });
     }
     if (state.held) {
       return res.status(409).json({
@@ -1441,6 +1452,15 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     try { await applyMaterialDeductions(db, jobCardId, stageNo, !!done, req.user.id); }
     catch (e) { console.error('[checklist] material deduction failed:', e.message); }
 
+    // Terminal pins at Spot (owner, 8 Oct 2026): ticked → the card's pins leave
+    // stock; unticked → they go back; ticked again → taken again.
+    if (stageNo === 4) {
+      try {
+        if (done) await terminals.takePinsAtSpot(db, jobCardId, req.user.id);
+        else await terminals.givePinsBackAtSpot(db, jobCardId, req.user.id);
+      } catch (e) { console.error('[checklist] Spot terminal pins failed:', e.message); }
+    }
+
     // Category-timed BOM deduction: Stage 15 (Brazing) → flange/brazing categories,
     // Stage 21 (Nipple Press) → nipple categories, prorated by the card's qty share.
     if (done && (stageNo === 15 || stageNo === 21)) {
@@ -1613,6 +1633,12 @@ router.post('/:id/checklist/:stage/photo', authenticate, authorize('production',
     }
 
     if (markDone) {
+      // Spot done here takes the card's terminal pins, as on the checklist
+      // route (owner, 8 Oct 2026).
+      if (jcRow && stageNo === 4 && !jcRow.is_fg) {
+        try { await terminals.takePinsAtSpot(db, jcRow.id, req.user.id); }
+        catch (e) { console.error('[checklist photo] Spot terminal pins failed:', e.message); }
+      }
       // Marking the last stage done here takes the rest of the card's list,
       // as on the checklist route (owner, 6 Oct 2026).
       if (jcRow && ((stageNo === 29 && !jcRow.is_fg) || (stageNo === 4 && jcRow.is_fg))) {

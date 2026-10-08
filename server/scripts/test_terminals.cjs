@@ -72,6 +72,11 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
   app.use(express.json());
   app.use('/api/job-cards', require(S + '/src/routes/jobCards.js'));
   app.use('/api/qc', require(S + '/src/routes/qc.js'));
+  app.use('/api/orders', require(S + '/src/routes/orders.js'));
+  // Orders up to ORD-160-26 keep the old pin rules; sections A–I test those, so
+  // every test order counts as old until section J switches the cut-off.
+  const { PINS_RULE } = require(S + '/src/lib/terminals.js');
+  PINS_RULE.afterOrderId = 1e12;
   const server = app.listen(0);
   const base = 'http://127.0.0.1:' + server.address().port;
   // The stages that must be done before stage 29, read from the route itself.
@@ -548,7 +553,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     await putLine(oiD, TRN, 10); await putLine(oiD, NUT, 40);
     const D1 = await mkCard(oD, oiD, 'ZZT-TD1', 10, { dwg: 'ZZTEST-DWG-TD' });
     r = await call('GET', terminals(D1));
-    ok('D1. design has not picked the pin yet (TRAIN placeholder on the list): no row is seeded, the list shows the placeholder line, nothing held',
+    ok('D1. design has not picked the pin yet (TRAIN placeholder on the list): no row is seeded, the list shows the placeholder line, nothing held (an order up to ORD-160)',
       r.status === 200 && r.body.rows.length === 0 && (await rowsOf(D1)).length === 0 && r.body.list.length === 1 && r.body.list[0].inventory_item_id === TRN
       && r.body.held === false && r.body.no_terminals === false, JSON.stringify(r.body).slice(0, 300));
     sl = await call('POST', slipOf(D1), {}, floor);
@@ -617,9 +622,130 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       && (await qa(`SELECT 1 FROM inventory_transactions WHERE job_card_id=$1 AND source='terminal'`, [G1])).length === 0,
       `${r.status} ${JSON.stringify(r.body)} | ${await moved(s0)}`);
 
+    // ════ I2. An order up to ORD-160 still needs its pin on the list ════
+    {
+      const oOld = await mkOrder('ZZT-TOLD');
+      const oiOld = await mkLine(oOld, 2, 'ZZTEST-DWG-TOLD');
+      const rr = await call('PUT', `/api/orders/${oOld}/items/${oiOld}/inventory`, { inventory_item_ids: [{ id: NUT, qty: 8 }] }, owner);
+      ok('I2. an order up to ORD-160: a list without a Terminal Pin is still refused', rr.status === 400 && /Terminal Pin is required/.test(rr.body.error || ''), JSON.stringify(rr.body));
+    }
+
+    // ════ J. Pins from the job card, taken at Spot — orders after ORD-160 (owner, 8 Oct 2026) ════
+    PINS_RULE.afterOrderId = 0;
+    // Made-up stud M9 so no real pin item matches: TP-SS-M9-03-WH / -WO.
+    const P9H = await mkItem('TP-SS-M9-03-WH', 'Terminal Pin', 100, 'pcs');
+    const P9O = await mkItem('TP-SS-M9-03-WO', 'Terminal Pin', 100, 'pcs');
+    const P9X = await mkItem('TP-SS-M9-04-WH', 'Terminal Pin', 100, 'pcs');   // design's other pin
+    const spec = (big, small, el = 1) => JSON.stringify({ computed: { studLabel: 'M9-SS', terminalPinBig: { studs: big }, terminalPinSmall: { studs: small }, elements: el } });
+    const pin9 = [P9H, P9O, P9X];
+    const oJ = await mkOrder('ZZT-TJ');
+    const oiJ = await mkLine(oJ, 10, 'ZZTEST-DWG-TJ');
+    await putLine(oiJ, NUT, 40);                                   // no pin on the list at all
+    const J1 = await mkCard(oJ, oiJ, 'ZZT-TJ1', 10, { dwg: 'ZZTEST-DWG-TJ' });
+    await client.query('UPDATE job_cards SET generated_spec=$2 WHERE id=$1', [J1, spec(3, 3)]);
+    r = await call('GET', terminals(J1));
+    let jr = await rowsOf(J1);
+    ok('J1. an app-made card: pins from the job card — 10 × TP-SS-M9-03-WH + 10 × -WO (one with head, one without, per element), "from job card", not held',
+      r.status === 200 && jr.length === 2 && rowQ(jr, P9H)?.q === 10 && rowQ(jr, P9O)?.q === 10 && jr.every(x => x.source === 'card') && r.body.held === false && r.body.from === 'card',
+      JSON.stringify({ rows: jr, held: r.body.held, from: r.body.from }));
+    r = await call('PUT', `/api/orders/${oJ}/items/${oiJ}/inventory`, { inventory_item_ids: [{ id: NUT, qty: 40 }] }, owner);
+    ok('J2. the list saves without a Terminal Pin now', r.status === 200, `${r.status} ${JSON.stringify(r.body)}`);
+    r = await call('PUT', `/api/orders/${oJ}/items/${oiJ}/inventory`, { inventory_item_ids: [{ id: NUT, qty: 40 }, { id: WH, qty: 10 }] }, owner);
+    ok('J2. a Terminal Pin sent with the list is dropped — pins are not on the list any more',
+      r.status === 200 && !(await qa('SELECT 1 FROM order_item_inventory WHERE order_item_id=$1 AND inventory_item_id=$2', [oiJ, WH])).length, `${r.status} ${JSON.stringify(r.body)}`);
+    await tick(J1, [1, 2, 3]);
+    s0 = await snap(pin9);
+    r = await call('PUT', `/api/job-cards/${J1}/checklist/4`, { done: true }, floor);
+    c = await cardRow(J1);
+    ok('J3. Spot ticked: the 10 + 10 pins leave stock, stamped on the card',
+      r.status === 200 && near(await stock(P9H), s0[P9H] - 10) && near(await stock(P9O), s0[P9O] - 10) && !!c.pins_taken_at
+      && (await termRows(J1, P9H)).length === 1 && /Terminal pins at Spot \(JC ZZT-TJ1\)/.test((await termRows(J1, P9H))[0].notes),
+      `${r.status} ${JSON.stringify(r.body)} | ${await moved(s0)}`);
+    r = await call('PUT', terminals(J1), { rows: [{ inventory_item_id: P9X, qty: 10 }, { inventory_item_id: P9O, qty: 10 }] }, design);
+    ok('J3. after Spot the pins cannot be changed — untick Spot or Inventory QC', r.status === 400 && /taken at Spot/.test(r.body.error || ''), JSON.stringify(r.body));
+    s0 = await snap(pin9);
+    r = await call('PUT', `/api/job-cards/${J1}/checklist/4`, { done: false }, floor);
+    c = await cardRow(J1);
+    ok('J4. Spot unticked: exactly those pins go back, the stamp is cleared',
+      r.status === 200 && near(await stock(P9H), s0[P9H] + 10) && near(await stock(P9O), s0[P9O] + 10) && !c.pins_taken_at && c.pins_taken === null,
+      `${r.status} | ${await moved(s0)}`);
+    r = await call('PUT', terminals(J1), { rows: [{ inventory_item_id: P9X, qty: 10 }, { inventory_item_id: P9O, qty: 10 }] }, design);
+    ok('J5. pins from the job card are not changed on the card — only at Inventory QC', r.status === 400 && r.body.code === 'PINS_FIXED', JSON.stringify(r.body));
+    r = await call('GET', terminals(J1));
+    ok('J5. the box offers no Change pins for job-card pins', r.body.editable === false, JSON.stringify({ editable: r.body.editable }));
+    s0 = await snap(pin9);
+    r = await call('PUT', `/api/job-cards/${J1}/checklist/4`, { done: true }, floor);
+    ok('J5. Spot ticked again: the same 10 + 10 pins are taken again',
+      r.status === 200 && near(await stock(P9H), s0[P9H] - 10) && near(await stock(P9O), s0[P9O] - 10), await moved(s0));
+    await tick(J1, MANDATORY);
+    s0 = await snap(pin9);
+    r = await call('PUT', `/api/job-cards/${J1}/checklist/29`, { done: true }, floor);
+    ok('J6. the last stage takes the list but NOT the pins again', r.status === 200 && !(await moved(s0)) && !!(await cardRow(J1)).last_stage_taken_at, await moved(s0));
+
+    // An uploaded job card (no spec) whose list names no pin: design picks them.
+    const J2c = await mkCard(oJ, oiJ, 'ZZT-TJ2', 10, { dwg: 'ZZTEST-DWG-TJ' });
+    r = await call('GET', terminals(J2c));
+    ok('J7. an uploaded card with no pin named anywhere: pins not set, slip held', r.status === 200 && r.body.unset === true && r.body.held === true && (await rowsOf(J2c)).length === 0, JSON.stringify({ unset: r.body.unset, held: r.body.held }));
+    sl = await call('POST', slipOf(J2c), {}, floor);
+    ok('J7. the slip says the pins are not set (409 TERMINALS_UNSET), no OK button', sl.status === 409 && sl.body.code === 'TERMINALS_UNSET' && sl.body.can_ok === false, JSON.stringify(sl.body));
+    r = await call('POST', `/api/job-cards/${J2c}/terminals/ok`, {}, owner);
+    ok('J7. an OK cannot release pins that are not set', r.status === 400 && r.body.code === 'PINS_NOT_SET', JSON.stringify(r.body));
+    await tick(J2c, [1, 2, 3]);
+    s0 = await snap(pin9);
+    r = await call('PUT', `/api/job-cards/${J2c}/checklist/4`, { done: true }, floor);
+    ok('J7. Spot with no pins set takes nothing and stamps nothing', r.status === 200 && !(await moved(s0)) && !(await cardRow(J2c)).pins_taken_at, await moved(s0));
+    r = await call('PUT', terminals(J2c), { rows: [{ inventory_item_id: P9H, qty: 10 }, { inventory_item_id: P9O, qty: 10 }] }, design);
+    ok('J7. design sets them: the slip is released', r.status === 200 && r.body.held === false && r.body.unset === false, JSON.stringify({ held: r.body.held, unset: r.body.unset }));
+    await tick(J2c, MANDATORY);
+    s0 = await snap(pin9);
+    r = await call('PUT', `/api/job-cards/${J2c}/checklist/29`, { done: true }, floor);
+    ok('J7. Spot was ticked before the pins were set, so the last stage takes them as a catch-up (10 + 10)',
+      r.status === 200 && near(await stock(P9H), s0[P9H] - 10) && near(await stock(P9O), s0[P9O] - 10), await moved(s0));
+
+    // The job card asks for a pin length stock has no item for.
+    const oK = await mkOrder('ZZT-TK');
+    const oiK = await mkLine(oK, 5, 'ZZTEST-DWG-TK');
+    await putLine(oiK, NUT, 20);
+    const K1 = await mkCard(oK, oiK, 'ZZT-TK1', 5, { dwg: 'ZZTEST-DWG-TK' });
+    await client.query('UPDATE job_cards SET generated_spec=$2 WHERE id=$1', [K1, spec(7, 3)]);
+    r = await call('GET', terminals(K1));
+    ok('J8. the card asks for TP-SS-M9-07-WH, which has no item: held, named as missing', r.status === 200 && r.body.held === true && (r.body.missing || []).includes('TP-SS-M9-07-WH'), JSON.stringify({ held: r.body.held, missing: r.body.missing }));
+    r = await call('PUT', terminals(K1), { rows: [{ inventory_item_id: P9X, qty: 5 }, { inventory_item_id: P9O, qty: 5 }] }, design);
+    ok('J8. design picks another pin: released', r.status === 200 && r.body.held === false, JSON.stringify({ held: r.body.held, missing: r.body.missing }));
+
+    // A pin marked from the rework bin: Spot draws the bin, untick puts it back.
+    const oL2 = await mkOrder('ZZT-TL2');
+    const oiL2 = await mkLine(oL2, 4, 'ZZTEST-DWG-TL2');
+    await putLine(oiL2, NUT, 16);
+    const L2 = await mkCard(oL2, oiL2, 'ZZT-TL2-1', 4, { dwg: 'ZZTEST-DWG-TL2' });   // uploaded: design picks its pins
+    await rework.move(txDb, { itemId: P9H, kind: 'deposit', qty: 5, ref: {}, notes: 'test deposit', userId: uid });
+    await call('GET', terminals(L2));
+    r = await call('PUT', terminals(L2), { rows: [{ inventory_item_id: P9H, qty: 4, rework_qty: 4 }, { inventory_item_id: P9O, qty: 4 }] }, design);
+    await tick(L2, [1, 2, 3]);
+    s0 = await snap(pin9);
+    const b0 = await bin(P9H);
+    r = await call('PUT', `/api/job-cards/${L2}/checklist/4`, { done: true }, floor);
+    ok('J9. Spot with 4 WH marked from the bin: the bin gives 4 (5 → 1), stock gives only the 4 WO',
+      r.status === 200 && (await bin(P9H)) === b0 - 4 && near(await stock(P9H), s0[P9H]) && near(await stock(P9O), s0[P9O] - 4), `${await moved(s0)} bin ${await bin(P9H)}`);
+    r = await call('PUT', `/api/job-cards/${L2}/checklist/4`, { done: false }, floor);
+    ok('J9. Spot unticked: the 4 go back into the bin, the 4 WO back to stock', r.status === 200 && (await bin(P9H)) === b0 && near(await stock(P9O), s0[P9O]), `bin ${await bin(P9H)} ${await moved(s0)}`);
+
+    // A list that still names a pin, on an app-made card: the job card wins.
+    const oM2 = await mkOrder('ZZT-TM2');
+    const oiM2 = await mkLine(oM2, 6, 'ZZTEST-DWG-TM2');
+    await putLine(oiM2, WH, 6); await putLine(oiM2, NUT, 24);
+    const M2 = await mkCard(oM2, oiM2, 'ZZT-TM2-1', 6, { dwg: 'ZZTEST-DWG-TM2' });
+    await call('GET', terminals(M2));                                   // seeded from the list first (no spec yet)
+    await client.query('UPDATE job_cards SET generated_spec=$2 WHERE id=$1', [M2, spec(3, 3)]);
+    r = await call('GET', terminals(M2));
+    jr = await rowsOf(M2);
+    ok('J10. list pins on an app-made card are replaced by the job card\'s (6 × M9-03-WH + 6 × -WO), and the timeline says so',
+      jr.length === 2 && rowQ(jr, P9H)?.q === 6 && rowQ(jr, P9O)?.q === 6 && !rowQ(jr, WH) && jr.every(x => x.source === 'card')
+      && logs.some(l => /now come from the job card \(M9 3" × 1 element\)/.test(l.desc || '')), JSON.stringify(jr));
+
     // ════ G. Nothing leaked past the stubs ════
     ok('G1. every WhatsApp copy recorded was a terminals_short alert for one of the test cards',
-      waCalls.every(w => w.type === 'terminals_short' && [B1, R1, M1, L1, S1, S2].includes(w.ref?.id)), JSON.stringify(waCalls.map(w => [w.type, w.ref?.id])));
+      waCalls.every(w => w.type === 'terminals_short' && [B1, R1, M1, L1, S1, S2, J2c, K1, D1, L2].includes(w.ref?.id)), JSON.stringify(waCalls.filter(w => ![B1, R1, M1, L1, S1, S2, J2c, K1, D1, L2].includes(w.ref?.id)).map(w => [w.type, w.ref?.id, w.title])));
   } catch (e) {
     failed = true;
     console.error('ERROR', e);

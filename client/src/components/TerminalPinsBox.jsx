@@ -11,6 +11,11 @@
 // Design / QC presses OK — both are told the moment the shortage is found.
 // Rework pins never raise anything.
 //
+// From 8 Oct 2026 (owner) the pins come from the JOB CARD (an app-made card
+// names the stud and lengths; an uploaded one names nothing, so design picks
+// them — the slip waits until they are set) and leave stock at Spot (stage 4).
+// Unticking Spot puts them back and opens Change pins again.
+//
 // Shown on the job card page (full) and in the order's job card list
 // (compact: one summary line, click to open). Server: GET / PUT
 // /job-cards/:id/terminals and POST /job-cards/:id/terminals/ok.
@@ -33,9 +38,9 @@ const isTerminalPin = (i) =>
 const fmtQty = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 3 });
 
 function SourceBadge({ source }) {
-  return source === 'design'
-    ? <span className="text-[10px] font-semibold bg-violet-100 text-violet-800 rounded px-1.5 py-0.5 whitespace-nowrap" title="Design changed this card's pins from what the list says">changed by design</span>
-    : <span className="text-[10px] font-semibold bg-gray-100 text-gray-600 rounded px-1.5 py-0.5 whitespace-nowrap" title="This card's share of the item's list">from list</span>;
+  if (source === 'design') return <span className="text-[10px] font-semibold bg-violet-100 text-violet-800 rounded px-1.5 py-0.5 whitespace-nowrap" title="Design changed this card's pins from what the job card says">changed by design</span>;
+  if (source === 'card') return <span className="text-[10px] font-semibold bg-sky-100 text-sky-800 rounded px-1.5 py-0.5 whitespace-nowrap" title="The stud and lengths printed on this job card — one with-head and one without-head pin per element">from job card</span>;
+  return <span className="text-[10px] font-semibold bg-gray-100 text-gray-600 rounded px-1.5 py-0.5 whitespace-nowrap" title="This card's share of the item's list (older list)">from list</span>;
 }
 
 export default function TerminalPinsBox({ jobCardId, compact = false, onChanged }) {
@@ -70,7 +75,10 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
   const rows = data.rows || [];
   const held = !!data.held;
   const shortButOk = data.short?.length > 0 && !!data.ok && !held;
-  const taken = !!data.last_stage_taken_at;
+  const taken = !!data.last_stage_taken_at || !!data.pins_taken_at;
+  // Pins not set: an uploaded job card names none, or the card names a pin
+  // stock has no item for. Design chooses them; an OK cannot release this.
+  const unset = !!data.unset || (data.missing || []).length > 0;
 
   const startEdit = () => {
     setDraft(rows.map(r => ({ inventory_item_id: r.inventory_item_id, qty: String(Math.round(Number(r.qty) || 0)),
@@ -166,7 +174,7 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
       {compact && !open && <span className="text-xs text-gray-500 truncate">{summary}</span>}
       {held && (
         <span className="text-[10px] font-semibold bg-red-100 text-red-700 rounded px-1.5 py-0.5 whitespace-nowrap flex items-center gap-1">
-          <AlertTriangle size={10} /> SLIP HELD — pin short
+          <AlertTriangle size={10} /> {unset ? 'SLIP HELD — pins not set' : 'SLIP HELD — pin short'}
         </span>
       )}
       {shortButOk && (
@@ -189,7 +197,7 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
           </button>
         ) : header}
         <div className="flex items-center gap-2 flex-shrink-0">
-          {held && data.can_ok && (
+          {held && !unset && data.can_ok && (
             <button type="button" className="btn-primary btn-sm text-xs" onClick={pressOk} disabled={okBusy}
               title="Release this card's slip although a pin is short — recorded on the card's timeline">
               <CheckCircle size={13} /> {okBusy ? 'Recording…' : 'OK — release slip'}
@@ -206,7 +214,17 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
       {open && (
         <div className="mt-3 space-y-2">
           {/* Why the slip is held, in the owner's words, with who can lift it. */}
-          {held && (
+          {held && unset && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              <div className="font-medium">
+                {data.unset
+                  ? 'Slip held — no terminal pins are set. This is an uploaded job card, so the app cannot read its pins.'
+                  : `Slip held — the job card asks for ${(data.missing || []).join(', ')}, which has no inventory item.`}
+              </div>
+              <div className="text-xs mt-0.5">Design chooses the pins in <b>Change pins</b>; the slip prints once they are set.</div>
+            </div>
+          )}
+          {held && !unset && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
               <div className="font-medium">
                 Slip held — {(data.short || []).map(s => `pin ${s.item_code} short (need ${s.need}, stock ${fmtQty(s.stock)})`).join('; ')}.
@@ -225,7 +243,9 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
           )}
           {taken && (
             <p className="text-xs text-gray-500">
-              Pins taken from stock at the last stage on {fmtDateTime(data.last_stage_taken_at)} — read-only; any difference is fixed at Inventory QC.
+              {data.pins_taken_at
+                ? <>Pins taken from stock at Spot on {fmtDateTime(data.pins_taken_at)}. To change them, untick Spot (they go back to stock) — or correct at Inventory QC.</>
+                : <>Pins taken from stock at the last stage on {fmtDateTime(data.last_stage_taken_at)} — read-only; any difference is fixed at Inventory QC.</>}
             </p>
           )}
 
@@ -339,7 +359,7 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
                   {saving ? 'Saving…' : 'Save pins'}
                 </button>
                 <span className="text-[11px] text-gray-400 self-center ml-1">
-                  Saving clears any earlier OK and re-checks stock. These pins leave stock at the card's last stage.
+                  Saving clears any earlier OK and re-checks stock. These pins leave stock when Spot (stage 4) is ticked.
                 </span>
               </div>
             </div>

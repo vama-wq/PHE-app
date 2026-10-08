@@ -524,6 +524,23 @@ export default function OrderDetail() {
                           ) : (
                             <span className="text-xs text-gray-400 italic">None selected yet — added with the drawing.</span>
                           )}
+                          {/* Terminal pins (owner, 8 Oct 2026): not on the list — picked from
+                              each job card, taken at Spot, changed only at Inventory QC. */}
+                          {order.pins_from_card && order.order_type !== 'finished_goods' && (
+                            <div className="mt-1.5 text-xs text-gray-600 flex flex-wrap items-center gap-1.5">
+                              <span className="text-gray-500">Terminal pins:</span>
+                              {(item.terminal_pins || []).length ? (item.terminal_pins.map(p => (
+                                <span key={p.item_code} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 bg-sky-50 text-sky-900 border border-sky-200"
+                                  title={`From ${p.cards} job card${p.cards === 1 ? '' : 's'} — not editable here; corrected at Inventory QC`}>
+                                  <span className="font-mono font-medium">{p.item_code}</span>
+                                  <span className="text-sky-700">× {+Number(p.qty).toFixed(2)} {(p.unit || '').trim()}</span>
+                                </span>
+                              ))) : (
+                                <span className="italic text-gray-400">picked from the job card when it is made</span>
+                              )}
+                              <span className="text-[10px] text-gray-400">· from the job card, taken at Spot, changed only at Inventory QC</span>
+                            </div>
+                          )}
                         </div>
                       </div>
                       {canManageItems && (

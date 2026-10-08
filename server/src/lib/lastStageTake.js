@@ -87,8 +87,15 @@ async function runTake(tx, jobCardId, userId) {
     // Also when the list has no pin line at all: design may have put the
     // pins on the card itself, and those must leave stock too.
     const tpLines = lines.filter(l => isTerminalCategory(l.category));
-    const r = await takeTerminalRows(tx, card, item, tpLines, orderCode, userId);
-    if (r) { terminalsByRows = true; taken.push(...r.taken); }
+    if (card.pins_taken_at) {
+      // Taken at Spot (owner, 8 Oct 2026); the list's pin share was settled then.
+      terminalsByRows = true;
+    } else {
+      // Spot ticked before this went live, or no pins were set at Spot: the
+      // card takes them now, as before.
+      const r = await takeTerminalRows(tx, card, item, tpLines, orderCode, userId);
+      if (r) { terminalsByRows = true; taken.push(...r.taken); }
+    }
   }
 
   let finsLines = false;
