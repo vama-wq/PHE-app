@@ -338,6 +338,14 @@ router.post('/draft', authenticate, authorize('admin', 'owner'), async (req, res
 // Creation still goes through the normal path below: this endpoint prepares the
 // file and hands it over, so the 50-piece split, the numbering and the no-BOM
 // gate all behave identically whether a card was generated or uploaded.
+
+// A replacement order's job cards end in -RPL (owner, 8 Oct 2026).
+async function rplNumbers(db, orderId, numbers) {
+  const o = orderId ? await db.get('SELECT replacement_query_id FROM orders WHERE id=$1', [orderId]) : null;
+  if (!o?.replacement_query_id) return numbers;
+  return numbers.map(n => (/-RPL$/i.test(String(n)) ? n : `${n}-RPL`));
+}
+
 router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, res) => {
   const db = getDB();
   const { order_item_id, ...answers } = req.body || {};
@@ -382,6 +390,7 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
   let numbers;
   try {
     numbers = allocateCardNumbers(baseNo, Math.max(parts.length, 1), taken, { forceMarker: covered.n > 0 });
+    numbers = await rplNumbers(db, item.order_id, numbers);
   } catch (e) {
     return res.status(409).json({ error: e.message });
   }
@@ -787,6 +796,7 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
       // card sits with its siblings instead of taking the bare base name.
       numbers = allocateCardNumbers(baseNo, Math.max(parts.length, 1), taken,
         { forceMarker: existingCards > 0 });
+      numbers = await rplNumbers(db, parseInt(order_id, 10), numbers);
     } catch (e) {
       return res.status(409).json({ error: e.message });
     }
@@ -1859,6 +1869,7 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
     let numbers;
     try {
       numbers = allocateCardNumbers(base, parts.length, taken);
+      numbers = await rplNumbers(db, order_id ? parseInt(order_id, 10) : null, numbers);
     } catch (e) {
       return res.status(409).json({ error: e.message });
     }

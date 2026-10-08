@@ -139,7 +139,9 @@ router.put('/:jobCardId/mark-dispatched', authenticate, authorize('accounts', 'o
     "SELECT id FROM dispatch_documents WHERE job_card_id=$1 AND doc_type='invoice' LIMIT 1",
     [req.params.jobCardId]
   );
-  if (!invoiceDoc && !isRepairDispatch && !jc.replacement_query_id) {
+  // A replacement order's cards (owner, 8 Oct 2026) need no invoice either.
+  const rplOrder = await db.get('SELECT replacement_query_id FROM orders WHERE id=$1', [jc.order_id]);
+  if (!invoiceDoc && !isRepairDispatch && !jc.replacement_query_id && !rplOrder?.replacement_query_id) {
     return res.status(400).json({ error: 'An invoice document is required before dispatching. Please upload an invoice first.' });
   }
 

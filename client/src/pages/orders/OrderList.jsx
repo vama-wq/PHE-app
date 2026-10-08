@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import api from '../../lib/api';
 import { compressImages } from '../../lib/compressImage';
 import { useAuthStore } from '../../store/authStore';
@@ -49,6 +49,12 @@ export default function OrderList() {
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const navigate = useNavigate();
+  // A replacement started from a customer query (owner, 8 Oct 2026) opens New Order pre-filled.
+  const location = useLocation();
+  const [replacement, setReplacement] = useState(location.state?.replacement || null);
+  useEffect(() => {
+    if (location.state?.replacement) { setShowNew(true); navigate('/orders', { replace: true, state: null }); }
+  }, []);
 
   useEffect(() => { load(); }, []);
 
@@ -220,8 +226,9 @@ export default function OrderList() {
 
       {showNew && (
         <NewOrderModal
-          onClose={() => setShowNew(false)}
-          onSave={(id) => { setShowNew(false); navigate(`/orders/${id}`); }}
+          prefill={replacement}
+          onClose={() => { setShowNew(false); setReplacement(null); }}
+          onSave={(id) => { setShowNew(false); setReplacement(null); navigate(`/orders/${id}`); }}
         />
       )}
     </div>
@@ -565,7 +572,7 @@ function ItemModal({ item, images: initialImages = [], orderType, customerId, on
 }
 
 // ── New Order modal ─────────────────────────────────────────────────────────
-function NewOrderModal({ onClose, onSave }) {
+function NewOrderModal({ onClose, onSave, prefill = null }) {
   const [form, setForm] = useState({
     order_code: '',
     customer_id: '',
@@ -573,11 +580,15 @@ function NewOrderModal({ onClose, onSave }) {
     order_date: new Date().toISOString().split('T')[0],
     dispatch_date: '',
     notes: '',
-    order_type: 'local_he'
+    order_type: 'local_he',
+    // a replacement for a customer query: pre-filled, and saving closes the query
+    ...(prefill?.form || {}),
+    ...(prefill ? { customer_id: String(prefill.form?.customer_id || ''), replacement_query_id: prefill.replacement?.query_id,
+                    replacement_summary: prefill.summary || '' } : {}),
   });
   const [customers, setCustomers] = useState([]);
   const [quotationFile, setQuotationFile] = useState(null);
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState(prefill?.items || []);
   const [itemImages, setItemImages] = useState({}); // { [itemIndex]: File[] }
   const [showItemModal, setShowItemModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null); // { index, data, images }
@@ -666,8 +677,14 @@ function NewOrderModal({ onClose, onSave }) {
 
   return (
     <>
-      <Modal open title="New Order" onClose={onClose} size="xl">
+      <Modal open title={prefill ? `Replacement order — query ${prefill.replacement?.query_no}` : 'New Order'} onClose={onClose} size="xl">
         <form onSubmit={handleSubmit} className="space-y-6">
+          {prefill && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+              Replacement for query <b>{prefill.replacement?.query_no}</b> — {prefill.replacement?.qty} pcs of <b>{prefill.replacement?.job_card_no}</b> ({prefill.replacement?.order_code}).
+              Pre-filled from that card; change anything you need. Its job cards will end in <b>-RPL</b> and need no invoice to dispatch. Saving closes the query.
+            </div>
+          )}
 
           {/* ── Order Details ── */}
           <section>

@@ -357,6 +357,15 @@ router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => 
   if (!order_code || !order_date) return res.status(400).json({ error: 'Order code and date are required' });
 
   const db = getDB();
+  // A replacement order (owner, 8 Oct 2026): it names the open query it replaces.
+  const rplQueryId = parseInt(req.body.replacement_query_id, 10) || null;
+  let rplQuery = null;
+  if (rplQueryId) {
+    rplQuery = await db.get('SELECT * FROM customer_queries WHERE id=$1', [rplQueryId]);
+    if (!rplQuery) return res.status(404).json({ error: 'The query this order replaces was not found' });
+    if (rplQuery.status === 'resolved') return res.status(400).json({ error: `Query ${rplQuery.query_no} is already resolved — no replacement order needed` });
+    if (!rplQuery.job_card_id) return res.status(400).json({ error: `Query ${rplQuery.query_no} has no job card to replace` });
+  }
 
   // A pure PHE inventory order has no external customer. Customer is optional
   // for it — fall back to the internal "IO" customer so the NOT NULL column and
@@ -375,14 +384,31 @@ router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => 
 
   try {
     const r = await db.insert(
-      `INSERT INTO orders (order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type, created_by, material_deduction)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE)`,
-      [order_code.toUpperCase(), custId, inquiry_id||null, order_date, dispatch_date||null, notes||null, order_type||'local_he', req.user.id]
+      `INSERT INTO orders (order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type, created_by, material_deduction, replacement_query_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9)`,
+      [order_code.toUpperCase(), custId, inquiry_id||null, order_date, dispatch_date||null, notes||null, order_type||'local_he', req.user.id, rplQueryId]
     // valid: local_he, export_he, inventory_order, io_export_he, io_local_he
     // material_deduction=TRUE: new orders deduct tube & spring-gauge from the checklist
     );
 
     await logActivity(r.lastInsertRowid, null, 'order_created', `Order ${order_code} submitted for approval`, req.user.id);
+
+    if (rplQuery) {
+      // The query closes as "Replacement issued — ORD-xxx"; the returned card
+      // reads Query Resolved and its order goes back to resolved, as before.
+      const summary = String(req.body.replacement_summary || '').trim() || `Replacement order ${order_code.toUpperCase()}`;
+      await db.run(
+        `UPDATE customer_queries SET status='resolved', return_status='replacement_issued', resolution_summary=$1,
+                resolved_by=$2, resolved_at=NOW(), updated_at=NOW(), replacement_order_id=$3 WHERE id=$4`,
+        [`${summary} — replacement order ${order_code.toUpperCase()}`, req.user.id, r.lastInsertRowid, rplQuery.id]);
+      const orig = await db.get('SELECT id, order_id, job_card_no FROM job_cards WHERE id=$1', [rplQuery.job_card_id]);
+      if (orig) await db.run("UPDATE job_cards SET status='resolved_dispatched' WHERE id=$1", [orig.id]);
+      await db.run("UPDATE orders SET status='resolved_dispatched' WHERE id=$1 AND status IN ('customer_query','product_return')", [rplQuery.order_id]);
+      await logActivity(rplQuery.order_id, rplQuery.job_card_id, 'replacement_issued',
+        `Replacement issued for query ${rplQuery.query_no} — new order ${order_code.toUpperCase()}`, req.user.id);
+      await logActivity(r.lastInsertRowid, null, 'replacement_issued',
+        `Replacement for query ${rplQuery.query_no}${orig ? ` (${orig.job_card_no})` : ''} — its job cards end in -RPL and need no invoice to dispatch`, req.user.id);
+    }
 
     if (inquiry_id) {
       await db.run("UPDATE inquiries SET status='order_received' WHERE id=$1", [inquiry_id]);

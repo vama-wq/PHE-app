@@ -503,21 +503,14 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('F3. debit note complete closes the query; the -Q2 card reads dispatched', r.status === 200 && (await queryRow(Q2)).status === 'resolved' && (await queryRow(Q2)).return_status === 'debit_note_issued' && (await cardRow(C2.id)).status === 'dispatched');
 
     // ════ G. Replacement on the third query clones only ITS 3 ════
+    // From 8 Oct 2026 a replacement is a NEW ORDER (test_replacement_order.cjs
+    // covers the flow): the draft carries only the pieces of this query.
     r = await call('PUT', `${CQ}/${Q3}/resolve`, { resolution_summary: 'ZZTEST replace without waiting', resolution_type: 'replaced' });
-    const RPL = r.body.job_card_id ? await cardRow(r.body.job_card_id) : null;
-    ok('G1. replaced: a new production card ZZT-QA1-Q3-RPL for 3 pcs (the -Q3 card\'s qty, not the parent\'s 41), on the same line, linked to the query',
-      r.status === 200 && !!RPL && RPL.job_card_no === 'ZZT-QA1-Q3-RPL' && Number(RPL.qty) === 3 && RPL.replacement_query_id === Q3 && RPL.order_item_id === oiA && RPL.order_id === oA
-      && RPL.drawing_no === 'ZZTEST-DWG-QA' && RPL.product_name === 'ZZTEST Heater 1kW' && RPL.parent_job_card_id === null && /^Replacement for query CQ-/.test(RPL.notes || ''),
-      `${r.status} ${JSON.stringify(r.body)} | ${RPL && JSON.stringify({ no: RPL.job_card_no, qty: RPL.qty, link: RPL.replacement_query_id })}`);
-    // (The pick is dated by the server's clock, not the database's — around
-    // midnight the two can disagree, so only the pick itself is checked.)
-    ok('G1. its checklist starts empty (a fresh run) and it is in today\'s work; production is told "3 pcs"',
-      !!RPL && (await doneStages(RPL.id)).length === 0 && !!(await q1('SELECT 1 FROM production_day_picks WHERE job_card_id=$1', [RPL.id]))
-      && (await qa(`SELECT body FROM notifications WHERE type='replacement_issued' AND link=$1`, [`/job-cards/${RPL.id}`])).every(n => /\(3 pcs/.test(n.body)),
-      RPL && JSON.stringify(await qa(`SELECT body FROM notifications WHERE type='replacement_issued' AND link=$1 LIMIT 1`, [`/job-cards/${RPL.id}`])));
-    ok('G1. the -Q3 card is closed as resolved_dispatched; the query resolved with a replacement issued; parent still 41 dispatched',
-      (await cardRow(C3.id)).status === 'resolved_dispatched' && (await queryRow(Q3)).status === 'resolved' && (await queryRow(Q3)).return_status === 'replacement_issued'
-      && Number((await cardRow(A)).qty) === 41 && (await cardRow(A)).status === 'dispatched');
+    ok('G1. the old clone-a-card replacement is closed — a replacement starts as a new order', r.status === 400 && r.body.code === 'REPLACEMENT_IS_AN_ORDER', JSON.stringify(r.body));
+    r = await call('GET', `${CQ}/${Q3}/replacement-draft`);
+    ok('G1. the replacement order draft carries 3 pcs (the -Q3 card\'s qty, not the parent\'s 41) of the same drawing, as a reuse of the line',
+      r.status === 200 && r.body.items?.[0]?.quantity === 3 && r.body.items[0].drawing_number === 'ZZTEST-DWG-QA' && r.body.items[0].copy_from_item_id === oiA,
+      JSON.stringify(r.body).slice(0, 300));
 
     // ════ H. qty typed in = all the pieces that are out → no split (the parent itself) ════
     // The form prefills the product name and drawing no; sent back unchanged

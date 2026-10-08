@@ -169,6 +169,13 @@ export default function CustomerQueryDetail() {
               <Clock size={15} /> Full Timeline
             </Link>
           )}
+          {/* Replacement = a NEW ORDER, pre-filled (owner, 8 Oct 2026) — owner or admin */}
+          {['owner', 'admin'].includes(user.role) && query.status !== 'resolved' && !query.return_type && query.job_card_id && (
+            <button className="btn-secondary flex items-center gap-1.5"
+              onClick={() => startReplacementOrder(query, navigate)}>
+              <RefreshCw size={15} /> Replacement → new order
+            </button>
+          )}
           {/* Owner-only resolve button */}
           {isOwner && query.status !== 'resolved' && !query.return_type && (
             <button className="btn-primary flex items-center gap-1.5"
@@ -654,9 +661,19 @@ function highlightMentions(text, users) {
 }
 
 // ── Resolve Modal ──────────────────────────────────────────────────────────
+// Opens New Order pre-filled from the returned card; saving it closes the query
+// as "Replacement issued — ORD-xxx" (owner, 8 Oct 2026).
+async function startReplacementOrder(query, navigate, summary = '') {
+  try {
+    const r = await api.get(`/customer-queries/${query.id}/replacement-draft`);
+    navigate('/orders', { state: { replacement: { ...r.data, summary } } });
+  } catch (e) { alert(e.response?.data?.error || 'Could not start the replacement order'); }
+}
+
 function ResolveModal({ query, onClose, onDone }) {
   const [type, setType] = useState('resolved');
   const [summary, setSummary] = useState('');
+  const navigateTo = useNavigate();
   const [cardChoice, setCardChoice] = useState('keep'); // 'keep' | 'new' — job card for the replacement run
   const [newCardFile, setNewCardFile] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -664,8 +681,13 @@ function ResolveModal({ query, onClose, onDone }) {
 
   const handleSubmit = async () => {
     if (!summary.trim()) { setError('Resolution summary is required'); return; }
-    if (type === 'replaced' && cardChoice === 'new' && !newCardFile) {
-      setError('Upload the new job card file, or choose to keep the existing card.'); return;
+
+    if (type === 'replaced') {
+      // A replacement is a new order now: open it pre-filled.
+      setSaving(true);
+      await startReplacementOrder(query, navigateTo, summary.trim());
+      setSaving(false);
+      return;
     }
     setSaving(true);
     try {
@@ -714,33 +736,11 @@ function ResolveModal({ query, onClose, onDone }) {
           </div>
         </div>
         {type === 'replaced' && (
-          <div className="bg-blue-50/50 border border-blue-200 rounded-xl p-3 space-y-2">
-            <label className="label mb-0">Job card for the replacement run</label>
-            <div className="flex gap-2">
-              <button type="button"
-                className={`flex-1 py-2 px-3 rounded-lg border-2 text-sm font-medium transition-colors ${
-                  cardChoice === 'keep' ? 'bg-white border-blue-500 text-blue-700' : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                }`}
-                onClick={() => { setCardChoice('keep'); setNewCardFile(null); }}>
-                Keep same job card
-              </button>
-              <button type="button"
-                className={`flex-1 py-2 px-3 rounded-lg border-2 text-sm font-medium transition-colors ${
-                  cardChoice === 'new' ? 'bg-white border-blue-500 text-blue-700' : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                }`}
-                onClick={() => setCardChoice('new')}>
-                Upload new job card
-              </button>
-            </div>
-            {cardChoice === 'new' && (
-              <label className="flex items-center gap-2 cursor-pointer border border-gray-200 rounded-lg px-3 py-2 hover:border-brand-400 transition-colors bg-white">
-                <Upload size={15} className="text-gray-400 flex-shrink-0" />
-                <span className="text-sm text-gray-600 flex-1 truncate">{newCardFile ? newCardFile.name : 'Attach the new job card…'}</span>
-                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx" className="hidden"
-                  onChange={e => { setNewCardFile(e.target.files[0] || null); setError(''); }} />
-              </label>
-            )}
-            <p className="text-[11px] text-gray-500">The replacement card goes straight into production with this document.</p>
+          <div className="bg-blue-50/50 border border-blue-200 rounded-xl p-3 text-sm text-blue-900">
+            The replacement starts as a <b>new order</b>, pre-filled from {query.job_card_no || 'the returned card'}:
+            customer, product, drawing and the pieces that came back. Check it, add details, and save — it then
+            goes through approval, drawings, job cards (ending in <b>-RPL</b>), production, both QCs and dispatch
+            like any order, with no invoice needed. Saving it closes this query.
           </div>
         )}
 
@@ -753,7 +753,7 @@ function ResolveModal({ query, onClose, onDone }) {
         <div className="flex gap-3">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button className="btn-primary flex-1" onClick={handleSubmit} disabled={saving}>
-            {saving ? 'Saving...' : type === 'resolved' ? 'Resolve & Close' : type === 'replaced' ? 'Issue Replacement' : 'Initiate Return'}
+            {saving ? 'Saving...' : type === 'resolved' ? 'Resolve & Close' : type === 'replaced' ? 'Open the replacement order' : 'Initiate Return'}
           </button>
         </div>
       </div>

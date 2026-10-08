@@ -469,6 +469,40 @@ router.put('/:id', authenticate, authorize('accounts', 'owner', 'admin'), async 
 });
 
 // ── Resolve query (OWNER ONLY) ─────────────────────────────────────────────
+// ── Replacement as a NEW ORDER (owner, 8 Oct 2026) ──────────────────────────
+// "The replacement job card should start with a new order, where the admin can
+// directly add the new order details, and the same flow goes on as any new
+// order, just the job card has RPL with it. The invoice is not compulsory."
+// This returns the new order pre-filled from the returned card; saving it
+// (POST /orders with replacement_query_id) closes the query.
+router.get('/:id/replacement-draft', authenticate, authorize('owner', 'admin'), async (req, res) => {
+  const db = getDB();
+  const q = await db.get('SELECT * FROM customer_queries WHERE id=$1', [req.params.id]);
+  if (!q) return res.status(404).json({ error: 'Query not found' });
+  if (q.status === 'resolved') return res.status(400).json({ error: 'Query is already resolved' });
+  if (!q.job_card_id) return res.status(400).json({ error: 'This query has no job card to replace' });
+  const jc = await db.get(
+    `SELECT jc.*, o.customer_id, o.order_type, o.order_code FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1`, [q.job_card_id]);
+  if (!jc) return res.status(400).json({ error: 'Original job card not found' });
+  const oi = jc.order_item_id ? await db.get('SELECT * FROM order_items WHERE id=$1', [jc.order_item_id]) : null;
+  const qty = Number(q.qty) > 0 ? Number(q.qty) : (Number(jc.qc_dispatch_qty) > 0 ? Number(jc.qc_dispatch_qty) : Number(jc.qty) || 1);
+  const later = (d) => d && new Date(d) > new Date() ? String(d).slice(0, 10) : new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  const hasList = oi ? !!(await db.get('SELECT 1 AS x FROM order_item_inventory WHERE order_item_id=$1 LIMIT 1', [oi.id])) : false;
+  res.json({
+    replacement: { query_id: q.id, query_no: q.query_no, job_card_no: jc.job_card_no, order_code: jc.order_code, qty },
+    form: { customer_id: jc.customer_id, order_type: jc.order_type, dispatch_date: later(jc.dispatch_date),
+            notes: `Replacement for query ${q.query_no} — ${qty} pcs of ${jc.job_card_no} (${jc.order_code})` },
+    items: oi ? [{
+      product_code: oi.product_code || '', drawing_number: oi.drawing_number || '', tube_material: oi.tube_material || '',
+      tube_diameter: oi.tube_diameter || '', wattage: oi.wattage ?? '', voltage: oi.voltage ?? '',
+      plating_instructions: oi.plating_instructions || '', quantity: qty, remark: oi.remark || '',
+      // added as a reuse of the returned item: its drawing and list come along
+      copy_from_item_id: oi.id,
+      copy_src: { order_code: jc.order_code, order_type: jc.order_type, has_list: hasList },
+    }] : [],
+  });
+});
+
 router.put('/:id/resolve', authenticate, authorize('owner'), ...uploadJobCard, async (req, res) => {
   const { resolution_summary, resolution_type } = req.body;
   // resolution_type: 'resolved', 'product_return' or 'replaced' (no return —
@@ -484,6 +518,10 @@ router.put('/:id/resolve', authenticate, authorize('owner'), ...uploadJobCard, a
   if (q.status === 'resolved') return res.status(400).json({ error: 'Query is already resolved' });
 
   if (resolution_type === 'replaced') {
+    // From 8 Oct 2026 a replacement is a new order (GET /:id/replacement-draft,
+    // then POST /orders with replacement_query_id) — no more card clones here.
+    return res.status(400).json({ error: 'A replacement now starts as a new order — choose Replacement, then save the pre-filled order.', code: 'REPLACEMENT_IS_AN_ORDER' });
+    // eslint-disable-next-line no-unreachable
     // Replace without waiting for the product to come back: clone the original
     // job card into a fresh production run (empty checklist), tagged with the
     // query. The original card's lifecycle is closed as resolved.
