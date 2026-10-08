@@ -68,11 +68,20 @@ async function readTerminals(db, cardId) {
             u.name AS updated_by_name,
             ii.item_code, ii.name, ii.name_gu, ii.unit, TRIM(ii.category) AS category,
             ii.current_stock::float AS current_stock,
+            t.rework_qty::float AS rework_qty,
             COALESCE(b.qty,0)::float AS rework_bin,
+            -- free for anyone: the bin less what open lists and cards hold
             GREATEST(COALESCE(b.qty,0) - COALESCE((
                 SELECT SUM(GREATEST(oii.rework_qty - oii.rework_deducted, 0))
                   FROM order_item_inventory oii JOIN order_items oi ON oi.id = oii.order_item_id
-                 WHERE oii.inventory_item_id = ii.id AND oi.inventory_deducted = FALSE), 0), 0)::float AS rework_free
+                 WHERE oii.inventory_item_id = ii.id AND oi.inventory_deducted = FALSE), 0)
+              - ${rework.CARD_HOLDS('ii.id')}, 0)::float AS rework_free,
+            -- free for THIS card: the same, without this card's own hold
+            GREATEST(COALESCE(b.qty,0) - COALESCE((
+                SELECT SUM(GREATEST(oii.rework_qty - oii.rework_deducted, 0))
+                  FROM order_item_inventory oii JOIN order_items oi ON oi.id = oii.order_item_id
+                 WHERE oii.inventory_item_id = ii.id AND oi.inventory_deducted = FALSE), 0)
+              - ${rework.CARD_HOLDS('ii.id', 'AND t.job_card_id <> $1')}, 0)::float AS card_rework_free
        FROM job_card_terminals t
        JOIN inventory_items ii ON ii.id = t.inventory_item_id
        LEFT JOIN inventory_rework_bins b ON b.item_id = ii.id
@@ -104,7 +113,9 @@ async function ensureTerminals(db, card, { seed = true } = {}) {
   const want = lines.filter(l => l.share > 0 && !PLACEHOLDER.test(l.item_code || ''))
     .map(l => ({ inventory_item_id: l.inventory_item_id, qty: l.share, item_code: l.item_code }));
   const key = (r) => `${r.inventory_item_id}:${Math.round(Number(r.qty))}`;
-  const allFromList = rows.every(r => r.source === 'list');
+  // A row marked to come from the rework bin is design's choice for this card —
+  // a list correction must not redo it and drop the mark.
+  const allFromList = rows.every(r => r.source === 'list' && !(Number(r.rework_qty) > 0));
   const differs = rows.length !== want.length || want.some(w => !rows.some(r => key(r) === key(w)));
   if (allFromList && differs && (rows.length || want.length)) {
     const before = rows.map(r => `${r.item_code} × ${r.qty}`).join(', ') || 'none';
@@ -150,15 +161,21 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
   // below). The check follows the same rule, so pins the bin covers never read
   // short (owner, 7 Oct 2026 — card set to take its pins from rework still
   // showed "stock 0 — short 18").
+  // Marked in Change pins (owner, 8 Oct 2026): pieces free in the bin cover
+  // the pin; pieces already held for other inventory do not — those still need
+  // stock, so the pin reads short and the slip waits for an OK.
   const fromBin = (r) => {
     const l = lines.find(x => x.inventory_item_id === r.inventory_item_id);
     const want = l ? Math.max(0, Number(l.rework_qty || 0) - Number(l.rework_deducted || 0)) : 0;
-    return Math.min(Number(r.qty) || 0, want, Number(r.rework_bin) || 0);
+    if (want > 0) return Math.min(Number(r.qty) || 0, want, Number(r.rework_bin) || 0);
+    const marked = Number(r.rework_qty) || 0;
+    return marked > 0 ? Math.min(Number(r.qty) || 0, marked, Number(r.card_rework_free) || 0) : 0;
   };
   const short = pastPins(card) ? [] : rows
     .filter(r => Number(r.current_stock) < Number(r.qty) - fromBin(r))
     .map(r => ({ inventory_item_id: r.inventory_item_id, item_code: r.item_code, name: r.name, unit: r.unit || '',
-                 need: Number(r.qty) - fromBin(r), from_rework: fromBin(r), stock: Number(r.current_stock) }));
+                 need: Number(r.qty) - fromBin(r), from_rework: fromBin(r), stock: Number(r.current_stock),
+                 rework_marked: Number(r.rework_qty) || 0 }));
   let ok = okState(card);
   let shortAt = card.terminals_short_at;
 
@@ -229,11 +246,16 @@ async function saveTerminals(db, jc, rows, user) {
     if (seen.has(id)) throw httpError(400, 'The same terminal pin is listed twice — give it one row with the total.');
     seen.add(id);
     if (!Number.isInteger(qty) || !(qty > 0)) throw httpError(400, 'Terminal pin quantity must be a whole number above 0.');
+    // From the rework bin, for this card (owner, 8 Oct 2026): blank / 0 = none.
+    const rwRaw = r?.rework_qty;
+    const rw = rwRaw === undefined || rwRaw === null || String(rwRaw).trim() === '' ? 0 : Number(rwRaw);
+    if (!Number.isInteger(rw) || rw < 0) throw httpError(400, 'Pieces from the rework bin must be a whole number.');
+    if (rw > qty) throw httpError(400, `No more than the ${qty} pins on the row can come from the rework bin.`);
     const inv = await db.get('SELECT id, item_code, TRIM(category) AS category FROM inventory_items WHERE id=$1', [id]);
     if (!inv) throw httpError(400, `Inventory item #${id} not found.`);
     if (!isTerminalCategory(inv.category)) throw httpError(400, `${inv.item_code} is in category "${inv.category}" — only 'Terminal Pin' items go here (heavy pins, nuts and washers stay on the list).`);
     if (PLACEHOLDER.test(inv.item_code || '')) throw httpError(400, `${inv.item_code} is a TRAIN placeholder — pick the real pin.`);
-    clean.push({ inventory_item_id: id, qty, item_code: inv.item_code });
+    clean.push({ inventory_item_id: id, qty, item_code: inv.item_code, rework_qty: rw || null });
   }
 
   const before = await readTerminals(db, card.id);
@@ -242,19 +264,28 @@ async function saveTerminals(db, jc, rows, user) {
   // A row that is exactly the list's share is still "from list"; anything
   // else is design's change for this card.
   const sourceOf = (r) => lines.some(l => l.inventory_item_id === r.inventory_item_id && l.share === r.qty) ? 'list' : 'design';
+  // Where the item's list already takes this pin from the rework bin, the list
+  // decides — a second mark on the card would hold the same pieces twice.
+  for (const r of clean) {
+    const l = lines.find(x => x.inventory_item_id === r.inventory_item_id);
+    if (r.rework_qty && l && Number(l.rework_qty) > 0) {
+      throw httpError(400, `The item's list already takes ${r.item_code} from the rework bin — change it on the list, not here.`);
+    }
+  }
 
   await db.run('DELETE FROM job_card_terminals WHERE job_card_id=$1', [card.id]);
   for (const r of clean) {
     await db.run(
-      `INSERT INTO job_card_terminals (job_card_id, inventory_item_id, qty, source, updated_by, updated_at)
-       VALUES ($1,$2,$3,$4,$5,NOW())
-       ON CONFLICT (job_card_id, inventory_item_id) DO UPDATE SET qty = EXCLUDED.qty, source = EXCLUDED.source, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
-      [card.id, r.inventory_item_id, r.qty, sourceOf(r), user.id]);
+      `INSERT INTO job_card_terminals (job_card_id, inventory_item_id, qty, source, updated_by, updated_at, rework_qty)
+       VALUES ($1,$2,$3,$4,$5,NOW(),$6)
+       ON CONFLICT (job_card_id, inventory_item_id) DO UPDATE SET qty = EXCLUDED.qty, source = EXCLUDED.source, updated_by = EXCLUDED.updated_by,
+         updated_at = NOW(), rework_qty = EXCLUDED.rework_qty`,
+      [card.id, r.inventory_item_id, r.qty, sourceOf(r), user.id, r.rework_qty]);
   }
   await db.run(
     'UPDATE job_cards SET terminals_short_at = NULL, terminals_ok_by = NULL, terminals_ok_at = NULL, terminals_ok_note = NULL WHERE id=$1',
     [card.id]);
-  const fmt = (list) => list.map(r => `${r.item_code} × ${r.qty}`).join(', ') || 'none';
+  const fmt = (list) => list.map(r => `${r.item_code} × ${r.qty}${Number(r.rework_qty) > 0 ? ` (${r.rework_qty} from rework bin)` : ''}`).join(', ') || 'none';
   await logActivity(card.order_id, card.id, 'terminals_changed',
     `Terminal pins for ${card.job_card_no} set by ${user.name}: ${fmt(clean)} (was: ${fmt(before)})`, user.id);
   return checkTerminals(db, card);
@@ -322,6 +353,20 @@ async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId) {
         await tx.run('UPDATE order_item_inventory SET rework_qty = COALESCE(rework_deducted,0) WHERE id=$1', [line.id]);
         note = `${note} | rework bin short by ${shortBin} — taken from stock`;
       }
+    } else if (Number(row.rework_qty) > 0) {
+      // Marked in Change pins for this card (owner, 8 Oct 2026): from the bin,
+      // up to what it holds now; any shortfall comes from stock, noted. The
+      // card's hold ends with this take (it now has its last-stage stamp).
+      const marked = Math.min(need, Math.round(Number(row.rework_qty)));
+      const available = await rework.binQty(tx, row.inventory_item_id);
+      fromRework = Math.min(marked, available);
+      if (fromRework > 0) {
+        await rework.move(tx, { itemId: row.inventory_item_id, kind: 'draw', qty: fromRework,
+          ref: { order_id: card.order_id, order_item_id: item.id, job_card_id: card.id, order_code: orderCode,
+                 job_card_no: card.job_card_no, drawing_number: item.drawing_number || null },
+          notes: `${note} | marked from rework bin in Change pins`, userId });
+      }
+      if (marked - fromRework > 0) note = `${note} | rework bin short by ${marked - fromRework} — taken from stock`;
     }
     const fromStock = need - fromRework;
     if (fromStock > 0) {
@@ -367,7 +412,8 @@ async function rescaleAfterSplit(tx, parentId, oldQty, newQty, userId) {
   for (const r of rows) {
     const q = Math.max(0, Math.round((r.qty * Number(newQty)) / Number(oldQty)));
     if (q === r.qty) continue;
-    if (q > 0) await tx.run('UPDATE job_card_terminals SET qty=$1, updated_at=NOW() WHERE id=$2', [q, r.id]);
+    if (q > 0) await tx.run(
+      'UPDATE job_card_terminals SET qty=$1, rework_qty = CASE WHEN rework_qty > $1 THEN $1 ELSE rework_qty END, updated_at=NOW() WHERE id=$2', [q, r.id]);
     else await tx.run('DELETE FROM job_card_terminals WHERE id=$1', [r.id]);   // a pin with nothing left is no row
     changed.push(`${r.item_code} ${r.qty} → ${q}`);
   }

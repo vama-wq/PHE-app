@@ -18,6 +18,15 @@
 // is never blocked and the bin never goes negative. Owner's rules, 27 Sep 2026.
 const { getDB } = require('../db');
 
+// Pieces a job card's terminal pins are marked to take from the bin (Change
+// pins, owner 8 Oct 2026) are held for that card until its last stage takes
+// them — the same as a list line's rework portion holds pieces for its order.
+// `excl` is a SQL fragment naming a card to leave out (its own hold).
+const CARD_HOLDS = (itemExpr, excl = '') => `COALESCE((
+  SELECT SUM(t.rework_qty) FROM job_card_terminals t JOIN job_cards jc ON jc.id = t.job_card_id
+   WHERE t.inventory_item_id = ${itemExpr} AND t.rework_qty > 0 ${excl}
+     AND jc.last_stage_taken_at IS NULL AND jc.dispatched_at IS NULL AND jc.inventory_qc_at IS NULL), 0)`;
+
 async function binQty(db, itemId) {
   const b = await db.get('SELECT qty FROM inventory_rework_bins WHERE item_id=$1', [itemId]);
   return Number(b?.qty) || 0;
@@ -28,7 +37,7 @@ async function binQty(db, itemId) {
 // to be replaced and must not count against it.
 async function reservedQty(db, itemId, excludeItemId = null) {
   const r = await db.get(
-    `SELECT COALESCE(SUM(GREATEST(oii.rework_qty - oii.rework_deducted, 0)), 0) AS r
+    `SELECT COALESCE(SUM(GREATEST(oii.rework_qty - oii.rework_deducted, 0)), 0) + ${CARD_HOLDS('$1::int')} AS r
        FROM order_item_inventory oii JOIN order_items oi ON oi.id = oii.order_item_id
       WHERE oii.inventory_item_id=$1 AND oi.inventory_deducted = FALSE
         AND ($2::int IS NULL OR oi.id <> $2)`, [itemId, excludeItemId]);
@@ -45,7 +54,8 @@ async function binsWithFree(db) {
     `SELECT b.item_id, b.qty,
             GREATEST(b.qty - COALESCE((SELECT SUM(GREATEST(oii.rework_qty - oii.rework_deducted, 0))
                                           FROM order_item_inventory oii JOIN order_items oi ON oi.id = oii.order_item_id
-                                         WHERE oii.inventory_item_id = b.item_id AND oi.inventory_deducted = FALSE), 0), 0) AS free
+                                         WHERE oii.inventory_item_id = b.item_id AND oi.inventory_deducted = FALSE), 0)
+                     - ${CARD_HOLDS('b.item_id')}, 0) AS free
        FROM inventory_rework_bins b`);
 }
 
@@ -77,4 +87,4 @@ async function move(db, { itemId, kind, qty, ref = {}, notes = null, userId }) {
 const PIECE_UNITS = new Set(['pcs', 'pc', 'nos', 'no', 'piece', 'pieces', 'set', 'sets', 'box', 'boxes']);
 const isPieceUnit = (u) => PIECE_UNITS.has(String(u || '').trim().toLowerCase().replace(/\.$/, ''));
 
-module.exports = { binQty, reservedQty, freeQty, binsWithFree, move, isPieceUnit };
+module.exports = { binQty, reservedQty, freeQty, binsWithFree, move, isPieceUnit, CARD_HOLDS };

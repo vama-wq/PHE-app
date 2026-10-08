@@ -591,7 +591,9 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
         // REWORK row, like any other line — the card's share of it, never more
         // than the row itself.
         const line = state.lines.find(l => l.inventory_item_id === r.inventory_item_id);
-        const rw = line && Number(line.rework_qty) > 0 ? Math.min(r.qty, terminals.shareFor(line.rework_qty, jc.qty, state.itemQty)) : 0;
+        // Pins marked in Change pins print the part the bin covers (owner, 8 Oct 2026).
+        const rw = line && Number(line.rework_qty) > 0 ? Math.min(r.qty, terminals.shareFor(line.rework_qty, jc.qty, state.itemQty))
+          : Math.min(r.qty, Math.round(Number(r.from_rework) || 0));
         return { inventory_item_id: r.inventory_item_id, item_code: r.item_code, name: r.name, name_gu: r.name_gu,
                  unit: r.unit, qty: r.qty, rework_qty: rw, source: r.source, current_stock: r.current_stock };
       });

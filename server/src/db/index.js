@@ -2376,6 +2376,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       // passes the goods and Payments Due bills them, but no stock is added.
       await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS no_stock BOOLEAN NOT NULL DEFAULT FALSE`);
 
+      // Terminal pins marked in Change pins to come from the rework bin (owner,
+      // 8 Oct 2026). NULL = nothing marked for this card.
+      await pool.query(`ALTER TABLE job_card_terminals ADD COLUMN IF NOT EXISTS rework_qty NUMERIC`);
+
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
       if (parseInt(rows[0].c, 10) === 0) {

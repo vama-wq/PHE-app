@@ -165,7 +165,8 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const HV  = await mkItem('ZZTEST-TP-HV', 'Heavy Terminal Pin', 500, 'pcs');   // stays on the list as today
     const NUT = await mkItem('ZZTEST-TP-NUT', 'Nut', 2000, 'pcs');
     const RW  = await mkItem('ZZTEST-TP-RW', 'Terminal Pin', 0, 'pcs');            // none in stock — the list takes it from the rework bin
-    const pins = [WH, WO, X, LOW, TRN, HV, NUT, RW];
+    const MK  = await mkItem('ZZTEST-TP-MK', 'Terminal Pin', 0, 'pcs');            // none in stock — marked from the bin in Change pins
+    const pins = [WH, WO, X, LOW, TRN, HV, NUT, RW, MK];
 
     // ════ A. Two cards of 50 on an item of 100: lazy seed, design's change, the slip, the last stage, a correction ════
     // List per piece: 1 WH + 1 WO terminal pin, 1 heavy pin, 4 nuts.
@@ -474,6 +475,57 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       r.status === 200 && (await bin(RW)) === 2 && near(await stock(RW), 0) && (await termRows(R1, RW)).length === 0,
       `${r.status} bin ${await bin(RW)} | ${await moved(s0)}`);
 
+    // ════ C4. Marked from the rework bin in Change pins (owner, 8 Oct 2026) ════
+    // 4 MK on an item of 2 (no rework on the list), one card of 2; stock 0.
+    // MK's bin holds 10, but another open order's list has 9 of them reserved.
+    const oM = await mkOrder('ZZT-TM');
+    const oiM = await mkLine(oM, 2, 'ZZTEST-DWG-TM');
+    await putLine(oiM, MK, 4); await putLine(oiM, NUT, 8);
+    const M1 = await mkCard(oM, oiM, 'ZZT-TM1', 2, { dwg: 'ZZTEST-DWG-TM' });
+    const oMo = await mkOrder('ZZT-TMO');
+    const oiMo = await mkLine(oMo, 9, 'ZZTEST-DWG-TMO');
+    await putLine(oiMo, MK, 9, 9);
+    await rework.move(txDb, { itemId: MK, kind: 'deposit', qty: 10, ref: {}, notes: 'test deposit', userId: uid });
+    r = await call('GET', terminals(M1));
+    ok('C4. stock 0, nothing marked: short by 4', r.status === 200 && r.body.held === true && r.body.short[0]?.need === 4, JSON.stringify(r.body.short));
+    r = await call('PUT', terminals(M1), { rows: [{ inventory_item_id: MK, qty: 4, rework_qty: 5 }] }, design);
+    ok('C4. more from the bin than the pins on the row is refused', r.status === 400 && /No more than the 4 pins/.test(r.body.error || ''), JSON.stringify(r.body));
+    r = await call('PUT', terminals(M1), { rows: [{ inventory_item_id: MK, qty: 4, rework_qty: 4 }] }, design);
+    ok('C4. 4 marked from the bin while 9 of its 10 are held for another order: only 1 counts — still short by 3, the slip needs OK',
+      r.status === 200 && r.body.held === true && r.body.short[0]?.need === 3 && r.body.short[0]?.from_rework === 1 && r.body.short[0]?.rework_marked === 4
+      && r.body.rows[0]?.rework_qty === 4 && r.body.rows[0]?.from_rework === 1, JSON.stringify({ short: r.body.short, row: r.body.rows[0] }));
+    ok('C4. the change is on the timeline with the rework mark',
+      (await qa(`SELECT 1 FROM activity_log WHERE job_card_id=$1 AND activity_type='terminals_changed' AND description LIKE '%ZZTEST-TP-MK × 4 (4 from rework bin)%'`, [M1])).length === 1
+      || logs.some(l => /ZZTEST-TP-MK × 4 \(4 from rework bin\)/.test(l.desc || '')));
+    await client.query('UPDATE order_item_inventory SET rework_qty=0 WHERE order_item_id=$1', [oiMo]);
+    r = await call('GET', terminals(M1));
+    c = await cardRow(M1);
+    ok('C4. the other order no longer holds them: the 4 are free, so marked from the bin — not short, no OK needed, short state cleared',
+      r.status === 200 && r.body.held === false && r.body.short.length === 0 && r.body.rows[0]?.from_rework === 4 && c.terminals_short_at === null,
+      JSON.stringify({ short: r.body.short, row: r.body.rows[0] }));
+    ok('C4. the 4 are held for this card: the bin shows 6 free to everyone else', (await rework.freeQty(txDb, MK)) === 6, String(await rework.freeQty(txDb, MK)));
+    // A list correction does not undo a pin design marked from the bin.
+    await client.query('UPDATE order_item_inventory SET qty=6 WHERE order_item_id=$1 AND inventory_item_id=$2', [oiM, MK]);
+    r = await call('GET', terminals(M1));
+    ok('C4. a later list correction leaves the marked row alone (4, 4 from the bin)', r.body.rows?.length === 1 && r.body.rows[0].qty === 4 && r.body.rows[0].rework_qty === 4, JSON.stringify(r.body.rows));
+    sl = await call('POST', slipOf(M1), {}, floor);
+    ok('C4. the slip prints the 4 as a REWORK row', sl.status === 200 && sl.body.terminals?.[0]?.qty === 4 && sl.body.terminals[0].rework_qty === 4, `${sl.status} ${JSON.stringify(sl.body.terminals)}`);
+    await tick(M1, MANDATORY);
+    s0 = await snap(pins);
+    r = await call('PUT', `/api/job-cards/${M1}/checklist/29`, { done: true }, floor);
+    ok('C4. stage 29: the 4 come out of the bin (10 → 6), stock untouched, the draw is against this card; the hold ends',
+      r.status === 200 && (await bin(MK)) === 6 && near(await stock(MK), 0) && (await termRows(M1, MK)).length === 0
+      && (await qa(`SELECT 1 FROM inventory_rework_moves WHERE item_id=$1 AND job_card_id=$2 AND kind='draw' AND qty=4`, [MK, M1])).length === 1
+      && (await rework.freeQty(txDb, MK)) === 6, `${r.status} bin ${await bin(MK)} free ${await rework.freeQty(txDb, MK)} | ${await moved(s0)}`);
+    // Where the list already takes the pin from the bin, the list decides.
+    const oL = await mkOrder('ZZT-TL');
+    const oiL = await mkLine(oL, 2, 'ZZTEST-DWG-TL');
+    await putLine(oiL, MK, 4, 2);
+    const L1 = await mkCard(oL, oiL, 'ZZT-TL1', 2, { dwg: 'ZZTEST-DWG-TL' });
+    await call('GET', terminals(L1));
+    r = await call('PUT', terminals(L1), { rows: [{ inventory_item_id: MK, qty: 4, rework_qty: 3 }] }, design);
+    ok('C4. a pin the list already takes from the bin cannot be marked again on the card', r.status === 400 && /already takes ZZTEST-TP-MK from the rework bin/.test(r.body.error || ''), JSON.stringify(r.body));
+
     // ════ D. No real pin on the list yet (TRAIN placeholder): nothing seeded, the old take; whole pieces ════
     const oD = await mkOrder('ZZT-TD');
     const oiD = await mkLine(oD, 10, 'ZZTEST-DWG-TD');
@@ -551,7 +603,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
 
     // ════ G. Nothing leaked past the stubs ════
     ok('G1. every WhatsApp copy recorded was a terminals_short alert for one of the test cards',
-      waCalls.every(w => w.type === 'terminals_short' && [B1, R1].includes(w.ref?.id)), JSON.stringify(waCalls.map(w => [w.type, w.ref?.id])));
+      waCalls.every(w => w.type === 'terminals_short' && [B1, R1, M1, L1].includes(w.ref?.id)), JSON.stringify(waCalls.map(w => [w.type, w.ref?.id])));
   } catch (e) {
     failed = true;
     console.error('ERROR', e);

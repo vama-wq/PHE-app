@@ -74,7 +74,9 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
 
   const startEdit = () => {
     setDraft(rows.map(r => ({ inventory_item_id: r.inventory_item_id, qty: String(Math.round(Number(r.qty) || 0)),
-      item_code: r.item_code, name: r.name, unit: r.unit, current_stock: r.current_stock, rework_free: r.rework_free })));
+      rework: Number(r.rework_qty) > 0 ? String(Math.round(Number(r.rework_qty))) : '',
+      item_code: r.item_code, name: r.name, unit: r.unit, current_stock: r.current_stock, rework_free: r.rework_free,
+      card_rework_free: r.card_rework_free })));
     setEditing(true);
     setOpen(true);
     if (!pins) {
@@ -85,16 +87,39 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
 
   const addPin = (i) => {
     if (draft.some(d => d.inventory_item_id === i.id)) return;
-    setDraft(d => [...d, { inventory_item_id: i.id, qty: '', item_code: i.item_code, name: i.name, unit: i.unit,
-      current_stock: i.current_stock, rework_free: i.rework_free }]);
+    setDraft(d => [...d, { inventory_item_id: i.id, qty: '', rework: '', item_code: i.item_code, name: i.name, unit: i.unit,
+      current_stock: i.current_stock, rework_free: i.rework_free, card_rework_free: i.rework_free }]);
   };
   const setQty = (id, v) => setDraft(d => d.map(r => r.inventory_item_id === id ? { ...r, qty: v } : r));
+  const setRework = (id, v) => setDraft(d => d.map(r => r.inventory_item_id === id ? { ...r, rework: v } : r));
+  // What the bin has free for THIS card (its own earlier mark not counted against it)
+  const freeFor = (r) => Number(r.card_rework_free ?? r.rework_free ?? 0) || 0;
+  const listReworkFor = (id) => {
+    const l = (data?.list || []).find(x => x.inventory_item_id === id);
+    return l && Number(l.rework_qty) > 0 ? l : null;
+  };
   const removeRow = (id) => setDraft(d => d.filter(r => r.inventory_item_id !== id));
 
   const save = async () => {
-    const body = draft.map(r => ({ inventory_item_id: r.inventory_item_id, qty: parseInt(r.qty, 10) }));
+    const body = draft.map(r => ({ inventory_item_id: r.inventory_item_id, qty: parseInt(r.qty, 10),
+      rework_qty: String(r.rework ?? '').trim() === '' ? null : Number(r.rework) }));
     if (!body.length) { setError('A job card needs at least one terminal pin.'); return; }
     if (body.some(r => !Number.isInteger(r.qty) || r.qty <= 0)) { setError('Every pin needs a whole quantity above 0.'); return; }
+    if (body.some(r => r.rework_qty !== null && (!Number.isInteger(r.rework_qty) || r.rework_qty < 0 || r.rework_qty > r.qty))) {
+      setError('Pieces from the rework bin must be a whole number, no more than the pins on the row.'); return;
+    }
+    // From the rework bin (owner, 8 Oct 2026): ask before marking. Pieces free
+    // in the bin are just marked; pieces held for other inventory don't count —
+    // the pin stays short and the slip will need an OK.
+    const marked = draft.map((r, i) => ({ r, n: body[i].rework_qty || 0 })).filter(x => x.n > 0);
+    if (marked.length) {
+      const inUse = marked.filter(x => x.n > freeFor(x.r));
+      const what = marked.map(x => `${x.n} ${x.r.item_code}`).join(', ');
+      const ask = inUse.length
+        ? `Take ${what} from the rework bin for this card?\n\n${inUse.map(x => `${x.r.item_code}: only ${freeFor(x.r)} free in the bin — the rest are in use for other inventory`).join('\n')}.\nThose pins stay short, so the slip will need OK.`
+        : `Take ${what} from the rework bin for this card?`;
+      if (!window.confirm(ask)) return;
+    }
     setSaving(true); setError('');
     try {
       const r = await api.put(`/job-cards/${jobCardId}/terminals`, { rows: body });
@@ -218,6 +243,9 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
                     <span className="text-xs whitespace-nowrap w-40 text-right">
                       {/* the part the list takes from the rework bin needs no stock */}
                       {Number(r.from_rework) > 0 && <span className="block text-sky-700 font-medium">{fmtQty(r.from_rework)} from rework bin</span>}
+                      {Number(r.rework_qty) > Number(r.from_rework || 0) && !taken && (
+                        <span className="block text-[10px] text-red-700">{fmtQty(Number(r.rework_qty) - Number(r.from_rework || 0))} marked from rework — in use for other inventory</span>
+                      )}
                       {r.short
                         ? <span className="text-red-700 font-medium flex items-center justify-end gap-1"><AlertTriangle size={11} /> stock {fmtQty(r.current_stock)} — short {fmtQty(Number(r.qty) - Number(r.from_rework || 0) - Number(r.current_stock))}</span>
                         : <span className="text-gray-500">stock {fmtQty(r.current_stock)}</span>}
@@ -266,10 +294,13 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
                 const q = parseInt(r.qty, 10);
                 const listLine = (data.list || []).find(l => l.inventory_item_id === r.inventory_item_id);
                 // The list's rework portion for this pin comes from the bin, not stock (same rule as the server)
-                const binCover = Number.isInteger(q) && listLine
-                  ? Math.min(q, Math.max(0, Number(listLine.rework_qty || 0) - Number(listLine.rework_deducted || 0)),
-                             Number(rows.find(x => x.inventory_item_id === r.inventory_item_id)?.rework_bin ?? r.rework_free ?? 0))
-                  : 0;
+                const listRw = listReworkFor(r.inventory_item_id);
+                const rwMark = parseInt(r.rework, 10);
+                const binCover = !Number.isInteger(q) ? 0
+                  : listRw
+                    ? Math.min(q, Math.max(0, Number(listRw.rework_qty || 0) - Number(listRw.rework_deducted || 0)),
+                               Number(rows.find(x => x.inventory_item_id === r.inventory_item_id)?.rework_bin ?? r.rework_free ?? 0))
+                    : Number.isInteger(rwMark) && rwMark > 0 ? Math.min(q, rwMark, freeFor(r)) : 0;
                 const shortBy = Number.isInteger(q) && q - binCover > Number(r.current_stock) ? q - binCover - Number(r.current_stock) : 0;
                 return (
                   <div key={r.inventory_item_id} className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 ${shortBy > 0 ? 'bg-red-50' : 'bg-gray-50'}`}>
@@ -277,6 +308,13 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
                     <input className="input w-20 text-sm py-1" type="number" min="1" step="1" placeholder="Qty"
                       value={r.qty} onChange={e => setQty(r.inventory_item_id, e.target.value)} />
                     <span className="text-xs text-gray-400 w-8">{(r.unit || '').trim()}</span>
+                    {listRw ? (
+                      <span className="text-[10px] text-sky-700 w-24 text-center" title="Set on the item's list">list: {fmtQty(listRw.rework_qty)} from rework</span>
+                    ) : (
+                      <input className="input w-24 text-sm py-1" type="number" min="0" step="1" placeholder="from bin"
+                        title="How many of these pins come from the rework bin for this card"
+                        value={r.rework ?? ''} onChange={e => setRework(r.inventory_item_id, e.target.value)} />
+                    )}
                     <span className="text-xs whitespace-nowrap w-36 text-right">
                       {binCover > 0 && <span className="block text-sky-700 font-medium">{fmtQty(binCover)} from rework bin</span>}
                       {shortBy > 0
