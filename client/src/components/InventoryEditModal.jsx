@@ -24,6 +24,14 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
   const [result, setResult] = useState(null);
 
   useEffect(() => { api.get('/inventory').then(r => setInventoryItems(r.data)).catch(() => {}); }, []);
+  // Finished goods (owner, 8 Oct 2026): fins go by the tube length of the
+  // heaters in the store — the job card that put them there. null = none on
+  // record, so the fins are typed in kg as before.
+  const [fgLength, setFgLength] = useState(null);
+  useEffect(() => {
+    if (!fgOrder || !item?.id) return;
+    api.get(`/orders/${orderId}/items/${item.id}/fg-fins-length`).then(r => setFgLength(r.data?.length_mm ? r.data : null)).catch(() => setFgLength(null));
+  }, [fgOrder, orderId, item?.id]);
 
   const filtered = inventoryItems.filter(i =>
     (i.item_code || '').toLowerCase().includes(invSearch.toLowerCase()) ||
@@ -41,8 +49,9 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
   const setQty = (id, qty) => setSelected(prev => ({ ...prev, [id]: qty }));
   const selectedList = inventoryItems.filter(i => i.id in selected);
   // Fins need no qty — they deduct automatically by tube length at QC approval
-  // On a finished-goods order there is no tube length, so fins are typed in kg (owner, 2 Oct 2026).
-  const isFins = (i) => !fgOrder && (i?.category || '').trim().toLowerCase() === 'finns';
+  // On a finished-goods order they go by the store heaters' length when one is on
+  // record (owner, 8 Oct 2026); otherwise typed in kg (owner, 2 Oct 2026).
+  const isFins = (i) => (!fgOrder || !!fgLength) && (i?.category || '').trim().toLowerCase() === 'finns';
   const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
 
   // A blank Qty with a number in the rework box means the whole line comes
@@ -129,8 +138,8 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
                 <StockNote item={i} />
                 {isFins(i) ? (
                   <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 whitespace-nowrap"
-                    title="Deducts automatically from the tube length at QC approval">
-                    auto — by tube length
+                    title={fgOrder && fgLength ? `By the tube length of ${fgLength.card_no}, the job card that put these heaters into the store` : 'Deducts automatically from the tube length when the card completes its last stage'}>
+                    {fgOrder && fgLength ? `auto — by store heaters' length (${fgLength.length_mm} mm)` : 'auto — by tube length'}
                   </span>
                 ) : (
                   <>

@@ -126,6 +126,9 @@ async function lineRef(db, sel) {
 async function deductStageCategories(db, jc, stageNo, userId) {
   const cats = STAGE_CATEGORY_MAP[stageNo];
   if (!cats || !jc) return;
+  // A finished-goods card takes only its list, at its last stage — nothing by
+  // stage (owner, 8 Oct 2026).
+  if (jc.is_fg) return;
   // Inventory QC done is the final change to a card's inventory (owner, 6 Oct
   // 2026): re-ticking a stage on it later (e.g. a repair) takes nothing.
   if (jc.inventory_qc_at) return;
@@ -214,8 +217,63 @@ async function deductPartialAtQC(db, jc, userId) {
 // quantity, every piece built, taken when the card completes its last stage
 // rather than on the QC-approved qty. Rejected / remade differences are
 // corrected at Inventory QC.
-async function deductFinsByLength(db, jc, userId, { qty = null } = {}) {
-  if (!jc || jc.is_fg) return; // FG inventory cards have no Draw stage
+// The finished length a card's fins go by: the app-generated job card when it
+// has one (owner, 4 Oct 2026), for every element it makes; else Stage 8 as
+// typed. Workers may record several readings in one field ("1610-1625",
+// "1610+1620"): the AVERAGE of every number found. (Stripping all non-digits
+// once mashed a range into 16,101,625mm and drew 163,868kg of fins.)
+async function cardFinsLength(db, card) {
+  const spec = cardLengths(await specForCard(db, card));
+  const s8 = await db.get('SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=8', [card.id]);
+  const s8nums = (String(s8?.value1 || '').match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  const lengthMm = spec?.totalMm ? spec.totalMm
+    : (s8nums.length ? s8nums.reduce((a, b) => a + b, 0) / s8nums.length : NaN);
+  return { lengthMm, fromCard: !!spec?.totalMm, elements: spec?.totalMm ? (spec.elements || 1) : 1, card_no: card.job_card_no };
+}
+
+// Finished goods (owner, 8 Oct 2026): the heaters come out of the store with no
+// Draw stage of their own, so their fins go by the tube length of the job card
+// that put them INTO the store — the latest intake with a length on record,
+// else the card that first made the store row. null when none has one (older
+// or hand-added stock): the list's kg is used then, as before.
+async function fgStoreLength(db, fg) {
+  if (!fg) return null;
+  const nos = (await db.all(
+    `SELECT DISTINCT ON (job_card_no) job_card_no, id FROM finished_goods_log
+      WHERE finished_good_id=$1 AND movement_type='inward' AND job_card_no IS NOT NULL
+      ORDER BY job_card_no, id DESC`, [fg.id])).sort((a, b) => b.id - a.id).map(r => r.job_card_no);
+  const cards = [];
+  for (const no of nos) { const c = await db.get('SELECT * FROM job_cards WHERE job_card_no=$1 AND NOT COALESCE(is_fg,FALSE) ORDER BY id DESC LIMIT 1', [no]); if (c) cards.push(c); }
+  if (fg.job_card_id && !cards.some(c => c.id === fg.job_card_id)) {
+    const c = await db.get('SELECT * FROM job_cards WHERE id=$1', [fg.job_card_id]);
+    if (c && !c.is_fg) cards.push(c);
+  }
+  for (const c of cards) {
+    const len = await cardFinsLength(db, c);
+    if (len.lengthMm > 0 && len.lengthMm <= 20000) return len;
+  }
+  return null;
+}
+// For a finished-goods card: its store row.
+async function fgSourceLength(db, fgCard) {
+  if (!fgCard?.fg_source_id) return null;
+  return fgStoreLength(db, await db.get('SELECT * FROM finished_goods WHERE id=$1', [fgCard.fg_source_id]));
+}
+// For a finished-goods order line before it has cards: the store row of its drawing.
+async function fgSourceLengthForItem(db, item) {
+  const base = String(item?.drawing_number || '').trim().replace(/-\d+$/, '');
+  if (!base) return null;
+  const fg = await db.get(
+    `SELECT * FROM finished_goods WHERE LOWER(TRIM(base_drawing_no)) = LOWER($1)
+      ORDER BY (qty_available > 0) DESC, id DESC LIMIT 1`, [base]);
+  return fgStoreLength(db, fg);
+}
+
+// opts.length: a length worked out elsewhere — a finished-goods card's store
+// heaters (fgSourceLength). Without it a finished-goods card takes no fins here.
+async function deductFinsByLength(db, jc, userId, { qty = null, length = null } = {}) {
+  if (!jc) return;
+  if (jc.is_fg && !length) return; // FG inventory cards have no Draw stage of their own
   // Once per card. Nothing used to stop this running again on a second QC
   // cycle, and a rejection that returns work to stage 29 settles too — so a
   // card could draw fin strip several times over, uncapped, including for
@@ -243,20 +301,11 @@ async function deductFinsByLength(db, jc, userId, { qty = null } = {}) {
   );
   if (!sels.length) return;
 
-  // The finished length comes from the app-generated job card when it has one
-  // (owner, 4 Oct 2026), for every element it makes; else from Stage 8 as typed.
-  const spec = cardLengths(await specForCard(db, jc));
-  const s8 = await db.get(
-    'SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=8', [jc.id]
-  );
-  // Workers may record several readings in one field ("1610-1625", "1610+1620"):
-  // deduct on the AVERAGE of every number found. (Stripping all non-digits once
-  // mashed a range into 16,101,625mm and drew 163,868kg of fins.) The >20m guard
-  // below stays as a second net against implausible entries.
-  const s8nums = (String(s8?.value1 || '').match(/\d+(?:\.\d+)?/g) || []).map(Number);
-  const lengthMm = spec?.totalMm ? spec.totalMm
-    : (s8nums.length ? s8nums.reduce((a, b) => a + b, 0) / s8nums.length : NaN);
-  const fromCard = !!spec?.totalMm;
+  // The card's own finished length (cardFinsLength), or the store heaters' for a
+  // finished-goods card. The >20m guard below stays as a second net.
+  const len = length || await cardFinsLength(db, jc);
+  const { lengthMm, fromCard } = len;
+  const spec = { elements: len.elements || 1 };
   if (!(lengthMm > 0)) {
     console.warn(`[fins] JC ${jc.job_card_no}: no length on the job card and no stage-8 Total Length — fins not deducted`);
     return;
@@ -280,7 +329,7 @@ async function deductFinsByLength(db, jc, userId, { qty = null } = {}) {
     if (!(kgs > 0)) continue;
     const noteParts = [`Order: ${orderCode}`];
     if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
-    noteParts.push(`Fins by tube length: ${lengthMm}mm${fromCard ? ' (job card)' : ' (Stage 8)'} × ${perBase}kg/${FINS_MM_BASE}mm × ${pcs}${fromCard && spec.elements > 1 ? ` (${approved} × ${spec.elements}in1)` : ''} pcs = ${kgs}kg (JC ${jc.job_card_no})`);
+    noteParts.push(`Fins by tube length: ${lengthMm}mm${fromCard ? ' (job card)' : ' (Stage 8)'}${length ? ` of ${length.card_no}, the heaters in the store` : ''} × ${perBase}kg/${FINS_MM_BASE}mm × ${pcs}${fromCard && spec.elements > 1 ? ` (${approved} × ${spec.elements}in1)` : ''} pcs = ${kgs}kg (JC ${jc.job_card_no})`);
     await deductLine(db, sel, kgs, noteParts.join(' | '), userId, { jobCardId: jc.id });
     totalKg += kgs;
   }
@@ -562,4 +611,4 @@ async function settleWithoutTaking(db, orderItemId) {
   await db.run('UPDATE order_items SET inventory_deducted=TRUE WHERE id=$1', [orderItemId]);
 }
 
-module.exports = { STAGE_CATEGORY_MAP, STAGE_LABEL, deductLine, FINS_WEIGHT_PER_BASE, FG_PREP_CATEGORIES, fgTakes, buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, replayDeductions, FINS_CODES };
+module.exports = { cardFinsLength, fgSourceLength, fgSourceLengthForItem, STAGE_CATEGORY_MAP, STAGE_LABEL, deductLine, FINS_WEIGHT_PER_BASE, FG_PREP_CATEGORIES, fgTakes, buildOnlyOnFg, BUILD_ONLY_CATEGORIES, deductItemInventory, restoreItemInventory, resolveJobCardItemId, settleItemInventory, deductStageCategories, applyRemakeExtras, applyReworkDeposit, reverseReworkDeposit, deductPartialAtQC, deductFinsByLength, replayDeductions, FINS_CODES };

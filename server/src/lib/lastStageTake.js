@@ -14,7 +14,7 @@
 // was taken, and the whole take runs in one transaction with the card locked,
 // so a double tick or a retry can never take twice.
 
-const { STAGE_CATEGORY_MAP, STAGE_LABEL, FINS_CODES, fgTakes, deductLine, deductFinsByLength, resolveJobCardItemId } = require('./inventoryDeduction');
+const { STAGE_CATEGORY_MAP, STAGE_LABEL, FINS_CODES, fgTakes, deductLine, deductFinsByLength, resolveJobCardItemId, fgSourceLength } = require('./inventoryDeduction');
 const { clientDb } = require('./bomCorrection');
 const { isPieceUnit } = require('./rework');
 const { isTerminalCategory, takeTerminalRows } = require('./terminals');
@@ -92,10 +92,15 @@ async function runTake(tx, jobCardId, userId) {
   }
 
   let finsLines = false;
+  // Finished goods: fins go by the tube length of the heaters in the store
+  // (owner, 8 Oct 2026); when none is on record, the kg on the list as before.
+  const fgLength = fgOrder && lines.some(l => FINS_CODES.includes(l.item_code)) ? await fgSourceLength(tx, card) : null;
   for (const line of lines) {
     if (fgOrder) {
-      // Finished goods: only the prep parts; the rest is inside the heater.
+      // Finished goods: only what is on its list that is fitted while preparing
+      // it; the rest is inside the heater.
       if (!fgTakes(line.category)) continue;
+      if (fgLength && FINS_CODES.includes(line.item_code)) { finsLines = true; continue; }   // by length, below
     } else {
       if (FINS_CODES.includes(line.item_code)) { finsLines = true; continue; } // by tube length, below
       if (terminalsByRows && isTerminalCategory(line.category)) continue;      // taken by the card's rows, above
@@ -118,7 +123,7 @@ async function runTake(tx, jobCardId, userId) {
   }
 
   // Fins by the job card's length, for the card's full quantity.
-  if (finsLines) await deductFinsByLength(tx, card, userId, { qty: cardQty });
+  if (finsLines) await deductFinsByLength(tx, card, userId, { qty: cardQty, length: fgLength });
 
   await stamp();
   return { taken };

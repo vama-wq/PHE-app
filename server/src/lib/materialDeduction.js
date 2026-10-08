@@ -191,6 +191,10 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
     [jobCardId]
   );
   if (!jc || !jc.material_deduction) return;
+  // A finished-goods card takes only its list, at its last stage — no coil,
+  // tube or filling by stage (owner, 8 Oct 2026). Its stage 4 is "Ready", not
+  // the coil stage of a production card.
+  if (jc.is_fg) return;
   const orderCode = jc.order_code || `Order #${jc.order_id}`;
   const qty = Number(jc.qty) || 0;
   const detail = `${orderCode}${jc.drawing_no ? ` · ${jc.drawing_no}` : ''} · JC ${jc.job_card_no}`;

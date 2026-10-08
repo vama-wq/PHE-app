@@ -72,6 +72,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
   app.use('/api/job-cards', require(S + '/src/routes/jobCards.js'));
   app.use('/api/qc', require(S + '/src/routes/qc.js'));
   app.use('/api/dispatch', require(S + '/src/routes/dispatch.js'));
+  app.use('/api/orders', require(S + '/src/routes/orders.js'));
   const server = app.listen(0);
   const base = 'http://127.0.0.1:' + server.address().port;
   // The stages that must be done before stage 29, read from the route itself.
@@ -402,6 +403,39 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       r.status === 200 && c.status === 'qc_pending' && !!c.last_stage_taken_at, `${r.status} ${JSON.stringify(r.body)}`);
     ok('D1. only the prep parts are taken: 10 nuts, fins 0.5 kg by the kg on the list; the terminal pins are inside the heater already',
       near(await stock(NUT), s0[NUT] - 10) && near(await stock(FIN), s0[FIN] - 0.5) && near(await stock(PIN), s0[PIN]) && !c.fins_deducted, await moved(s0));
+
+    // ════ D2. Finished goods: fins by the store heaters' tube length; nothing by stage (owner, 8 Oct 2026) ════
+    // The heaters in the store were made on ZZT-IQC-SRC1 (stage 8: 508 mm). A
+    // finished-goods order of 5 with fins on its list at 0 kg (auto) and
+    // material deduction on.
+    const oSrc = await mkOrder('ZZT-IQC-SRC', 'inventory_order');
+    const oiSrc = await mkLine(oSrc, 5, 'ZZTEST-DWG-SRC-1');
+    const SRC1 = await mkCard(oSrc, oiSrc, 'ZZT-IQC-SRC1', 5, { status: 'qc_approved', dwg: 'ZZTEST-DWG-SRC-1' });
+    await tick(SRC1, [8], { value1: { 8: '508' } });
+    const fgRow = (await q1(
+      `INSERT INTO finished_goods (job_card_id, order_id, drawing_no, base_drawing_no, qty_in, qty_available)
+       VALUES ($1,$2,'ZZTEST-DWG-SRC-1','ZZTEST-DWG-SRC',5,5) RETURNING id`, [SRC1, oSrc])).id;
+    await client.query(`INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, job_card_no) VALUES ($1,'inward',5,'ZZT-IQC-SRC1')`, [fgRow]);
+    const oG2 = await mkOrder('ZZT-IQC-G2', 'finished_goods', true);
+    const oiG2 = await mkLine(oG2, 5, 'ZZTEST-DWG-SRC-1');
+    await putLine(oiG2, NUT, 10); await putLine(oiG2, FIN, 0);
+    r = await call('GET', `/api/orders/${oG2}/items/${oiG2}/fg-fins-length`);
+    ok('D2. the list editor learns the store heaters\' length: 508 mm from ZZT-IQC-SRC1', r.status === 200 && r.body.length_mm === 508 && r.body.card_no === 'ZZT-IQC-SRC1', JSON.stringify(r.body));
+    const G2 = (await q1(
+      `INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, drawing_no, is_fg, fg_source_id)
+       VALUES ('ZZT-IQC-G2-FG1',$1,$2,5,'in_progress',CURRENT_DATE,'ZZTEST-DWG-SRC-1',TRUE,$3) RETURNING id`, [oG2, oiG2, fgRow])).id;
+    s0 = await snap([NUT, FIN, WIRE, TUBE, TUBC]);
+    await tick(G2, [1, 2, 3]);
+    for (const st of [3, 4]) await applyMaterialDeductions(txDb, G2, st, true, uid);   // what a stage tick runs
+    ok('D2. stages on the finished-goods card take nothing by stage (its stage 4 is "Ready", not the coil stage)', !(await moved(s0)), await moved(s0));
+    r = await call('PUT', `/api/job-cards/${G2}/checklist/4`, { done: true });
+    c = await cardRow(G2);
+    ok('D2. its last stage (4) takes the list: 10 nuts, and fins by the store heaters\' length — 508 mm × 0.011 kg/50.8 mm × 5 = 0.55 kg — no coil, tube or filling',
+      r.status === 200 && near(await stock(NUT), s0[NUT] - 10) && near(await stock(FIN), s0[FIN] - 0.55) && c.fins_deducted === true && near(c.fins_kg, 0.55)
+      && c.coil_deducted === false && c.tube_deducted === false && c.fill_deducted === false && near(await stock(TUBE), s0[TUBE]) && near(await stock(TUBC), s0[TUBC]),
+      `${r.status} ${await moved(s0)} fins_kg ${c.fins_kg}`);
+    const finRow = await q1(`SELECT notes FROM inventory_transactions WHERE item_id=$1 AND job_card_id=$2`, [FIN, G2]);
+    ok('D2. the fins row says whose length it used', /508mm \(Stage 8\) of ZZT-IQC-SRC1, the heaters in the store/.test(finRow?.notes || ''), finRow?.notes);
 
     // ════ E. Split cards ════
     const oF = await mkOrder('ZZT-IQC-F');

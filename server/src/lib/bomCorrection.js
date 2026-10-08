@@ -70,7 +70,9 @@ async function applyBomCorrection(db, { orderItemId, sels, userId, userRole }) {
       'SELECT id, TRIM(category) AS category FROM inventory_items WHERE id = ANY($1)', [Object.keys(ledger.net).map(Number)])).map(r => [String(r.id), r.category])) : {};
     // Lines a correction never moves: fins (by tube length) on normal orders; on
     // finished-goods orders, everything that is not a prep part.
-    const frozen = (id, code, category) => (fgOrder ? !fgTakes(category) : FINS_CODES.includes(code));
+    // Fins on a finished-goods order go by the store heaters' tube length now
+    // (owner, 8 Oct 2026) — a list correction never moves them either.
+    const frozen = (id, code, category) => (fgOrder ? (!fgTakes(category) || FINS_CODES.includes(code)) : FINS_CODES.includes(code));
     // What the old lines already counted as settled without taking stock.
     const oldWaived = {}, oldQty = {};
     for (const l of oldLines) {

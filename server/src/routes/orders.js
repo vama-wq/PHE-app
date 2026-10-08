@@ -739,6 +739,21 @@ async function checkReworkPortions(db, sels, excludeItemId) {
   return null;
 }
 
+// Finished-goods line: the tube length its fins will go by — the job card that
+// put those heaters into the store (owner, 8 Oct 2026). null when none is on
+// record, and the list then asks for kg.
+router.get('/:id/items/:itemId/fg-fins-length', authenticate, async (req, res) => {
+  const db = getDB();
+  const item = await db.get(
+    `SELECT oi.id, oi.drawing_number, o.order_type FROM order_items oi JOIN orders o ON o.id = oi.order_id
+      WHERE oi.id=$1 AND oi.order_id=$2`, [req.params.itemId, req.params.id]);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  if (item.order_type !== 'finished_goods') return res.json({ length_mm: null });
+  const { fgSourceLengthForItem } = require('../lib/inventoryDeduction');
+  const len = await fgSourceLengthForItem(db, item);
+  res.json(len ? { length_mm: Math.round(len.lengthMm * 10) / 10, card_no: len.card_no, elements: len.elements } : { length_mm: null });
+});
+
 router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
   const db = getDB();
   const raw = (req.body.inventory_item_ids || []).filter(s => s && s.id);
