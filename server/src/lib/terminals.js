@@ -58,7 +58,10 @@ async function listTerminalLines(db, itemId, card, itemQty) {
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
       WHERE oii.order_item_id=$1 AND LOWER(TRIM(ii.category)) = LOWER($2)
       ORDER BY ii.item_code`, [itemId, TERMINAL_CATEGORY]);
-  return lines.map(l => ({ ...l, share: shareFor(l.qty, card?.qty, itemQty) }));
+  // rework_share: the card's share of the line's rework portion — what the slip
+  // prints as its REWORK row and what the shortage check counts as covered.
+  return lines.map(l => ({ ...l, share: shareFor(l.qty, card?.qty, itemQty),
+                           rework_share: shareFor(l.rework_qty || 0, card?.qty, itemQty) }));
 }
 
 // The card's rows with what the editor and the slip need to know about each pin.
@@ -166,8 +169,13 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
   // stock, so the pin reads short and the slip waits for an OK.
   const fromBin = (r) => {
     const l = lines.find(x => x.inventory_item_id === r.inventory_item_id);
-    const want = l ? Math.max(0, Number(l.rework_qty || 0) - Number(l.rework_deducted || 0)) : 0;
-    if (want > 0) return Math.min(Number(r.qty) || 0, want, Number(r.rework_bin) || 0);
+    // The list's rework covers this card's SHARE of it (the same figure the
+    // slip prints), never the whole line's portion — otherwise every card of
+    // a 360-pc order counted all 163 bin pins as its own (8 Oct 2026).
+    if (l && Number(l.rework_qty) > 0) {
+      const left = Math.max(0, Number(l.rework_qty || 0) - Number(l.rework_deducted || 0));
+      return Math.min(Number(r.qty) || 0, Number(l.rework_share) || 0, left, Number(r.rework_bin) || 0);
+    }
     const marked = Number(r.rework_qty) || 0;
     return marked > 0 ? Math.min(Number(r.qty) || 0, marked, Number(r.card_rework_free) || 0) : 0;
   };

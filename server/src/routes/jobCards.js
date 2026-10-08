@@ -476,7 +476,8 @@ function cardFromSpec(spec) {
 const terminalsPayload = (state, req) => ({
   rows: state.rows,
   list: state.lines.map(l => ({ inventory_item_id: l.inventory_item_id, item_code: l.item_code, name: l.name,
-    name_gu: l.name_gu, unit: l.unit, qty: Number(l.qty), rework_qty: Number(l.rework_qty) || 0, share: l.share })),
+    name_gu: l.name_gu, unit: l.unit, qty: Number(l.qty), rework_qty: Number(l.rework_qty) || 0, share: l.share,
+    rework_share: l.rework_share || 0, rework_deducted: Number(l.rework_deducted) || 0 })),
   short: state.short,
   short_at: state.short_at || null,
   ok: state.ok,

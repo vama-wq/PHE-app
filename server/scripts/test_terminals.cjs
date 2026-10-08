@@ -475,6 +475,22 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       r.status === 200 && (await bin(RW)) === 2 && near(await stock(RW), 0) && (await termRows(R1, RW)).length === 0,
       `${r.status} bin ${await bin(RW)} | ${await moved(s0)}`);
 
+    // ════ C3b. Two cards share the list's rework portion (8 Oct 2026) ════
+    // 10 RW on an item of 10, 4 of them from the bin; two cards of 5. Each card
+    // counts only ITS share of the 4 (2), not all 4 — the slip prints the same.
+    const oS = await mkOrder('ZZT-TS');
+    const oiS = await mkLine(oS, 10, 'ZZTEST-DWG-TS');
+    await putLine(oiS, RW, 10, 4); await putLine(oiS, NUT, 40);
+    const S1 = await mkCard(oS, oiS, 'ZZT-TS1', 5, { dwg: 'ZZTEST-DWG-TS' });
+    const S2 = await mkCard(oS, oiS, 'ZZT-TS2', 5, { dwg: 'ZZTEST-DWG-TS' });
+    const rS1 = await call('GET', terminals(S1));
+    const rS2 = await call('GET', terminals(S2));
+    ok('C3b. two cards of 5 sharing 4 bin pins: each counts 2 from the bin, so each is short by 3 (stock 0) — not 4 each',
+      rS1.body.rows?.[0]?.from_rework === 2 && rS1.body.short[0]?.need === 3 && rS2.body.rows?.[0]?.from_rework === 2 && rS2.body.short[0]?.need === 3
+      && rS1.body.list?.[0]?.rework_share === 2, JSON.stringify({ a: rS1.body.short, b: rS2.body.short, list: rS1.body.list }));
+    sl = await call('POST', slipOf(S1), {}, floor);
+    ok('C3b. the slip prints the same share as REWORK (2)', sl.body.terminals?.[0]?.rework_qty === 2 || sl.status === 409, `${sl.status} ${JSON.stringify(sl.body.terminals || sl.body)}`);
+
     // ════ C4. Marked from the rework bin in Change pins (owner, 8 Oct 2026) ════
     // 4 MK on an item of 2 (no rework on the list), one card of 2; stock 0.
     // MK's bin holds 10, but another open order's list has 9 of them reserved.
@@ -603,7 +619,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
 
     // ════ G. Nothing leaked past the stubs ════
     ok('G1. every WhatsApp copy recorded was a terminals_short alert for one of the test cards',
-      waCalls.every(w => w.type === 'terminals_short' && [B1, R1, M1, L1].includes(w.ref?.id)), JSON.stringify(waCalls.map(w => [w.type, w.ref?.id])));
+      waCalls.every(w => w.type === 'terminals_short' && [B1, R1, M1, L1, S1, S2].includes(w.ref?.id)), JSON.stringify(waCalls.map(w => [w.type, w.ref?.id])));
   } catch (e) {
     failed = true;
     console.error('ERROR', e);

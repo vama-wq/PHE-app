@@ -298,7 +298,7 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
                 const rwMark = parseInt(r.rework, 10);
                 const binCover = !Number.isInteger(q) ? 0
                   : listRw
-                    ? Math.min(q, Math.max(0, Number(listRw.rework_qty || 0) - Number(listRw.rework_deducted || 0)),
+                    ? Math.min(q, Number(listRw.rework_share || 0), Math.max(0, Number(listRw.rework_qty || 0) - Number(listRw.rework_deducted || 0)),
                                Number(rows.find(x => x.inventory_item_id === r.inventory_item_id)?.rework_bin ?? r.rework_free ?? 0))
                     : Number.isInteger(rwMark) && rwMark > 0 ? Math.min(q, rwMark, freeFor(r)) : 0;
                 const shortBy = Number.isInteger(q) && q - binCover > Number(r.current_stock) ? q - binCover - Number(r.current_stock) : 0;
@@ -350,7 +350,7 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
           {/* What the list says, for comparison — this is where the default came from. */}
           {!editing && data.list?.length > 0 && (
             <p className="text-[11px] text-gray-400">
-              On the item's list: {data.list.map(l => `${l.item_code} × ${fmtQty(l.qty)} (${l.share} for this card${Number(l.rework_qty) > 0 ? `, ${fmtQty(l.rework_qty)} from rework` : ''})`).join(' · ')}
+              On the item's list: {data.list.map(l => `${l.item_code} × ${fmtQty(l.qty)} (${l.share} for this card${Number(l.rework_qty) > 0 ? `, ${fmtQty(l.rework_qty)} from rework — ${fmtQty(l.rework_share)} of them this card's` : ''})`).join(' · ')}
             </p>
           )}
           {!editing && rows.some(r => r.source === 'design' && r.updated_by_name) && (
