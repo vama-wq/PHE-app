@@ -54,9 +54,9 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   const reworkMax = (i) => (Number(i.rework_free) || 0) + (Number(reworkOf[i.id]) || 0);
   const setQty = (id, qty) => setSelected(prev => ({ ...prev, [id]: qty }));
   const selectedList = inventoryItems.filter(i => i.id in selected && !isRegularPin(i));
-  // Fins need no qty — they deduct automatically by tube length at QC approval
-  // On a finished-goods order there is no tube length, so fins are typed in kg (owner, 2 Oct 2026).
-  const isFins = (i) => !fgOrder && (i?.category || '').trim().toLowerCase() === 'finns';
+  // Fins need no qty — they always go by tube length, on every order (owner,
+  // 9 Oct 2026); on a finished-goods order by the store heaters' job cards.
+  const isFins = (i) => (i?.category || '').trim().toLowerCase() === 'finns';
   const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
   // Every production BOM must include a terminal pin (finished-goods exempt —
   // fileOptional marks FG orders, where the heater is already built). Which pin
@@ -212,8 +212,8 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
                   <StockNote item={i} />
                   {isFins(i) ? (
                     <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 whitespace-nowrap"
-                      title="Deducts automatically from the tube length at QC approval">
-                      auto — by tube length
+                      title={fgOrder ? "By the tube length of the job cards the store heaters were made on, oldest first" : "Deducts automatically from the tube length when the card completes its last stage"}>
+                      {fgOrder ? "auto — by store heaters' length" : 'auto — by tube length'}
                     </span>
                   ) : (
                     <>

@@ -850,12 +850,9 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
   const [qcPhoto,      setQcPhoto]     = useState(null); // required image of approved material
   const [saving,       setSaving]      = useState(false);
   const [error,        setError]       = useState('');
-  const [bom,          setBom]         = useState(null); // inventory the item consumes
   const [fgLocation,   setFgLocation]  = useState('');   // storage location for FG intake
   const [locations,    setLocations]   = useState([]);
 
-  const loadBom = () => api.get(`/qc/${card.id}/bom`).then(r => setBom(r.data)).catch(() => setBom(null));
-  useEffect(() => { loadBom(); }, [card.id]);
   useEffect(() => { api.get('/finished-goods/locations').then(r => setLocations(r.data.filter(l => l.active))).catch(() => {}); }, []);
 
   // Every piece rejected in production: nothing to route, so no destination is
@@ -935,67 +932,8 @@ function ApproveDestinationModal({ card, onClose, onSaved }) {
           )}
         </div>
 
-        {/* Inventory (BOM) review — confirm or edit before approving */}
-        <div className="border border-gray-200 rounded-lg p-3">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
-              <Package size={14} className="text-brand-500" /> Inventory to consume
-            </span>
-            {/* No list editing from Product QC (owner, 7 Oct 2026): the item's
-                list is held once a card reaches QC, and what THIS card used is
-                corrected at Inventory QC next. The list is shown for reference. */}
-          </div>
-          {/* Finished-goods cards: only the prep parts are taken (owner,
-              2 Oct 2026) — at the card's last stage since 6 Oct 2026;
-              everything else on the list is inside the heater. */}
-          {bom?.fg_build_only?.length > 0 && (
-            <div className="text-xs rounded-lg px-3 py-2 mb-2 bg-sky-50 border border-sky-200 text-sky-900">
-              <b>Finished-goods card.</b> Only the parts fitted while preparing it are taken from stock —
-              wire, lugs, fins, thermostats, nuts and washers, heavy terminal nut/washer/pin and brackets.
-              These lines are already inside the heater and will <b>not</b> be taken:
-              <ul className="mt-1 ml-4 list-disc">
-                {bom.fg_build_only.map(i => (
-                  <li key={i.item_code}>{i.item_code} · {i.category} · qty {i.qty}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {!bom ? (
-            <p className="text-xs text-gray-400">Loading inventory…</p>
-          ) : bom.inventory_items.length === 0 ? (
-            <p className="text-xs text-orange-600">No inventory list on this item — design adds it on the order; this card's takes are reviewed at Inventory QC.</p>
-          ) : (
-            <ul className="space-y-1">
-              {bom.inventory_items.map(i => (
-                <li key={i.id} className="flex justify-between text-xs text-gray-700">
-                  <span><span className="font-mono">{i.item_code}</span> — {i.name}</span>
-                  <span className="font-medium">
-                    {(i.category || '').trim().toLowerCase() === 'finns' ? (
-                      <span className="text-emerald-700" title="Taken by tube length × card qty when the card completes its last stage">auto — by tube length</span>
-                    ) : (
-                      <>
-                        {i.qty} {i.unit}
-                        {Number(i.qty_deducted) > 0 && Number(i.qty_deducted) < Number(i.qty) && (
-                          <span className="text-gray-400 font-normal"> ({i.qty_deducted} taken so far)</span>
-                        )}
-                      </>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {bom && bom.inventory_items.length > 0 && (
-            <p className="text-[11px] mt-2 pt-2 border-t border-gray-100 text-gray-500">
-              {/* Product QC → Inventory QC → Dispatch (owner, 6 Oct 2026): the
-                  list is taken at the stages and the card's last stage, and QC
-                  corrects what really left stock at Inventory QC — not here. */}
-              {bom.deducted
-                ? '✓ Inventory already deducted for this item.'
-                : 'The rest of the list is taken when the card completes its last stage. Every quantity is reviewed at Inventory QC next — take more, give back, rework and scrap are entered there.'}
-            </p>
-          )}
-        </div>
+        {/* No "Inventory to consume" here any more (owner, 9 Oct 2026): it is
+            redundant — what the card took is reviewed at Inventory QC next. */}
 
         {dnRepair && !allRejected && (
           <div className="rounded-lg px-3 py-2 text-sm bg-sky-50 border border-sky-200 text-sky-900">

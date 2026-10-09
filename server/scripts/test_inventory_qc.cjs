@@ -55,6 +55,11 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
   upload.deleteFromStorage = async () => {};
   upload.copyInStorage = async () => {};
   upload.uploadChecklistPhoto = [(req, res, next) => { req.file = { storagePath: 'test/qc.jpg', filename: 'qc.jpg', originalname: 'qc.jpg' }; next(); }];
+  // The finished-goods job card file: nothing stored either.
+  upload.uploadJobCard = [(req, res, next) => { req.file = { storagePath: 'test/jc.pdf', filename: 'jc.pdf', originalname: 'jc.pdf' }; next(); }];
+  // No WhatsApp copy of any alert leaves the test (the fins alert below).
+  const wa = require(S + '/src/lib/whatsapp.js');
+  wa.queueWhatsApp = async () => {};
 
   const ded = require(S + '/src/lib/inventoryDeduction.js');
   // A made-up fins code (0.011 kg per 50.8 mm, as FIN-MS-08), so no real fins
@@ -401,8 +406,9 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     c = await cardRow(D1);
     ok('D1. finished-goods card ticks stage 4 (Ready for Dispatch): to Product QC, last-stage take stamped',
       r.status === 200 && c.status === 'qc_pending' && !!c.last_stage_taken_at, `${r.status} ${JSON.stringify(r.body)}`);
-    ok('D1. only the prep parts are taken: 10 nuts, fins 0.5 kg by the kg on the list; the terminal pins are inside the heater already',
-      near(await stock(NUT), s0[NUT] - 10) && near(await stock(FIN), s0[FIN] - 0.5) && near(await stock(PIN), s0[PIN]) && !c.fins_deducted, await moved(s0));
+    ok('D1. only the prep parts are taken: 10 nuts; fins are NEVER taken by the kg on the list (owner, 9 Oct 2026) — this card has no store row, so none, and it is flagged; the terminal pins are inside the heater already',
+      near(await stock(NUT), s0[NUT] - 10) && near(await stock(FIN), s0[FIN]) && near(await stock(PIN), s0[PIN]) && !c.fins_deducted
+      && (await qa(`SELECT 1 FROM activity_log WHERE job_card_id=$1 AND activity_type='fins_no_length'`, [D1])).length === 1, await moved(s0));
 
     // ════ D2. Finished goods: fins by the store heaters' tube length; nothing by stage (owner, 8 Oct 2026) ════
     // The heaters in the store were made on ZZT-IQC-SRC1 (stage 8: 508 mm). A
@@ -435,7 +441,80 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       && c.coil_deducted === false && c.tube_deducted === false && c.fill_deducted === false && near(await stock(TUBE), s0[TUBE]) && near(await stock(TUBC), s0[TUBC]),
       `${r.status} ${await moved(s0)} fins_kg ${c.fins_kg}`);
     const finRow = await q1(`SELECT notes FROM inventory_transactions WHERE item_id=$1 AND job_card_id=$2`, [FIN, G2]);
-    ok('D2. the fins row says whose length it used', /508mm \(Stage 8\) of ZZT-IQC-SRC1, the heaters in the store/.test(finRow?.notes || ''), finRow?.notes);
+    ok('D2. the fins row says whose length it used', /store heaters' tube length, oldest first: 5 pcs × 508mm \(ZZT-IQC-SRC1\)/.test(finRow?.notes || ''), finRow?.notes);
+
+    // ════ D3. Finished goods first in, first out (owner, 9 Oct 2026) ════
+    // A store row with: 4 from ZZT-IQC-FA (508 mm), 3 by hand, 5 from
+    // ZZT-IQC-FB (1016 mm), then 2 gone out. Nothing is picked: the card takes
+    // the oldest pieces, and its fins go by each intake's length (the hand
+    // entry: the average, 762 mm).
+    const oFA = await mkOrder('ZZT-IQC-FA', 'inventory_order');
+    const oiFA = await mkLine(oFA, 9, 'ZZTEST-DWG-FIFO');
+    const FA = await mkCard(oFA, oiFA, 'ZZT-IQC-FA', 4, { status: 'qc_approved', dwg: 'ZZTEST-DWG-FIFO' });
+    const FB = await mkCard(oFA, oiFA, 'ZZT-IQC-FB', 5, { status: 'qc_approved', dwg: 'ZZTEST-DWG-FIFO' });
+    await tick(FA, [8], { value1: { 8: '508' } });
+    await tick(FB, [8], { value1: { 8: '1016' } });
+    const fgF = (await q1(
+      `INSERT INTO finished_goods (job_card_id, order_id, drawing_no, base_drawing_no, qty_in, qty_available)
+       VALUES ($1,$2,'ZZTEST-DWG-FIFO','ZZTEST-DWG-FIFO',12,10) RETURNING id`, [FA, oFA])).id;
+    await client.query(`INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, job_card_no, order_code) VALUES ($1,'inward',4,'ZZT-IQC-FA','ZZT-IQC-FA')`, [fgF]);
+    await client.query(`INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, notes) VALUES ($1,'inward',3,'Manual entry')`, [fgF]);
+    await client.query(`INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, job_card_no, order_code) VALUES ($1,'inward',5,'ZZT-IQC-FB','ZZT-IQC-FA')`, [fgF]);
+    await client.query(`INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, outward_type, client_name) VALUES ($1,'outward',2,'sampling','ZZTEST')`, [fgF]);
+    const oG3 = await mkOrder('ZZT-IQC-G3', 'finished_goods', true);
+    const oiG3 = await mkLine(oG3, 6, 'ZZTEST-DWG-FIFO-Finns');      // the store's drawing + a word
+    await putLine(oiG3, NUT, 12); await putLine(oiG3, FIN, 0);
+    r = await call('GET', `/api/orders/${oG3}/items/${oiG3}/fg-plan?qty=6`);
+    const pl = r.body.parts || [];
+    ok('D3. the plan for 6: the store row found by its drawing ("-Finns" after it), oldest first — 2 left of FA (508 mm), the 3 by hand (average 762 mm), 1 of FB (1016 mm)',
+      r.status === 200 && r.body.store?.id === fgF && r.body.store.qty_available === 10 && pl.length === 3
+      && pl[0].job_card_no === 'ZZT-IQC-FA' && pl[0].qty === 2 && pl[0].mm === 508
+      && pl[1].hand === true && pl[1].qty === 3 && pl[1].mm === 762 && pl[1].mm_from === 'average'
+      && pl[2].job_card_no === 'ZZT-IQC-FB' && pl[2].qty === 1 && pl[2].mm === 1016 && r.body.short === 0, JSON.stringify(r.body));
+    r = await call('POST', '/api/job-cards/fg', { order_id: oG3, order_item_id: oiG3, qty: 6, dispatch_date: '2026-10-20' });
+    const G3 = r.body.id;
+    c = G3 ? await cardRow(G3) : {};
+    const fb = typeof c.fg_batches === 'string' ? JSON.parse(c.fg_batches) : c.fg_batches;
+    ok('D3. the card is made with nothing picked: it remembers FA 2, hand 3, FB 1; the store row goes 10 → 4',
+      r.status === 201 && c.fg_source_id === fgF && Array.isArray(fb) && fb.length === 3 && fb[0].job_card_no === 'ZZT-IQC-FA' && fb[0].qty === 2
+      && fb[1].job_card_no === null && fb[1].qty === 3 && fb[2].job_card_no === 'ZZT-IQC-FB' && fb[2].qty === 1
+      && Number((await q1('SELECT qty_available FROM finished_goods WHERE id=$1', [fgF])).qty_available) === 4, `${r.status} ${JSON.stringify(r.body)} ${JSON.stringify(fb)}`);
+    await tick(G3, [1, 2, 3]);
+    s0 = await snap([NUT, FIN]);
+    r = await call('PUT', `/api/job-cards/${G3}/checklist/4`, { done: true });
+    c = await cardRow(G3);
+    ok('D3. its last stage takes the fins by each intake: (2 × 508 + 3 × 762 + 1 × 1016) mm ÷ 50.8 × 0.011 kg = 0.935 kg, and the 12 nuts',
+      r.status === 200 && near(await stock(FIN), s0[FIN] - 0.935) && near(await stock(NUT), s0[NUT] - 12) && c.fins_deducted === true && near(c.fins_kg, 0.935),
+      `${r.status} ${await moved(s0)} fins_kg ${c.fins_kg}`);
+    const oG4 = await mkOrder('ZZT-IQC-G4', 'finished_goods', true);
+    const oiG4 = await mkLine(oG4, 4, 'ZZTEST-DWG-FIFO');
+    await putLine(oiG4, NUT, 8);
+    r = await call('POST', '/api/job-cards/fg', { order_id: oG4, order_item_id: oiG4, qty: 4, dispatch_date: '2026-10-20' });
+    c = r.body.id ? await cardRow(r.body.id) : {};
+    const fb4 = typeof c.fg_batches === 'string' ? JSON.parse(c.fg_batches) : c.fg_batches;
+    ok('D3. the next card gets the next pieces: the 4 left of FB; the row is empty', r.status === 201 && fb4?.length === 1 && fb4[0].job_card_no === 'ZZT-IQC-FB' && fb4[0].qty === 4
+      && Number((await q1('SELECT qty_available FROM finished_goods WHERE id=$1', [fgF])).qty_available) === 0, `${r.status} ${JSON.stringify(r.body)} ${JSON.stringify(fb4)}`);
+    const oG5 = await mkOrder('ZZT-IQC-G5', 'finished_goods', true);
+    const oiG5 = await mkLine(oG5, 1, 'ZZTEST-DWG-FIFO');
+    await putLine(oiG5, NUT, 2);
+    r = await call('POST', '/api/job-cards/fg', { order_id: oG5, order_item_id: oiG5, qty: 1, dispatch_date: '2026-10-20' });
+    ok('D3. none left: refused', r.status === 400 && /Insufficient Finished Goods stock/.test(r.body.error || ''), JSON.stringify(r.body));
+    // A row made only by hand: no job card length anywhere — nothing guessed, flagged.
+    const fgH = (await q1(
+      `INSERT INTO finished_goods (drawing_no, base_drawing_no, qty_in, qty_available) VALUES ('ZZTEST-DWG-HAND','ZZTEST-DWG-HAND',3,3) RETURNING id`)).id;
+    await client.query(`INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, notes) VALUES ($1,'inward',3,'Manual entry')`, [fgH]);
+    const oG6 = await mkOrder('ZZT-IQC-G6', 'finished_goods', true);
+    const oiG6 = await mkLine(oG6, 2, 'ZZTEST-DWG-HAND');
+    await putLine(oiG6, NUT, 4); await putLine(oiG6, FIN, 0);
+    r = await call('POST', '/api/job-cards/fg', { order_id: oG6, order_item_id: oiG6, qty: 2, dispatch_date: '2026-10-20' });
+    const G6 = r.body.id;
+    await tick(G6, [1, 2, 3]);
+    s0 = await snap([NUT, FIN]);
+    r = await call('PUT', `/api/job-cards/${G6}/checklist/4`, { done: true });
+    c = await cardRow(G6);
+    ok('D3. heaters only ever entered by hand: the nuts are taken, the fins are not (no length to go by) and it is flagged for the owner and Design / QC',
+      r.status === 200 && near(await stock(NUT), s0[NUT] - 4) && near(await stock(FIN), s0[FIN]) && !c.fins_deducted
+      && (await qa(`SELECT 1 FROM activity_log WHERE job_card_id=$1 AND activity_type='fins_no_length'`, [G6])).length === 1, `${r.status} ${await moved(s0)}`);
 
     // ════ E. Split cards ════
     const oF = await mkOrder('ZZT-IQC-F');

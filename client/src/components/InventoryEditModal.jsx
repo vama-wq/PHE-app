@@ -51,10 +51,10 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
   const reworkMax = (i) => (Number(i.rework_free) || 0) + (Number((item?.inventory_items || []).find(x => x.id === i.id)?.rework_qty) || 0);
   const setQty = (id, qty) => setSelected(prev => ({ ...prev, [id]: qty }));
   const selectedList = inventoryItems.filter(i => i.id in selected && !isRegularPin(i));
-  // Fins need no qty — they deduct automatically by tube length at QC approval
-  // On a finished-goods order they go by the store heaters' length when one is on
-  // record (owner, 8 Oct 2026); otherwise typed in kg (owner, 2 Oct 2026).
-  const isFins = (i) => (!fgOrder || !!fgLength) && (i?.category || '').trim().toLowerCase() === 'finns';
+  // Fins need no qty — they always go by tube length, on every order (owner,
+  // 9 Oct 2026): on a finished-goods order, by the length of the job cards the
+  // store heaters were made on, oldest first. Never typed in kg.
+  const isFins = (i) => (i?.category || '').trim().toLowerCase() === 'finns';
   const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
 
   // A blank Qty with a number in the rework box means the whole line comes
@@ -141,8 +141,8 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
                 <StockNote item={i} />
                 {isFins(i) ? (
                   <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 whitespace-nowrap"
-                    title={fgOrder && fgLength ? `By the tube length of ${fgLength.card_no}, the job card that put these heaters into the store` : 'Deducts automatically from the tube length when the card completes its last stage'}>
-                    {fgOrder && fgLength ? `auto — by store heaters' length (${fgLength.length_mm} mm)` : 'auto — by tube length'}
+                    title={fgOrder ? 'By the tube length of the job cards the store heaters were made on, oldest first (a hand entry: their average)' : 'Deducts automatically from the tube length when the card completes its last stage'}>
+                    {fgOrder ? `auto — by store heaters' length${fgLength ? ` (${fgLength.length_mm} mm)` : ''}` : 'auto — by tube length'}
                   </span>
                 ) : (
                   <>

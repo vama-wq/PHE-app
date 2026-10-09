@@ -812,6 +812,30 @@ router.get('/:id/items/:itemId/fg-fins-length', authenticate, async (req, res) =
   res.json(len ? { length_mm: Math.round(len.lengthMm * 10) / 10, card_no: len.card_no, elements: len.elements } : { length_mm: null });
 });
 
+// Finished goods (owner, 9 Oct 2026): what a new card for this item would take
+// from the store — the row for its drawing, oldest intake first — and the tube
+// length per heater its fins would go by (a hand entry: the row's average).
+router.get('/:id/items/:itemId/fg-plan', authenticate, async (req, res) => {
+  const db = getDB();
+  const item = await db.get(
+    `SELECT oi.id, oi.drawing_number, o.order_type FROM order_items oi JOIN orders o ON o.id = oi.order_id
+      WHERE oi.id=$1 AND oi.order_id=$2`, [req.params.itemId, req.params.id]);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  if (item.order_type !== 'finished_goods') return res.json({ store: null, parts: [], short: 0 });
+  const fgFifo = require('../lib/fgFifo');
+  const fg = await fgFifo.storeRowFor(db, item);
+  if (!fg) return res.json({ store: null, parts: [], short: 0 });
+  const qty = Math.max(0, parseInt(req.query.qty, 10) || 0);
+  const { parts, short } = fgFifo.allocate(await fgFifo.batchesLeft(db, fg.id), qty);
+  const { byCard, avg } = await fgFifo.intakeLengths(db, fg.id);
+  res.json({
+    store: { id: fg.id, drawing: fg.base_drawing_no || fg.drawing_no, qty_available: Number(fg.qty_available) || 0 },
+    parts: parts.map(p => ({ ...p, hand: !p.job_card_no, mm: (p.job_card_no && byCard.get(p.job_card_no)) || avg || null,
+                             mm_from: p.job_card_no && byCard.get(p.job_card_no) ? 'card' : avg ? 'average' : null })),
+    short, average_mm: avg,
+  });
+});
+
 router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
   const db = getDB();
   const raw = (req.body.inventory_item_ids || []).filter(s => s && s.id);

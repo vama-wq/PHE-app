@@ -2340,13 +2340,14 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
 }
 
 // ── FG inventory job card creation ──────────────────────────────────────────
-// Admin picks which Finished Goods stock the item's material comes from; the
-// stock deducts immediately (blocked if short) and the card enters production
-// with the short 4-stage checklist.
+// The heaters come from the store row for the item's drawing, OLDEST intake
+// first (owner, 9 Oct 2026: "no selecting anymore — just take out as FIFO"):
+// nothing to pick. The form shows which intakes the card will take and the tube
+// length its fins will go by. The stock deducts immediately (blocked if short)
+// and the card enters production with the short 4-stage checklist.
 function FgJobCardModal({ order, item, onClose, onSaved }) {
   const { user } = useAuthStore();
-  const [fgStock, setFgStock] = useState(null);
-  const [sourceId, setSourceId] = useState('');
+  const [plan, setPlan] = useState(null);
   const [qty, setQty] = useState(item.quantity || '');
   const [dispatchDate, setDispatchDate] = useState(order.dispatch_date ? order.dispatch_date.slice(0, 10) : '');
   const [notes, setNotes] = useState('');
@@ -2354,31 +2355,24 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const baseDrawing = (item.drawing_number || '').trim().replace(/-\d+$/, '').toUpperCase();
-
   useEffect(() => {
-    api.get('/finished-goods').then(r => {
-      const rows = (r.data || []).filter(f => Number(f.qty_available) > 0);
-      setFgStock(rows);
-      // Exact drawing first; else the longest store drawing the item's name
-      // starts with ("PT-UType-10U-500W-Finns" → PT-UType-10U-500W, 9 Oct 2026).
-      const name = (item.drawing_number || '').trim().toUpperCase();
-      const match = rows.find(f => (f.base_drawing_no || '').toUpperCase() === baseDrawing)
-        || rows.filter(f => { const b = (f.base_drawing_no || '').trim().toUpperCase(); return b && (name.startsWith(`${b}-`) || name.startsWith(`${b} `)); })
-          .sort((a, b) => (b.base_drawing_no || '').trim().length - (a.base_drawing_no || '').trim().length)[0];
-      if (match) setSourceId(String(match.id));
-    }).catch(() => setFgStock([]));
-  }, []);
+    const n = parseInt(qty, 10) || 0;
+    const t = setTimeout(() => {
+      api.get(`/orders/${order.id}/items/${item.id}/fg-plan`, { params: { qty: n } })
+        .then(r => setPlan(r.data)).catch(() => setPlan({ store: null, parts: [], short: 0 }));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [qty, order.id, item.id]);
 
-  const chosen = (fgStock || []).find(f => String(f.id) === String(sourceId));
-  const short = chosen && parseInt(qty, 10) > Number(chosen.qty_available);
+  const store = plan?.store || null;
+  const short = !!store && parseInt(qty, 10) > Number(store.qty_available);
 
   const submit = async (e) => {
     e.preventDefault();
     setError('');
-    if (!sourceId) return setError('Select the Finished Goods stock to draw from.');
+    if (!store) return setError(`No Finished Goods stock found for ${item.drawing_number || 'this item'}.`);
     if (!(parseInt(qty, 10) > 0)) return setError('Enter a valid quantity.');
-    if (short) return setError(`Only ${chosen.qty_available} available in stock.`);
+    if (short) return setError(`Only ${store.qty_available} available in stock.`);
     if (!dispatchDate) return setError('Dispatch date is required.');
     if (!file) return setError('Upload the job card file.');
     setSaving(true);
@@ -2388,7 +2382,6 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
       fd.append('file', file);
       fd.append('order_id', order.id);
       fd.append('order_item_id', item.id);
-      fd.append('fg_source_id', parseInt(sourceId));
       fd.append('qty', parseInt(qty, 10));
       fd.append('dispatch_date', dispatchDate);
       if (notes) fd.append('notes', notes);
@@ -2413,30 +2406,42 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
     <Modal open title={`Inventory Job Card — ${item.drawing_number || 'Item'}`} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <p className="text-sm text-gray-500">
-          Select which Finished Goods stock this item's material comes from. The stock deducts immediately and the card runs the 4-stage checklist (Nut Washer → HV+Light+Ohms → Megger → Ready) before QC.
+          The heaters come out of the Finished Goods store for this drawing, oldest first. The stock deducts immediately and the card runs the 4-stage checklist (Nut Washer → HV+Light+Ohms → Megger → Ready) before QC.
         </p>
         <div>
-          <label className="label">Finished Goods stock <span className="text-red-500">*</span></label>
-          {!fgStock ? (
+          <label className="label">From the store</label>
+          {!plan ? (
             <p className="text-sm text-gray-400">Loading stock…</p>
-          ) : fgStock.length === 0 ? (
-            <p className="text-sm text-amber-600">No Finished Goods stock available.</p>
+          ) : !store ? (
+            <p className="text-sm text-amber-600">No Finished Goods stock found for {item.drawing_number || 'this item'}.</p>
           ) : (
-            <select className="input" value={sourceId} onChange={e => setSourceId(e.target.value)} required>
-              <option value="">— select stock —</option>
-              {fgStock.map(f => (
-                <option key={f.id} value={f.id}>
-                  {f.base_drawing_no || f.drawing_no} (avail: {f.qty_available}{f.location ? ` · ${f.location}` : ''})
-                </option>
-              ))}
-            </select>
+            <div className="rounded-lg border border-gray-200 overflow-hidden">
+              <div className="px-3 py-2 bg-gray-50 text-sm flex justify-between">
+                <span className="font-mono font-semibold">{store.drawing}</span>
+                <span className="text-gray-500">{store.qty_available} in store</span>
+              </div>
+              {(plan.parts || []).length > 0 && (
+                <table className="w-full text-xs">
+                  <thead><tr className="text-gray-400 text-left"><th className="px-3 py-1 font-medium">Oldest first — made on</th><th className="px-3 py-1 font-medium text-right">Pcs</th><th className="px-3 py-1 font-medium text-right">Tube length for fins</th></tr></thead>
+                  <tbody>
+                    {plan.parts.map(p => (
+                      <tr key={p.log_id} className="border-t border-gray-100">
+                        <td className="px-3 py-1">{p.job_card_no ? <><span className="font-mono">{p.job_card_no}</span>{p.order_code ? <span className="text-gray-400"> · {p.order_code}</span> : null}</> : <span className="text-gray-500">Hand entry</span>}</td>
+                        <td className="px-3 py-1 text-right tabular-nums">{p.qty}</td>
+                        <td className="px-3 py-1 text-right tabular-nums">{p.mm ? `${p.mm} mm${p.mm_from === 'average' ? ' (average)' : ''}` : <span className="text-amber-700">none on record</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           )}
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="label">Qty <span className="text-red-500">*</span></label>
             <input className="input" type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} required />
-            {short && <p className="text-xs text-red-600 mt-1">Only {chosen.qty_available} available — cannot draw more.</p>}
+            {short && <p className="text-xs text-red-600 mt-1">Only {store.qty_available} available — cannot draw more.</p>}
           </div>
           <div>
             <label className="label">Dispatch Date <span className="text-red-500">*</span></label>
@@ -2459,7 +2464,7 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
         {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
         <div className="flex gap-3 pt-1">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn-primary flex-1" disabled={saving || short || !file}>
+          <button type="submit" className="btn-primary flex-1" disabled={saving || short || !file || !store}>
             {saving ? 'Creating…' : 'Create & Deduct Stock'}
           </button>
         </div>

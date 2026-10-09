@@ -264,25 +264,18 @@ async function fgSourceLength(db, fgCard) {
 // / "-Plain" on ORD-162-26 (9 Oct 2026) — so when nothing matches exactly, the
 // longest store drawing the item's name starts with is the one.
 async function fgSourceLengthForItem(db, item) {
-  const name = String(item?.drawing_number || '').trim();
-  const base = name.replace(/-\d+$/, '');
-  if (!base) return null;
-  const fg = await db.get(
-    `SELECT * FROM finished_goods WHERE LOWER(TRIM(base_drawing_no)) = LOWER($1)
-      ORDER BY (qty_available > 0) DESC, id DESC LIMIT 1`, [base])
-    || await db.get(
-    `SELECT * FROM finished_goods
-      WHERE LENGTH(TRIM(COALESCE(base_drawing_no,''))) > 0
-        AND LEFT(LOWER($1), LENGTH(TRIM(base_drawing_no)) + 1) IN (LOWER(TRIM(base_drawing_no)) || '-', LOWER(TRIM(base_drawing_no)) || ' ')
-      ORDER BY LENGTH(TRIM(base_drawing_no)) DESC, (qty_available > 0) DESC, id DESC LIMIT 1`, [name]);
-  return fgStoreLength(db, fg);
+  const { storeRowFor } = require('./fgFifo');
+  return fgStoreLength(db, await storeRowFor(db, item));
 }
 
 // opts.length: a length worked out elsewhere — a finished-goods card's store
 // heaters (fgSourceLength). Without it a finished-goods card takes no fins here.
-async function deductFinsByLength(db, jc, userId, { qty = null, length = null } = {}) {
+// opts.parts (finished goods, owner 9 Oct 2026): [{ qty, mm, from }] — the
+// pieces of each store intake the card took, first in first out, with that
+// intake's job card tube length per heater (lib/fgFifo.js finsParts).
+async function deductFinsByLength(db, jc, userId, { qty = null, length = null, parts = null } = {}) {
   if (!jc) return;
-  if (jc.is_fg && !length) return; // FG inventory cards have no Draw stage of their own
+  if (jc.is_fg && !length && !parts) return; // FG inventory cards have no Draw stage of their own
   // Once per card. Nothing used to stop this running again on a second QC
   // cycle, and a rejection that returns work to stage 29 settles too — so a
   // card could draw fin strip several times over, uncapped, including for
@@ -309,6 +302,42 @@ async function deductFinsByLength(db, jc, userId, { qty = null, length = null } 
     [itemId, FINS_CODES]
   );
   if (!sels.length) return;
+
+  if (parts) {
+    // Finished goods: each intake's pieces by its own job card's length.
+    const o = await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]);
+    const orderCode = o?.order_code || `Order #${jc.order_id}`;
+    const usable = parts.filter(p => p.mm > 0 && p.mm <= 20000 && p.qty > 0);
+    // No store row at all (an older card made without one): all its pieces.
+    const noLength = parts.length ? parts.filter(p => !(p.mm > 0 && p.mm <= 20000)).reduce((a, p) => a + (Number(p.qty) || 0), 0) : approved;
+    let totalKg = 0;
+    for (const sel of sels) {
+      const perBase = FINS_WEIGHT_PER_BASE[sel.item_code];
+      const kgs = Math.round(usable.reduce((a, p) => a + (p.mm / FINS_MM_BASE) * perBase * p.qty, 0) * 1000) / 1000;
+      if (!(kgs > 0)) continue;
+      const how = usable.map(p => `${p.qty} pcs × ${p.mm}mm (${p.from}${p.hand ? ', hand entry' : ''})`).join(' + ');
+      const noteParts = [`Order: ${orderCode}`];
+      if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
+      noteParts.push(`Fins by the store heaters' tube length, oldest first: ${how} × ${perBase}kg/${FINS_MM_BASE}mm = ${kgs}kg (JC ${jc.job_card_no})`);
+      await deductLine(db, sel, kgs, noteParts.join(' | '), userId, { jobCardId: jc.id });
+      totalKg += kgs;
+    }
+    if (noLength > 0) {
+      // No job card length anywhere for these heaters: nothing is guessed.
+      const text = `Fins not taken for ${noLength} pcs of ${jc.job_card_no}: the store heaters they came from have no job card with a tube length — tell Claude the length`;
+      await db.run(`INSERT INTO activity_log (order_id, job_card_id, activity_type, description, created_by) VALUES ($1,$2,'fins_no_length',$3,$4)`,
+        [jc.order_id, jc.id, text, userId || null]);
+      try {
+        const { notifyRole } = require('../routes/notifications');
+        for (const role of ['owner', 'design']) {
+          await notifyRole(db, role, { type: 'fins_no_length', title: `Fins not taken — ${jc.job_card_no}`, body: text,
+            link: `/job-cards/${jc.id}`, ref: { type: 'fins_no_length', id: jc.id } });
+        }
+      } catch (e) { console.error('[fins] could not notify:', e.message); }
+    }
+    if (totalKg > 0) await db.run('UPDATE job_cards SET fins_deducted=TRUE, fins_kg=$1 WHERE id=$2', [totalKg, jc.id]);
+    return;
+  }
 
   // The card's own finished length (cardFinsLength), or the store heaters' for a
   // finished-goods card. The >20m guard below stays as a second net.
@@ -374,7 +403,9 @@ async function deductItemInventory(db, itemId, orderCode, userId, reasonNote = '
       if (rest > 1e-4) await db.run('UPDATE order_item_inventory SET qty_waived = COALESCE(qty_waived,0) + $1 WHERE id=$2', [rest, sel.id]);
       continue;
     }
-    if (!fgOrder && FINS_CODES.includes(sel.item_code)) continue; // length-based, handled separately
+    // Fins go by length on every order — never by a kg on the list, finished
+    // goods included (owner, 9 Oct 2026).
+    if (FINS_CODES.includes(sel.item_code)) continue; // length-based, handled separately
     const remaining = parseFloat(sel.qty || 0) - parseFloat(sel.qty_deducted || 0) - parseFloat(sel.qty_waived || 0);
     if (remaining <= 1e-4) continue; // rounding dust is not a take
     if (holdCounted && isCountedItem(sel.item_code)) {

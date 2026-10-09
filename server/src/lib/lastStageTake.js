@@ -14,7 +14,8 @@
 // was taken, and the whole take runs in one transaction with the card locked,
 // so a double tick or a retry can never take twice.
 
-const { STAGE_CATEGORY_MAP, STAGE_LABEL, FINS_CODES, fgTakes, deductLine, deductFinsByLength, resolveJobCardItemId, fgSourceLength } = require('./inventoryDeduction');
+const { STAGE_CATEGORY_MAP, STAGE_LABEL, FINS_CODES, fgTakes, deductLine, deductFinsByLength, resolveJobCardItemId } = require('./inventoryDeduction');
+const { finsParts } = require('./fgFifo');
 const { clientDb } = require('./bomCorrection');
 const { isPieceUnit } = require('./rework');
 const { isTerminalCategory, takeTerminalRows } = require('./terminals');
@@ -99,15 +100,13 @@ async function runTake(tx, jobCardId, userId) {
   }
 
   let finsLines = false;
-  // Finished goods: fins go by the tube length of the heaters in the store
-  // (owner, 8 Oct 2026); when none is on record, the kg on the list as before.
-  const fgLength = fgOrder && lines.some(l => FINS_CODES.includes(l.item_code)) ? await fgSourceLength(tx, card) : null;
   for (const line of lines) {
     if (fgOrder) {
       // Finished goods: only what is on its list that is fitted while preparing
-      // it; the rest is inside the heater.
+      // it; the rest is inside the heater. Fins ALWAYS by length (owner, 9 Oct
+      // 2026): the job cards the pieces came from, oldest intake first.
       if (!fgTakes(line.category)) continue;
-      if (fgLength && FINS_CODES.includes(line.item_code)) { finsLines = true; continue; }   // by length, below
+      if (FINS_CODES.includes(line.item_code)) { finsLines = true; continue; }   // by length, below
     } else {
       if (FINS_CODES.includes(line.item_code)) { finsLines = true; continue; } // by tube length, below
       if (terminalsByRows && isTerminalCategory(line.category)) continue;      // taken by the card's rows, above
@@ -129,8 +128,9 @@ async function runTake(tx, jobCardId, userId) {
     taken.push({ inventory_item_id: line.inventory_item_id, item_code: line.item_code, qty: ded, unit: line.unit || '' });
   }
 
-  // Fins by the job card's length, for the card's full quantity.
-  if (finsLines) await deductFinsByLength(tx, card, userId, { qty: cardQty, length: fgLength });
+  // Fins by the job card's length, for the card's full quantity — on a
+  // finished-goods card, by the length of each store intake its pieces came from.
+  if (finsLines) await deductFinsByLength(tx, card, userId, fgOrder ? { qty: cardQty, parts: await finsParts(tx, card) } : { qty: cardQty });
 
   await stamp();
   return { taken };

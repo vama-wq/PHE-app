@@ -2389,6 +2389,10 @@ async function initDB(retries = 20, delayMs = 10000) {
       // query it replaces, the query names the order.
       await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS replacement_query_id INTEGER`);
       await pool.query(`ALTER TABLE customer_queries ADD COLUMN IF NOT EXISTS replacement_order_id INTEGER`);
+    // Finished goods first in, first out (owner, 9 Oct 2026): which store
+    // intakes a finished-goods card's pieces came from — [{ log_id, job_card_no,
+    // order_code, qty }] — so its fins go by those job cards' tube lengths.
+    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fg_batches JSONB`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
