@@ -244,6 +244,36 @@ export default function OrderDetail() {
         </div>
       )}
 
+      {/* Made wrongly in production → replacement order (owner, 9 Oct 2026) */}
+      {order.replacement_of_order_id && (
+        <div className="mb-5 bg-blue-50 border border-blue-200 rounded-xl px-5 py-3 text-sm text-blue-900">
+          Replacement for <Link to={`/orders/${order.replacement_of_order_id}`} className="font-semibold underline">{order.replacement_of_code || 'the earlier order'}</Link>, made wrongly in production.
+          Its job cards end in -RPL; the invoice is needed to dispatch, as for any order.
+        </div>
+      )}
+      {order.status === 'replaced' && (
+        <div className="mb-5 bg-slate-50 border border-slate-300 rounded-xl px-5 py-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-slate-800">Made wrongly in production — closed as Replaced</p>
+            <p className="text-xs text-slate-600">
+              {order.replaced_by_order_id
+                ? <>Its replacement order is <Link to={`/orders/${order.replaced_by_order_id}`} className="underline font-medium">{order.replaced_by_code}</Link>.</>
+                : 'Inventory QC has passed it. Start its replacement order — pre-filled from this one, everything can be changed.'}
+            </p>
+          </div>
+          {!order.replaced_by_order_id && ['owner', 'admin'].includes(user.role) && (
+            <button className="btn-primary btn-sm whitespace-nowrap" onClick={async () => {
+              try {
+                const r = await api.get(`/orders/${order.id}/replacement-draft`);
+                navigate('/orders', { state: { replacement: r.data } });
+              } catch (e) { alert(e.response?.data?.error || 'Could not start the replacement order'); }
+            }}>
+              Start replacement order
+            </button>
+          )}
+        </div>
+      )}
+
       {['customer_query', 'product_return'].includes(order.status) && (
         <div className="mb-5 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">

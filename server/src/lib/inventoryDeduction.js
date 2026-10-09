@@ -577,11 +577,11 @@ async function settleItemInventory(db, orderItemId, userId, orderCode, { atDispa
   // A card closed as Rejected has nothing to dispatch and its material was
   // settled at Inventory QC — it must not keep a multi-card item from settling.
   const settled = (c) =>
-    c.status === 'dispatched' || c.status === 'rejected' || c.status === 'scrapped' ||
+    c.status === 'dispatched' || c.status === 'rejected' || c.status === 'scrapped' || c.status === 'replaced' ||
     (c.status === 'qc_approved' && (Number(c.qc_dispatch_qty) || 0) === 0);
 
   const ready = cards.length === 1
-    ? ['qc_approved', 'dispatched', 'completed', 'rejected', 'scrapped'].includes(cards[0].status)
+    ? ['qc_approved', 'dispatched', 'completed', 'rejected', 'scrapped', 'replaced'].includes(cards[0].status)
     : cards.every(settled);
 
   if (!ready) return;

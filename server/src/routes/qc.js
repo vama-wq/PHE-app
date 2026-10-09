@@ -105,8 +105,11 @@ function baseDrawingNo(drawingNo) {
 // One row per unique base_drawing_no — works like inventory stock. Used when
 // Inventory QC is done and Product QC sent pieces to Finished Goods.
 // jc: a card from loadCardFull.
-async function createFinishedGoodsEntry(db, { jc, specs, qty, location = null, splitNotes = null, userId }) {
-  const baseNo = baseDrawingNo(jc.drawing_no);
+// drawingOverride / elementsPerPiece: heaters made wrongly and taken into the
+// store under another name — e.g. a 3in1 taken off its flange as single
+// elements (owner, 9 Oct 2026); each piece's fins later go by that many elements.
+async function createFinishedGoodsEntry(db, { jc, specs, qty, location = null, splitNotes = null, userId, drawingOverride = null, elementsPerPiece = null }) {
+  const baseNo = drawingOverride ? String(drawingOverride).trim() : baseDrawingNo(jc.drawing_no);
 
   // Check if a product entry already exists for this base drawing number
   const existing = baseNo
@@ -143,7 +146,7 @@ async function createFinishedGoodsEntry(db, { jc, specs, qty, location = null, s
     `, [
       jc.id, jc.order_id, jc.order_code, jc.order_type,
       jc.customer_code, jc.customer_name,
-      jc.drawing_no || null, baseNo,
+      drawingOverride ? baseNo : (jc.drawing_no || null), baseNo,
       specs.product_code,
       specs.tube_material, specs.tube_diameter,
       specs.wattage, specs.voltage,
@@ -156,8 +159,8 @@ async function createFinishedGoodsEntry(db, { jc, specs, qty, location = null, s
   // Log this inward batch with full traceability (job card + order + customer + location)
   await db.insert(
     `INSERT INTO finished_goods_log
-       (finished_good_id, movement_type, qty, job_card_no, order_code, customer_code, reference, notes, location, created_by)
-     VALUES ($1,'inward',$2,$3,$4,$5,$6,$7,$8,$9)`,
+       (finished_good_id, movement_type, qty, job_card_no, order_code, customer_code, reference, notes, location, created_by, elements_per_piece)
+     VALUES ($1,'inward',$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [
       fgId, qty,
       jc.job_card_no, jc.order_code, jc.customer_code,
@@ -165,6 +168,7 @@ async function createFinishedGoodsEntry(db, { jc, specs, qty, location = null, s
       splitNotes || null,
       location,
       userId,
+      elementsPerPiece || null,
     ]
   );
 
@@ -715,6 +719,8 @@ async function inventoryView(db, cardId) {
       last_stage_taken_at: card.last_stage_taken_at,
       product_qc_at: card.product_qc_at, product_qc_by: card.product_qc_by, product_qc_by_name: card.product_qc_by_name,
       inventory_qc_at: card.inventory_qc_at, inventory_qc_by: card.inventory_qc_by, inventory_qc_by_name: card.inventory_qc_by_name,
+      // made wrongly in production: what becomes of the heaters (owner, 9 Oct 2026)
+      replace_plan: (() => { try { return typeof card.replace_plan === 'string' ? JSON.parse(card.replace_plan) : (card.replace_plan || null); } catch { return null; } })(),
     },
     editable: card.status === 'inventory_qc' && !card.inventory_qc_at,
     counted_locked: held,
@@ -945,7 +951,7 @@ router.put('/:id/inventory-done', authenticate, authorize('design', 'owner', 'ad
       // closes as Rejected right here (owner, 7 Oct 2026) — the material was
       // settled by Inventory QC, the pieces are decided by the owner.
       const won = await tx.get(
-        `UPDATE job_cards SET status = CASE WHEN qc_route='rejected' THEN 'rejected' ELSE 'qc_approved' END,
+        `UPDATE job_cards SET status = CASE WHEN replace_plan IS NOT NULL THEN 'replaced' WHEN qc_route='rejected' THEN 'rejected' ELSE 'qc_approved' END,
                 inventory_qc_at=NOW(), inventory_qc_by=$2
           WHERE id=$1 AND status='inventory_qc' RETURNING id`, [req.params.id, req.user.id]);
       if (!won) throw httpError(400, 'This job card is not waiting for Inventory QC.');
@@ -964,6 +970,21 @@ router.put('/:id/inventory-done', authenticate, authorize('design', 'owner', 'ad
       const fgQty = Number(jc.qc_fg_qty) || 0;
       const dispQty = Number(jc.qc_dispatch_qty) || 0;
       let fgId = null;
+      // Made wrongly in production (owner, 9 Oct 2026): the pieces go into the
+      // store under the name given when the card was marked, and the card is
+      // Replaced — its replacement order starts below.
+      let plan = jc.replace_plan;
+      try { plan = typeof plan === 'string' ? JSON.parse(plan) : plan; } catch { plan = null; }
+      if (plan) {
+        if (plan.mode === 'finished_goods' && Number(plan.fg_qty) > 0) {
+          const specs = await productSpecs(tx, jc);
+          fgId = await createFinishedGoodsEntry(tx, { jc, specs: { ...specs, wattage: plan.fg_wattage || specs.wattage },
+            qty: Number(plan.fg_qty), location: jc.qc_fg_location || null,
+            splitNotes: `Made wrongly on ${jc.order_code} (${jc.job_card_no}) — ${plan.reason || ''}`.trim(),
+            userId: req.user.id, drawingOverride: plan.fg_name, elementsPerPiece: Number(plan.elements_per_piece) || null });
+        }
+        return { jc, route: 'replaced', fgQty: plan.mode === 'finished_goods' ? Number(plan.fg_qty) || 0 : 0, dispQty: 0, fgId, plan };
+      }
       if (['finished_goods', 'both', 'split'].includes(route) && fgQty > 0) {
         fgId = await createFinishedGoodsEntry(tx, { jc, specs: await productSpecs(tx, jc), qty: fgQty,
           location: jc.qc_fg_location || null, splitNotes: jc.qc_split_notes || null, userId: req.user.id });
@@ -974,10 +995,12 @@ router.put('/:id/inventory-done', authenticate, authorize('design', 'owner', 'ad
     if (e.status) return res.status(e.status).json({ error: e.message });
     throw e;
   }
-  const { jc, route, fgQty, dispQty, fgId } = done;
+  const { jc, route, fgQty, dispQty, fgId, plan } = done;
 
   // The same approval line as before Inventory QC existed.
-  const text = jc.dn_query_no
+  const text = plan
+    ? `Job card ${jc.job_card_no} closed as Replaced (made wrongly) — ${plan.mode === 'finished_goods' ? `${fgQty} × ${plan.fg_name} into Finished Goods` : 'scrapped'}; the replacement order is next`
+    : jc.dn_query_no
     ? `Job card ${jc.job_card_no} repaired after debit-note return ${jc.dn_query_no} — ${fgQty} units back into Finished Goods`
     : route === 'rejected'
     ? `Job card ${jc.job_card_no} closed as Rejected — all ${jc.qty} pieces rejected at production (QC)`
@@ -988,6 +1011,18 @@ router.put('/:id/inventory-done', authenticate, authorize('design', 'owner', 'ad
       : `Job card ${jc.job_card_no} QC Approved — ${dispQty} units going to dispatch`;
   await logActivity(jc.order_id, jc.id, 'status_changed', text, req.user.id);
   await syncOrderStatus(db, jc.order_id, req.user.id);
+  if (plan) {
+    // The replacement flow starts: the owner and the admin are told to make the
+    // replacement order (the order page has the button, the form prefilled).
+    try {
+      const { notifyRole } = require('./notifications');
+      for (const role of ['owner', 'admin']) {
+        await notifyRole(db, role, { type: 'replacement_needed', title: `Replacement order — ${jc.order_code}`,
+          body: `${jc.job_card_no} was made wrongly and is closed as Replaced${plan.mode === 'finished_goods' ? ` (${fgQty} × ${plan.fg_name} into Finished Goods)` : ''}. Start its replacement order.`,
+          link: `/orders/${jc.order_id}`, ref: { type: 'replacement_needed', id: jc.order_id } });
+      }
+    } catch (e) { console.error('[qc] replacement notice failed:', e.message); }
+  }
 
   // Settle the order line: in the new flow nothing more is taken — what is
   // left on it is settled without stock (lib/inventoryDeduction.js).
@@ -997,7 +1032,8 @@ router.put('/:id/inventory-done', authenticate, authorize('design', 'owner', 'ad
   } catch (e) { console.error('[qc] settle after Inventory QC failed:', e.message); }
 
   res.json({
-    message: route === 'rejected' ? 'Inventory QC done — job card closed as Rejected' : 'Inventory QC done',
+    message: plan ? 'Inventory QC done — job card closed as Replaced; start the replacement order from the order page'
+      : route === 'rejected' ? 'Inventory QC done — job card closed as Rejected' : 'Inventory QC done',
     status: jc.status, route, dispatch_qty: dispQty, fg_qty: fgQty, finished_good_id: fgId,
   });
 });

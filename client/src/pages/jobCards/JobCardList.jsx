@@ -85,6 +85,7 @@ export default function JobCardList() {
           <option value="dispatched">Dispatched</option>
           <option value="rejected">Rejected</option>
           <option value="scrapped">Scrapped</option>
+          <option value="replaced">Replaced</option>
         </select>
         <select className="input w-[150px]" value={clientFilter} onChange={e => setClient(e.target.value)}>
           <option value="">All Clients</option>

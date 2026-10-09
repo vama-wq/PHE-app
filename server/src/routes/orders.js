@@ -283,6 +283,9 @@ router.get('/:id', authenticate, async (req, res) => {
     [req.params.id]
   );
   if (!order) return res.status(404).json({ error: 'Order not found' });
+  // Made wrongly → replacement order (owner, 9 Oct 2026): the two orders' codes.
+  if (order.replacement_of_order_id) order.replacement_of_code = (await db.get('SELECT order_code FROM orders WHERE id=$1', [order.replacement_of_order_id]))?.order_code || null;
+  if (order.replaced_by_order_id) order.replaced_by_code = (await db.get('SELECT order_code FROM orders WHERE id=$1', [order.replaced_by_order_id]))?.order_code || null;
 
   order.quotations = await db.all(
     `SELECT q.*, u.name as uploaded_by_name
@@ -367,6 +370,19 @@ router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => 
     if (!rplQuery.job_card_id) return res.status(400).json({ error: `Query ${rplQuery.query_no} has no job card to replace` });
   }
 
+  // Made wrongly in production (owner, 9 Oct 2026): the order this one replaces —
+  // its cards were closed as Replaced at Inventory QC. A normal order otherwise:
+  // its invoice IS compulsory ("it happened in production, not at the client").
+  const rplOfId = parseInt(req.body.replacement_of_order_id, 10) || null;
+  let rplOf = null;
+  if (rplOfId) {
+    rplOf = await db.get('SELECT id, order_code, status, replaced_by_order_id FROM orders WHERE id=$1', [rplOfId]);
+    if (!rplOf) return res.status(404).json({ error: 'The order this replaces was not found' });
+    if (rplOf.replaced_by_order_id) return res.status(400).json({ error: `${rplOf.order_code} already has its replacement order` });
+    const replaced = await db.get(`SELECT 1 AS x FROM job_cards WHERE order_id=$1 AND status='replaced' LIMIT 1`, [rplOfId]);
+    if (!replaced) return res.status(400).json({ error: `${rplOf.order_code} has no job card closed as Replaced yet — Inventory QC must pass it first` });
+  }
+
   // A pure PHE inventory order has no external customer. Customer is optional
   // for it — fall back to the internal "IO" customer so the NOT NULL column and
   // the many customer joins across the app keep working. All other order types
@@ -384,9 +400,9 @@ router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => 
 
   try {
     const r = await db.insert(
-      `INSERT INTO orders (order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type, created_by, material_deduction, replacement_query_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9)`,
-      [order_code.toUpperCase(), custId, inquiry_id||null, order_date, dispatch_date||null, notes||null, order_type||'local_he', req.user.id, rplQueryId]
+      `INSERT INTO orders (order_code, customer_id, inquiry_id, order_date, dispatch_date, notes, order_type, created_by, material_deduction, replacement_query_id, replacement_of_order_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9,$10)`,
+      [order_code.toUpperCase(), custId, inquiry_id||null, order_date, dispatch_date||null, notes||null, order_type||'local_he', req.user.id, rplQueryId, rplOfId]
     // valid: local_he, export_he, inventory_order, io_export_he, io_local_he
     // material_deduction=TRUE: new orders deduct tube & spring-gauge from the checklist
     );
@@ -408,6 +424,14 @@ router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => 
         `Replacement issued for query ${rplQuery.query_no} — new order ${order_code.toUpperCase()}`, req.user.id);
       await logActivity(r.lastInsertRowid, null, 'replacement_issued',
         `Replacement for query ${rplQuery.query_no}${orig ? ` (${orig.job_card_no})` : ''} — its job cards end in -RPL and need no invoice to dispatch`, req.user.id);
+    }
+
+    if (rplOf) {
+      await db.run('UPDATE orders SET replaced_by_order_id=$1 WHERE id=$2 AND replaced_by_order_id IS NULL', [r.lastInsertRowid, rplOf.id]);
+      await logActivity(rplOf.id, null, 'replacement_issued',
+        `Replacement order ${order_code.toUpperCase()} made for ${rplOf.order_code} (made wrongly in production)`, req.user.id);
+      await logActivity(r.lastInsertRowid, null, 'replacement_issued',
+        `Replaces ${rplOf.order_code}, made wrongly in production — its job cards end in -RPL; the invoice is needed to dispatch as for any order`, req.user.id);
     }
 
     if (inquiry_id) {
@@ -812,6 +836,36 @@ router.get('/:id/items/:itemId/fg-fins-length', authenticate, async (req, res) =
   res.json(len ? { length_mm: Math.round(len.lengthMm * 10) / 10, card_no: len.card_no, elements: len.elements } : { length_mm: null });
 });
 
+// Made wrongly in production → replacement order (owner, 9 Oct 2026): the new
+// order form, prefilled from the replaced cards' items — every field open to
+// change (nothing reused or locked: the first ones were made wrongly), the
+// drawing and inventory added as for any new order.
+router.get('/:id/replacement-draft', authenticate, authorize('owner', 'admin'), async (req, res) => {
+  const db = getDB();
+  const o = await db.get('SELECT * FROM orders WHERE id=$1', [req.params.id]);
+  if (!o) return res.status(404).json({ error: 'Order not found' });
+  if (o.replaced_by_order_id) return res.status(400).json({ error: `${o.order_code} already has its replacement order` });
+  const cards = await db.all(`SELECT order_item_id, qty FROM job_cards WHERE order_id=$1 AND status='replaced'`, [o.id]);
+  if (!cards.length) return res.status(400).json({ error: `${o.order_code} has no job card closed as Replaced — Inventory QC must pass it first` });
+  const ids = [...new Set(cards.map(c => c.order_item_id).filter(Boolean))];
+  const items = ids.length ? await db.all(
+    `SELECT id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark
+       FROM order_items WHERE id = ANY($1) ORDER BY id`, [ids]) : [];
+  const orig = o.dispatch_date ? new Date(o.dispatch_date) : null;
+  const week = new Date(Date.now() + 7 * 86400000);
+  const date = orig && orig > new Date() ? orig : week;
+  res.json({
+    replacement_of: { order_id: o.id, order_code: o.order_code },
+    form: { customer_id: o.customer_id, order_type: o.order_type, dispatch_date: date.toISOString().slice(0, 10),
+            notes: `Replacement for ${o.order_code} — made wrongly in production` },
+    items: items.map(i => ({
+      product_code: i.product_code || '', drawing_number: i.drawing_number || '', tube_material: i.tube_material || '',
+      tube_diameter: i.tube_diameter || '', wattage: i.wattage || '', voltage: i.voltage || '',
+      plating_instructions: i.plating_instructions || '', quantity: i.quantity || '', remark: i.remark || '',
+    })),
+  });
+});
+
 // Finished goods (owner, 9 Oct 2026): what a new card for this item would take
 // from the store — the row for its drawing, oldest intake first — and the tube
 // length per heater its fins would go by (a hand entry: the row's average).
@@ -827,10 +881,10 @@ router.get('/:id/items/:itemId/fg-plan', authenticate, async (req, res) => {
   if (!fg) return res.json({ store: null, parts: [], short: 0 });
   const qty = Math.max(0, parseInt(req.query.qty, 10) || 0);
   const { parts, short } = fgFifo.allocate(await fgFifo.batchesLeft(db, fg.id), qty);
-  const { byCard, avg } = await fgFifo.intakeLengths(db, fg.id);
+  const { byCard, avg, mmFor } = await fgFifo.intakeLengths(db, fg.id);
   res.json({
     store: { id: fg.id, drawing: fg.base_drawing_no || fg.drawing_no, qty_available: Number(fg.qty_available) || 0 },
-    parts: parts.map(p => ({ ...p, hand: !p.job_card_no, mm: (p.job_card_no && byCard.get(p.job_card_no)) || avg || null,
+    parts: parts.map(p => ({ ...p, hand: !p.job_card_no, mm: mmFor(p),
                              mm_from: p.job_card_no && byCard.get(p.job_card_no) ? 'card' : avg ? 'average' : null })),
     short, average_mm: avg,
   });

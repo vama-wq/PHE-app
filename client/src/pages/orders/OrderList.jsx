@@ -583,8 +583,10 @@ function NewOrderModal({ onClose, onSave, prefill = null }) {
     order_type: 'local_he',
     // a replacement for a customer query: pre-filled, and saving closes the query
     ...(prefill?.form || {}),
-    ...(prefill ? { customer_id: String(prefill.form?.customer_id || ''), replacement_query_id: prefill.replacement?.query_id,
+    ...(prefill?.replacement ? { customer_id: String(prefill.form?.customer_id || ''), replacement_query_id: prefill.replacement?.query_id,
                     replacement_summary: prefill.summary || '' } : {}),
+    // made wrongly in production (owner, 9 Oct 2026): the order it replaces; a normal order otherwise
+    ...(prefill?.replacement_of ? { customer_id: String(prefill.form?.customer_id || ''), replacement_of_order_id: prefill.replacement_of.order_id } : {}),
   });
   const [customers, setCustomers] = useState([]);
   const [quotationFile, setQuotationFile] = useState(null);
@@ -677,9 +679,16 @@ function NewOrderModal({ onClose, onSave, prefill = null }) {
 
   return (
     <>
-      <Modal open title={prefill ? `Replacement order — query ${prefill.replacement?.query_no}` : 'New Order'} onClose={onClose} size="xl">
+      <Modal open title={prefill?.replacement_of ? `Replacement order — ${prefill.replacement_of.order_code}` : prefill ? `Replacement order — query ${prefill.replacement?.query_no}` : 'New Order'} onClose={onClose} size="xl">
         <form onSubmit={handleSubmit} className="space-y-6">
-          {prefill && (
+          {prefill?.replacement_of && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+              Replaces <b>{prefill.replacement_of.order_code}</b>, made wrongly in production. Pre-filled from it — change
+              anything you need (drawing, product, tube, wattage, quantity…); design adds the drawing and inventory as for
+              any new order. Its job cards will end in <b>-RPL</b>, and its <b>invoice is needed to dispatch</b>, as for any order.
+            </div>
+          )}
+          {prefill?.replacement && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
               Replacement for query <b>{prefill.replacement?.query_no}</b> — {prefill.replacement?.qty} pcs of <b>{prefill.replacement?.job_card_no}</b> ({prefill.replacement?.order_code}).
               Pre-filled from that card; change anything you need. Its job cards will end in <b>-RPL</b> and need no invoice to dispatch. Saving closes the query.

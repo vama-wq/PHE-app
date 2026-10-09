@@ -1512,7 +1512,9 @@ async function initDB(retries = 20, delayMs = 10000) {
         -- Some of the order's job cards have gone out and some have not. An
         -- item over 50 pieces runs as several cards, so this is now the normal
         -- middle of an order's life rather than an exception.
-        'partially_dispatched'
+        'partially_dispatched',
+        -- Made wrongly in production and replaced by a new order (owner, 9 Oct 2026).
+        'replaced'
       ))`);
       // 'inventory_qc' (owner, 6 Oct 2026): Product QC passed, waiting for
       // Inventory QC. 'rejected' (owner, 7 Oct 2026): every piece rejected in
@@ -1530,7 +1532,8 @@ async function initDB(retries = 20, delayMs = 10000) {
           await c.query(`ALTER TABLE job_cards DROP CONSTRAINT IF EXISTS job_cards_status_check`);
           await c.query(`ALTER TABLE job_cards ADD CONSTRAINT job_cards_status_check CHECK(status IN (
             'pending','in_progress','on_hold','qc_pending','inventory_qc','qc_approved','completed','dispatched',
-            'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched','rejected','scrapped'
+            'customer_query','product_return','repair_in_progress','repaired_dispatched','resolved_dispatched','rejected','scrapped',
+            'replaced'
           ))`);
           await c.query(`COMMIT`);
         } catch (e) { await c.query(`ROLLBACK`).catch(() => {}); throw e; }
@@ -2396,6 +2399,13 @@ async function initDB(retries = 20, delayMs = 10000) {
     // Stage 3 coil typed in grams (owner, 9 Oct 2026): 'g' marks such a row;
     // coil_weight and the Stage 3 scrap stay in kg.
     await pool.query(`ALTER TABLE production_checklist ADD COLUMN IF NOT EXISTS coil_unit TEXT`);
+    // Made wrongly in production → replacement order (owner, 9 Oct 2026): the
+    // card's plan (what becomes of the heaters made), the two orders linked, and
+    // a store intake whose pieces are single elements of a multi-element card.
+    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS replace_plan JSONB`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS replacement_of_order_id INTEGER`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS replaced_by_order_id INTEGER`);
+    await pool.query(`ALTER TABLE finished_goods_log ADD COLUMN IF NOT EXISTS elements_per_piece INTEGER`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');

@@ -32,6 +32,7 @@ export default function JobCardDetail() {
   const [capa, setCapa] = useState(null);
   const [showSplitModal, setShowSplitModal] = useState(false);
   const [showRejectQC, setShowRejectQC] = useState(false);
+  const [showMadeWrong, setShowMadeWrong] = useState(false);
 
   const loadSplits = () => api.get(`/job-cards/${id}/split-requests`).then(r => setSplitRequests(r.data)).catch(() => {});
   const load = () => { loadSplits(); loadCapa(); return api.get(`/job-cards/${id}`).then(r => setJc(r.data)).finally(() => setLoading(false)); };
@@ -51,6 +52,10 @@ export default function JobCardDetail() {
   const canUploadPackage = ['production', 'owner'].includes(user.role);
   const canViewDispatch = ['accounts', 'owner'].includes(user.role);
   const canRequestSplit = ['production', 'admin', 'owner'].includes(user.role) && ['pending', 'in_progress', 'on_hold'].includes(jc.status);
+  // Made wrongly in production → replacement order (owner, 9 Oct 2026)
+  const canMarkWrong = ['owner', 'admin'].includes(user.role) && !jc.replace_plan && !jc.is_fg
+    && ['pending', 'in_progress', 'on_hold', 'qc_pending'].includes(jc.status);
+  const plan = (() => { try { return typeof jc.replace_plan === 'string' ? JSON.parse(jc.replace_plan) : jc.replace_plan; } catch { return null; } })();
   const pendingSplit = splitRequests.find(s => s.status === 'pending');
 
   const tabs = [
@@ -74,6 +79,20 @@ export default function JobCardDetail() {
           </span>
           <span className="text-sm font-semibold whitespace-nowrap">Open CAPA →</span>
         </Link>
+      )}
+      {plan && (
+        <div className="mb-4 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-800">
+          <div className="font-semibold">Made wrongly in production — {jc.status === 'replaced' ? 'closed as Replaced' : 'waiting at Inventory QC'}</div>
+          <div className="mt-0.5">{plan.reason}</div>
+          <div className="mt-0.5 text-xs text-slate-600">
+            {plan.mode === 'finished_goods'
+              ? `${plan.fg_qty} × ${plan.fg_name}${plan.elements_per_piece > 1 ? ` (${plan.elements_per_piece} elements each)` : ''}${plan.fg_wattage ? ` · ${plan.fg_wattage} W` : ''} go into Finished Goods`
+              : 'The heaters are scrapped'}
+            {jc.status === 'replaced' ? ' — done. ' : ' once Inventory QC passes. '}
+            Then the replacement order is made from <Link to={`/orders/${jc.order_id}`} className="underline">{jc.order_code}</Link>.
+            {plan.by_name ? ` Marked by ${plan.by_name}.` : ''}
+          </div>
+        </div>
       )}
       {/* Header */}
       <div className="flex items-center gap-4 mb-5">
@@ -119,6 +138,12 @@ export default function JobCardDetail() {
           {canRequestSplit && !pendingSplit && (
             <button className="btn-secondary btn-sm" onClick={() => setShowSplitModal(true)}>
               <Truck size={14} /> Partial Dispatch
+            </button>
+          )}
+          {canMarkWrong && (
+            <button className="btn-secondary btn-sm text-red-700" onClick={() => setShowMadeWrong(true)}
+              title="Made wrongly in production: check it at Inventory QC, put the heaters into Finished Goods (or scrap), then make a replacement order">
+              <AlertTriangle size={14} /> Made wrongly → replace
             </button>
           )}
           {canUpdateStatus && (
@@ -525,7 +550,99 @@ export default function JobCardDetail() {
         <RejectQCModal jc={jc}
           onClose={() => setShowRejectQC(false)} onSave={() => { setShowRejectQC(false); load(); }} />
       )}
+      {showMadeWrong && (
+        <MadeWronglyModal jc={jc}
+          onClose={() => setShowMadeWrong(false)} onSave={() => { setShowMadeWrong(false); load(); }} />
+      )}
     </div>
+  );
+}
+
+// Made wrongly in production (owner, 9 Oct 2026): caught on the shop floor, so
+// no customer query. Say what was wrong and what becomes of the heaters made —
+// into Finished Goods under a name (a 3in1 taken off its flange gives single
+// elements: pieces = heaters × 3, 1 element each) or scrap. The card goes to
+// Inventory QC; once it passes, the replacement order is made from the order.
+function MadeWronglyModal({ jc, onClose, onSave }) {
+  let elements = 1;
+  try { const g = typeof jc.generated_spec === 'string' ? JSON.parse(jc.generated_spec) : jc.generated_spec; elements = Math.max(1, parseInt(g?.computed?.elements, 10) || 1); } catch { elements = 1; }
+  const [reason, setReason] = useState('');
+  const [mode, setMode] = useState('finished_goods');
+  const [name, setName] = useState(jc.drawing_no || '');
+  const [pcs, setPcs] = useState(String((Number(jc.qty) || 0) * elements));
+  const [epp, setEpp] = useState('1');
+  const [watt, setWatt] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!reason.trim()) return setError('Say what was made wrongly.');
+    if (mode === 'finished_goods') {
+      if (!name.trim()) return setError('Name the heaters as they go into Finished Goods.');
+      if (!(parseInt(pcs, 10) > 0)) return setError('Pieces must be a whole number above 0.');
+    }
+    const what = mode === 'finished_goods' ? `${pcs} × ${name.trim()} into Finished Goods` : 'the heaters scrapped';
+    if (!window.confirm(`Send ${jc.job_card_no} to Inventory QC as made wrongly?\n\nOnce QC passes it: ${what}, the card closes as Replaced, and the replacement order is made from ${jc.order_code}.`)) return;
+    setSaving(true);
+    try {
+      await api.post(`/job-cards/${jc.id}/replace`, { reason: reason.trim(), mode, fg_name: name.trim(), fg_qty: parseInt(pcs, 10),
+        elements_per_piece: parseInt(epp, 10) || 1, fg_wattage: watt ? Number(watt) : null });
+      onSave();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not mark the card');
+      setSaving(false);
+    }
+  };
+  return (
+    <Modal open title={`Made wrongly — ${jc.job_card_no}`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <p className="text-sm text-gray-500">
+          Caught on the shop floor, so no customer query. The card goes to <b>Inventory QC</b> to check what it took;
+          once it passes, the heaters go where you say below, the card closes as <b>Replaced</b>, and the replacement
+          order is made from {jc.order_code} (its invoice is needed to dispatch, as for any order).
+        </p>
+        <div>
+          <label className="label">What was wrong <span className="text-red-500">*</span></label>
+          <textarea className="input" rows={2} value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. made as 3in1 on the wrong flange" />
+        </div>
+        <div className="flex gap-4 text-sm">
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === 'finished_goods'} onChange={() => setMode('finished_goods')} /> Into Finished Goods</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === 'scrap'} onChange={() => setMode('scrap')} /> Scrap</label>
+        </div>
+        {mode === 'finished_goods' && (
+          <div className="space-y-3">
+            <div>
+              <label className="label">Name in Finished Goods <span className="text-red-500">*</span></label>
+              <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. PT-UType-38U-700W-SS304-8mm" />
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="label">Pieces <span className="text-red-500">*</span></label>
+                <input className="input" type="number" min="1" value={pcs} onChange={e => setPcs(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Elements each</label>
+                <input className="input" type="number" min="1" value={epp} onChange={e => setEpp(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Wattage each</label>
+                <input className="input" type="number" min="0" value={watt} onChange={e => setWatt(e.target.value)} placeholder="auto" />
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">
+              {jc.qty} heaters{elements > 1 ? ` of ${elements} elements — taken off the flange they give ${(Number(jc.qty) || 0) * elements} single elements (1 element each)` : ''}.
+              Wattage left blank is worked out from the heater's ({elements > 1 ? `÷ ${elements} for a single element` : 'as is'}).
+            </p>
+          </div>
+        )}
+        {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+        <div className="flex gap-3 pt-1">
+          <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving}>{saving ? 'Sending…' : 'Send to Inventory QC'}</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

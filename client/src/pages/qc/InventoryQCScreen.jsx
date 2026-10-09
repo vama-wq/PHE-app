@@ -26,6 +26,8 @@ export function routeText(route, dispQty, fgQty) {
   if (route === 'split')          return `${fgQty ?? '—'} → Finished Goods (IO) + ${dispQty ?? '—'} → Dispatch`;
   // every piece rejected in production — nothing goes anywhere (owner, 7 Oct 2026)
   if (route === 'rejected')       return 'Nothing to send — all pieces rejected, closes as Rejected';
+  // made wrongly in production (owner, 9 Oct 2026)
+  if (route === 'replaced')       return fgQty ? `Made wrongly — ${fgQty} → Finished Goods, closes as Replaced` : 'Made wrongly — scrapped, closes as Replaced';
   return route;
 }
 
@@ -201,6 +203,17 @@ export default function InventoryQCScreen({ cardId, onClose, onChanged }) {
               {card.inventory_qc_at
                 ? 'Inventory QC is done for this card — its inventory can no longer change. This screen is read-only.'
                 : 'This card is not waiting for Inventory QC — read-only.'}
+            </div>
+          )}
+
+          {view.card.replace_plan && (
+            <div className="rounded-lg px-3 py-2 text-sm bg-slate-50 border border-slate-300 text-slate-800">
+              <b>Made wrongly in production</b> — {view.card.replace_plan.reason}.{' '}
+              {view.card.replace_plan.mode === 'finished_goods'
+                ? <>On Done: <b>{view.card.replace_plan.fg_qty} × {view.card.replace_plan.fg_name}</b>{view.card.replace_plan.elements_per_piece > 1 ? ` (${view.card.replace_plan.elements_per_piece} elements each)` : ''} go into Finished Goods</>
+                : <>On Done the heaters are scrapped</>}
+              , the card closes as <b>Replaced</b> and the replacement order is made from {view.card.order_code}.
+              Nothing more was taken at a last stage — enter here what the card really used (e.g. terminal pins already spotted on).
             </div>
           )}
 
@@ -390,7 +403,7 @@ export default function InventoryQCScreen({ cardId, onClose, onChanged }) {
             {canFinish && (
               <button className="btn-primary bg-indigo-600 hover:bg-indigo-700 border-indigo-600"
                 onClick={() => setShowDone(true)}>
-                <CheckCircle size={15} /> {view.routing?.route === 'rejected' ? 'Inventory QC done → close as Rejected' : 'Inventory QC done → send to Dispatch / Finished Goods'}
+                <CheckCircle size={15} /> {view.card.replace_plan ? 'Inventory QC done → close as Replaced' : view.routing?.route === 'rejected' ? 'Inventory QC done → close as Rejected' : 'Inventory QC done → send to Dispatch / Finished Goods'}
               </button>
             )}
           </div>
@@ -763,6 +776,7 @@ function DoneModal({ view, negativeItems, onClose, onConfirm }) {
   const fgQty = Number(r.fg_qty) || 0;
   const dispQty = Number(r.dispatch_qty) || 0;
   const toFg = ['finished_goods', 'both', 'split'].includes(r.route) && fgQty > 0;
+  const plan = view.card.replace_plan || null;
 
   const confirm = async () => {
     setSaving(true);
@@ -787,14 +801,15 @@ function DoneModal({ view, negativeItems, onClose, onConfirm }) {
         </div>
 
         <div className="border border-gray-200 rounded-lg p-3 text-sm">
-          <div className="font-semibold text-gray-700 mb-1">{r.route === 'rejected' ? 'Then the card closes' : 'Then the card goes on'}</div>
+          <div className="font-semibold text-gray-700 mb-1">{r.route === 'rejected' || plan ? 'Then the card closes' : 'Then the card goes on'}</div>
           <ul className="text-xs text-gray-700 space-y-0.5">
+            {plan && <li>• Closed as <b>Replaced</b> (made wrongly){plan.mode === 'finished_goods' ? <> — <b>{plan.fg_qty} × {plan.fg_name}</b> into Finished Goods</> : ' — scrapped'}. The owner and admin are told to start the replacement order.</li>}
             {r.route === 'rejected' && <li>• Closed as <b>Rejected</b> — all {view.card.qty} pieces rejected at production. Nothing to dispatch or stock; the owner decides about the pieces.</li>}
             {toFg && <li>• {fgQty} piece{fgQty !== 1 ? 's' : ''} into Finished Goods{r.fg_location ? ` (${r.fg_location})` : ''}</li>}
             {(r.route === 'dispatch' || r.route === 'both' || r.route === 'split' || !r.route) && dispQty > 0 && (
               <li>• {dispQty} piece{dispQty !== 1 ? 's' : ''} to Dispatch</li>
             )}
-            {r.route !== 'rejected' && !toFg && dispQty === 0 && <li>• {routeText(r.route, r.dispatch_qty, r.fg_qty) || 'Dispatch'}</li>}
+            {r.route !== 'rejected' && !plan && !toFg && dispQty === 0 && <li>• {routeText(r.route, r.dispatch_qty, r.fg_qty) || 'Dispatch'}</li>}
           </ul>
         </div>
 
@@ -816,7 +831,7 @@ function DoneModal({ view, negativeItems, onClose, onConfirm }) {
           <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
           <button className="btn-primary bg-indigo-600 hover:bg-indigo-700 border-indigo-600" onClick={confirm} disabled={saving}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-            {saving ? 'Sending...' : r.route === 'rejected' ? 'Confirm — Inventory QC done, close as Rejected' : 'Confirm — Inventory QC done'}
+            {saving ? 'Sending...' : plan ? 'Confirm — Inventory QC done, close as Replaced' : r.route === 'rejected' ? 'Confirm — Inventory QC done, close as Rejected' : 'Confirm — Inventory QC done'}
           </button>
         </div>
       </div>

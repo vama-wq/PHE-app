@@ -342,8 +342,8 @@ router.post('/draft', authenticate, authorize('admin', 'owner'), async (req, res
 
 // A replacement order's job cards end in -RPL (owner, 8 Oct 2026).
 async function rplNumbers(db, orderId, numbers) {
-  const o = orderId ? await db.get('SELECT replacement_query_id FROM orders WHERE id=$1', [orderId]) : null;
-  if (!o?.replacement_query_id) return numbers;
+  const o = orderId ? await db.get('SELECT replacement_query_id, replacement_of_order_id FROM orders WHERE id=$1', [orderId]) : null;
+  if (!o?.replacement_query_id && !o?.replacement_of_order_id) return numbers;
   return numbers.map(n => (/-RPL$/i.test(String(n)) ? n : `${n}-RPL`));
 }
 
@@ -1026,9 +1026,14 @@ async function syncOrderStatus(db, orderId, userId) {
   // must not hold the order open, and it is not "done" either — the owner
   // decides what happens to those pieces. With only rejected cards left the
   // order keeps the status it has.
-  const cards = (await db.all(
+  const live = (await db.all(
     'SELECT status, qc_route, qc_dispatch_qty FROM job_cards WHERE order_id=$1', [orderId]))
     .filter(c => c.status !== 'rejected' && c.status !== 'scrapped');   // a scrapped return is out of it too
+  if (!live.length) return;
+  // Made wrongly and replaced by a new order (owner, 9 Oct 2026): when every
+  // card is, the order is Replaced; otherwise those cards are out of it too.
+  const allReplaced = live.every(c => c.status === 'replaced');
+  const cards = allReplaced ? live : live.filter(c => c.status !== 'replaced');
   if (!cards.length) return;
 
   const statuses = cards.map(c => c.status);
@@ -1049,7 +1054,9 @@ async function syncOrderStatus(db, orderId, userId) {
   // Genuinely out the door, as against parked in Finished Goods stock.
   const shipped = (c) => DISPATCHED.includes(c.status);
 
-  if (cards.every(done)) {
+  if (allReplaced) {
+    newOrderStatus = 'replaced';
+  } else if (cards.every(done)) {
     // All finished. If any of it went to stock rather than out the door, say
     // so plainly instead of calling it dispatched.
     newOrderStatus = cards.some(toFg) ? 'in_finished_goods' : 'dispatched';
@@ -1849,6 +1856,63 @@ router.put('/split-requests/:reqId/reject', authenticate, authorize('owner'), as
     console.error('split reject error:', err);
     res.status(500).json({ error: 'Could not reject the partial dispatch — please try again' });
   }
+});
+
+// ── Made wrongly in production → replacement (owner, 9 Oct 2026) ─────────────
+// "It was caught on the shop floor, we don't need to start the customer query —
+// just start the replacement flow." The owner or admin marks the card and says
+// what becomes of the heaters made: into Finished Goods under a name (pieces,
+// elements in each — a 3in1 taken off its flange gives three single elements a
+// heater) or scrap. The card goes to Inventory QC, where QC checks what it took
+// — nothing more is taken at a last stage; QC enters what was really used.
+// Inventory QC done puts the pieces into Finished Goods, closes the card as
+// Replaced and starts the replacement order (routes/qc.js, routes/orders.js).
+router.post('/:id/replace', authenticate, authorize('owner', 'admin'), async (req, res) => {
+  const db = getDB();
+  const jc = await db.get(
+    `SELECT jc.*, o.order_code, o.order_type, oi.wattage AS item_wattage, oi.drawing_number AS item_drawing
+       FROM job_cards jc JOIN orders o ON o.id = jc.order_id LEFT JOIN order_items oi ON oi.id = jc.order_item_id
+      WHERE jc.id=$1`, [req.params.id]);
+  if (!jc) return res.status(404).json({ error: 'Job card not found' });
+  if (jc.is_fg || jc.order_type === 'finished_goods') {
+    return res.status(400).json({ error: 'A finished-goods card is not built in production — there is nothing to replace here.' });
+  }
+  if (jc.replace_plan) return res.status(400).json({ error: `${jc.job_card_no} is already marked made wrongly.` });
+  if (!['pending', 'in_progress', 'on_hold', 'qc_pending'].includes(jc.status) || jc.inventory_qc_at || jc.dispatched_at) {
+    return res.status(400).json({ error: `${jc.job_card_no} is ${String(jc.status).replace(/_/g, ' ')} — only a card still in production (or waiting for Product QC) can be marked made wrongly.` });
+  }
+  const mode = req.body?.mode === 'scrap' ? 'scrap' : 'finished_goods';
+  const reason = String(req.body?.reason || '').trim().slice(0, 500);
+  if (!reason) return res.status(400).json({ error: 'Say what was made wrongly.' });
+  let plan = { mode, reason, by: req.user.id, by_name: req.user.name, at: new Date().toISOString() };
+  if (mode === 'finished_goods') {
+    const name = String(req.body?.fg_name || '').trim().slice(0, 200);
+    const pcs = Number(req.body?.fg_qty);
+    const epp = req.body?.elements_per_piece == null || req.body.elements_per_piece === '' ? 1 : Number(req.body.elements_per_piece);
+    if (!name) return res.status(400).json({ error: 'Name the heaters as they go into Finished Goods.' });
+    if (!Number.isInteger(pcs) || pcs <= 0) return res.status(400).json({ error: 'Pieces into Finished Goods must be a whole number above 0.' });
+    if (!Number.isInteger(epp) || epp < 1) return res.status(400).json({ error: 'Elements in each piece must be a whole number, 1 or more.' });
+    // Each piece's wattage: the heater's, shared by its elements (2.1 kW 3in1 →
+    // 700 W a single element), unless one is given.
+    const elements = Math.max(1, Number(cardLengths(await specForCard(db, jc))?.elements) || 1);
+    const given = Number(req.body?.fg_wattage);
+    const w = Number.isFinite(given) && given > 0 ? given
+      : Number(jc.item_wattage) > 0 ? Math.round((Number(jc.item_wattage) * Math.min(epp, elements)) / elements) : null;
+    plan = { ...plan, fg_name: name, fg_qty: pcs, elements_per_piece: epp, fg_wattage: w };
+  }
+  const r = await db.run(
+    `UPDATE job_cards SET replace_plan=$2, status='inventory_qc', qc_route='replaced', qc_fg_qty=$3, qc_dispatch_qty=0,
+            qc_rejected=FALSE, qc_rejection_notes=NULL, product_qc_at=NOW(), product_qc_by=$4,
+            last_stage_taken_at = COALESCE(last_stage_taken_at, NOW())
+      WHERE id=$1 AND replace_plan IS NULL`,
+    [jc.id, JSON.stringify(plan), mode === 'finished_goods' ? plan.fg_qty : 0, req.user.id]);
+  if (!(r?.rowCount ?? r?.changes ?? 1)) return res.status(409).json({ error: `${jc.job_card_no} was just marked by someone else.` });
+  await logActivity(jc.order_id, jc.id, 'made_wrongly',
+    `Job card ${jc.job_card_no} marked made wrongly by ${req.user.name}: ${reason} — ${mode === 'finished_goods'
+      ? `${plan.fg_qty} × ${plan.fg_name}${plan.elements_per_piece > 1 ? ` (${plan.elements_per_piece} elements each)` : ''} go into Finished Goods`
+      : 'the heaters are scrapped'} once Inventory QC passes; then the replacement order starts`, req.user.id);
+  await syncOrderStatus(db, jc.order_id, req.user.id);
+  res.json({ message: 'Sent to Inventory QC — the replacement order starts once it passes', status: 'inventory_qc', plan });
 });
 
 // ── Finished-Goods inventory job card ─────────────────────────────────────────
