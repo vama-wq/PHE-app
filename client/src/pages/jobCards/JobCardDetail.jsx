@@ -7,7 +7,7 @@ import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import InventoryQCScreen from '../qc/InventoryQCScreen';
 import TerminalPinsBox from '../../components/TerminalPinsBox';
-import { fmtDate, fmtDateTime, daysUntil, dispatchPending, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor, capaBlocks } from '../../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, dispatchPending, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor, capaBlocks, coilWeightText, stageScrapText } from '../../lib/utils';
 import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle, Truck } from 'lucide-react';
 
 // Only what can be set by hand: QC approval and dispatch come from Product QC,
@@ -840,13 +840,13 @@ function OverviewTab({ jc, userRole }) {
                     {s.scrap_value && (
                       <div className="flex gap-2 text-sm">
                         <span className="text-gray-500 font-medium w-28 flex-shrink-0">Scrap Value:</span>
-                        <span className="text-amber-700">{s.scrap_value}</span>
+                        <span className="text-amber-700">{stageScrapText(s, s.stage_no)}</span>
                       </div>
                     )}
                     {s.coil_weight != null && (
                       <div className="flex gap-2 text-sm">
                         <span className="text-gray-500 font-medium w-28 flex-shrink-0">Coil Weight:</span>
-                        <span className="text-blue-700 font-medium">{s.coil_weight} kg</span>
+                        <span className="text-blue-700 font-medium">{coilWeightText(s)}</span>
                       </div>
                     )}
                     {s.rejection_qty > 0 && (

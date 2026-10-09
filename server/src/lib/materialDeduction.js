@@ -14,6 +14,9 @@
 //     at Stage 3 (Ohms): coil used  = coil_weight — the box is KG — taken as kg as typed
 //                                     (it was wrongly ÷1000 until 4 Oct 2026)
 //                        coil scrap = scrap — also KG, as typed (was ÷1000 as grams until 5 Oct 2026)
+//                        From 9 Oct 2026 (owner) the floor types both in GRAMS; the
+//                        stage save turns them into kg (coil_unit 'g'), so these
+//                        stay kg here.
 //     Gauge inventory item = Stage 1 gauge pick (item code, category "Spring Guage").
 //   • Stage 6 (Filling):      PVC bush   = 2 pcs per element (qty × elements) — PVC-FB08-M4 (8mm dia) or
 //                                          PVC-FB11-M5 (11mm dia), by the order item's Tube Diameter.

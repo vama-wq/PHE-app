@@ -1242,8 +1242,16 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   if (isNaN(stageNo) || stageNo < 1 || stageNo > 40) return res.status(400).json({ error: 'Invalid stage' });
   if (stageNo === 30) return res.status(400).json({ error: 'The Kharoch Process stage has been removed from the checklist. Please refresh the page.' });
 
-  const { done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, coil_weight } = req.body;
+  const { done, value1, value2, rejection_qty, remade_qty, worker_name, notes, coil_weight, coil_unit } = req.body;
+  let { scrap_value } = req.body;
   const db = getDB();
+  // Stage 3 coil in GRAMS (owner, 9 Oct 2026: "they will add the coil in grams —
+  // 6 nos total used 48 grams, keep it simple"): the floor types grams for the
+  // coil weight and the coil scrap; they are kept in kg as before, so the stock
+  // take does not change. coil_unit 'g' marks such a row. A row ticked before
+  // keeps its kg (an older screen that sends no unit is read as kg).
+  const coilInGrams = stageNo === 3 && String(coil_unit || '').toLowerCase() === 'g';
+  const gToKg = (v) => Math.round((Number(v) / 1000) * 1e7) / 1e7;
 
   const jcCard = await db.get('SELECT * FROM job_cards WHERE id=$1', [jobCardId]);
   if (!jcCard) return res.status(404).json({ error: 'Job card not found' });
@@ -1393,7 +1401,10 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
   }
 
   // Stage 3 (Ohms) requires the total weight of all coils produced for this job card
-  const coilWeightNum = (coil_weight === '' || coil_weight == null) ? null : Number(coil_weight);
+  const coilWeightNum = (coil_weight === '' || coil_weight == null) ? null : (coilInGrams ? gToKg(coil_weight) : Number(coil_weight));
+  if (coilInGrams && scrap_value != null && String(scrap_value).trim() !== '' && !isNaN(Number(scrap_value))) {
+    scrap_value = String(gToKg(scrap_value));
+  }
   if (!isFg && stageNo === 3 && done && !(coilWeightNum > 0)) {
     return res.status(400).json({
       error: 'Total weight of all coils is required before marking this stage done.',
@@ -1410,7 +1421,9 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     const perCoilG = coils > 0 ? (coilWeightNum * 1000) / coils : null;
     if (perCoilG != null && (perCoilG < 0.2 || perCoilG > 500)) {
       return res.status(400).json({
-        error: `That is ${Math.round(perCoilG * 100) / 100} g per coil (${coilWeightNum} kg ÷ ${coils} coils). The total weight is in kg for all the coils together — please check it.`,
+        error: coilInGrams
+          ? `That is ${Math.round(perCoilG * 100) / 100} g per coil (${coil_weight} g ÷ ${coils} coils). Enter the total grams for all the coils together — please check it.`
+          : `That is ${Math.round(perCoilG * 100) / 100} g per coil (${coilWeightNum} kg ÷ ${coils} coils). The total weight is in kg for all the coils together — please check it.`,
         code: 'COIL_WEIGHT_IMPLAUSIBLE',
       });
     }
@@ -1434,8 +1447,8 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
 
   await db.run(`
     INSERT INTO production_checklist
-      (job_card_id, stage_no, done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, coil_weight, done_at, updated_by, updated_at, rejection_entered_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(), CASE WHEN $6 > 0 THEN NOW() END)
+      (job_card_id, stage_no, done, value1, value2, rejection_qty, remade_qty, worker_name, scrap_value, notes, coil_weight, done_at, updated_by, updated_at, rejection_entered_at, coil_unit)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(), CASE WHEN $6 > 0 THEN NOW() END, $14)
     ON CONFLICT(job_card_id, stage_no) DO UPDATE SET
       done          = EXCLUDED.done,
       value1        = EXCLUDED.value1,
@@ -1450,6 +1463,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
       scrap_value   = EXCLUDED.scrap_value,
       notes         = EXCLUDED.notes,
       coil_weight   = EXCLUDED.coil_weight,
+      coil_unit     = COALESCE(EXCLUDED.coil_unit, production_checklist.coil_unit),
       done_at = CASE
         WHEN EXCLUDED.done = 1 AND production_checklist.done_at IS NULL THEN EXCLUDED.done_at
         WHEN EXCLUDED.done = 0 THEN NULL
@@ -1461,7 +1475,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     worker_name || null,
     // '0' is a real scrap entry — only blank/absent becomes NULL
     (scrap_value != null && String(scrap_value).trim() !== '') ? String(scrap_value).trim() : null,
-    notes || null, coilWeightNum, done ? now : null, req.user.id]);
+    notes || null, coilWeightNum, done ? now : null, req.user.id, coilInGrams ? 'g' : null]);
 
   // When the ready stage is re-submitted to QC, clear the QC rejection flag
   if (((stageNo === 29 && !isFg) || (stageNo === 4 && isFg)) && done) {

@@ -4,7 +4,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
-import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS, getStageLabel, stagesFor, downloadExcel, WORKER_NAME_STAGES, SCRAP_VALUE_STAGES, PLATING_STAGE, PLATING_COMPANIES } from '../../lib/utils';
+import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS, getStageLabel, stagesFor, downloadExcel, WORKER_NAME_STAGES, SCRAP_VALUE_STAGES, PLATING_STAGE, PLATING_COMPANIES, kgToG, coilWeightText, stageScrapText } from '../../lib/utils';
 import { printJobCardSlip } from '../../lib/printJobCardSlip';
 import { compressImage } from '../../lib/compressImage';
 import {
@@ -997,8 +997,8 @@ function ChecklistModal({ card, onClose, onSave }) {
                             {sData.value2 && <span className="text-gray-400">{sData.value2}</span>}
                           </>
                         )}
-                        {sData.scrap_value && <span className="text-amber-600">Scrap: {sData.scrap_value}</span>}
-                        {sData.coil_weight != null && <span className="text-blue-600 font-medium">Coil Wt: {sData.coil_weight} kg</span>}
+                        {sData.scrap_value && <span className="text-amber-600">Scrap: {stageScrapText(sData, def.no)}</span>}
+                        {sData.coil_weight != null && <span className="text-blue-600 font-medium">Coil Wt: {coilWeightText(sData)}</span>}
                         {hasRejection && (
                           <span className="text-orange-600 font-medium">
                             Rej: {sData.rejection_qty} · Remade: {sData.remade_qty || 0}
@@ -1181,9 +1181,13 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const pickWorker = WORKER_PICK_STATUSES.has(card?.status);
   const [value1, setValue1] = useState(stageData.value1 || '');
   const [value2, setValue2] = useState(stageData.value2 || '');
-  const [coilWeight, setCoilWeight] = useState(stageData.coil_weight != null ? String(stageData.coil_weight) : '');
+  // Grams from 9 Oct 2026 (owner); an older kg figure is never put into the grams box.
+  const [coilWeight, setCoilWeight] = useState(stageData.coil_weight != null && stageData.coil_unit === 'g' ? String(kgToG(stageData.coil_weight)) : '');
   const [workerName, setWorkerName] = useState(stageData.worker_name || '');
-  const [scrapValue, setScrapValue] = useState(stageData.scrap_value || '');
+  const [scrapValue, setScrapValue] = useState(
+    stageDef.no === 3 && stageData.scrap_value != null && String(stageData.scrap_value) !== ''
+      ? (stageData.coil_unit === 'g' ? String(kgToG(stageData.scrap_value)) : '')
+      : (stageData.scrap_value || ''));
   const [rejQty, setRejQty] = useState(String(stageData.rejection_qty || 0));
   const [remadeQty, setRemadeQty] = useState(String(stageData.remade_qty || 0));
   const [dispatchedQty, setDispatchedQty] = useState(String(stageData.dispatched_qty || ''));
@@ -1445,7 +1449,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         worker_name: workerName || null,
         scrap_value: String(scrapValue).trim() !== '' ? scrapValue : null, // '0' is a real entry
         notes: notes || null,
-        ...(stageDef.coilWeight ? { coil_weight: coilWeight } : {}),
+        ...(stageDef.coilWeight ? { coil_weight: coilWeight, coil_unit: 'g' } : {}),
         ...(isDispatch ? { dispatched_qty: finalDispatchQty } : {}),
       });
       await onSaved();
@@ -1992,11 +1996,11 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       {stageDef.coilWeight && (
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Total Weight of All Coils (kg) <span className="text-red-500">*</span>
+            Total Weight of All Coils (grams) <span className="text-red-500">*</span>
           </label>
           {isDone ? (
             <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
-              {stageData.coil_weight != null ? `${stageData.coil_weight} kg` : '—'}
+              {coilWeightText(stageData)}
             </div>
           ) : (
             <input
@@ -2004,23 +2008,23 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               type="number"
               step="any"
               min="0"
-              placeholder="e.g. 12.5"
+              placeholder="e.g. 48"
               value={coilWeight}
               onChange={e => setCoilWeight(e.target.value)}
             />
           )}
-          <p className="text-xs text-gray-400 mt-1">Combined weight of every coil made for this job card.</p>
+          <p className="text-xs text-gray-400 mt-1">All the coils of this job card together, in grams — e.g. 6 coils used 48 g → type 48.</p>
           {/* Per coil as they type — the app refuses below 0.2 g or above 500 g a coil (owner, 5 Oct 2026). */}
           {!isDone && parseFloat(coilWeight) > 0 && (() => {
             let el = 1;
             try { const g = typeof card?.generated_spec === 'string' ? JSON.parse(card.generated_spec) : card?.generated_spec; el = Math.max(1, parseInt(g?.computed?.elements, 10) || 1); } catch { el = 1; }
             const coils = (Number(card?.qty) || 0) * el;
             if (!(coils > 0)) return null;
-            const per = (parseFloat(coilWeight) * 1000) / coils;
+            const per = parseFloat(coilWeight) / coils;
             const bad = per < 0.2 || per > 500;
             return (
               <p className={`text-xs mt-1 ${bad ? 'text-red-600 font-medium' : 'text-teal-700'}`}>
-                = {Math.round(per * 100) / 100} g per coil ({coils} coils){bad ? ' — that looks wrong: enter the total for all coils, in kg' : ''}
+                = {Math.round(per * 100) / 100} g per coil ({coils} coils){bad ? ' — that looks wrong: enter the total for all coils, in grams' : ''}
               </p>
             );
           })()}
@@ -2032,12 +2036,12 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">
             {scrapRequired
-              ? <>{stageDef.no === 3 ? 'Coil Scrap (kg, total)' : 'Tube Scrap (inches, per pc)'} <span className="text-red-500">*</span> <span className="text-xs text-gray-400 font-normal">— enter 0 if none</span></>
+              ? <>{stageDef.no === 3 ? 'Coil Scrap (grams, total)' : 'Tube Scrap (inches, per pc)'} <span className="text-red-500">*</span> <span className="text-xs text-gray-400 font-normal">— enter 0 if none</span></>
               : <>Scrap Value <span className="text-xs text-gray-400 font-normal">(optional)</span></>}
           </label>
           {isDone && stageData.scrap_value ? (
             <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
-              {stageData.scrap_value}
+              {stageScrapText(stageData, stageDef.no)}{stageDef.no === 3 && stageData.coil_unit !== 'g' ? ' kg' : ''}
             </div>
           ) : (
             <>

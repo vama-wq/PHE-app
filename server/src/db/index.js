@@ -2393,6 +2393,9 @@ async function initDB(retries = 20, delayMs = 10000) {
     // intakes a finished-goods card's pieces came from — [{ log_id, job_card_no,
     // order_code, qty }] — so its fins go by those job cards' tube lengths.
     await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fg_batches JSONB`);
+    // Stage 3 coil typed in grams (owner, 9 Oct 2026): 'g' marks such a row;
+    // coil_weight and the Stage 3 scrap stay in kg.
+    await pool.query(`ALTER TABLE production_checklist ADD COLUMN IF NOT EXISTS coil_unit TEXT`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');

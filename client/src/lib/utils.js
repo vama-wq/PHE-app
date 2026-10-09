@@ -387,3 +387,15 @@ export const fmtDateSpan = (first, last) => {
   const a = fmtDate(first || last), b = fmtDate(last || first);
   return a === b ? a : `${a} – ${b}`;
 };
+
+// Stage 3 coil (owner, 9 Oct 2026): typed in GRAMS from then on and kept in kg;
+// coil_unit 'g' marks such a row. Rows ticked before still read in kg.
+export const kgToG = (v) => Math.round(Number(v) * 1000 * 1000) / 1000;
+export function coilWeightText(row) {
+  if (row?.coil_weight == null) return '—';
+  return row.coil_unit === 'g' ? `${kgToG(row.coil_weight)} g` : `${row.coil_weight} kg`;
+}
+export function stageScrapText(row, stageNo) {
+  if (stageNo === 3 && row?.coil_unit === 'g' && row?.scrap_value != null && String(row.scrap_value) !== '') return `${kgToG(row.scrap_value)} g`;
+  return row?.scrap_value;
+}
