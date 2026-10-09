@@ -260,12 +260,21 @@ async function fgSourceLength(db, fgCard) {
   return fgStoreLength(db, await db.get('SELECT * FROM finished_goods WHERE id=$1', [fgCard.fg_source_id]));
 }
 // For a finished-goods order line before it has cards: the store row of its drawing.
+// The item may carry a word after the store's drawing — "PT-UType-10U-500W-Finns"
+// / "-Plain" on ORD-162-26 (9 Oct 2026) — so when nothing matches exactly, the
+// longest store drawing the item's name starts with is the one.
 async function fgSourceLengthForItem(db, item) {
-  const base = String(item?.drawing_number || '').trim().replace(/-\d+$/, '');
+  const name = String(item?.drawing_number || '').trim();
+  const base = name.replace(/-\d+$/, '');
   if (!base) return null;
   const fg = await db.get(
     `SELECT * FROM finished_goods WHERE LOWER(TRIM(base_drawing_no)) = LOWER($1)
-      ORDER BY (qty_available > 0) DESC, id DESC LIMIT 1`, [base]);
+      ORDER BY (qty_available > 0) DESC, id DESC LIMIT 1`, [base])
+    || await db.get(
+    `SELECT * FROM finished_goods
+      WHERE LENGTH(TRIM(COALESCE(base_drawing_no,''))) > 0
+        AND LEFT(LOWER($1), LENGTH(TRIM(base_drawing_no)) + 1) IN (LOWER(TRIM(base_drawing_no)) || '-', LOWER(TRIM(base_drawing_no)) || ' ')
+      ORDER BY LENGTH(TRIM(base_drawing_no)) DESC, (qty_available > 0) DESC, id DESC LIMIT 1`, [name]);
   return fgStoreLength(db, fg);
 }
 

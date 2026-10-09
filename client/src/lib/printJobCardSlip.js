@@ -184,10 +184,36 @@ export async function printJobCardSlip(jc) {
 // from every screen that prints — which records the release on the card's
 // timeline. Resolves true when the slip may now be requested again.
 async function releaseHeldSlip(jc, r) {
-  const what = (r.short || []).map(s => `pin ${s.item_code} short (need ${s.need}, stock ${s.stock})`).join('; ')
+  const what = (r.short || []).map(s => `pin ${s.item_code} short (need ${s.need}, stock ${s.stock_for_card ?? s.stock})`).join('; ')
     || 'a terminal pin is short of stock';
   const msg = `Slip held — ${what}.\nThe owner or Design / QC must press OK.`;
   if (!r.can_ok) { alert(msg); return false; }
+  // App-picked pins stock cannot cover: the rework bin first, with this
+  // approval (owner, 9 Oct 2026) — then, if still short, the OK below.
+  const offers = (r.short || []).filter(s => Number(s.bin_offer) > 0);
+  if (r.can_use_bin && offers.length) {
+    const bin = offers.map(s => `${s.bin_offer} ${s.item_code}`).join(', ');
+    if (window.confirm(`Slip held — ${what}.\n\nTake ${bin} from the rework bin for this card? The rest comes from new stock. Your approval is written on the card's timeline.`)) {
+      try {
+        const u = await api.post(`/job-cards/${jc.id}/terminals/use-bin`, {});
+        if (!u.data?.held) return true;
+        r = { ...r, short: u.data.short };
+      } catch (e) {
+        alert(e.response?.data?.error || 'Could not record the approval');
+        return false;
+      }
+      const left = (r.short || []).map(s => `pin ${s.item_code} short (need ${s.need}, stock ${s.stock_for_card ?? s.stock})`).join('; ');
+      if (!window.confirm(`Still held — ${left}.\n\nPress OK to release this slip and print it. Your OK is written on the card's timeline.`)) return false;
+      try {
+        await api.post(`/job-cards/${jc.id}/terminals/ok`, {});
+        return true;
+      } catch (e) {
+        if (e.response?.data?.code === 'NOT_SHORT') return true;
+        alert(e.response?.data?.error || 'Could not record the OK');
+        return false;
+      }
+    }
+  }
   if (!window.confirm(`${msg}\n\nPress OK to release this slip and print it. Your OK is written on the card's timeline.`)) return false;
   try {
     await api.post(`/job-cards/${jc.id}/terminals/ok`, {});

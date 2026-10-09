@@ -496,6 +496,9 @@ const terminalsPayload = (state, req) => ({
   pins_taken_at: state.pins_taken_at || null,
   editable: terminals.EDIT_ROLES.includes(req.user.role) && !!state.pickable && !state.last_stage_taken_at && !state.pins_taken_at && !state.no_terminals,
   can_ok: terminals.OK_ROLES.includes(req.user.role),
+  // App-picked pins stock cannot cover: the rework bin may give them, with the
+  // owner's or Design / QC's approval (owner, 9 Oct 2026).
+  can_use_bin: terminals.OK_ROLES.includes(req.user.role) && (state.short || []).some(s => s.bin_offer > 0),
   no_terminals: !!state.no_terminals,
 });
 
@@ -542,6 +545,21 @@ router.post('/:id/terminals/ok', authenticate, authorize(...terminals.OK_ROLES),
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error('[terminals] ok failed:', e);
     res.status(500).json({ error: 'Could not record the OK' });
+  }
+});
+
+// The owner or Design / QC approving the rework bin for pins stock cannot cover.
+router.post('/:id/terminals/use-bin', authenticate, authorize(...terminals.OK_ROLES), async (req, res) => {
+  const db = getDB();
+  const jc = await db.get('SELECT * FROM job_cards WHERE id=$1', [req.params.id]);
+  if (!jc) return res.status(404).json({ error: 'Job card not found' });
+  try {
+    const state = await terminals.useReworkBin(db, jc, req.user);
+    res.json({ message: 'Rework bin approved', ...terminalsPayload(state, req) });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error('[terminals] use-bin failed:', e);
+    res.status(500).json({ error: 'Could not record the approval' });
   }
 });
 
@@ -602,18 +620,18 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
       return res.status(409).json({
         code: 'TERMINALS_SHORT', short: state.short,
         can_ok: terminals.OK_ROLES.includes(req.user.role),
-        error: `Slip held — ${state.short.map(s => `pin ${s.item_code} short (need ${s.need}, stock ${s.stock})`).join('; ')}. The owner or Design / QC must press OK.`,
+        can_use_bin: terminals.OK_ROLES.includes(req.user.role) && state.short.some(s => s.bin_offer > 0),
+        error: `Slip held — ${state.short.map(s => `pin ${s.item_code} short (need ${s.need}, stock ${s.stock_for_card ?? s.stock}${s.bin_offer > 0 ? `, rework bin can give ${s.bin_offer}` : ''})`).join('; ')}. The owner or Design / QC must ${state.short.some(s => s.bin_offer > 0) ? 'approve the rework bin or ' : ''}press OK.`,
       });
     }
     if (state.rows.length) {
       lines = allLines.filter(l => !terminals.isTerminalCategory(l.category));
       terminalRows = state.rows.map(r => {
-        // A rework portion on the list line for the same pin prints as its own
-        // REWORK row, like any other line — the card's share of it, never more
-        // than the row itself.
+        // The part the rework bin covers prints as its own REWORK row: the
+        // list's rework portion on the item's last cards only (owner, 9 Oct
+        // 2026), or pins marked / approved from the bin — never more than the row.
         const line = state.lines.find(l => l.inventory_item_id === r.inventory_item_id);
-        // Pins marked in Change pins print the part the bin covers (owner, 8 Oct 2026).
-        const rw = line && Number(line.rework_qty) > 0 ? Math.min(r.qty, terminals.shareFor(line.rework_qty, jc.qty, state.itemQty))
+        const rw = line && Number(line.rework_qty) > 0 ? Math.min(r.qty, Number(line.rework_share) || 0)
           : Math.min(r.qty, Math.round(Number(r.from_rework) || 0));
         return { inventory_item_id: r.inventory_item_id, item_code: r.item_code, name: r.name, name_gu: r.name_gu,
                  unit: r.unit, qty: r.qty, rework_qty: rw, source: r.source, current_stock: r.current_stock };

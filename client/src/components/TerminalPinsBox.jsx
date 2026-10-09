@@ -157,6 +157,24 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
     } finally { setOkBusy(false); }
   };
 
+  // The owner or Design / QC approving the rework bin for app-picked pins that
+  // stock cannot cover (owner, 9 Oct 2026): the bin's pieces go on this card,
+  // the rest from new stock.
+  const binOffers = (data.short || []).filter(s => Number(s.bin_offer) > 0);
+  const useBin = async () => {
+    const what = binOffers.map(s => `${s.bin_offer} ${s.item_code}`).join(', ');
+    if (!window.confirm(`Take ${what} from the rework bin for this card?\n\nThe rest comes from new stock. Your approval is written on the card's timeline.`)) return;
+    setOkBusy(true); setError('');
+    try {
+      const r = await api.post(`/job-cards/${jobCardId}/terminals/use-bin`, {});
+      setData(r.data);
+      onChanged?.(r.data);
+    } catch (e) {
+      if (e.response?.data?.code === 'NO_BIN_OFFER') load();
+      else setError(e.response?.data?.error || 'Could not record the approval');
+    } finally { setOkBusy(false); }
+  };
+
   const filteredPins = (pins || []).filter(i => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
@@ -197,6 +215,12 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
           </button>
         ) : header}
         <div className="flex items-center gap-2 flex-shrink-0">
+          {held && !unset && data.can_use_bin && binOffers.length > 0 && (
+            <button type="button" className="btn-secondary btn-sm text-xs" onClick={useBin} disabled={okBusy}
+              title="Take the pins stock cannot cover from the rework bin — recorded on the card's timeline">
+              {okBusy ? 'Recording…' : `Use rework bin (${binOffers.map(s => `${fmtQty(s.bin_offer)} ${s.item_code}`).join(', ')})`}
+            </button>
+          )}
           {held && !unset && data.can_ok && (
             <button type="button" className="btn-primary btn-sm text-xs" onClick={pressOk} disabled={okBusy}
               title="Release this card's slip although a pin is short — recorded on the card's timeline">
@@ -227,10 +251,16 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
           {held && !unset && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
               <div className="font-medium">
-                Slip held — {(data.short || []).map(s => `pin ${s.item_code} short (need ${s.need}, stock ${fmtQty(s.stock)})`).join('; ')}.
+                Slip held — {(data.short || []).map(s => `pin ${s.item_code} short (need ${s.need}, ${s.stock_for_card !== null && s.stock_for_card !== undefined && s.stock_for_card !== s.stock
+                  ? `stock left after the earlier cards ${fmtQty(s.stock_for_card)}` : `stock ${fmtQty(s.stock)}`})`).join('; ')}.
               </div>
+              {binOffers.length > 0 && (
+                <div className="text-xs mt-0.5 text-sky-800">
+                  The rework bin can give {binOffers.map(s => `${fmtQty(s.bin_offer)} ${s.item_code}`).join(', ')} — rework pins go on the last job cards; the first cards take new stock.
+                </div>
+              )}
               <div className="text-xs mt-0.5">
-                The owner or Design / QC must press OK before the material slip can print.
+                The owner or Design / QC must {binOffers.length ? 'approve the rework bin or ' : ''}press OK before the material slip can print.
                 {data.short_at ? ` Found ${fmtDateTime(data.short_at)}.` : ''}
               </div>
             </div>
@@ -267,7 +297,7 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
                         <span className="block text-[10px] text-red-700">{fmtQty(Number(r.rework_qty) - Number(r.from_rework || 0))} marked from rework — in use for other inventory</span>
                       )}
                       {r.short
-                        ? <span className="text-red-700 font-medium flex items-center justify-end gap-1"><AlertTriangle size={11} /> stock {fmtQty(r.current_stock)} — short {fmtQty(Number(r.qty) - Number(r.from_rework || 0) - Number(r.current_stock))}</span>
+                        ? <span className="text-red-700 font-medium flex items-center justify-end gap-1"><AlertTriangle size={11} /> {r.stock_for_card !== null && r.stock_for_card !== undefined && r.stock_for_card !== r.current_stock ? `stock ${fmtQty(r.current_stock)}, ${fmtQty(r.stock_for_card)} left after the earlier cards` : `stock ${fmtQty(r.current_stock)}`} — short {fmtQty(Number(r.qty) - Number(r.from_rework || 0) - Number(r.stock_for_card ?? r.current_stock))}</span>
                         : <span className="text-gray-500">stock {fmtQty(r.current_stock)}</span>}
                       {Number(r.rework_free) > 0 && <span className="block text-[10px] text-sky-700">rework bin: {fmtQty(r.rework_free)} free</span>}
                     </span>
@@ -370,7 +400,7 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
           {/* What the list says, for comparison — this is where the default came from. */}
           {!editing && data.list?.length > 0 && (
             <p className="text-[11px] text-gray-400">
-              On the item's list: {data.list.map(l => `${l.item_code} × ${fmtQty(l.qty)} (${l.share} for this card${Number(l.rework_qty) > 0 ? `, ${fmtQty(l.rework_qty)} from rework — ${fmtQty(l.rework_share)} of them this card's` : ''})`).join(' · ')}
+              On the item's list: {data.list.map(l => `${l.item_code} × ${fmtQty(l.qty)} (${l.share} for this card${Number(l.rework_qty) > 0 ? `, ${fmtQty(l.rework_qty)} from rework on the last job cards — ${fmtQty(l.rework_share)} of them on this card` : ''})`).join(' · ')}
             </p>
           )}
           {!editing && rows.some(r => r.source === 'design' && r.updated_by_name) && (

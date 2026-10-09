@@ -480,9 +480,9 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       r.status === 200 && (await bin(RW)) === 2 && near(await stock(RW), 0) && (await termRows(R1, RW)).length === 0,
       `${r.status} bin ${await bin(RW)} | ${await moved(s0)}`);
 
-    // ════ C3b. Two cards share the list's rework portion (8 Oct 2026) ════
-    // 10 RW on an item of 10, 4 of them from the bin; two cards of 5. Each card
-    // counts only ITS share of the 4 (2), not all 4 — the slip prints the same.
+    // ════ C3b. Two cards and the list's rework portion (owner, 9 Oct 2026) ════
+    // 10 RW on an item of 10, 4 of them from the bin; two cards of 5. The bin
+    // pins go on the LAST card (all 4); the first card takes new stock only.
     const oS = await mkOrder('ZZT-TS');
     const oiS = await mkLine(oS, 10, 'ZZTEST-DWG-TS');
     await putLine(oiS, RW, 10, 4); await putLine(oiS, NUT, 40);
@@ -490,11 +490,13 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const S2 = await mkCard(oS, oiS, 'ZZT-TS2', 5, { dwg: 'ZZTEST-DWG-TS' });
     const rS1 = await call('GET', terminals(S1));
     const rS2 = await call('GET', terminals(S2));
-    ok('C3b. two cards of 5 sharing 4 bin pins: each counts 2 from the bin, so each is short by 3 (stock 0) — not 4 each',
-      rS1.body.rows?.[0]?.from_rework === 2 && rS1.body.short[0]?.need === 3 && rS2.body.rows?.[0]?.from_rework === 2 && rS2.body.short[0]?.need === 3
-      && rS1.body.list?.[0]?.rework_share === 2, JSON.stringify({ a: rS1.body.short, b: rS2.body.short, list: rS1.body.list }));
+    ok('C3b. two cards of 5 and 4 bin pins: all 4 are the last card\'s (the bin holds only 2 now, so it counts 2 — short 3); the first card none (short 5)',
+      rS1.body.rows?.[0]?.from_rework === 0 && rS1.body.short[0]?.need === 5 && rS2.body.rows?.[0]?.from_rework === 2 && rS2.body.short[0]?.need === 3
+      && rS1.body.list?.[0]?.rework_share === 0 && rS2.body.list?.[0]?.rework_share === 4, JSON.stringify({ a: rS1.body.short, b: rS2.body.short, list: rS1.body.list }));
     sl = await call('POST', slipOf(S1), {}, floor);
-    ok('C3b. the slip prints the same share as REWORK (2)', sl.body.terminals?.[0]?.rework_qty === 2 || sl.status === 409, `${sl.status} ${JSON.stringify(sl.body.terminals || sl.body)}`);
+    ok('C3b. the first card\'s slip is held (short 5) — no REWORK on it', sl.status === 409 && sl.body.code === 'TERMINALS_SHORT' && sl.body.short?.[0]?.from_rework === 0, `${sl.status} ${JSON.stringify(sl.body)}`);
+    r = await call('POST', `/api/job-cards/${S1}/terminals/use-bin`, {}, design);
+    ok('C3b. a list that takes the pin from the bin decides — no extra bin approval on the card (older orders)', r.status === 400 && r.body.code === 'NO_BIN_OFFER', JSON.stringify(r.body));
 
     // ════ C4. Marked from the rework bin in Change pins (owner, 8 Oct 2026) ════
     // 4 MK on an item of 2 (no rework on the list), one card of 2; stock 0.
@@ -630,6 +632,80 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       ok('I2. an order up to ORD-160: a list without a Terminal Pin is still refused', rr.status === 400 && /Terminal Pin is required/.test(rr.body.error || ''), JSON.stringify(rr.body));
     }
 
+    // ════ N. Rework pins go on the LAST job cards (owner, 9 Oct 2026) ════
+    // ORD-159-26's shape: 360 pcs on 7 cards of 50 + 1 of 10, the list takes 60
+    // WH and 15 WO from the bin (owner: rework only on S13 and S12). S13 takes
+    // 10 + 10 from the bin, S12 50 WH + 5 WO; S6–S11 take new stock only.
+    const NH = await mkItem('ZZTEST-TP-NH', 'Terminal Pin', 1000, 'pcs');
+    const NO = await mkItem('ZZTEST-TP-NO', 'Terminal Pin', 1000, 'pcs');
+    await rework.move(txDb, { itemId: NH, kind: 'deposit', qty: 100, ref: {}, notes: 'test deposit', userId: uid });
+    await rework.move(txDb, { itemId: NO, kind: 'deposit', qty: 15, ref: {}, notes: 'test deposit', userId: uid });
+    const oN = await mkOrder('ZZT-TN');
+    const oiN = await mkLine(oN, 360, 'ZZTEST-DWG-TN');
+    await putLine(oiN, NH, 360, 60); await putLine(oiN, NO, 360, 15); await putLine(oiN, NUT, 720);
+    const NC = [];
+    for (let i = 6; i <= 13; i++) NC.push(await mkCard(oN, oiN, `ZZT-TN-S${i}`, i === 13 ? 10 : 50, { dwg: 'ZZTEST-DWG-TN' }));
+    const shareOf = (b, inv) => b.list?.find(l => l.inventory_item_id === inv)?.rework_share;
+    const fromOf = (b, inv) => b.rows?.find(x => x.inventory_item_id === inv)?.from_rework;
+    const nb = [];
+    for (const id of NC) nb.push((await call('GET', terminals(id))).body);
+    ok('N1. the rework sits on the last cards: S13 10 WH + 10 WO, S12 50 WH + 5 WO, S6–S11 none',
+      shareOf(nb[7], NH) === 10 && shareOf(nb[7], NO) === 10 && shareOf(nb[6], NH) === 50 && shareOf(nb[6], NO) === 5
+      && nb.slice(0, 6).every(b => shareOf(b, NH) === 0 && shareOf(b, NO) === 0), JSON.stringify(nb.map(b => [shareOf(b, NH), shareOf(b, NO)])));
+    ok('N1. the rows count the same from the bin, and nothing is short (stock 1000)',
+      fromOf(nb[7], NH) === 10 && fromOf(nb[7], NO) === 10 && fromOf(nb[6], NH) === 50 && fromOf(nb[6], NO) === 5
+      && nb.slice(0, 6).every(b => fromOf(b, NH) === 0 && fromOf(b, NO) === 0) && nb.every(b => b.held === false && b.short.length === 0),
+      JSON.stringify(nb.map(b => [fromOf(b, NH), fromOf(b, NO), b.held])));
+    sl = await call('POST', slipOf(NC[7]), {}, floor);
+    const slT = (b, inv) => b.terminals?.find(t => t.inventory_item_id === inv);
+    ok('N2. S13\'s slip: 10 WH and 10 WO, all REWORK', sl.status === 200 && slT(sl.body, NH)?.qty === 10 && slT(sl.body, NH)?.rework_qty === 10
+      && slT(sl.body, NO)?.rework_qty === 10, `${sl.status} ${JSON.stringify(sl.body.terminals)}`);
+    sl = await call('POST', slipOf(NC[6]), {}, floor);
+    ok('N2. S12\'s slip: REWORK 50 WH and 5 WO', sl.status === 200 && slT(sl.body, NH)?.rework_qty === 50 && slT(sl.body, NO)?.rework_qty === 5, `${sl.status} ${JSON.stringify(sl.body.terminals)}`);
+    sl = await call('POST', slipOf(NC[0]), {}, floor);
+    ok('N2. S6\'s slip: no REWORK at all', sl.status === 200 && sl.body.terminals?.length === 2 && sl.body.terminals.every(t => t.rework_qty === 0), `${sl.status} ${JSON.stringify(sl.body.terminals)}`);
+    // S6 finishes first: new stock only.
+    await tick(NC[0], MANDATORY);
+    s0 = await snap([NH, NO]);
+    let bH = await bin(NH), bO = await bin(NO);
+    r = await call('PUT', `/api/job-cards/${NC[0]}/checklist/29`, { done: true }, floor);
+    ok('N3. S6 (a first card) finishes first: 50 + 50 from new stock, the bin untouched',
+      r.status === 200 && near(await stock(NH), s0[NH] - 50) && near(await stock(NO), s0[NO] - 50) && (await bin(NH)) === bH && (await bin(NO)) === bO,
+      `${r.status} ${await moved(s0)} bin ${await bin(NH)}/${await bin(NO)}`);
+    await tick(NC[7], MANDATORY);
+    s0 = await snap([NH, NO]);
+    r = await call('PUT', `/api/job-cards/${NC[7]}/checklist/29`, { done: true }, floor);
+    ok('N4. S13 (the last card): its 10 WH + 10 WO come out of the bin, nothing from stock',
+      r.status === 200 && near(await stock(NH), s0[NH]) && near(await stock(NO), s0[NO]) && (await bin(NH)) === bH - 10 && (await bin(NO)) === bO - 10,
+      `${r.status} ${await moved(s0)} bin ${await bin(NH)}/${await bin(NO)}`);
+    await tick(NC[6], MANDATORY);
+    s0 = await snap([NH, NO]);
+    r = await call('PUT', `/api/job-cards/${NC[6]}/checklist/29`, { done: true }, floor);
+    let LNH = await line(oiN, NH), LNO = await line(oiN, NO);
+    ok('N5. S12: 50 WH from the bin, WO 5 from the bin + 45 new; the list\'s 60 + 15 are all drawn',
+      r.status === 200 && near(await stock(NH), s0[NH]) && near(await stock(NO), s0[NO] - 45) && (await bin(NH)) === bH - 60 && (await bin(NO)) === 0
+      && near(LNH.rework_deducted, 60) && near(LNH.rework_qty, 60) && near(LNO.rework_deducted, 15),
+      `${r.status} ${await moved(s0)} bin ${await bin(NH)}/${await bin(NO)} ${JSON.stringify([LNH, LNO])}`);
+    // The bin short on the last cards: only the shortfall is released.
+    const NS = await mkItem('ZZTEST-TP-NS', 'Terminal Pin', 100, 'pcs');
+    await rework.move(txDb, { itemId: NS, kind: 'deposit', qty: 6, ref: {}, notes: 'test deposit', userId: uid });
+    const oN2 = await mkOrder('ZZT-TN2');
+    const oiN2 = await mkLine(oN2, 10, 'ZZTEST-DWG-TN2');
+    await putLine(oiN2, NS, 10, 8); await putLine(oiN2, NUT, 40);
+    const N21 = await mkCard(oN2, oiN2, 'ZZT-TN2-1', 5, { dwg: 'ZZTEST-DWG-TN2' });
+    const N22 = await mkCard(oN2, oiN2, 'ZZT-TN2-2', 5, { dwg: 'ZZTEST-DWG-TN2' });
+    const n21 = (await call('GET', terminals(N21))).body, n22 = (await call('GET', terminals(N22))).body;
+    ok('N6. 8 from the bin on two cards of 5: the last card 5, the one before it 3', shareOf(n22, NS) === 5 && shareOf(n21, NS) === 3,
+      JSON.stringify([shareOf(n21, NS), shareOf(n22, NS)]));
+    await tick(N22, MANDATORY); await tick(N21, MANDATORY);
+    await call('PUT', `/api/job-cards/${N22}/checklist/29`, { done: true }, floor);
+    s0 = await snap([NS]);
+    r = await call('PUT', `/api/job-cards/${N21}/checklist/29`, { done: true }, floor);
+    const LNS = await line(oiN2, NS);
+    ok('N6. the last card drew 5 (bin 6 → 1); the one before wanted 3, got 1 — 4 from stock — and only its shortfall of 2 was released (8 → 6)',
+      r.status === 200 && (await bin(NS)) === 0 && near(await stock(NS), s0[NS] - 4) && near(LNS.rework_deducted, 6) && near(LNS.rework_qty, 6),
+      `${r.status} bin ${await bin(NS)} ${await moved(s0)} ${JSON.stringify(LNS)}`);
+
     // ════ J. Pins from the job card, taken at Spot — orders after ORD-160 (owner, 8 Oct 2026) ════
     PINS_RULE.afterOrderId = 0;
     // Made-up stud M9 so no real pin item matches: TP-SS-M9-03-WH / -WO.
@@ -743,9 +819,77 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       jr.length === 2 && rowQ(jr, P9H)?.q === 6 && rowQ(jr, P9O)?.q === 6 && !rowQ(jr, WH) && jr.every(x => x.source === 'card')
       && logs.some(l => /now come from the job card \(M9 3" × 1 element\)/.test(l.desc || '')), JSON.stringify(jr));
 
+    // ════ O. App-picked pins: new stock for the first cards; the bin only when stock runs out, on the last cards, with an approval (owner, 9 Oct 2026) ════
+    const P7H = await mkItem('TP-SS-M7-03-WH', 'Terminal Pin', 25, 'pcs');
+    const P7O = await mkItem('TP-SS-M7-03-WO', 'Terminal Pin', 100, 'pcs');
+    const spec7 = JSON.stringify({ computed: { studLabel: 'M7-SS', terminalPinBig: { studs: 3 }, terminalPinSmall: { studs: 3 }, elements: 1 } });
+    await rework.move(txDb, { itemId: P7H, kind: 'deposit', qty: 8, ref: {}, notes: 'test deposit', userId: uid });
+    const oO = await mkOrder('ZZT-TO');
+    const oiO = await mkLine(oO, 30, 'ZZTEST-DWG-TO');
+    await putLine(oiO, NUT, 120);
+    const OC = [];
+    for (let i = 1; i <= 3; i++) {
+      const id = await mkCard(oO, oiO, `ZZT-TO-${i}`, 10, { dwg: 'ZZTEST-DWG-TO' });
+      await client.query('UPDATE job_cards SET generated_spec=$2 WHERE id=$1', [id, spec7]);
+      OC.push(id);
+    }
+    const ob = [];
+    for (const id of OC) ob.push((await call('GET', terminals(id))).body);
+    const sh = (b) => b.short?.find(x => x.inventory_item_id === P7H);
+    ok('O1. 25 WH in stock for three cards of 10: cards 1 and 2 are covered by new stock, card 3 has 5 left — short 5, the bin can give 5',
+      ob[0].held === false && ob[1].held === false && ob[2].held === true && sh(ob[2])?.need === 10 && sh(ob[2])?.stock_for_card === 5
+      && sh(ob[2])?.stock === 25 && sh(ob[2])?.bin_offer === 5 && ob[2].can_use_bin === true, JSON.stringify(ob.map(b => [b.held, b.short])));
+    ok('O1. nothing is marked from the bin without an approval', (await qa('SELECT 1 FROM job_card_terminals WHERE job_card_id = ANY($1) AND rework_qty > 0', [OC])).length === 0);
+    sl = await call('POST', slipOf(OC[2]), {}, owner);
+    ok('O1. card 3\'s slip is held, and the owner is offered the bin', sl.status === 409 && sl.body.can_use_bin === true && sl.body.short?.[0]?.bin_offer === 5, JSON.stringify(sl.body));
+    r = await call('POST', `/api/job-cards/${OC[2]}/terminals/use-bin`, {}, floor);
+    ok('O2. production cannot approve the bin', r.status === 403, `${r.status}`);
+    r = await call('POST', `/api/job-cards/${OC[2]}/terminals/use-bin`, {}, design);
+    const o3r = (await rowsOf(OC[2])).find(x => x.inv === P7H);
+    ok('O2. Design / QC approves: 5 WH marked from the bin on card 3, the slip is no longer held, the approval is on the timeline',
+      r.status === 200 && r.body.held === false && Number((await q1('SELECT rework_qty FROM job_card_terminals WHERE job_card_id=$1 AND inventory_item_id=$2', [OC[2], P7H])).rework_qty) === 5
+      && o3r && (logs.some(l => /Rework bin approved by .* for ZZT-TO-3: 5 TP-SS-M7-03-WH/.test(l.desc || ''))
+        || (await qa(`SELECT 1 FROM activity_log WHERE job_card_id=$1 AND activity_type='terminals_rework_approved'`, [OC[2]])).length === 1),
+      `${r.status} ${JSON.stringify(r.body).slice(0, 300)}`);
+    r = await call('GET', terminals(OC[0]));
+    ok('O2. the first cards are untouched: card 1 still all new stock, not held', r.body.held === false && r.body.rows.every(x => !(Number(x.rework_qty) > 0)), JSON.stringify(r.body.rows));
+    sl = await call('POST', slipOf(OC[2]), {}, floor);
+    ok('O3. card 3\'s slip prints REWORK 5 on the WH row', sl.status === 200 && sl.body.terminals?.find(t => t.inventory_item_id === P7H)?.rework_qty === 5, `${sl.status} ${JSON.stringify(sl.body.terminals)}`);
+    r = await call('POST', `/api/job-cards/${OC[2]}/terminals/use-bin`, {}, owner);
+    ok('O3. approving again with nothing short is refused', r.status === 400 && r.body.code === 'NO_BIN_OFFER', JSON.stringify(r.body));
+    await tick(OC[2], [1, 2, 3]);
+    s0 = await snap([P7H, P7O]);
+    r = await call('PUT', `/api/job-cards/${OC[2]}/checklist/4`, { done: true }, floor);
+    ok('O4. Spot on card 3: 5 WH from the bin (8 → 3) and 5 from stock, 10 WO from stock',
+      r.status === 200 && (await bin(P7H)) === 3 && near(await stock(P7H), s0[P7H] - 5) && near(await stock(P7O), s0[P7O] - 10), `${r.status} bin ${await bin(P7H)} ${await moved(s0)}`);
+    // The bin too small, and the first card short as well: the bin goes to the LAST card.
+    const P7X = await mkItem('TP-SS-M7-04-WH', 'Terminal Pin', 5, 'pcs');
+    const P7Y = await mkItem('TP-SS-M7-04-WO', 'Terminal Pin', 100, 'pcs');
+    const spec74 = JSON.stringify({ computed: { studLabel: 'M7-SS', terminalPinBig: { studs: 4 }, terminalPinSmall: { studs: 4 }, elements: 1 } });
+    await rework.move(txDb, { itemId: P7X, kind: 'deposit', qty: 3, ref: {}, notes: 'test deposit', userId: uid });
+    const oP = await mkOrder('ZZT-TP');
+    const oiP = await mkLine(oP, 20, 'ZZTEST-DWG-TP');
+    await putLine(oiP, NUT, 80);
+    const PC = [];
+    for (let i = 1; i <= 2; i++) {
+      const id = await mkCard(oP, oiP, `ZZT-TP-${i}`, 10, { dwg: 'ZZTEST-DWG-TP' });
+      await client.query('UPDATE job_cards SET generated_spec=$2 WHERE id=$1', [id, spec74]);
+      PC.push(id);
+    }
+    const p1 = (await call('GET', terminals(PC[0]))).body, p2 = (await call('GET', terminals(PC[1]))).body;
+    const shX = (b) => b.short?.find(x => x.inventory_item_id === P7X);
+    ok('O5. stock 5 and 3 in the bin for two cards of 10: both short; the bin is offered to the LAST card only (3), the first card none',
+      p1.held && p2.held && shX(p1)?.bin_offer === 0 && shX(p2)?.bin_offer === 3 && shX(p1)?.stock_for_card === 5 && shX(p2)?.stock_for_card === 0,
+      JSON.stringify([p1.short, p2.short]));
+    r = await call('POST', `/api/job-cards/${PC[1]}/terminals/use-bin`, {}, owner);
+    ok('O5. approved: 3 from the bin, still short 7 — the slip waits for an OK as before',
+      r.status === 200 && r.body.held === true && shX(r.body)?.need === 7 && shX(r.body)?.from_rework === 3 && shX(r.body)?.bin_offer === 0, JSON.stringify(r.body.short));
+    r = await call('POST', `/api/job-cards/${PC[0]}/terminals/use-bin`, {}, owner);
+    ok('O5. the first card is never given bin pins the last card holds', r.status === 400 && r.body.code === 'NO_BIN_OFFER', JSON.stringify(r.body));
+
     // ════ G. Nothing leaked past the stubs ════
     ok('G1. every WhatsApp copy recorded was a terminals_short alert for one of the test cards',
-      waCalls.every(w => w.type === 'terminals_short' && [B1, R1, M1, L1, S1, S2, J2c, K1, D1, L2].includes(w.ref?.id)), JSON.stringify(waCalls.filter(w => ![B1, R1, M1, L1, S1, S2, J2c, K1, D1, L2].includes(w.ref?.id)).map(w => [w.type, w.ref?.id, w.title])));
+      waCalls.every(w => w.type === 'terminals_short' && [B1, R1, M1, L1, S1, S2, J2c, K1, D1, L2, ...OC, ...PC].includes(w.ref?.id)), JSON.stringify(waCalls.filter(w => ![B1, R1, M1, L1, S1, S2, J2c, K1, D1, L2, ...OC, ...PC].includes(w.ref?.id)).map(w => [w.type, w.ref?.id, w.title])));
   } catch (e) {
     failed = true;
     console.error('ERROR', e);

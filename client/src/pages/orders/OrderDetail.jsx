@@ -2360,7 +2360,12 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
     api.get('/finished-goods').then(r => {
       const rows = (r.data || []).filter(f => Number(f.qty_available) > 0);
       setFgStock(rows);
-      const match = rows.find(f => (f.base_drawing_no || '').toUpperCase() === baseDrawing);
+      // Exact drawing first; else the longest store drawing the item's name
+      // starts with ("PT-UType-10U-500W-Finns" → PT-UType-10U-500W, 9 Oct 2026).
+      const name = (item.drawing_number || '').trim().toUpperCase();
+      const match = rows.find(f => (f.base_drawing_no || '').toUpperCase() === baseDrawing)
+        || rows.filter(f => { const b = (f.base_drawing_no || '').trim().toUpperCase(); return b && (name.startsWith(`${b}-`) || name.startsWith(`${b} `)); })
+          .sort((a, b) => (b.base_drawing_no || '').trim().length - (a.base_drawing_no || '').trim().length)[0];
       if (match) setSourceId(String(match.id));
     }).catch(() => setFgStock([]));
   }, []);

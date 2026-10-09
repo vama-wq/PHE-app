@@ -10,6 +10,9 @@
 // Rules the owner set:
 //   • QC is told ONLY when a pin is NOT in stock: current stock < this card's
 //     need. Rework pins never trigger anything.
+//   • Rework-bin pins go on the item's LAST job cards; the first cards take new
+//     stock (9 Oct 2026). On app-picked pins the bin is used only when stock
+//     runs out, and only once the owner or Design / QC approves.
 //   • A short pin BLOCKS the card's material slip until someone presses OK —
 //     the owner or the "Design / QC" login (roles 'owner' and 'design', never
 //     user ids), who both get the message.
@@ -108,6 +111,31 @@ function shareFor(lineQty, cardQty, itemQty) {
   return Math.max(0, Math.round(share));
 }
 
+// REWORK-BIN PINS GO ON THE LAST JOB CARDS (owner, 9 Oct 2026): "use all rework
+// in the last job card … keep new for the start job cards". The item's cards in
+// the order they were made; a rework portion fills the last card first, then
+// the one before it, until it is used up. The first cards take new stock.
+async function itemCards(db, itemId, card = null) {
+  const cards = itemId ? await db.all(
+    `SELECT jc.*, o.order_type FROM job_cards jc JOIN orders o ON o.id = jc.order_id
+      WHERE jc.order_item_id=$1 ORDER BY jc.id`, [itemId]) : [];
+  const seq = cards.filter(c => !noTerminals(c));
+  // A card tied to its item only by drawing number is not in the query: last.
+  if (card?.id && !seq.some(c => c.id === card.id) && !noTerminals(card)) seq.push(card);
+  return seq;
+}
+
+// This card's part of a rework portion, filled from the last card backwards.
+function lastCardsShare(seq, cardId, lineQty, reworkQty, itemQty) {
+  let left = Math.max(0, Math.round(Number(reworkQty) || 0));
+  for (let i = seq.length - 1; i >= 0 && left > 0; i--) {
+    const take = Math.min(shareFor(lineQty, seq[i].qty, itemQty), left);
+    if (seq[i].id === cardId) return take;
+    left -= take;
+  }
+  return 0;
+}
+
 // The item's 'Terminal Pin' lines, with the card's share of each.
 async function listTerminalLines(db, itemId, card, itemQty) {
   if (!itemId) return [];
@@ -116,10 +144,54 @@ async function listTerminalLines(db, itemId, card, itemQty) {
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
       WHERE oii.order_item_id=$1 AND LOWER(TRIM(ii.category)) = LOWER($2)
       ORDER BY ii.item_code`, [itemId, TERMINAL_CATEGORY]);
-  // rework_share: the card's share of the line's rework portion — what the slip
-  // prints as its REWORK row and what the shortage check counts as covered.
+  // rework_share: the card's part of the line's rework portion — on the last
+  // cards only (above) — what the slip prints as its REWORK row, what the
+  // shortage check counts as covered and what its take draws from the bin.
+  const seq = lines.some(l => Number(l.rework_qty) > 0) ? await itemCards(db, itemId, card) : [];
   return lines.map(l => ({ ...l, share: shareFor(l.qty, card?.qty, itemQty),
-                           rework_share: shareFor(l.rework_qty || 0, card?.qty, itemQty) }));
+                           rework_share: Number(l.rework_qty) > 0 ? lastCardsShare(seq, card?.id, l.qty, l.rework_qty, itemQty) : 0 }));
+}
+
+// NEW STOCK FOR THE FIRST CARDS (owner, 9 Oct 2026): on a card whose pins the
+// app picks (orders after ORD-160-26) the stock a card can count on is what is
+// left after the cards made before it that have not taken their pins yet. A
+// shortage therefore falls on the LAST cards — where the rework bin may cover
+// it, once the owner or Design / QC approves ("if you are using from the bin
+// you will take either mine or design approval"). Per pin: cover = the stock
+// this card can count on; later = what the cards made after it are still short
+// (not yet approved from the bin) — the bin goes to them first.
+async function stockForCard(db, card, itemId, rows) {
+  const cover = {}, later = {};
+  const stock = {};
+  for (const r of rows) { stock[r.inventory_item_id] = Number(r.current_stock) || 0; cover[r.inventory_item_id] = stock[r.inventory_item_id]; later[r.inventory_item_id] = 0; }
+  if (!rows.length) return { cover, later };
+  const seq = await itemCards(db, itemId, card);
+  const used = { ...Object.fromEntries(Object.keys(stock).map(k => [k, 0])) };
+  let passed = false;
+  for (const s of seq) {
+    if (s.id === card.id) {
+      for (const k of Object.keys(stock)) cover[k] = Math.max(0, stock[k] - used[k]);
+      // This card's own need comes out of what the later cards see.
+      for (const r of rows) used[r.inventory_item_id] += Math.max(0, Number(r.qty) - (Number(r.rework_qty) || 0));
+      passed = true;
+      continue;
+    }
+    if (pastPins(s)) continue;                         // its pins have left stock already
+    let need = await db.all(
+      'SELECT inventory_item_id, qty::float AS qty, COALESCE(rework_qty,0)::float AS rework_qty FROM job_card_terminals WHERE job_card_id=$1', [s.id]);
+    if (!need.length && newRule(s)) {
+      const spec = await cardSpecPins(db, s);
+      need = (spec?.rows || []).map(w => ({ inventory_item_id: w.inventory_item_id, qty: w.qty, rework_qty: 0 }));
+    }
+    for (const n of need) {
+      const k = n.inventory_item_id;
+      if (stock[k] === undefined) continue;
+      const fromStock = Math.max(0, Number(n.qty) - Number(n.rework_qty));
+      if (passed) later[k] += Math.max(0, fromStock - Math.max(0, stock[k] - used[k]));
+      used[k] += fromStock;
+    }
+  }
+  return { cover, later };
 }
 
 // The card's rows with what the editor and the slip need to know about each pin.
@@ -249,9 +321,9 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
   // stock, so the pin reads short and the slip waits for an OK.
   const fromBin = (r) => {
     const l = lines.find(x => x.inventory_item_id === r.inventory_item_id);
-    // The list's rework covers this card's SHARE of it (the same figure the
-    // slip prints), never the whole line's portion — otherwise every card of
-    // a 360-pc order counted all 163 bin pins as its own (8 Oct 2026).
+    // The list's rework covers this card's part of it (the same figure the
+    // slip prints) — on the item's last cards only (9 Oct 2026), never the
+    // whole line's portion on every card.
     if (l && Number(l.rework_qty) > 0) {
       const left = Math.max(0, Number(l.rework_qty || 0) - Number(l.rework_deducted || 0));
       return Math.min(Number(r.qty) || 0, Number(l.rework_share) || 0, left, Number(r.rework_bin) || 0);
@@ -259,11 +331,32 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
     const marked = Number(r.rework_qty) || 0;
     return marked > 0 ? Math.min(Number(r.qty) || 0, marked, Number(r.card_rework_free) || 0) : 0;
   };
-  const short = pastPins(card) ? [] : rows
-    .filter(r => Number(r.current_stock) < Number(r.qty) - fromBin(r))
-    .map(r => ({ inventory_item_id: r.inventory_item_id, item_code: r.item_code, name: r.name, unit: r.unit || '',
-                 need: Number(r.qty) - fromBin(r), from_rework: fromBin(r), stock: Number(r.current_stock),
-                 rework_marked: Number(r.rework_qty) || 0 }));
+  // What stock this card can count on: on an app-picked card, what the cards
+  // made before it leave (9 Oct 2026); otherwise today's stock as before.
+  const pinsByApp = newRule(card) && !past && !noTerminals(card);
+  const walk = pinsByApp ? await stockForCard(db, card, item?.id, rows) : null;
+  const cover = walk ? walk.cover : null;
+  const stockFor = (r) => cover ? cover[r.inventory_item_id] : Number(r.current_stock);
+  // The bin may cover what stock cannot — on an app-picked card only, never on
+  // a pin the list already takes from the bin, and only with an approval. The
+  // cards made after this one get the bin first (last cards first).
+  const binOffer = (r, shortBy) => {
+    if (!pinsByApp || lines.some(l => l.inventory_item_id === r.inventory_item_id && Number(l.rework_qty) > 0)) return 0;
+    const more = Math.floor((Number(r.card_rework_free) || 0) - fromBin(r) - (walk.later[r.inventory_item_id] || 0));
+    return Math.max(0, Math.min(shortBy, more));
+  };
+  const short = past ? [] : rows
+    .filter(r => stockFor(r) < Number(r.qty) - fromBin(r))
+    .map(r => {
+      const need = Number(r.qty) - fromBin(r);
+      return { inventory_item_id: r.inventory_item_id, item_code: r.item_code, name: r.name, unit: r.unit || '',
+               need, from_rework: fromBin(r), stock: Number(r.current_stock),
+               // stock left for this card after the cards made before it (app-picked pins)
+               stock_for_card: cover ? stockFor(r) : null,
+               rework_marked: Number(r.rework_qty) || 0,
+               // pieces the rework bin could add, with an approval
+               bin_offer: binOffer(r, need - stockFor(r)) };
+    });
   let ok = okState(card);
   let shortAt = card.terminals_short_at;
 
@@ -281,6 +374,7 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
   }
   return {
     rows: rows.map(r => ({ ...r, from_rework: pastPins(card) ? 0 : fromBin(r),
+                           stock_for_card: cover ? stockFor(r) : null,
                            short: short.some(s => s.inventory_item_id === r.inventory_item_id) })),
     lines, item, itemQty, short, short_at: shortAt, ok,
     // An OK releases a shortage only — pins that are not set are never released by it.
@@ -303,11 +397,14 @@ async function notifyShort(db, card, short, { unset = false, missing = [] } = {}
   const { notifyRole } = require('../routes/notifications');
   const what = unset ? 'no terminal pins are set — it is an uploaded job card, so design chooses them in Change pins'
     : missing.length ? `the job card asks for ${missing.join(', ')}, which has no inventory item — design chooses the pin in Change pins`
-    : short.map(s => `terminal pin ${s.item_code} short — need ${s.need}, stock ${s.stock}`).join('; ');
+    : short.map(s => `terminal pin ${s.item_code} short — need ${s.need}, ${s.stock_for_card !== null && s.stock_for_card !== undefined && s.stock_for_card !== s.stock
+        ? `stock left after the earlier cards ${s.stock_for_card}` : `stock ${s.stock}`}${s.bin_offer > 0 ? `; the rework bin can give ${s.bin_offer}` : ''}`).join('; ');
+  const binAsk = !unset && !missing.length && short.some(s => s.bin_offer > 0);
   const payload = {
     type: 'terminals_short',
     title: unset || missing.length ? `Terminal pins to choose — ${card.job_card_no}` : `Terminal pin short — ${card.job_card_no}`,
-    body: `Job card ${card.job_card_no}: ${what}. ${unset || missing.length ? 'The slip is held until they are set.' : 'Press OK to release the slip.'}`,
+    body: `Job card ${card.job_card_no}: ${what}. ${unset || missing.length ? 'The slip is held until they are set.'
+      : binAsk ? 'Approve the rework bin, or press OK to release the slip.' : 'Press OK to release the slip.'}`,
     link: `/job-cards/${card.id}`,
     ref: { type: 'terminals_short', id: card.id },
   };
@@ -421,6 +518,27 @@ async function okTerminals(db, jc, user, note) {
   return { ...after, held: false };
 }
 
+// The owner or Design / QC approving the rework bin for a card whose app-picked
+// pins stock cannot cover (owner, 9 Oct 2026). The pieces the bin can give are
+// marked on the card's rows — held for it like a Change pins mark — and taken
+// from the bin at Spot; whatever is still short waits for an OK as before.
+async function useReworkBin(db, jc, user) {
+  const state = await checkTerminals(db, jc, { notify: false });
+  const offers = (state.short || []).filter(s => s.bin_offer > 0);
+  if (!offers.length) {
+    throw httpError(400, 'Nothing on this card can come from the rework bin — no pin is short, or the bin has none free for it.', 'NO_BIN_OFFER');
+  }
+  const card = await db.get('SELECT * FROM job_cards WHERE id=$1', [jc.id]);
+  for (const s of offers) {
+    await db.run(
+      `UPDATE job_card_terminals SET rework_qty = COALESCE(rework_qty,0) + $3, updated_at = NOW()
+        WHERE job_card_id=$1 AND inventory_item_id=$2`, [card.id, s.inventory_item_id, s.bin_offer]);
+  }
+  await logActivity(card.order_id, card.id, 'terminals_rework_approved',
+    `Rework bin approved by ${user.name} for ${card.job_card_no}: ${offers.map(s => `${s.bin_offer} ${s.item_code}`).join(', ')} from the rework bin — the rest from new stock`, user.id);
+  return checkTerminals(db, card);
+}
+
 // ── Last-stage take of the card's rows ───────────────────────────────────────
 // Called by lastStageTake.js inside its transaction. tpLines are the item's
 // 'Terminal Pin' lines (with qty_deducted / qty_waived as they stand). Each
@@ -443,6 +561,9 @@ async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId, { at
   if (item.drawing_number) noteParts.push(`Dwg: ${item.drawing_number}`);
   noteParts.push(`Terminal pins${at === 'Spot' ? ' at Spot' : ''} (JC ${card.job_card_no})`);
   const baseNote = noteParts.join(' | ');
+  // This card's part of each line's rework portion: the last cards only (owner,
+  // 9 Oct 2026) — a first card takes all its pins from new stock.
+  const parts = await listTerminalLines(tx, item.id, card, itemQty);
 
   for (const row of rows) {
     const need = Math.round(Number(row.qty) || 0);
@@ -453,9 +574,10 @@ async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId, { at
     const rec = { inventory_item_id: row.inventory_item_id, item_code: row.item_code, from_stock: 0, from_rework: 0,
                   rework_line_id: null, rework_qty_was: null };
     const wantRework = line ? Math.max(0, Number(line.rework_qty || 0) - Number(line.rework_deducted || 0)) : 0;
-    if (wantRework > 0) {
+    const mine = line ? Number(parts.find(p => p.id === line.id)?.rework_share) || 0 : 0;
+    if (wantRework > 0 && mine > 0) {
       const available = await rework.binQty(tx, row.inventory_item_id);
-      fromRework = Math.min(need, wantRework, available);
+      fromRework = Math.min(need, mine, wantRework, available);
       if (fromRework > 0) {
         await rework.move(tx, { itemId: row.inventory_item_id, kind: 'draw', qty: fromRework,
           ref: { order_id: card.order_id, order_item_id: item.id, job_card_id: card.id, order_code: orderCode,
@@ -465,11 +587,13 @@ async function takeTerminalRows(tx, card, item, tpLines, orderCode, userId, { at
           [fromRework, line.id]);
         rec.rework_line_id = line.id;
       }
-      const shortBin = Math.min(need, wantRework) - fromRework;
+      const shortBin = Math.min(need, mine, wantRework) - fromRework;
       if (shortBin > 0) {
-        // Bin short: the rest comes from stock, and the reservation is released.
+        // Bin short: the rest comes from stock, and that much of the
+        // reservation is released (the other last cards keep theirs).
         rec.rework_line_id = line.id; rec.rework_qty_was = Number(line.rework_qty) || 0;
-        await tx.run('UPDATE order_item_inventory SET rework_qty = COALESCE(rework_deducted,0) WHERE id=$1', [line.id]);
+        await tx.run('UPDATE order_item_inventory SET rework_qty = GREATEST(COALESCE(rework_deducted,0), COALESCE(rework_qty,0) - $2) WHERE id=$1',
+          [line.id, shortBin]);
         note = `${note} | rework bin short by ${shortBin} — taken from stock`;
       }
     } else if (Number(row.rework_qty) > 0) {
@@ -653,6 +777,6 @@ function httpError(status, message, code) {
 
 module.exports = {
   TERMINAL_CATEGORY, isTerminalCategory, noTerminals, shareFor, EDIT_ROLES, OK_ROLES,
-  readTerminals, listTerminalLines, ensureTerminals, checkTerminals, saveTerminals, okTerminals,
-  takeTerminalRows, rescaleAfterSplit, okState, pastPins, cardSpecPins, takePinsAtSpot, givePinsBackAtSpot, PINS_RULE, newRule,
+  readTerminals, listTerminalLines, ensureTerminals, checkTerminals, saveTerminals, okTerminals, useReworkBin,
+  itemCards, lastCardsShare, stockForCard, takeTerminalRows, rescaleAfterSplit, okState, pastPins, cardSpecPins, takePinsAtSpot, givePinsBackAtSpot, PINS_RULE, newRule,
 };
