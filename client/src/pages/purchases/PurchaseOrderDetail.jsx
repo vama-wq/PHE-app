@@ -1343,6 +1343,10 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
           {item.qc_status !== 'rejected' && (
             <span>Accepted: <b>{item.qc_received_qty}</b>{converts ? ` ${item.unit}` : ''} · {converts ? <>10 {stockUnit} = <b>{item.qc_weight_10}</b> {item.unit} → <b>{stockQtyIn.toLocaleString('en-IN')} {stockUnit}</b> into stock</> : <>Weight of 10: <b>{item.qc_weight_10}</b></>}{item.qc_observations ? ` · ${item.qc_observations}` : ''}{item.qc_image_file && <> · <a className="text-brand-600 hover:underline" href={`/uploads/${item.qc_image_file}`} target="_blank" rel="noopener noreferrer">image</a></>}</span>
           )}
+          {/* Bought as a set (owner, 10 Oct 2026): the other parts went into stock with it */}
+          {item.qc_status !== 'rejected' && (item.set_parts || []).length > 0 && (
+            <span className="text-sky-700">Set — also into stock: {(item.set_parts || []).map(sp => `${(Math.round(stockQtyIn * sp.per * 100) / 100).toLocaleString('en-IN')} ${sp.item_code}`).join(', ')}</span>
+          )}
           {/* Paid on the bill, stocked on the count — show both when they differ */}
           {item.billed_qty != null && Math.abs(Number(item.billed_qty) - (Number(item.qc_received_qty) || 0) - (Number(item.qc_rejected_qty) || 0)) > 1e-9 && (
             <span className="text-amber-700">Billed: <b>{item.billed_qty}</b> (paid on the bill)</span>
@@ -1511,6 +1515,12 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
       )}
       {open && canQC && (
         <div className="mt-3 space-y-2.5 border-t border-gray-200 pt-3">
+          {(item.set_parts || []).length > 0 && (
+            <p className="text-[11px] text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-2 py-1.5">
+              Bought as a set: each {item.item_code || 'piece'} comes with {(item.set_parts || []).map(sp => `${sp.per} ${sp.item_code}`).join(' and ')}.
+              Approving puts those into their own stock too (at ₹0 — the set's price stays on {item.item_code || 'this item'}).
+            </p>
+          )}
           <div className="flex gap-2">
             <button className={`btn-sm text-xs flex-1 ${mode === 'approved' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('approved')}>Approve all</button>
             <button className={`btn-sm text-xs flex-1 ${mode === 'partial' ? 'btn-primary bg-amber-600 border-amber-600 hover:bg-amber-700' : 'btn-secondary'}`} onClick={() => setMode('partial')}>Partial</button>

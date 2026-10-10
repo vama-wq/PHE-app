@@ -1,4 +1,5 @@
 const router = require('express').Router();
+const { setParts, setPartsFor } = require('../lib/inventorySets');
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseReceive, uploadPurchaseItemQC, uploadPurchaseItemQCFields, uploadDebitNote, uploadChatAttachments, parseInvoiceOnly } = require('../middleware/upload');
@@ -101,6 +102,33 @@ async function receiveItemStock(db, po, item, userId, qty) {
     [item.inventory_item_id, stockQty, newStock, po.po_number, supplier?.name || '',
      `PO received (QC approved): ${po.po_number} — qty ${stockQty}${convNote || (Number(item.qty) !== q ? ` of ${item.qty} ordered` : '')}${landedNote}`, userId]
   );
+
+  // Bought as a set (owner, 10 Oct 2026 — heavy terminal pin + 1 HV nut + 2 HV
+  // washers): each other part of the set goes into its own stock too, at ₹0 —
+  // the set's price stays on the item ordered. Same PO lot link, so deleting the
+  // PO reverses them with the rest.
+  const parts = await setParts(db, item.inventory_item_id);
+  if (parts.length) {
+    const setCode = (await db.get('SELECT item_code FROM inventory_items WHERE id=$1', [item.inventory_item_id]))?.item_code || item.description;
+    for (const p of parts) {
+      const pq = Math.round(stockQty * p.per * 100) / 100;
+      if (!(pq > 0)) continue;
+      await db.run(
+        `INSERT INTO inventory_fifo_lots (item_id, po_id, qty_original, qty_remaining, unit_cost, received_at)
+         VALUES ($1,$2,$3,$4,0,$5)`, [p.component_item_id, po.id, pq, pq, now]);
+      const ps = Number((await db.get('UPDATE inventory_items SET current_stock = COALESCE(current_stock,0) + $1 WHERE id=$2 RETURNING current_stock',
+        [pq, p.component_item_id])).current_stock);
+      const pl = await db.all('SELECT qty_remaining, unit_cost FROM inventory_fifo_lots WHERE item_id=$1 AND qty_remaining > 0', [p.component_item_id]);
+      const pqty = pl.reduce((a, l) => a + Number(l.qty_remaining), 0);
+      const pcost = pl.reduce((a, l) => a + Number(l.qty_remaining) * Number(l.unit_cost), 0);
+      await db.run('UPDATE inventory_items SET unit_cost=$1 WHERE id=$2', [pqty > 0 ? Math.round((pcost / pqty) * 100) / 100 : 0, p.component_item_id]);
+      await db.run(
+        `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, po_number, supplier_name, notes, created_by)
+         VALUES ($1,'purchase_in',$2,$3,$4,$5,$6,$7)`,
+        [p.component_item_id, pq, ps, po.po_number, supplier?.name || '',
+         `PO received (QC approved): ${po.po_number} — ${pq} as part of the set: ${p.per} per ${setCode} × ${stockQty} (₹0 — the set's price is on ${setCode})`, userId]);
+    }
+  }
 }
 
 // Detect PO items priced above their agreed rate (supplier-link rate), or for
@@ -429,6 +457,9 @@ router.get('/:id', authenticate, async (req, res) => {
        WHERE poi.po_id = $1 ORDER BY poi.id`,
       [req.params.id]
     );
+    { const ids = (await db.all('SELECT id, inventory_item_id FROM purchase_order_items WHERE po_id=$1', [req.params.id]));
+      const sp = await setPartsFor(db, ids.map(i => i.inventory_item_id));
+      for (const i of items) i.set_parts = sp.get(ids.find(x => x.id === i.id)?.inventory_item_id) || []; }
     return res.json({ ...po, qc_limited: true, items });
   }
 
@@ -453,6 +484,8 @@ router.get('/:id', authenticate, async (req, res) => {
      ORDER BY poi.id`,
     [req.params.id]
   );
+  // Items bought as a set: the other parts QC puts into stock with them.
+  { const sp = await setPartsFor(db, items.map(i => i.inventory_item_id)); for (const i of items) i.set_parts = sp.get(i.inventory_item_id) || []; }
 
   const materialQc = await db.get(
     `SELECT pmq.*, u.name as created_by_name

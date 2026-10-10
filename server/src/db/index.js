@@ -2410,6 +2410,25 @@ async function initDB(retries = 20, delayMs = 10000) {
     // when, and exactly what — so unticking Brazing gives that back.
     await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS rings_taken_at TIMESTAMPTZ`);
     await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS rings_taken JSONB`);
+    // Items bought as a set (owner, 10 Oct 2026): the other parts of each set.
+    // Seeded once, when the table is first made empty: each M6 heavy terminal
+    // pin comes with 1 HV nut and 2 HV washers.
+    await pool.query(`CREATE TABLE IF NOT EXISTS inventory_set_components (
+      set_item_id INTEGER NOT NULL REFERENCES inventory_items(id),
+      component_item_id INTEGER NOT NULL REFERENCES inventory_items(id),
+      qty_per_set NUMERIC NOT NULL CHECK (qty_per_set > 0),
+      PRIMARY KEY (set_item_id, component_item_id))`);
+    {
+      const n = await pool.query('SELECT COUNT(*)::int AS n FROM inventory_set_components');
+      if (n.rows[0].n === 0) {
+        await pool.query(`INSERT INTO inventory_set_components (set_item_id, component_item_id, qty_per_set)
+          SELECT s.id, c.id, v.per FROM inventory_items s
+            CROSS JOIN (VALUES ('NUT-HV-M6-07', 1), ('WSH-HV-07', 2)) AS v(code, per)
+            JOIN inventory_items c ON UPPER(TRIM(c.item_code)) = v.code
+           WHERE UPPER(TRIM(s.item_code)) IN ('TP-HV-M6XM3','TP-HV-M6XM4','TP-HV-M6XM5')
+          ON CONFLICT DO NOTHING`);
+      }
+    }
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
