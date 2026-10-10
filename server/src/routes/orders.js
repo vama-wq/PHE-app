@@ -383,19 +383,19 @@ router.post('/', authenticate, authorize('admin', 'owner'), async (req, res) => 
     if (!replaced) return res.status(400).json({ error: `${rplOf.order_code} has no job card closed as Replaced yet — Inventory QC must pass it first` });
   }
 
-  // A pure PHE inventory order has no external customer. Customer is optional
-  // for it — fall back to the internal "IO" customer so the NOT NULL column and
-  // the many customer joins across the app keep working. All other order types
-  // (incl. the io_export_he / io_local_he combos) still require a customer.
+  // A pure PHE inventory order has no external customer: its client is ALWAYS
+  // the internal "IO" customer, whatever is sent, and client IO is for
+  // Inventory Orders only (owner, 10 Oct 2026). All other order types (incl.
+  // the io_export_he / io_local_he combos) need their real customer.
+  const io = await db.get(`SELECT id FROM customers WHERE UPPER(customer_code) = 'IO' ORDER BY id LIMIT 1`);
   let custId = customer_id || null;
-  if (!custId) {
-    if (order_type === 'inventory_order') {
-      const io = await db.get(`SELECT id FROM customers WHERE UPPER(customer_code) = 'IO' ORDER BY id LIMIT 1`);
-      if (!io) return res.status(400).json({ error: 'Inventory-order customer (code "IO") is missing — add it once under Customers.' });
-      custId = io.id;
-    } else {
-      return res.status(400).json({ error: 'Customer is required' });
-    }
+  if (order_type === 'inventory_order') {
+    if (!io) return res.status(400).json({ error: 'Inventory-order customer (code "IO") is missing — add it once under Customers.' });
+    custId = io.id;
+  } else if (!custId) {
+    return res.status(400).json({ error: 'Customer is required' });
+  } else if (io && Number(custId) === Number(io.id)) {
+    return res.status(400).json({ error: 'Client IO is only for Inventory Orders — choose the real client, or make it an Inventory Order.', code: 'IO_CLIENT_ONLY_FOR_IO' });
   }
 
   try {
@@ -1227,6 +1227,13 @@ router.put('/:id', authenticate, authorize('admin', 'owner', 'accounts'), async 
     const params = [notes || null];
     let idx = 2;
     if (dispatch_date !== undefined) { sets.push(`dispatch_date = $${idx}`); params.push(dispatch_date || null); idx++; }
+    // An Inventory Order stays one, and no other order becomes one (owner, 10 Oct 2026).
+    if (order_type !== undefined && order_type !== order.order_type
+        && (order.order_type === 'inventory_order' || order_type === 'inventory_order')) {
+      return res.status(400).json({ error: order.order_type === 'inventory_order'
+        ? `${order.order_code} is an Inventory Order — its type cannot be changed.`
+        : `${order.order_code} cannot be changed into an Inventory Order — make a new Inventory Order instead.`, code: 'IO_TYPE_FIXED' });
+    }
     if (order_type !== undefined) { sets.push(`order_type = $${idx}`); params.push(order_type); idx++; }
     params.push(req.params.id);
     await db.run(`UPDATE orders SET ${sets.join(', ')} WHERE id = $${idx}`, params);

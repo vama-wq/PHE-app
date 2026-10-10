@@ -604,9 +604,17 @@ function NewOrderModal({ onClose, onSave, prefill = null }) {
 
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  // A pure PHE inventory order has no external customer, so the customer field
-  // is optional for it (the io_* combo types still need a customer).
+  // A pure PHE inventory order has no external customer: its client is ALWAYS
+  // IO and cannot be changed, and IO is for Inventory Orders only (owner,
+  // 10 Oct 2026). The io_* combo types need their real customer.
   const isInventoryOnly = form.order_type === 'inventory_order';
+  const ioCust = customers.find(c => String(c.customer_code || '').trim().toUpperCase() === 'IO') || null;
+  useEffect(() => {
+    if (!ioCust) return;
+    setForm(f => (f.order_type === 'inventory_order'
+      ? (f.customer_id === String(ioCust.id) ? f : { ...f, customer_id: String(ioCust.id) })
+      : (f.customer_id === String(ioCust.id) ? { ...f, customer_id: '' } : f)));
+  }, [form.order_type, ioCust?.id]);
 
   const addItem = (data, files) => {
     if (editingItem !== null) {
@@ -723,13 +731,19 @@ function NewOrderModal({ onClose, onSave, prefill = null }) {
               <div>
                 <label className="label">
                   Customer {isInventoryOnly
-                    ? <span className="text-gray-400 font-normal">(optional — PHE inventory order)</span>
+                    ? <span className="text-gray-400 font-normal">(always IO for an Inventory Order)</span>
                     : <span className="text-red-500">*</span>}
                 </label>
-                <select className="input" value={form.customer_id} onChange={set('customer_id')} required={!isInventoryOnly}>
-                  <option value="">{isInventoryOnly ? 'None — internal PHE inventory' : 'Select customer...'}</option>
-                  {customers.map(c => <option key={c.id} value={c.id}>{c.customer_code} — {c.name}</option>)}
-                </select>
+                {isInventoryOnly ? (
+                  <div className="input bg-gray-100 text-gray-600" title="An Inventory Order's client is always IO and cannot be changed">
+                    IO — {ioCust?.name || 'Inventory Order - PHE'}
+                  </div>
+                ) : (
+                  <select className="input" value={form.customer_id} onChange={set('customer_id')} required>
+                    <option value="">Select customer...</option>
+                    {customers.filter(c => c !== ioCust).map(c => <option key={c.id} value={c.id}>{c.customer_code} — {c.name}</option>)}
+                  </select>
+                )}
               </div>
               <div className="col-span-2">
                 <label className="label">Notes</label>

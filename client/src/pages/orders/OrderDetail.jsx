@@ -370,14 +370,18 @@ export default function OrderDetail() {
                   </div>
                   <div>
                     <label className="label">Order Type</label>
-                    <select className="input" value={editFields.order_type || 'local_he'}
-                      onChange={e => setEditFields(p => ({ ...p, order_type: e.target.value }))}>
-                      <option value="local_he">Local HE</option>
-                      <option value="export_he">Export HE</option>
-                      <option value="inventory_order">Inventory Order (IO)</option>
-                      <option value="io_export_he">IO Export HE</option>
-                      <option value="io_local_he">IO Local HE</option>
-                    </select>
+                    {/* An Inventory Order stays one, and no other order becomes one (owner, 10 Oct 2026). */}
+                    {order.order_type === 'inventory_order' ? (
+                      <div className="input bg-gray-100 text-gray-600" title="An Inventory Order's type cannot be changed">Inventory Order (IO) — cannot be changed</div>
+                    ) : (
+                      <select className="input" value={editFields.order_type || 'local_he'}
+                        onChange={e => setEditFields(p => ({ ...p, order_type: e.target.value }))}>
+                        <option value="local_he">Local HE</option>
+                        <option value="export_he">Export HE</option>
+                        <option value="io_export_he">IO Export HE</option>
+                        <option value="io_local_he">IO Local HE</option>
+                      </select>
+                    )}
                   </div>
                 </div>
                 <div>
