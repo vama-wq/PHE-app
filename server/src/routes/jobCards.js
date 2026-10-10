@@ -8,6 +8,7 @@ const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventor
 const { takeLastStage } = require('../lib/lastStageTake');
 const terminals = require('../lib/terminals');
 const fgFifo = require('../lib/fgFifo');
+const brazingRings = require('../lib/brazingRings');
 const { cardLengths, specForCard } = require('../lib/cardSpec');
 const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit } = require('../lib/jobCardSplit');
 const { buildDraft, draftQuestions } = require('../lib/jobCardDraft');
@@ -1509,6 +1510,15 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
         if (done) await terminals.takePinsAtSpot(db, jobCardId, req.user.id);
         else await terminals.givePinsBackAtSpot(db, jobCardId, req.user.id);
       } catch (e) { console.error('[checklist] Spot terminal pins failed:', e.message); }
+    }
+
+    // Brazing rings from the job card on a 2in1 / 3in1 / Xin1 heater (owner,
+    // 10 Oct 2026): ticked → 2 rings per element taken; unticked → given back.
+    if (stageNo === 15) {
+      try {
+        if (done) await brazingRings.takeRingsAtBrazing(db, jobCardId, req.user.id);
+        else await brazingRings.giveRingsBack(db, jobCardId, req.user.id);
+      } catch (e) { console.error('[checklist] brazing rings failed:', e.message); }
     }
 
     // Category-timed BOM deduction: Stage 15 (Brazing) → flange/brazing categories,

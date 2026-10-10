@@ -342,7 +342,12 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
         const pin = await q1(`SELECT id FROM inventory_items WHERE TRIM(category)='Terminal Pin' AND current_stock > 10 ORDER BY id LIMIT 1`);
         const hv = await q1(`SELECT id FROM inventory_items WHERE TRIM(category)='Heavy Terminal Pin' AND current_stock > 10 ORDER BY id LIMIT 1`);
         const remark = (await q1('SELECT remark FROM order_items WHERE id=$1', [fresh.id])).remark || '';
-        const pinId = /heavy[\s\-_.]*terminal[\s\-_.]*pin/i.test(remark) ? hv.id : pin.id;
+        // Orders after ORD-160-26 take terminal pins from the job card, not the
+        // list (lib/terminals.js PINS_RULE) — a plain nut stands in for them there.
+        const { PINS_RULE } = require(S + '/src/lib/terminals.js');
+        const nut = await q1(`SELECT id FROM inventory_items WHERE TRIM(category)='Nut' AND current_stock > 10 ORDER BY id LIMIT 1`);
+        const pinId = /heavy[\s\-_.]*terminal[\s\-_.]*pin/i.test(remark) ? hv.id
+          : Number(fresh.order_id) > PINS_RULE.afterOrderId ? nut.id : pin.id;
         const snap = await snapshot([pinId]);
         const r = await uploadDrawing(fresh.order_id, fresh.id, [{ id: pinId, qty: 4 }]);
         const after = await lines(fresh.id);

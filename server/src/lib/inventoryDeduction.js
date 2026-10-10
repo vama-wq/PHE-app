@@ -146,7 +146,11 @@ async function deductStageCategories(db, jc, stageNo, userId) {
      WHERE oii.order_item_id=$1 AND TRIM(ii.category) = ANY($2)`,
     [itemId, cats]
   );
+  // Brazing rings come from the job card on a multi-element heater (owner,
+  // 10 Oct 2026; lib/brazingRings.js): the list's ring lines are not taken here.
+  const rings = stageNo === 15 ? await require('./brazingRings').ringPlan(db, jc) : null;
   for (const sel of sels) {
+    if (rings && require('./brazingRings').isRingCode((await db.get('SELECT item_code FROM inventory_items WHERE id=$1', [sel.inventory_item_id]))?.item_code)) continue;
     const total = parseFloat(sel.qty || 0);
     const already = parseFloat(sel.qty_deducted || 0) + parseFloat(sel.qty_waived || 0);
     const ded = Math.min(total * ratio, total - already);

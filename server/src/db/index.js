@@ -2406,6 +2406,10 @@ async function initDB(retries = 20, delayMs = 10000) {
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS replacement_of_order_id INTEGER`);
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS replaced_by_order_id INTEGER`);
     await pool.query(`ALTER TABLE finished_goods_log ADD COLUMN IF NOT EXISTS elements_per_piece INTEGER`);
+    // Brazing rings taken at Stage 15 from the job card (owner, 10 Oct 2026):
+    // when, and exactly what — so unticking Brazing gives that back.
+    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS rings_taken_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS rings_taken JSONB`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');

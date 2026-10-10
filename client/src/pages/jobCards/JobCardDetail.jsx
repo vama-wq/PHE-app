@@ -231,6 +231,9 @@ export default function JobCardDetail() {
           finished-goods card renders nothing here. */}
       <TerminalPinsBox jobCardId={jc.id} onChanged={() => load()} />
 
+      {/* What this card has taken from stock (owner, 10 Oct 2026). */}
+      {['owner', 'admin', 'design'].includes(user.role) && <InventoryTakenBox jcId={jc.id} />}
+
       {/* Customer Query Warning Banner — Full Details */}
       {jc.active_query_no && (
         <div className="mb-5 bg-amber-50 border border-amber-300 rounded-xl overflow-hidden">
@@ -553,6 +556,95 @@ export default function JobCardDetail() {
       {showMadeWrong && (
         <MadeWronglyModal jc={jc}
           onClose={() => setShowMadeWrong(false)} onSave={() => { setShowMadeWrong(false); load(); }} />
+      )}
+    </div>
+  );
+}
+
+// Inventory taken by this job card (owner, 10 Oct 2026): per item, what left
+// stock for it (taken, given back, scrap), what came from or went into the
+// rework bin, and the net — beside the list's figure for this card — with every
+// movement behind it. The same figures Inventory QC works from.
+function InventoryTakenBox({ jcId }) {
+  const [view, setView] = useState(null);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(true);
+  const [showMoves, setShowMoves] = useState(false);
+  useEffect(() => {
+    api.get(`/qc/${jcId}/inventory`).then(r => setView(r.data))
+      .catch(e => setError(e.response?.status === 403 ? '' : (e.response?.data?.error || 'Could not load the inventory taken')));
+  }, [jcId]);
+  if (!view) return error ? <p className="text-xs text-red-600 mb-5">{error}</p> : null;
+  const fmt = (n) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 4 });
+  const rows = (view.items || []).filter(i => i.taken || i.given_back || i.scrap || i.from_rework_bin || i.reworked || i.on_list || i.terminal);
+  const used = (i) => Math.round((Number(i.net) + Number(i.from_rework_bin) - Number(i.reworked)) * 10000) / 10000;
+  const off = (i) => i.list_qty_for_card != null && Math.abs(used(i) - Number(i.list_qty_for_card)) > 1e-6;
+  const offCount = rows.filter(off).length;
+  return (
+    <div className="card p-4 mb-5 no-print">
+      <button type="button" className="w-full flex items-center gap-2 text-left" onClick={() => setOpen(o => !o)}>
+        {open ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />}
+        <span className="font-semibold text-gray-900 text-sm">Inventory taken by this card</span>
+        <span className="text-xs text-gray-500">{rows.length} item{rows.length === 1 ? '' : 's'}</span>
+        {offCount > 0 && <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 rounded px-1.5 py-0.5">{offCount} differ from the list</span>}
+        {view.card?.inventory_qc_at && <span className="text-[10px] font-semibold bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">Inventory QC done</span>}
+      </button>
+      {open && (
+        <div className="mt-3">
+          {rows.length === 0 ? (
+            <p className="text-sm text-gray-400">Nothing taken from stock yet, and no list on this item.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-gray-500 border-b border-gray-200">
+                    <th className="py-1.5 pr-3 font-medium">Item</th>
+                    <th className="py-1.5 px-2 font-medium text-right">List for this card</th>
+                    <th className="py-1.5 px-2 font-medium text-right">Taken</th>
+                    <th className="py-1.5 px-2 font-medium text-right">Given back</th>
+                    <th className="py-1.5 px-2 font-medium text-right">From rework bin</th>
+                    <th className="py-1.5 px-2 font-medium text-right">Into rework bin</th>
+                    <th className="py-1.5 pl-2 font-medium text-right">Used</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(i => (
+                    <tr key={i.inventory_item_id} className={`border-b border-gray-100 ${off(i) ? 'bg-amber-50' : ''}`}>
+                      <td className="py-1.5 pr-3"><span className="font-mono font-semibold text-gray-800">{i.item_code}</span> <span className="text-gray-500">{i.name}</span></td>
+                      <td className="py-1.5 px-2 text-right tabular-nums text-gray-600" title={i.no_guide || ''}>{i.list_qty_for_card != null ? fmt(i.list_qty_for_card) : (i.no_guide ? '—' : i.on_list ? '' : 'not on list')}</td>
+                      <td className="py-1.5 px-2 text-right tabular-nums">{i.taken || i.scrap ? fmt(Number(i.taken) + Number(i.scrap)) : '—'}</td>
+                      <td className="py-1.5 px-2 text-right tabular-nums">{i.given_back ? fmt(i.given_back) : '—'}</td>
+                      <td className="py-1.5 px-2 text-right tabular-nums text-sky-700">{i.from_rework_bin ? fmt(i.from_rework_bin) : '—'}</td>
+                      <td className="py-1.5 px-2 text-right tabular-nums text-sky-700">{i.reworked ? fmt(i.reworked) : '—'}</td>
+                      <td className="py-1.5 pl-2 text-right tabular-nums font-semibold">{fmt(used(i))} {(i.unit || '').trim()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-[11px] text-gray-400 mt-1.5">Used = taken − given back + from the rework bin − into the rework bin. Amber rows differ from the list's figure for this card.</p>
+            </div>
+          )}
+          {(view.movements || []).length > 0 && (
+            <div className="mt-2">
+              <button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => setShowMoves(m => !m)}>
+                {showMoves ? 'Hide' : 'Show'} every movement ({view.movements.length})
+              </button>
+              {showMoves && (
+                <ul className="mt-1.5 space-y-0.5 text-[11px] text-gray-600 max-h-72 overflow-y-auto">
+                  {view.movements.map(m => (
+                    <li key={m.id} className="flex gap-2">
+                      <span className="text-gray-400 whitespace-nowrap">{fmtDateTime(m.created_at)}</span>
+                      <span className={`whitespace-nowrap font-medium ${m.transaction_type === 'return_from_production' ? 'text-green-700' : 'text-gray-800'}`}>
+                        {m.transaction_type === 'return_from_production' ? '+' : '−'}{fmt(m.quantity)} {(m.unit || '').trim()} {m.item_code}
+                      </span>
+                      <span className="truncate" title={m.notes}>{m.notes}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
