@@ -120,6 +120,25 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     await tick(E2, true);
     L = await lineRow(oiE, B8);
     ok('E. the second takes its 30 and settles the other 60', near(await stock(B8), s8 - 60) && L.w === 120 && L.d === 0, `${await stock(B8)} ${JSON.stringify(L)}`);
+    // G. Split after Brazing: the split pieces' rings move onto the split card.
+    const { approveSplitRequest } = require(S + '/src/services/actions/splitRequests.js');
+    const oiG = await mkItem('ZZTEST-DWG-BR-G-3in1', 6, '8');
+    await line(oiG, B8, 72);
+    const G = await mkCard('ZZT-BR-G', oiG, 6, spec3, 'ZZTEST-DWG-BR-G-3in1');
+    s8 = await stock(B8);
+    await tick(G, true);
+    const sr = (await q1(`INSERT INTO job_card_split_requests (job_card_id, qty, reason, status) VALUES ($1,2,'test','pending') RETURNING id`, [G])).id;
+    const sres = await approveSplitRequest(txDb, { requestId: sr, actor: owner });
+    const Gc = sres?.data?.childJobCardId;
+    const pg = await q1('SELECT qty, rings_taken FROM job_cards WHERE id=$1', [G]);
+    const cg = Gc ? await q1('SELECT qty, rings_taken_at, rings_taken FROM job_cards WHERE id=$1', [Gc]) : null;
+    ok('G1. 6 × 3in1 brazed (36 rings), then 2 split off: the split card holds its own 12 (and 24 of the list\'s settled 72), the main card 24 (48); nothing moved in stock',
+      sres?.ok && near(await stock(B8), s8 - 36) && pg.rings_taken?.qty === 24 && cg?.rings_taken?.qty === 12 && !!cg?.rings_taken_at
+      && cg.rings_taken.waived?.[0]?.qty === 24 && pg.rings_taken.waived?.[0]?.qty === 48, JSON.stringify({ sres, pg: pg.rings_taken, cg: cg?.rings_taken }));
+    r = await tick(Gc, false);
+    ok('G2. unticking Brazing on the split card gives back only its 12', r.status === 200 && near(await stock(B8), s8 - 24), `${r.status} ${await stock(B8)}`);
+    r = await tick(G, false);
+    ok('G2. …and on the main card only its 24; the list line is fully open again', r.status === 200 && near(await stock(B8), s8) && (await lineRow(oiG, B8)).w === 0, `${r.status} ${await stock(B8)} ${JSON.stringify(await lineRow(oiG, B8))}`);
     ok('F. every take is on the card\'s timeline', (await q1(`SELECT COUNT(*)::int n FROM activity_log WHERE job_card_id = ANY($1) AND activity_type='rings_taken'`, [[A, Bc, E1, E2]])).n >= 5);
   } catch (e) { failed = true; console.error('ERROR', e); }
   finally {

@@ -75,6 +75,36 @@ async function cloneChildCard(tx, parent, { childNo, qty, status, notes, columns
      SELECT $1, stage_no, done, value1, value2, worker_name, done_at, notes, coil_weight
      FROM production_checklist WHERE job_card_id=$2 AND done=1 AND ($3::boolean OR stage_no <> $4)`,
     [childId, parent.id, !!copyReadyStage, readyStageFor(parent)]);
+
+  // Brazing rings already taken for the batch (owner, 10 Oct 2026: "a partial
+  // dispatch of a job card takes its own share"): the split pieces' rings —
+  // and their share of the list's settled ring lines — move onto the child, so
+  // each card holds exactly its own and unticking Brazing on either gives back
+  // only that. Nothing moves in stock here.
+  const pr = await tx.run('SELECT rings_taken_at, rings_taken FROM job_cards WHERE id=$1', [parent.id]);
+  const prow = pr.rows ? pr.rows[0] : null;
+  let rec = prow?.rings_taken;
+  try { rec = typeof rec === 'string' ? JSON.parse(rec) : rec; } catch { rec = null; }
+  if (prow?.rings_taken_at && rec && Number(rec.qty) > 0 && Number(qty) > 0) {
+    const per = Math.max(1, Number(rec.elements) || 1) * 2;
+    const before = Number(rec.qty);
+    const share = Math.min(before, Number(qty) * per);
+    const childWaived = [];
+    const parentWaived = (rec.waived || []).map(w => {
+      const part = Math.min(Number(w.qty) || 0, Math.round(((Number(w.qty) || 0) * share) / before));
+      if (part > 0) childWaived.push({ line_id: w.line_id, qty: part });
+      return { line_id: w.line_id, qty: (Number(w.qty) || 0) - part };
+    }).filter(w => w.qty > 0);
+    const parentRec = { ...rec, qty: before - share, waived: parentWaived };
+    const childRec = { item_id: rec.item_id, item_code: rec.item_code, qty: share, elements: rec.elements, waived: childWaived };
+    await tx.run('UPDATE job_cards SET rings_taken = $2 WHERE id=$1', [parent.id, JSON.stringify(parentRec)]);
+    await tx.run('UPDATE job_cards SET rings_taken_at = $2, rings_taken = $3 WHERE id=$1', [childId, prow.rings_taken_at, JSON.stringify(childRec)]);
+    for (const [id, text] of [[parent.id, `Brazing rings: ${share} of the ${before} × ${rec.item_code} taken for ${parent.job_card_no} move with the ${qty} split pieces to ${childNo}`],
+                              [childId, `Brazing rings: ${share} × ${rec.item_code} come with these ${qty} pieces from ${parent.job_card_no} (taken there at Brazing)`]]) {
+      await tx.run(`INSERT INTO activity_log (order_id, job_card_id, activity_type, description, created_by) VALUES ($1,$2,'rings_split',$3,NULL)`,
+        [parent.order_id, id, text]);
+    }
+  }
   return childId;
 }
 
