@@ -20,6 +20,9 @@ router.get('/:id/items', authenticate, authorize('owner', 'admin', 'accounts'), 
     WHERE si.supplier_id = $1
     ORDER BY ii.item_code
   `, [req.params.id]);
+  // Items bought as a set (owner, 10 Oct 2026): the parts that come with each.
+  const sp = await require('../lib/inventorySets').setPartsFor(getDB(), rows.map(r => r.inventory_item_id));
+  for (const r of rows) r.set_parts = sp.get(r.inventory_item_id) || [];
   res.json(rows);
 });
 

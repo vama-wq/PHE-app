@@ -79,6 +79,7 @@ export default function PurchaseOrderForm() {
         supplier_price: li.supplier_price,
         lead_time_days: li.lead_time_days,
         approval_status: li.approval_status,
+        set_parts: li.set_parts || [],
       })));
     }).catch(() => setLinkedItems([]));
   };
@@ -311,6 +312,13 @@ export default function PurchaseOrderForm() {
                           {inv.name}
                           {inv.approval_status === 'pending_approval' && (
                             <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 align-middle">PENDING APPROVAL</span>
+                          )}
+                          {/* Bought as a set (owner, 10 Oct 2026): QC puts its parts into stock too */}
+                          {(inv.set_parts || []).length > 0 && (
+                            <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-800 align-middle"
+                              title={`A set: each comes with ${inv.set_parts.map(p => `${p.per} ${p.item_code}`).join(' and ')} — QC puts those into stock too`}>
+                              SET + {inv.set_parts.map(p => `${p.per} ${p.item_code}`).join(' + ')}
+                            </span>
                           )}
                         </div>
                         <div className="text-xs text-gray-400 mt-0.5">{inv.item_code} · {inv.unit} · Stock: {inv.current_stock}</div>
