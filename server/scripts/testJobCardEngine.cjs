@@ -342,10 +342,10 @@ const REGRESSIONS = [
       const o = E.buildJobCard({ tubeMaterial: 'SS304', wattage: w, voltage: 230, drawingTotalLengthIn: tl - E.TOTAL_LENGTH_ALLOWANCE_IN });
       if (o.ok && o.wire && o.wire.row >= 67 && o.wire.row <= 70 && !o.usedLastResort) n++; } return n; },
     n => n === 0],
-  // (examples move with the copper draws: 2 kW 27" until the 26.2% tube draw,
-  // 1 kW 50" until 25-29 SWG went to 20%, both 2 Oct 2026)
-  ['...but still save a card nothing else reaches (copper 500 W 93")',
-    () => E.buildJobCard({ tubeMaterial: 'Copper', wattage: 500, voltage: 230, drawingTotalLengthIn: 93 - E.TOTAL_LENGTH_ALLOWANCE_IN }),
+  // (examples move with the copper draws: 2 kW 27" until the 26.2% tube draw;
+  // 500 W 93" while 25-29 SWG was at 20%, 2 – 10 Oct 2026; 1 kW 50" again at 26%)
+  ['...but still save a card nothing else reaches (copper 1 kW 50")',
+    () => E.buildJobCard({ tubeMaterial: 'Copper', wattage: 1000, voltage: 230, drawingTotalLengthIn: 50 - E.TOTAL_LENGTH_ALLOWANCE_IN }),
     o => o.gauge === 24 && o.usedLastResort === true && o.warnings.some(w => /odd 24 SWG/.test(w))],
 
   // The returned wire must not be a live row of the shared table.
@@ -375,9 +375,9 @@ const REGRESSIONS = [
   ['8 mm copper wire draw is 21% from gauge 30 up',
     () => [30, 31, 32, 34, 36].map(g => E.WIRE_DRAW[8].copper.find(b => g >= b.minG && g <= b.maxG).pct),
     pcts => pcts.every(p => p === 0.21)],
-  ['8 mm copper gauges 25-29 take 20% (26% until 2 Oct 2026)',
+  ['8 mm copper gauges 25-29 take 26% (20% from 2 to 10 Oct 2026)',
     () => [25, 26, 27, 28, 29].map(g => E.WIRE_DRAW[8].copper.find(b => g >= b.minG && g <= b.maxG).pct),
-    pcts => pcts.every(p => p === 0.20)],
+    pcts => pcts.every(p => p === 0.26)],
   // 11 mm: up to 51" stays 15.6% for every steel; above 51" SS304 14.5%,
   // Incoloy 16%, SS316 / other steel 15%; copper a flat 16% (owner, 2 Oct 2026).
   ...[['TUB-SS304-12-T06', 0.156, 0.145], ['TUB-INC-12-T05', 0.156, 0.16], ['TUB-SS316-12-T06', 0.156, 0.15],
@@ -458,7 +458,7 @@ const REGRESSIONS = [
     o => o.gauge === 23 && o.spoolOptions.length === 16 && o.doubleCoil && o.doubleCoil.widened === false
       && Math.abs(o.doubleCoil.windowHighIn - o.springWindowHighIn / 2) < 0.0001],
   ['8 mm copper already tops out at /2, so its double coil checks plain half length',
-    () => E.buildJobCard({ tubeMaterial: 'Copper', wattage: 500, voltage: 230, drawingTotalLengthIn: 71 - E.TOTAL_LENGTH_ALLOWANCE_IN, tubeDiameterMm: 8 }),
+    () => E.buildJobCard({ tubeMaterial: 'Copper', wattage: 600, voltage: 230, drawingTotalLengthIn: 63 - E.TOTAL_LENGTH_ALLOWANCE_IN, tubeDiameterMm: 8 }),
     o => E.SPRING_DIVISORS[8].copper.high === E.DOUBLE_COIL_WIDE_DIVISOR && o.doubleCoil && o.doubleCoil.widened === false
       && Math.abs(o.doubleCoil.windowHighIn - o.springWindowHighIn / 2) < 0.0001],
   ['a hand-set wire draw also falls back to a double coil, still printing its own ohms',
