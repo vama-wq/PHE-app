@@ -1945,8 +1945,13 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
     const parsedQty = parseInt(qty, 10);
     if (!(parsedQty > 0)) return res.status(400).json({ error: 'Valid quantity required' });
     if (!dispatch_date) return res.status(400).json({ error: 'Dispatch date is required' });
-    const existing = await db.get('SELECT id FROM job_cards WHERE order_item_id=$1', [order_item_id]);
-    if (existing) return res.status(409).json({ error: 'This item already has an inventory job card' });
+    // Several cards per item (owner, 10 Oct 2026): when the store has only part
+    // of the quantity, a card is made for that part and another for the rest
+    // later — never more than the item's quantity in all.
+    const carded = await db.get('SELECT COALESCE(SUM(qty),0)::int AS n FROM job_cards WHERE order_item_id=$1', [order_item_id]);
+    const remaining = (Number(item.quantity) || 0) - (Number(carded?.n) || 0);
+    if (remaining <= 0) return res.status(409).json({ error: `All ${item.quantity} pcs of this item already have inventory job cards` });
+    if (parsedQty > remaining) return res.status(400).json({ error: `Only ${remaining} pcs of this item are left to card (${carded.n} of ${item.quantity} already have a card)` });
 
     const fg = await fgFifo.storeRowFor(db, item);
     if (!fg) return res.status(400).json({ error: `No Finished Goods stock found for ${item.drawing_number || 'this item'} — the store has no row for that drawing.` });

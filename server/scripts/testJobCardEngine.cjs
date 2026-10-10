@@ -69,22 +69,22 @@ const CARDS = [
     // Built on the old 23% copper rate; policy is now a flat 23.7%.
     tubeDrawMoved: { cardPct: 0.23, coldZoneIn: 2, divLow: 2.5, divHigh: 2 },
     // SUPERSEDED, not a defect. This card was built 23.07.26 on a 24% wire draw;
-    // copper at 30 SWG and above went to 29% (confirmed 22 Sep 2026) and then to
-    // 21% (owner, 28 Sep 2026, after a 31 SWG 1 kW card drew only 18-20%). The
-    // engine follows the policy and lands on 34 SWG @ 21%. The card stays in the
+    // copper at 30 SWG and above is 29% (confirmed 22 Sep 2026; 21% from 28 Sep,
+    // back to 29% on 10 Oct 2026, owner). The engine follows the policy and lands
+    // on 36 SWG @ 29%. The card stays in the
     // suite because forcing its own 24% still reproduces it exactly — which is
     // what proves the divergence is the input percentage alone and not the
     // arithmetic underneath it.
     knownDivergence: {
       fields: ['gauge', 'wireDrawPct', 'ohmsRangeMid', 'ohmsRangeMin', 'ohmsRangeMax'],
-      why: 'card predates the current policy (built on 24% wire draw; policy says 21% for copper at 30 SWG and above since 28 Sep 2026)',
+      why: 'card predates the current policy (built on 24% wire draw; policy says 29% for copper at 30 SWG and above — 21% from 28 Sep, back to 29% on 10 Oct 2026)',
       rerunWithOverride: 0.24,
       // Exempting these fields would mean a regression in copper could never fail
       // the suite. So they are not exempt — they are checked against what the
       // policy says they must be, which is the whole point of the divergence.
       expected: {
-        gauge: 34, wireDrawPct: 0.21, ohmsRangeMid: 160.0225,
-        ohmsRangeMin: 158.4223, ohmsRangeMax: 161.6227,
+        gauge: 36, wireDrawPct: 0.29, ohmsRangeMid: 170.6025,
+        ohmsRangeMin: 168.8965, ohmsRangeMax: 172.3085,
       },
     },
   },
@@ -372,9 +372,9 @@ const REGRESSIONS = [
   ['8 mm steel gauge 29 still takes 41%',
     () => E.WIRE_DRAW[8].steel.find(b => 29 >= b.minG && 29 <= b.maxG).pct,
     pct => pct === 0.41],
-  ['8 mm copper wire draw is 21% from gauge 30 up',
+  ['8 mm copper wire draw is 29% from gauge 30 up (21% from 28 Sep to 10 Oct 2026)',
     () => [30, 31, 32, 34, 36].map(g => E.WIRE_DRAW[8].copper.find(b => g >= b.minG && g <= b.maxG).pct),
-    pcts => pcts.every(p => p === 0.21)],
+    pcts => pcts.every(p => p === 0.29)],
   ['8 mm copper gauges 25-29 take 26% (20% from 2 to 10 Oct 2026)',
     () => [25, 26, 27, 28, 29].map(g => E.WIRE_DRAW[8].copper.find(b => g >= b.minG && g <= b.maxG).pct),
     pcts => pcts.every(p => p === 0.26)],

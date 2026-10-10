@@ -499,6 +499,25 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     await putLine(oiG5, NUT, 2);
     r = await call('POST', '/api/job-cards/fg', { order_id: oG5, order_item_id: oiG5, qty: 1, dispatch_date: '2026-10-20' });
     ok('D3. none left: refused', r.status === 400 && /Insufficient Finished Goods stock/.test(r.body.error || ''), JSON.stringify(r.body));
+    // Part now, the rest later (owner, 10 Oct 2026): 5 ordered, 3 in the store.
+    const fgP = (await q1(
+      `INSERT INTO finished_goods (drawing_no, base_drawing_no, qty_in, qty_available) VALUES ('ZZTEST-DWG-PART','ZZTEST-DWG-PART',3,3) RETURNING id`)).id;
+    await client.query(`INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, job_card_no) VALUES ($1,'inward',3,'ZZT-IQC-FA')`, [fgP]);
+    const oG7 = await mkOrder('ZZT-IQC-G7', 'finished_goods', true);
+    const oiG7 = await mkLine(oG7, 5, 'ZZTEST-DWG-PART');
+    await putLine(oiG7, NUT, 10);
+    r = await call('POST', '/api/job-cards/fg', { order_id: oG7, order_item_id: oiG7, qty: 3, dispatch_date: '2026-10-20' });
+    const p1 = r.body.job_card_no;
+    ok('D4. 5 ordered, 3 in the store: a card for the 3 now', r.status === 201, JSON.stringify(r.body));
+    r = await call('POST', '/api/job-cards/fg', { order_id: oG7, order_item_id: oiG7, qty: 3, dispatch_date: '2026-10-20' });
+    ok('D4. a second card for more than the 2 left is refused', r.status === 400 && /Only 2 pcs of this item are left to card/.test(r.body.error || ''), JSON.stringify(r.body));
+    await client.query(`INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, job_card_no) VALUES ($1,'inward',2,'ZZT-IQC-FB')`, [fgP]);
+    await client.query('UPDATE finished_goods SET qty_in=qty_in+2, qty_available=qty_available+2 WHERE id=$1', [fgP]);
+    r = await call('POST', '/api/job-cards/fg', { order_id: oG7, order_item_id: oiG7, qty: 2, dispatch_date: '2026-10-20' });
+    ok('D4. once 2 more are in the store, a second card for the 2 left — its own number', r.status === 201 && r.body.job_card_no && r.body.job_card_no !== p1, JSON.stringify(r.body));
+    r = await call('POST', '/api/job-cards/fg', { order_id: oG7, order_item_id: oiG7, qty: 1, dispatch_date: '2026-10-20' });
+    ok('D4. all 5 carded: no more cards', r.status === 409 && /already have inventory job cards/.test(r.body.error || ''), JSON.stringify(r.body));
+
     // A row made only by hand: no job card length anywhere — nothing guessed, flagged.
     const fgH = (await q1(
       `INSERT INTO finished_goods (drawing_no, base_drawing_no, qty_in, qty_available) VALUES ('ZZTEST-DWG-HAND','ZZTEST-DWG-HAND',3,3) RETURNING id`)).id;

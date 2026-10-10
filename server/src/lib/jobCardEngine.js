@@ -86,10 +86,10 @@ const WIRE_DRAW = {
       // 25-29: 26%, moved to 20% on 2 Oct 2026 and back to 26% on 10 Oct 2026
       // (owner). Cards made in between keep the 20% printed on them.
       { minG: 25, maxG: 29, pct: 0.26 },
-      // 30 and above moved 29% -> 21% (owner, 28 Sep 2026): a 1 kW 31 SWG card
-      // wound to 68.24 ohm on 29% landed at 57-58 ohm after draw, i.e. a real
-      // draw of 18-20%. Cards already made keep their 29% (frozen figures).
-      { minG: 30, maxG: Infinity, pct: 0.21 },
+      // 30 and above: 29%; moved to 21% on 28 Sep 2026 (a 1 kW 31 SWG card wound
+      // to 68.24 ohm on 29% landed at 57-58 ohm after draw) and back to 29% on
+      // 10 Oct 2026 (owner). Cards made in between keep the 21% printed on them.
+      { minG: 30, maxG: Infinity, pct: 0.29 },
     ],
   },
   // 11 mm has no 1 kW special case.

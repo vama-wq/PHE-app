@@ -952,7 +952,7 @@ export default function OrderDetail() {
                     <span className="ml-1 text-sm font-normal text-gray-400">({order.job_cards.length})</span>
                   )}
                 </h2>
-                <p className="text-xs text-gray-400 mt-0.5">One per item — material is drawn from the Finished Goods store, then runs the short 4-stage checklist before QC &amp; dispatch</p>
+                <p className="text-xs text-gray-400 mt-0.5">One per item, or several when the store has only part of it (a card for what is there now, another for the rest later) — material is drawn from the Finished Goods store, then runs the short 4-stage checklist before QC &amp; dispatch</p>
               </div>
             </div>
 
@@ -979,7 +979,9 @@ export default function OrderDetail() {
                     }`}>
                       <div>
                         <span className={`font-medium ${hasJC ? 'text-gray-500' : 'text-gray-800'}`}>{item.drawing_number || `Item ${idx + 1}`}</span>
-                        <span className="ml-2 text-xs text-gray-400">Qty: {item.quantity}</span>
+                        <span className="ml-2 text-xs text-gray-400">Qty: {item.quantity}
+                          {fgCovered > 0 && !hasJC && <> · {fgCovered} carded · <b className="text-gray-600">{(Number(item.quantity) || 0) - fgCovered} left</b></>}
+                        </span>
                       </div>
                       {hasJC ? (
                         <span className="text-xs text-gray-500 font-medium flex items-center gap-1">
@@ -987,8 +989,8 @@ export default function OrderDetail() {
                         </span>
                       ) : drawingStatus === 'approved' ? (
                         <button className="btn-primary btn-sm py-1 px-2 text-xs"
-                          onClick={() => setFgJobCardItem(item)}>
-                          <Plus size={12} /> Create Inventory Job Card
+                          onClick={() => setFgJobCardItem({ ...item, remaining: (Number(item.quantity) || 0) - fgCovered })}>
+                          <Plus size={12} /> {fgCovered > 0 ? `Create Job Card for the ${(Number(item.quantity) || 0) - fgCovered} left` : 'Create Inventory Job Card'}
                         </button>
                       ) : (
                         <span className="text-xs text-blue-600 font-medium flex items-center gap-1">
@@ -2382,7 +2384,10 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
 function FgJobCardModal({ order, item, onClose, onSaved }) {
   const { user } = useAuthStore();
   const [plan, setPlan] = useState(null);
-  const [qty, setQty] = useState(item.quantity || '');
+  // What is left of the item to card — the whole of it the first time, the rest
+  // after a card made for part of it (owner, 10 Oct 2026).
+  const remaining = item.remaining != null ? item.remaining : (Number(item.quantity) || 0);
+  const [qty, setQty] = useState(remaining || '');
   const [dispatchDate, setDispatchDate] = useState(order.dispatch_date ? order.dispatch_date.slice(0, 10) : '');
   const [notes, setNotes] = useState('');
   const [file, setFile] = useState(null);
@@ -2406,6 +2411,7 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
     setError('');
     if (!store) return setError(`No Finished Goods stock found for ${item.drawing_number || 'this item'}.`);
     if (!(parseInt(qty, 10) > 0)) return setError('Enter a valid quantity.');
+    if (parseInt(qty, 10) > remaining) return setError(`Only ${remaining} pcs of this item are left to card.`);
     if (short) return setError(`Only ${store.qty_available} available in stock.`);
     if (!dispatchDate) return setError('Dispatch date is required.');
     if (!file) return setError('Upload the job card file.');
