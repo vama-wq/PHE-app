@@ -25,6 +25,10 @@ router.get('/', authenticate, async (req, res) => {
   // claim — so pickers can offer them. current_stock is untouched.
   const bins = Object.fromEntries((await rework.binsWithFree(db)).map(b => [b.item_id, b]));
   for (const it of items) { const b = bins[it.id]; it.rework_qty = b ? Number(b.qty) : 0; it.rework_free = b ? Number(b.free) : 0; }
+  // What open orders still have to take (owner, 10 Oct 2026) — display only;
+  // per order, so a picker can leave the order being edited out.
+  const holds = await require('../lib/stockHolds').heldByOrders(db);
+  for (const it of items) { const h = holds.get(it.id); it.held_qty = h ? h.held : 0; it.held_by = h ? h.by : []; }
   res.json(stripCost(req, items));
 });
 
