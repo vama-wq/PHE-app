@@ -3,9 +3,11 @@ import { Link } from 'react-router-dom';
 import api, { uploadApi } from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import DrawingUploadModal from '../../components/DrawingUploadModal';
+import InventoryEditModal from '../../components/InventoryEditModal';
+import { fittingLabels } from '../../lib/heaterFittings';
 import {
   PenLine, CheckCircle2, Clock, AlertTriangle, Upload,
-  FileImage, ExternalLink, ChevronRight, RefreshCw, XCircle
+  FileImage, ExternalLink, ChevronRight, RefreshCw, XCircle, Package
 } from 'lucide-react';
 
 function fmtDate(d) {
@@ -17,10 +19,13 @@ export default function DrawingsList() {
   const { user } = useAuthStore();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('pending'); // 'pending' | 'ready'
+  const [tab, setTab] = useState('pending'); // 'pending' | 'review' | 'rejected' | 'ready' | 'bom'
+  // Items whose inventory list Design must fix and confirm (owner, 12 Oct 2026).
+  const [bomItems, setBomItems] = useState([]);
 
   const load = () => {
     setLoading(true);
+    api.get('/orders/bom-review/pending').then(r => setBomItems(r.data || [])).catch(() => setBomItems([]));
     api.get('/orders/drawings/pending')
       .then(r => setOrders(r.data))
       .finally(() => setLoading(false));
@@ -82,12 +87,13 @@ export default function DrawingsList() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-5 gap-3 mb-6">
         {[
           { key: 'pending',  count: needsDrawing.length,   label: 'Needs Drawing',     sub: 'No drawing uploaded',          color: 'red',   Icon: AlertTriangle },
           { key: 'review',   count: awaitingReview.length, label: 'Awaiting Review',   sub: 'Owner must approve',           color: 'blue',  Icon: Clock },
           { key: 'rejected', count: rejectedOrders.length, label: 'Rejected',           sub: 'Design must revise',           color: 'amber', Icon: XCircle },
           { key: 'ready',    count: approvedOrders.length, label: 'Approved',           sub: 'Ready for order approval',     color: 'green', Icon: CheckCircle2 },
+          { key: 'bom',      count: bomItems.length,       label: 'BOM Required',       sub: 'Design must fix & confirm',    color: 'purple', Icon: Package },
         ].map(({ key, count, label, sub, color, Icon }) => (
           <div key={key}
             className={`card p-3 cursor-pointer border-2 transition-colors ${tab === key ? `border-${color}-400 bg-${color}-50` : 'border-transparent hover:border-gray-200'}`}
@@ -107,6 +113,9 @@ export default function DrawingsList() {
         ))}
       </div>
 
+      {tab === 'bom' ? (
+        <BomRequired items={bomItems} loading={loading} canEdit={canUpload} onChanged={load} />
+      ) : (<>
       {/* Tab label */}
       <div className="flex items-center gap-2 mb-3">
         <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
@@ -158,7 +167,97 @@ export default function DrawingsList() {
           </table>
         )}
       </div>
+      </>)}
     </div>
+  );
+}
+
+// ── BOM required ─────────────────────────────────────────────────────────────
+// Every open item whose inventory list waits on Design (owner, 12 Oct 2026):
+// why it was flagged, what its heater fittings still need, its open job cards,
+// and the two things Design does about it — edit the list, then confirm it.
+// Its drawing cannot be approved, nor a job card made, until it is confirmed.
+function BomRequired({ items, loading, canEdit, onChanged }) {
+  const [editing, setEditing] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const confirm = async (it) => {
+    setBusy(it.item_id);
+    try { await api.put(`/orders/${it.order_id}/items/${it.item_id}/bom-confirm`); onChanged(); }
+    catch (e) { alert(e.response?.data?.error || 'Could not confirm the list'); }
+    finally { setBusy(null); }
+  };
+  return (
+    <>
+      <div className="flex items-center gap-2 mb-3">
+        <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">BOM Required — Design must fix and confirm the list</h2>
+        <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-purple-100 text-purple-700">{items.length}</span>
+      </div>
+      <div className="card overflow-hidden">
+        {loading && !items.length ? (
+          <div className="p-12 text-center text-gray-400">Loading…</div>
+        ) : items.length === 0 ? (
+          <div className="p-12 text-center text-gray-400">No item is waiting on its BOM.</div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {items.map(it => (
+              <div key={it.item_id} className="p-4 space-y-2">
+                <div className="flex flex-wrap items-start gap-x-4 gap-y-1">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link to={`/orders/${it.order_id}`} className="font-semibold text-brand-700 hover:underline">{it.order_code}</Link>
+                      <span className="text-xs text-gray-500">{it.customer_code}</span>
+                      <span className="font-mono text-sm text-gray-800">{it.drawing_number || it.product_code || `Item #${it.item_id}`}</span>
+                      <span className="text-xs bg-gray-100 text-gray-700 rounded-full px-2 py-0.5">Qty {it.quantity}</span>
+                      {it.drawing_status && <span className="text-[11px] text-gray-500">drawing: {String(it.drawing_status).replace('_', ' ')}</span>}
+                    </div>
+                    {fittingLabels(it.fittings).length > 0 && (
+                      <div className="text-xs text-gray-600 mt-0.5">Fittings: <b className="font-medium">{fittingLabels(it.fittings).join(', ')}</b></div>
+                    )}
+                  </div>
+                  {canEdit && (
+                    <div className="flex gap-2 flex-shrink-0">
+                      <button className="btn-secondary btn-sm" onClick={() => setEditing(it)}>Edit inventory</button>
+                      <button className="btn-primary btn-sm" disabled={busy === it.item_id || it.fittings_missing?.length > 0 || !(it.inventory_items?.length)}
+                        title={it.fittings_missing?.length ? 'Add the missing fitting parts first' : !(it.inventory_items?.length) ? 'Add the BOM first' : 'Confirm this list — the drawing can then be approved'}
+                        onClick={() => confirm(it)}>
+                        {busy === it.item_id ? 'Confirming…' : 'Confirm BOM'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <span className="font-medium">What it needs: </span>{it.bom_review_reason || 'Design to check the list and confirm it.'}
+                  {it.fittings_missing?.length > 0 && (
+                    <div className="mt-1 text-red-700">Still missing for its fittings: {it.fittings_missing.join(', ')}</div>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-600">
+                  <div>
+                    <span className="text-gray-400">List now: </span>
+                    {it.inventory_items?.length
+                      ? it.inventory_items.map(l => `${l.item_code} ${Number(l.qty) || 'auto'}`).join(' · ')
+                      : <span className="text-red-600">nothing on the list</span>}
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Open job cards: </span>
+                    {it.job_cards?.length
+                      ? it.job_cards.map(j => <Link key={j.id} to={`/job-cards/${j.id}`} className="text-brand-600 hover:underline mr-2">{j.job_card_no} ({j.qty}, {String(j.status).replace(/_/g, ' ')})</Link>)
+                      : 'none yet — a job card is made once the drawing is approved'}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {editing && (
+        <InventoryEditModal orderId={editing.order_id}
+          item={{ id: editing.item_id, drawing_number: editing.drawing_number, fittings: editing.fittings, inventory_items: editing.inventory_items }}
+          fgOrder={editing.order_type === 'finished_goods'}
+          onClose={() => setEditing(null)}
+          onDone={() => { setEditing(null); onChanged(); }} />
+      )}
+    </>
   );
 }
 

@@ -256,16 +256,36 @@ router.get('/', authenticate, async (req, res) => {
 // blocked, and listing them buried the ones that were. Declared before /:id
 // so the path segment is not read as an order id.
 router.get('/bom-review/pending', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
-  const rows = await getDB().all(`
+  const db = getDB();
+  const rows = await db.all(`
     SELECT oi.id AS item_id, oi.drawing_number, oi.product_code, oi.quantity, oi.bom_review_reason,
-           oi.created_at AS flagged_at,
-           o.id AS order_id, o.order_code, o.status AS order_status, c.customer_code
+           oi.created_at AS flagged_at, oi.fittings, oi.remark,
+           o.id AS order_id, o.order_code, o.status AS order_status, o.order_type, c.customer_code,
+           (SELECT od.drawing_status FROM order_drawings od WHERE od.item_id = oi.id ORDER BY od.created_at DESC, od.id DESC LIMIT 1) AS drawing_status
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id
       LEFT JOIN customers c ON c.id = o.customer_id
      WHERE oi.bom_review = 'needed'
-       AND o.status NOT IN ('dispatched','in_finished_goods','resolved_dispatched','cancelled','closed','completed')
+       AND (o.status NOT IN ('dispatched','in_finished_goods','resolved_dispatched','cancelled','closed','completed')
+            -- a drawing still waiting on its BOM, whatever the order's status (owner, 12 Oct 2026)
+            OR EXISTS (SELECT 1 FROM order_drawings od WHERE od.item_id = oi.id AND od.drawing_status = 'pending_review'))
      ORDER BY o.created_at DESC, oi.id`);
+  // The Drawings page's "BOM required" tab (owner, 12 Oct 2026): each item with
+  // its list as it stands, what its fittings still need, and its open job cards,
+  // so Design can fix and confirm it from one place.
+  for (const r of rows) {
+    r.inventory_items = await db.all(
+      `SELECT ii.id, ii.item_code, ii.name, ii.unit, ii.category, oii.qty, COALESCE(oii.rework_qty,0) AS rework_qty
+         FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
+        WHERE oii.order_item_id = $1 ORDER BY ii.item_code`, [r.item_id]);
+    const fits = heaterFittings.forItem(r.fittings, { drawingNumber: r.drawing_number, productCode: r.product_code, orderType: r.order_type });
+    r.fittings = fits;
+    r.fittings_missing = heaterFittings.missingParts(fits, r.inventory_items).map(m => m.text);
+    r.job_cards = await db.all(
+      `SELECT id, job_card_no, qty, status FROM job_cards
+        WHERE order_item_id = $1 AND status NOT IN ('dispatched','resolved_dispatched','replaced','rejected')
+        ORDER BY id`, [r.item_id]);
+  }
   res.json(rows);
 });
 
