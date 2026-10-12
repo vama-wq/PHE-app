@@ -3,6 +3,8 @@ import api from '../lib/api';
 import { pinsFromCard } from '../lib/utils';
 import Modal from './ui/Modal';
 import StockTag, { StockNote } from './StockTag';
+import { FittingsNeeded } from './HeaterFittings';
+import { fittingParts } from '../lib/heaterFittings';
 import { Package, X } from 'lucide-react';
 
 // Edit the inventory selected for an order item. If the item's drawing is already
@@ -71,6 +73,9 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
     if (!ids.length) return setError('Select at least one inventory item');
     const missingQty = ids.filter(id => !finsIds.has(String(id)) && !(lineQty(id) > 0));
     if (missingQty.length) return setError('Enter a quantity for every selected item');
+    // The heater's fittings (owner, 12 Oct 2026): each needs its part on the list.
+    const fitMissing = fgOrder ? [] : fittingParts(item?.fittings, selectedList).filter(p => !p.ok);
+    if (fitMissing.length) return setError(`This heater's fittings need these on the list: ${fitMissing.map(p => p.text).join(', ')} — add one of each.`);
     const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : lineQty(id),
       rework_qty: parseInt(reworkOf[id], 10) || 0 }));
     setSaving(true);
@@ -108,6 +113,7 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
           Correct the inventory this item consumes. Stock only changes where real stock was already
           taken for this item, and then only by the difference; otherwise just the list is corrected.
         </p>
+        {!fgOrder && <FittingsNeeded value={item?.fittings} invRows={selectedList} />}
 
         <div className="relative">
           <input className="input" placeholder="Search inventory by code or name..."

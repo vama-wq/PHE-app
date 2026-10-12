@@ -6,6 +6,7 @@ import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import { fmtDate, fmtDateTime, daysUntil, PRODUCTION_STAGES, MANDATORY_STAGE_NOS, getStageLabel, stagesFor, downloadExcel, WORKER_NAME_STAGES, SCRAP_VALUE_STAGES, PLATING_STAGE, PLATING_COMPANIES, kgToG, coilWeightText, stageScrapText } from '../../lib/utils';
 import { printJobCardSlip } from '../../lib/printJobCardSlip';
+import { normalizeFittings } from '../../lib/heaterFittings';
 import { compressImage } from '../../lib/compressImage';
 import {
   Wrench, Calendar, Plus, CheckSquare, Square, CheckCircle,
@@ -978,6 +979,7 @@ function ChecklistModal({ card, onClose, onSave }) {
                             <span className={d.airCleaning ? 'text-green-600 font-medium' : 'text-gray-400'}>
                               Air Cleaning {d.airCleaning ? '✅' : '—'}
                             </span>
+                            {d.sleeveWeightG > 0 && <span className="text-blue-600 font-medium">Sleeve Wt: {d.sleeveWeightG} g</span>}
                             {d.remark && <span className="text-gray-500">{d.remark}</span>}
                           </>;
                         })() : null}
@@ -1265,6 +1267,10 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [brazingAirPressureRemark, setBrazingAirPressureRemark] = useState(brazingData.airPressureRemark || '');
   const [brazingAirCleaning, setBrazingAirCleaning] = useState(!!brazingData.airCleaning);
   const [brazingRemark, setBrazingRemark] = useState(brazingData.remark || '');
+  // A heater with a Cap (owner, 12 Oct 2026): the total sleeve weight, in grams,
+  // is compulsory at Brazing.
+  const needsSleeveWeight = isBrazing && normalizeFittings(card?.fittings).includes('cap');
+  const [sleeveWeightG, setSleeveWeightG] = useState(brazingData.sleeveWeightG != null ? String(brazingData.sleeveWeightG) : '');
 
   // Stage 1 (Coil) — gauge picked from inventory items in category "Spring Guage".
   // Stored in value1 (just a record of which gauge was used; no stock deduction).
@@ -1317,6 +1323,7 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (!brazingAirPressure) return false;
       if (brazingAirPressure === 'fail' && !brazingAirPressureRemark.trim()) return false;
       if (!brazingAirCleaning) return false;
+      if (needsSleeveWeight && !(parseFloat(sleeveWeightG) > 0)) return false;
     }
     if (isHvLight) {
       if (!hvTestResult || !hvLightResult) return false;
@@ -1370,7 +1377,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       v2: null,
     };
     if (isBrazing) return {
-      v1: JSON.stringify({ airPressure: brazingAirPressure, airPressureRemark: brazingAirPressureRemark, airCleaning: brazingAirCleaning, remark: brazingRemark }),
+      v1: JSON.stringify({ airPressure: brazingAirPressure, airPressureRemark: brazingAirPressureRemark, airCleaning: brazingAirCleaning, remark: brazingRemark,
+        ...(needsSleeveWeight ? { sleeveWeightG: parseFloat(sleeveWeightG) } : {}) }),
       v2: null,
     };
     if (isBending) return { v1: heaterAdjustDone ? 'adjusted' : null, v2: null };
@@ -1928,6 +1936,25 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
               </button>
             )}
           </div>
+
+          {/* Sleeve weight — a heater with a Cap */}
+          {needsSleeveWeight && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Total Sleeve Weight (grams) <span className="text-red-500">*</span>
+              </label>
+              {isDone ? (
+                <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+                  {brazingData.sleeveWeightG ? `${brazingData.sleeveWeightG} g` : '—'}
+                </div>
+              ) : (
+                <input className="input w-full" type="number" min="0" step="any" inputMode="decimal"
+                  placeholder="Weight of all sleeves used, in grams — required"
+                  value={sleeveWeightG} onChange={e => setSleeveWeightG(e.target.value)} />
+              )}
+              <p className="text-[11px] text-gray-500 mt-1">This heater has a Cap — the sleeve weight is needed to mark Brazing done.</p>
+            </div>
+          )}
 
           {/* Brazing remark */}
           <div>

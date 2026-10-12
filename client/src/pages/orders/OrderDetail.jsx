@@ -7,6 +7,8 @@ import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import DrawingUploadModal from '../../components/DrawingUploadModal';
 import InventoryEditModal from '../../components/InventoryEditModal';
+import HeaterFittingsPicker, { FittingsText } from '../../components/HeaterFittings';
+import { isMultiElement, normalizeFittings } from '../../lib/heaterFittings';
 import TerminalPinsBox, { TERMINAL_ROLES } from '../../components/TerminalPinsBox';
 import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati, ORDER_TYPE_COLORS, orderTypeLabel, reuseListNote } from '../../lib/utils';
 import { printJobCardSlip } from '../../lib/printJobCardSlip';
@@ -474,6 +476,7 @@ export default function OrderDetail() {
                               <span className="text-gray-600">{item.remark}</span>
                             </div>
                           )}
+                          <FittingsText value={item.fittings} className="text-xs col-span-2 md:col-span-3" />
                         </div>
                         {/* Reference images */}
                         {item.images?.length > 0 && (
@@ -1543,9 +1546,11 @@ function TimelinePanel({ activity }) {
 function ItemModal({ item, orderId, orderType, customerId, onClose, onSave }) {
   const blank = {
     product_code: '', drawing_number: '', tube_material: '', tube_diameter: '',
-    wattage: '', voltage: '', plating_instructions: '', quantity: '', remark: ''
+    wattage: '', voltage: '', plating_instructions: '', quantity: '', remark: '', fittings: []
   };
-  const [f, setF] = useState(item ? { ...item } : blank);
+  const [f, setF] = useState(item ? { ...item, fittings: normalizeFittings(item.fittings) } : blank);
+  // Heater fittings — asked only for a 2in1 / 3in1 / Xin1 heater (owner, 12 Oct 2026).
+  const askFittings = orderType !== 'finished_goods' && isMultiElement(f.drawing_number, f.product_code);
   const [existingImages, setExistingImages] = useState(item?.images || []);
   const [newFiles, setNewFiles] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -1615,6 +1620,7 @@ function ItemModal({ item, orderId, orderType, customerId, onClose, onSave }) {
       plating_instructions: p.plating_instructions || '',
       quantity: '', // left blank on purpose — quantity varies per order
       remark: p.remark || '',
+      fittings: normalizeFittings(p.fittings),
     });
     setProductSearch(p.product_code || '');
     setCopyFromItemId(p.id); // inventory is copied server-side from the source item
@@ -1655,7 +1661,7 @@ function ItemModal({ item, orderId, orderType, customerId, onClose, onSave }) {
     const missing = validateItem(f);
     if (missing.length) { setError(`Required fields missing: ${missing.join(', ')}`); return; }
     // Inventory is chosen by design at the drawing stage, not here.
-    const payload = { ...f };
+    const payload = { ...f, fittings: askFittings ? normalizeFittings(f.fittings) : [] };
     if (!item?.id && copyFromItemId) payload.copy_from_item_id = copyFromItemId;
     setSaving(true);
     // Upload in batches — the server accepts up to 40 images per request
@@ -1821,6 +1827,13 @@ function ItemModal({ item, orderId, orderType, customerId, onClose, onSave }) {
           <label className="label">Remark <span className="text-gray-400 font-normal">(optional)</span></label>
           <input className="input" placeholder="Any remarks..." value={f.remark ?? ''} onChange={set('remark')} />
         </div>
+
+        {askFittings && (
+          <div className="col-span-2">
+            <label className="label">Heater fittings <span className="text-gray-400 font-normal">(tick all this heater has)</span></label>
+            <HeaterFittingsPicker value={f.fittings} onChange={v => setF(p => ({ ...p, fittings: v }))} />
+          </div>
+        )}
 
         {/* Inventory is now selected by design at the drawing-upload stage */}
         <div className="col-span-2 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 flex items-center gap-1.5">

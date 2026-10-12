@@ -273,9 +273,10 @@ async function buildDraft(db, orderItemId, answers = {}) {
       // cost the sheet a line per instruction and pushed it onto a second page.
       remark: (() => {
         const en = String(item.remark || '').trim();
-        if (!en) return [];
-        const both = [toGujarati(en), toHindi(en)].filter(v => isTranslated(en, v));
-        return [en, ...(both.length ? [both.join('  ·  ')] : [])];
+        const both = en ? [toGujarati(en), toHindi(en)].filter(v => isTranslated(en, v)) : [];
+        // The heater's fittings (owner, 12 Oct 2026) are an instruction too.
+        const fit = require('./heaterFittings').labels(item.fittings);
+        return [...(en ? [en] : []), ...(both.length ? [both.join('  ·  ')] : []), ...(fit.length ? [`Fittings: ${fit.join(', ')}`] : [])];
       })(),
       plating: PLATING_TRILINGUAL[String(item.plating_instructions || '').trim()]
         || item.plating_instructions || '',

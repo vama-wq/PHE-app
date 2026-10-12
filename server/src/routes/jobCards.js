@@ -57,6 +57,10 @@ router.get('/', authenticate, async (req, res) => {
             (SELECT id FROM order_items WHERE order_id = jc.order_id AND drawing_number = jc.drawing_no ORDER BY id LIMIT 1))
           AND TRIM(ii.category) IN ('Nipple Fastner','Nipple Washer','Nipple Nut+Washer')
       ) as requires_stage_21,
+      -- Heater fittings on the card's item (owner, 12 Oct 2026): a Cap makes the
+      -- sleeve weight compulsory at Stage 15.
+      (SELECT oi.fittings FROM order_items oi WHERE oi.id = COALESCE(jc.order_item_id,
+          (SELECT id FROM order_items WHERE order_id = jc.order_id AND drawing_number = jc.drawing_no ORDER BY id LIMIT 1))) as fittings,
       cq_active.id as active_query_id,
       cq_active.query_no as active_query_no,
       cq_active.subject as active_query_subject,
@@ -159,7 +163,9 @@ router.get('/:id', authenticate, async (req, res) => {
   const jc = await db.get(`
     SELECT jc.*, o.order_code, c.customer_code, u.name as uploaded_by_name,
       rq.query_no as replacement_query_no,
-      EXISTS(SELECT 1 FROM production_day_picks WHERE job_card_id = jc.id AND pick_date = $1) as picked_today
+      EXISTS(SELECT 1 FROM production_day_picks WHERE job_card_id = jc.id AND pick_date = $1) as picked_today,
+      (SELECT oi.fittings FROM order_items oi WHERE oi.id = COALESCE(jc.order_item_id,
+          (SELECT id FROM order_items WHERE order_id = jc.order_id AND drawing_number = jc.drawing_no ORDER BY id LIMIT 1))) as fittings
     FROM job_cards jc
     JOIN orders o ON jc.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
@@ -1300,6 +1306,20 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
         error: `${stageNo === 3 ? 'Coil' : 'Tube'} scrap value is required — enter 0 if there was no scrap`,
         code: 'SCRAP_REQUIRED',
       });
+    }
+  }
+
+  // A heater with a Cap (owner, 12 Oct 2026): the sleeve's weight is
+  // compulsory at Brazing — typed in grams, kept in the stage's brazing record.
+  if (done && !isFg && stageNo === 15) {
+    const fits = await require('../lib/heaterFittings').forCard(db, jcCard);
+    if (fits.includes('cap')) {
+      let b = value1;
+      try { b = typeof b === 'string' ? JSON.parse(b) : b; } catch { b = null; }
+      const g = Number(b?.sleeveWeightG);
+      if (!(g > 0)) {
+        return res.status(400).json({ error: 'This heater has a Cap — enter the sleeve weight (grams) before marking Brazing done', code: 'SLEEVE_WEIGHT_REQUIRED' });
+      }
     }
   }
 

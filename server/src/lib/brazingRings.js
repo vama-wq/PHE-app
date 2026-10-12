@@ -13,11 +13,18 @@
 //   • Single-element heaters: nothing here; their list works as before.
 //   • From now on only: a card whose Stage 15 already took rings off its list
 //     keeps that and takes nothing more here.
+//   • A heater with a Pocket fitting takes 1 more ring of the same size (owner,
+//     12 Oct 2026: "this uses one other brazing ring in a heater apart from the
+//     element brazing rings") — lib/heaterFittings.js.
 const { recordMove } = require('./stockLedger');
 
 const RING_CODES = { 8: 'BRZ-08', 11: 'BRZ-11' };
 const RINGS_PER_ELEMENT = 2;
+const POCKET_RINGS = 1;
 const isRingCode = (code) => Object.values(RING_CODES).includes(String(code || '').trim().toUpperCase());
+// Rings for one heater: 2 per element, and 1 more for a pocket.
+const hasPocket = (fittings) => require('./heaterFittings').normalize(fittings).includes('pocket');
+const ringsPerPiece = (elements, fittings) => elements * RINGS_PER_ELEMENT + (hasPocket(fittings) ? POCKET_RINGS : 0);
 
 // "3in1", "3 in 1", "3IN1" in a drawing or card number.
 function elementsFromName(...names) {
@@ -37,7 +44,7 @@ async function ringPlan(db, card) {
   let spec = await specForCard(db, card);
   try { spec = typeof spec === 'string' ? JSON.parse(spec) : spec; } catch { spec = null; }
   const item = card.order_item_id
-    ? await db.get('SELECT id, drawing_number, tube_diameter, quantity FROM order_items WHERE id=$1', [card.order_item_id]) : null;
+    ? await db.get('SELECT id, drawing_number, tube_diameter, quantity, fittings FROM order_items WHERE id=$1', [card.order_item_id]) : null;
   let elements = parseInt(spec?.computed?.elements, 10) || null;
   if (!(elements > 1)) elements = elementsFromName(item?.drawing_number, card.drawing_no, card.job_card_no) || elements || 1;
   if (!(elements > 1)) return null;
@@ -53,9 +60,10 @@ async function ringPlan(db, card) {
         AND COALESCE(source,'') <> 'brazing' LIMIT 1`,
     [ringIds, `Stage 15 Brazing (JC ${card.job_card_no})`]);
   if (legacy) return null;
-  const qty = (Number(card.qty) || 0) * elements * RINGS_PER_ELEMENT;
+  const pocket = hasPocket(item?.fittings) ? POCKET_RINGS : 0;
+  const qty = (Number(card.qty) || 0) * ringsPerPiece(elements, item?.fittings);
   if (!(qty > 0)) return null;
-  return { inv, qty, elements, dia, item };
+  return { inv, qty, elements, dia, item, pocket };
 }
 
 const txDb = (client) => ({
@@ -84,7 +92,10 @@ async function takeRingsAtBrazing(db, jobCardId, userId) {
     }
     const after = Number((await tx.get(
       'UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id=$2 RETURNING current_stock', [plan.qty, plan.inv.id])).current_stock);
-    const note = `Order: ${card.order_code}${plan.item?.drawing_number ? ` | Dwg: ${plan.item.drawing_number}` : ''} | Brazing rings ${plan.qty} pcs (${card.qty} × ${plan.elements} elements × ${RINGS_PER_ELEMENT}, ${plan.dia} mm) | Stage 15 Brazing (JC ${card.job_card_no})`;
+    const how = plan.pocket
+      ? `${card.qty} × (${plan.elements} elements × ${RINGS_PER_ELEMENT} + ${plan.pocket} pocket)`
+      : `${card.qty} × ${plan.elements} elements × ${RINGS_PER_ELEMENT}`;
+    const note = `Order: ${card.order_code}${plan.item?.drawing_number ? ` | Dwg: ${plan.item.drawing_number}` : ''} | Brazing rings ${plan.qty} pcs (${how}, ${plan.dia} mm) | Stage 15 Brazing (JC ${card.job_card_no})`;
     await recordMove(tx, { itemId: plan.inv.id, type: 'dispatch_to_production', qty: plan.qty, balanceAfter: after,
       notes: note, userId, orderItemId: plan.item?.id || null, source: 'brazing', jobCardId: card.id });
     // The list's ring lines: this card's share settled without stock.
@@ -104,10 +115,10 @@ async function takeRingsAtBrazing(db, jobCardId, userId) {
         }
       }
     }
-    const rec = { item_id: plan.inv.id, item_code: plan.inv.item_code, qty: plan.qty, elements: plan.elements, waived };
+    const rec = { item_id: plan.inv.id, item_code: plan.inv.item_code, qty: plan.qty, elements: plan.elements, pocket: plan.pocket, waived };
     await tx.run('UPDATE job_cards SET rings_taken_at = NOW(), rings_taken = $2 WHERE id=$1', [card.id, JSON.stringify(rec)]);
     await tx.run(`INSERT INTO activity_log (order_id, job_card_id, activity_type, description, created_by) VALUES ($1,$2,'rings_taken',$3,$4)`,
-      [card.order_id, card.id, `Brazing ticked: ${plan.qty} × ${plan.inv.item_code} taken for ${card.job_card_no} (${card.qty} × ${plan.elements} elements × ${RINGS_PER_ELEMENT})`, userId || null]);
+      [card.order_id, card.id, `Brazing ticked: ${plan.qty} × ${plan.inv.item_code} taken for ${card.job_card_no} (${how})`, userId || null]);
     return rec;
   });
 }
@@ -136,4 +147,4 @@ async function giveRingsBack(db, jobCardId, userId) {
   });
 }
 
-module.exports = { RING_CODES, RINGS_PER_ELEMENT, isRingCode, elementsFromName, ringPlan, takeRingsAtBrazing, giveRingsBack };
+module.exports = { RING_CODES, RINGS_PER_ELEMENT, POCKET_RINGS, isRingCode, hasPocket, ringsPerPiece, elementsFromName, ringPlan, takeRingsAtBrazing, giveRingsBack };

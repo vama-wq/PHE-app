@@ -7,6 +7,7 @@ import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import InventoryQCScreen from '../qc/InventoryQCScreen';
 import TerminalPinsBox from '../../components/TerminalPinsBox';
+import { fittingLabels } from '../../lib/heaterFittings';
 import { fmtDate, fmtDateTime, daysUntil, dispatchPending, ACTIVITY_ICONS, getStageLabel, PRODUCTION_STAGES, stagesFor, capaBlocks, coilWeightText, stageScrapText } from '../../lib/utils';
 import { ArrowLeft, Plus, Upload, Printer, CheckCircle, Wrench, FileText, Image, Trash2, PlayCircle, Download, HelpCircle, AlertTriangle, Copy, ChevronDown, ChevronRight, Camera, XCircle, Truck } from 'lucide-react';
 
@@ -118,6 +119,8 @@ export default function JobCardDetail() {
             <Link to={`/orders/${jc.order_id}`} className="text-brand-600 hover:underline">{jc.order_code}</Link>
             <span>·</span><span>{jc.customer_code}</span>
             {jc.product_name && <><span>·</span><span>{jc.product_name}</span></>}
+            {fittingLabels(jc.fittings).length > 0 && <><span>·</span>
+              <span className="text-gray-700">Fittings: <b className="font-medium">{fittingLabels(jc.fittings).join(', ')}</b></span></>}
           </div>
         </div>
         <div className="flex gap-2 no-print">

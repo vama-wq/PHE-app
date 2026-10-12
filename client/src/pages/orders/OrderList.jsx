@@ -7,6 +7,8 @@ import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import { fmtDate, downloadExcel, STATUS_LABELS, orderTypeLabel, reuseListNote } from '../../lib/utils';
+import HeaterFittingsPicker, { FittingsText } from '../../components/HeaterFittings';
+import { isMultiElement, normalizeFittings } from '../../lib/heaterFittings';
 
 // Every status an ORDER can hold, in the order it moves through them. Labels
 // come from STATUS_LABELS so the filter reads the same as the badge beside it.
@@ -239,9 +241,11 @@ export default function OrderList() {
 function ItemModal({ item, images: initialImages = [], orderType, customerId, onClose, onSave }) {
   const blank = {
     product_code: '', drawing_number: '', tube_material: '', tube_diameter: '',
-    wattage: '', voltage: '', plating_instructions: '', quantity: '', remark: ''
+    wattage: '', voltage: '', plating_instructions: '', quantity: '', remark: '', fittings: []
   };
   const [f, setF] = useState(item || blank);
+  // Heater fittings — asked only for a 2in1 / 3in1 / Xin1 heater (owner, 12 Oct 2026).
+  const askFittings = orderType !== 'finished_goods' && isMultiElement(f.drawing_number, f.product_code);
   const [images, setImages] = useState(initialImages); // File[] for new images
   const [error, setError] = useState('');
   const [products, setProducts] = useState([]);
@@ -298,6 +302,7 @@ function ItemModal({ item, images: initialImages = [], orderType, customerId, on
       plating_instructions: p.plating_instructions || '',
       quantity: '', // left blank on purpose — quantity varies per order
       remark: p.remark || '',
+      fittings: normalizeFittings(p.fittings),
     });
     setProductSearch(p.product_code || '');
     setCopyFromItemId(p.id); // inventory is copied server-side from the source item
@@ -353,7 +358,7 @@ function ItemModal({ item, images: initialImages = [], orderType, customerId, on
     const copy_src = !copyFromItemId ? null
       : src ? { order_code: src.order_code, order_type: src.order_type, has_list: (src.inventory_items?.length || 0) > 0 }
       : (item?.copy_src || null);
-    onSave({ ...f, copy_from_item_id: copyFromItemId || null, copy_src }, images);
+    onSave({ ...f, fittings: askFittings ? normalizeFittings(f.fittings) : [], copy_from_item_id: copyFromItemId || null, copy_src }, images);
   };
 
   return (
@@ -506,6 +511,13 @@ function ItemModal({ item, images: initialImages = [], orderType, customerId, on
           <input className="input" placeholder="Any remarks..."
             value={f.remark} onChange={set('remark')} />
         </div>
+
+        {askFittings && (
+          <div className="col-span-2">
+            <label className="label">Heater fittings <span className="text-gray-400 font-normal">(tick all this heater has)</span></label>
+            <HeaterFittingsPicker value={f.fittings} onChange={v => setF(p => ({ ...p, fittings: v }))} />
+          </div>
+        )}
 
         {/* Inventory is now selected by design at the drawing-upload stage */}
         <div className="col-span-2 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 flex items-center gap-1.5">
@@ -810,6 +822,7 @@ function NewOrderModal({ onClose, onSave, prefill = null }) {
                             <span className="text-gray-600">{item.remark}</span>
                           </div>
                         )}
+                        <FittingsText value={item.fittings} className="col-span-4 text-sm" />
                         {item.copy_from_item_id && item.copy_src && (
                           <div className="col-span-4 text-xs text-brand-600">
                             Reused from {item.copy_src.order_code} ({orderTypeLabel(item.copy_src.order_type)}). {reuseListNote(item.copy_src, form.order_type)}

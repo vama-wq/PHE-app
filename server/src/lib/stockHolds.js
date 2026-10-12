@@ -34,7 +34,8 @@ async function heldByOrders(db) {
         AND jc.status IN ('pending', 'in_progress', 'on_hold')
       GROUP BY 1, 2, 3`, [PINS_RULE.afterOrderId, OPEN_EXCLUDED]);
   // Brazing rings on a 2in1 / 3in1 / Xin1 item go by the job card, not the list
-  // (lib/brazingRings.js): 2 per element for every piece not yet brazed.
+  // (lib/brazingRings.js): 2 per element for every piece not yet brazed, and 1
+  // more for a pocket.
   const br = require('./brazingRings');
   const ringItems = await db.all(`SELECT id FROM inventory_items WHERE UPPER(TRIM(item_code)) = ANY($1)`, [Object.values(br.RING_CODES)]);
   const ringIds = new Set(ringItems.map(r => r.id));
@@ -42,7 +43,7 @@ async function heldByOrders(db) {
   if (ringIds.size) {
     // Every open multi-element item — with ring lines on its list or not.
     const ringLines = await db.all(
-      `SELECT oi.id AS order_item_id, oi.order_id, o.order_code, oi.drawing_number, oi.quantity, oi.tube_diameter
+      `SELECT oi.id AS order_item_id, oi.order_id, o.order_code, oi.drawing_number, oi.quantity, oi.tube_diameter, oi.fittings
          FROM order_items oi JOIN orders o ON o.id = oi.order_id
         WHERE COALESCE(oi.inventory_deducted, FALSE) = FALSE AND o.status <> ALL($2) AND o.order_type <> 'finished_goods'
           AND (oi.drawing_number ~* '[0-9]\\s*in\\s*1'
@@ -72,7 +73,7 @@ async function heldByOrders(db) {
       const carded = cards.reduce((x, c) => x + (Number(c.qty) || 0), 0);
       const open = cards.filter(c => !c.rings_taken_at && c.s15 !== 1 && !['qc_approved', 'dispatched', 'replaced', 'rejected', 'scrapped', 'inventory_qc', 'qc_pending'].includes(c.status))
         .reduce((x, c) => x + (Number(c.qty) || 0), 0) + Math.max(0, (Number(it.quantity) || 0) - carded);
-      if (open > 0) ringRows.push({ item_id: invId, order_id: it.order_id, order_code: it.order_code, qty: open * el * br.RINGS_PER_ELEMENT });
+      if (open > 0) ringRows.push({ item_id: invId, order_id: it.order_id, order_code: it.order_code, qty: open * br.ringsPerPiece(el, it.fittings) });
     }
   }
 

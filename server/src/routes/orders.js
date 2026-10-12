@@ -12,6 +12,7 @@ const { createNotification } = require('./notifications');
 const { deductItemInventory } = require('../lib/inventoryDeduction');
 const { applyBomCorrection } = require('../lib/bomCorrection');
 const rework = require('../lib/rework');
+const heaterFittings = require('../lib/heaterFittings');
 const orderActions = require('../services/actions/orders');
 
 // Which of these inventory ids are Fins? Fins BOM lines carry no qty — they
@@ -207,7 +208,7 @@ router.get('/customer/:customerId/previous-items', authenticate, async (req, res
   const items = await db.all(
     `SELECT oi.id, oi.order_id, o.order_code, o.order_date, o.order_type,
             oi.product_code, oi.drawing_number, oi.tube_material, oi.tube_diameter,
-            oi.wattage, oi.voltage, oi.plating_instructions, oi.quantity, oi.remark,
+            oi.wattage, oi.voltage, oi.plating_instructions, oi.quantity, oi.remark, oi.fittings,
             EXISTS (SELECT 1 FROM order_drawings od WHERE od.item_id = oi.id) AS has_drawing,
             (SELECT COUNT(*) FROM order_item_images im WHERE im.item_id = oi.id) AS image_count
      FROM order_items oi
@@ -578,11 +579,15 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
     }
   }
 
+  // Heater fittings (owner, 12 Oct 2026): asked only for a 2in1 / 3in1 / Xin1
+  // heater, never on a finished-goods order.
+  const ordType = (await db.get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]))?.order_type;
+  const fits = heaterFittings.forItem(req.body.fittings, { drawingNumber: dNo, productCode: pCode, orderType: ordType });
   const r = await db.insert(
-    `INSERT INTO order_items (order_id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    `INSERT INTO order_items (order_id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark, fittings)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [req.params.id, pCode||null, dNo||null, tMat||null, tDia||null,
-     watts||null, volts||null, plating_instructions||null, quantity, remark||null]
+     watts||null, volts||null, plating_instructions||null, quantity, remark||null, fits.length ? JSON.stringify(fits) : null]
   );
   const itemId = r.lastInsertRowid;
   // Inventory is no longer chosen here — design selects it when uploading the
@@ -707,7 +712,7 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
   }
   const db = getDB();
   const before = await db.get(
-    `SELECT quantity, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, copied_from_item_id
+    `SELECT quantity, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, copied_from_item_id, fittings
        FROM order_items WHERE id=$1 AND order_id=$2`,
     [req.params.itemId, req.params.id]);
 
@@ -742,13 +747,33 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
       }
     }
   }
+  const ordType = (await db.get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]))?.order_type;
+  // An older screen that sends no fittings leaves them as they were.
+  const fits = heaterFittings.forItem(req.body.fittings === undefined ? before?.fittings : req.body.fittings,
+    { drawingNumber: drawing_number, productCode: product_code, orderType: ordType });
   await db.run(
     `UPDATE order_items SET product_code=$1, drawing_number=$2, tube_material=$3, tube_diameter=$4, wattage=$5,
-       voltage=$6, plating_instructions=$7, quantity=$8, remark=$9
+       voltage=$6, plating_instructions=$7, quantity=$8, remark=$9, fittings=$12
      WHERE id=$10 AND order_id=$11`,
     [product_code||null, drawing_number||null, tube_material||null, tube_diameter||null, wattage||null,
-     voltage||null, plating_instructions||null, quantity, remark||null, req.params.itemId, req.params.id]
+     voltage||null, plating_instructions||null, quantity, remark||null, req.params.itemId, req.params.id,
+     fits.length ? JSON.stringify(fits) : null]
   );
+  // Fittings added after Design made the list: Design must add their parts,
+  // and the drawing cannot be approved until they confirm the list.
+  const fitsBefore = heaterFittings.normalize(before?.fittings);
+  const added = fits.filter(k => !fitsBefore.includes(k));
+  if (added.length) {
+    const err = await heaterFittings.listError(db, req.params.itemId,
+      (await db.all('SELECT inventory_item_id FROM order_item_inventory WHERE order_item_id=$1', [req.params.itemId])).map(r => r.inventory_item_id));
+    const hasList = await db.get('SELECT 1 AS x FROM order_item_inventory WHERE order_item_id=$1 LIMIT 1', [req.params.itemId]);
+    if (hasList && err) {
+      await db.run('UPDATE order_items SET bom_review=$1, bom_review_reason=$2, bom_review_by=NULL, bom_review_at=NULL WHERE id=$3',
+        ['needed', `Fittings added: ${added.map(k => heaterFittings.LABEL[k]).join(', ')}. ${err}`, req.params.itemId]);
+    }
+    await logActivity(req.params.id, null, 'fittings_changed',
+      `Fittings on ${drawing_number || product_code || `item #${req.params.itemId}`}: ${heaterFittings.labels(fits).join(', ') || 'none'}`, req.user.id);
+  }
 
   // Editing the item's SPECS must not touch its inventory — design chose that.
   // But quantity is not a spec: every BOM line is a total for the item's whole
@@ -849,7 +874,7 @@ router.get('/:id/replacement-draft', authenticate, authorize('owner', 'admin'), 
   if (!cards.length) return res.status(400).json({ error: `${o.order_code} has no job card closed as Replaced — Inventory QC must pass it first` });
   const ids = [...new Set(cards.map(c => c.order_item_id).filter(Boolean))];
   const items = ids.length ? await db.all(
-    `SELECT id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark
+    `SELECT id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark, fittings
        FROM order_items WHERE id = ANY($1) ORDER BY id`, [ids]) : [];
   const orig = o.dispatch_date ? new Date(o.dispatch_date) : null;
   const week = new Date(Date.now() + 7 * 86400000);
@@ -862,6 +887,7 @@ router.get('/:id/replacement-draft', authenticate, authorize('owner', 'admin'), 
       product_code: i.product_code || '', drawing_number: i.drawing_number || '', tube_material: i.tube_material || '',
       tube_diameter: i.tube_diameter || '', wattage: i.wattage || '', voltage: i.voltage || '',
       plating_instructions: i.plating_instructions || '', quantity: i.quantity || '', remark: i.remark || '',
+      fittings: heaterFittings.normalize(i.fittings),
     })),
   });
 });
@@ -909,6 +935,9 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
           : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory',
       });
     }
+    // Each ticked heater fitting needs its part on the list (owner, 12 Oct 2026).
+    const fitErr = await heaterFittings.listError(db, item.id, sels.map(s => s.id));
+    if (fitErr) return res.status(400).json({ error: fitErr, code: 'FITTINGS_PARTS_MISSING' });
   }
   // Checked before anything changes (it used to run after the old stock had
   // already been given back, leaving that give-back in place on a refusal).
@@ -996,6 +1025,9 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
             : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory',
         });
       }
+      // Each ticked heater fitting needs its part on the list (owner, 12 Oct 2026).
+      const fitErr = await heaterFittings.listError(db, parseInt(item_id), invSelections.map(s => s.id));
+      if (fitErr) return res.status(400).json({ error: fitErr, code: 'FITTINGS_PARTS_MISSING' });
     }
     const orderItem = await db.get('SELECT id FROM order_items WHERE id=$1 AND order_id=$2', [parseInt(item_id), req.params.id]);
     if (!orderItem) return res.status(404).json({ error: 'Item not found' });
@@ -1074,6 +1106,9 @@ router.put('/:id/items/:itemId/bom-confirm', authenticate, authorize('design', '
   if (!lines.length) {
     return res.status(400).json({ error: 'This item has no inventory on it — add the BOM before confirming.' });
   }
+  const fitErr = await heaterFittings.listError(db, it.id,
+    (await db.all('SELECT inventory_item_id FROM order_item_inventory WHERE order_item_id=$1', [it.id])).map(r => r.inventory_item_id));
+  if (fitErr) return res.status(400).json({ error: fitErr, code: 'FITTINGS_PARTS_MISSING' });
 
   await db.run(
     "UPDATE order_items SET bom_review='confirmed', bom_review_by=$1, bom_review_at=NOW() WHERE id=$2",

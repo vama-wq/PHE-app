@@ -86,7 +86,8 @@ async function cloneChildCard(tx, parent, { childNo, qty, status, notes, columns
   let rec = prow?.rings_taken;
   try { rec = typeof rec === 'string' ? JSON.parse(rec) : rec; } catch { rec = null; }
   if (prow?.rings_taken_at && rec && Number(rec.qty) > 0 && Number(qty) > 0) {
-    const per = Math.max(1, Number(rec.elements) || 1) * 2;
+    // 2 per element, plus a pocket's ring per heater (owner, 12 Oct 2026).
+    const per = Math.max(1, Number(rec.elements) || 1) * 2 + (Number(rec.pocket) || 0);
     const before = Number(rec.qty);
     const share = Math.min(before, Number(qty) * per);
     const childWaived = [];
@@ -96,7 +97,7 @@ async function cloneChildCard(tx, parent, { childNo, qty, status, notes, columns
       return { line_id: w.line_id, qty: (Number(w.qty) || 0) - part };
     }).filter(w => w.qty > 0);
     const parentRec = { ...rec, qty: before - share, waived: parentWaived };
-    const childRec = { item_id: rec.item_id, item_code: rec.item_code, qty: share, elements: rec.elements, waived: childWaived };
+    const childRec = { item_id: rec.item_id, item_code: rec.item_code, qty: share, elements: rec.elements, pocket: rec.pocket || 0, waived: childWaived };
     await tx.run('UPDATE job_cards SET rings_taken = $2 WHERE id=$1', [parent.id, JSON.stringify(parentRec)]);
     await tx.run('UPDATE job_cards SET rings_taken_at = $2, rings_taken = $3 WHERE id=$1', [childId, prow.rings_taken_at, JSON.stringify(childRec)]);
     for (const [id, text] of [[parent.id, `Brazing rings: ${share} of the ${before} × ${rec.item_code} taken for ${parent.job_card_no} move with the ${qty} split pieces to ${childNo}`],

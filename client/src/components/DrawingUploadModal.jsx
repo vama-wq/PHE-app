@@ -3,6 +3,8 @@ import api, { uploadApi } from '../lib/api';
 import { pinsFromCard } from '../lib/utils';
 import Modal from './ui/Modal';
 import StockTag, { StockNote } from './StockTag';
+import { FittingsNeeded } from './HeaterFittings';
+import { normalizeFittings, fittingParts } from '../lib/heaterFittings';
 import { Upload, Package, X, FileText } from 'lucide-react';
 
 // Design uploads a reference drawing for an order item AND selects the inventory
@@ -21,6 +23,8 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   // What the inventory rules did with the list (owner, 1 Oct 2026).
   const [result, setResult] = useState(null);
   const fileRef = useRef(null);
+  // The heater's fittings (owner, 12 Oct 2026): each needs its part on the list.
+  const [fittings, setFittings] = useState(normalizeFittings(item?.fittings));
 
   useEffect(() => {
     api.get('/inventory').then(r => setInventoryItems(r.data)).catch(() => {});
@@ -29,6 +33,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
       api.get(`/orders/${orderId}/items`)
         .then(r => {
           const found = (r.data || []).find(it => String(it.id) === String(item.id));
+          if (found) setFittings(normalizeFittings(found.fittings));
           if (found?.inventory_items?.length) {
             setSelected(Object.fromEntries(found.inventory_items.map(i => [i.id, i.qty || ''])));
             setReworkOf(Object.fromEntries(found.inventory_items.filter(i => Number(i.rework_qty) > 0).map(i => [i.id, i.rework_qty])));
@@ -90,6 +95,8 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
         ? 'This item\'s remark calls for a Heavy Terminal Pin — add one from the Heavy Terminal Pin category.'
         : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory.');
     }
+    const fitMissing = fileOptional ? [] : fittingParts(fittings, selectedList).filter(p => !p.ok);
+    if (fitMissing.length) return setError(`This heater's fittings need these on the list: ${fitMissing.map(p => p.text).join(', ')} — add one of each.`);
 
     const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : lineQty(id),
       rework_qty: parseInt(reworkOf[id], 10) || 0 }));
@@ -179,6 +186,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
               Terminal pins are not added here — each job card's pins come from the job card and leave stock at Spot (stage 4), like the tube.
             </p>
           ))}
+          {!fileOptional && <FittingsNeeded value={fittings} invRows={selectedList} />}
           <div className="relative">
             <input className="input" placeholder="Search inventory by code or name..."
               value={invSearch}

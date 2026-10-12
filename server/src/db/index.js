@@ -2429,6 +2429,9 @@ async function initDB(retries = 20, delayMs = 10000) {
           ON CONFLICT DO NOTHING`);
       }
     }
+    // Heater fittings on an Xin1 item (owner, 12 Oct 2026): ["pocket", "cap",
+    // "short_patti", "gasket", "thermostat"] — lib/heaterFittings.js.
+    await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fittings JSONB`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
