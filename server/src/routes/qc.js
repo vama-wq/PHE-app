@@ -634,11 +634,19 @@ async function inventoryView(db, cardId) {
   const row = (id, info = {}) => {
     if (!by.has(id)) by.set(id, { inventory_item_id: id, item_code: info.item_code, name: info.name || info.item_name,
       unit: info.unit || '', category: info.category || null,
-      taken: 0, given_back: 0, scrap: 0, from_rework_bin: 0, reworked: 0 });
+      taken: 0, given_back: 0, scrap: 0, from_rework_bin: 0, reworked: 0, split: 0 });
     return by.get(id);
   };
   for (const t of moves) {
     const r = row(t.item_id, t);
+    // A split's share (owner, 12 Oct 2026; lib/childCard.js): what moved with
+    // the split pieces counts in Taken — less on the card they left, more on the
+    // card they went to — never as a give-back. split keeps the moved amount.
+    if (t.source === 'split') {
+      const s = t.transaction_type === 'dispatch_to_production' ? t.quantity : -t.quantity;
+      r.taken += s; r.split += s;
+      continue;
+    }
     if (t.transaction_type === 'dispatch_to_production') r.taken += t.quantity;
     else if (t.transaction_type === 'return_from_production') r.given_back += t.quantity;
     else if (t.transaction_type === 'scrap') r.scrap += t.quantity;
@@ -662,8 +670,9 @@ async function inventoryView(db, cardId) {
   const held = isHeldCard(card);
   const fgOrder = card.order_type === 'finished_goods';
   // A split card's stage 15/21 parts were taken on its parent before the split
-  // (it inherits the ticked stages), so the list is no guide for them here.
-  const splitChild = !!card.parent_job_card_id;
+  // (it inherits the ticked stages), so the list is no guide for them here —
+  // unless the split moved its share of them onto it (owner, 12 Oct 2026).
+  const splitChild = !!card.parent_job_card_id && !moves.some(t => t.source === 'split' && t.job_card_id === card.id);
   const stageCats = Object.values(STAGE_CATEGORY_MAP).flat();
   for (const t of terminalRows) if (!by.has(t.inventory_item_id)) row(t.inventory_item_id, t);
   const items = [...by.values()].map(r => {
@@ -686,7 +695,7 @@ async function inventoryView(db, cardId) {
     }
     return {
       ...r,
-      taken: r4(r.taken), given_back: r4(r.given_back), scrap: r4(r.scrap),
+      taken: r4(r.taken), given_back: r4(r.given_back), scrap: r4(r.scrap), split: r4(r.split),
       from_rework_bin: r4(r.from_rework_bin), reworked: r4(r.reworked),
       // what left stock for this card: taken + scrap − given back
       net: r4(r.taken + r.scrap - r.given_back),

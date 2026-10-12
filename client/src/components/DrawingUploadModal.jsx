@@ -4,7 +4,7 @@ import { pinsFromCard } from '../lib/utils';
 import Modal from './ui/Modal';
 import StockTag, { StockNote } from './StockTag';
 import { FittingsNeeded } from './HeaterFittings';
-import { normalizeFittings, fittingParts } from '../lib/heaterFittings';
+import { normalizeFittings, fittingParts, sleeveByWeight } from '../lib/heaterFittings';
 import { Upload, Package, X, FileText } from 'lucide-react';
 
 // Design uploads a reference drawing for an order item AND selects the inventory
@@ -63,6 +63,10 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   // 9 Oct 2026); on a finished-goods order by the store heaters' job cards.
   const isFins = (i) => (i?.category || '').trim().toLowerCase() === 'finns';
   const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
+  // A Cap heater's sleeve is weighed at Brazing and taken by its weight (owner,
+  // 12 Oct 2026) — no quantity here, like the fins.
+  const byWeight = (i) => !fgOrder && sleeveByWeight(fittings, i);
+  const weightIds = new Set(inventoryItems.filter(byWeight).map(i => String(i.id)));
   // Every production BOM must include a terminal pin (finished-goods exempt —
   // fileOptional marks FG orders, where the heater is already built). Which pin
   // depends on the item's remark: any variation of "heavy terminal pin" there
@@ -88,7 +92,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
     if (!file && !fileOptional) return setError('Please choose a drawing file');
     const ids = Object.keys(selected);
     if (ids.length === 0) return setError('Select at least one inventory item for this drawing');
-    const missingQty = ids.filter(id => !finsIds.has(String(id)) && !(lineQty(id) > 0));
+    const missingQty = ids.filter(id => !finsIds.has(String(id)) && !weightIds.has(String(id)) && !(lineQty(id) > 0));
     if (missingQty.length) return setError('Enter a quantity for every selected inventory item');
     if (!fileOptional && !hasTerminalPin) {
       return setError(needsHeavyPin
@@ -98,7 +102,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
     const fitMissing = fileOptional ? [] : fittingParts(fittings, selectedList).filter(p => !p.ok);
     if (fitMissing.length) return setError(`This heater's fittings need these on the list: ${fitMissing.map(p => p.text).join(', ')} — add one of each.`);
 
-    const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) ? 0 : lineQty(id),
+    const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) || weightIds.has(String(id)) ? 0 : lineQty(id),
       rework_qty: parseInt(reworkOf[id], 10) || 0 }));
     const fd = new FormData();
     if (file) fd.append('file', file);
@@ -217,8 +221,13 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
               {selectedList.map(i => (
                 <div key={i.id} className="flex items-center gap-2 bg-gray-50 rounded-lg px-2.5 py-1.5">
                   <span className="text-sm flex-1 truncate"><span className="font-mono">{i.item_code}</span> — {i.name}</span>
-                  <StockNote item={i} orderId={orderId} qty={isFins(i) ? null : lineQty(i.id)} />
-                  {isFins(i) ? (
+                  <StockNote item={i} orderId={orderId} qty={isFins(i) || byWeight(i) ? null : lineQty(i.id)} />
+                  {byWeight(i) ? (
+                    <span className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1 whitespace-nowrap"
+                      title="This heater has a Cap: production weighs the sleeves at Brazing and that weight is taken from stock">
+                      auto — weighed at Brazing
+                    </span>
+                  ) : isFins(i) ? (
                     <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 whitespace-nowrap"
                       title={fgOrder ? "By the tube length of the job cards the store heaters were made on, oldest first" : "Deducts automatically from the tube length when the card completes its last stage"}>
                       {fgOrder ? "auto — by store heaters' length" : 'auto — by tube length'}

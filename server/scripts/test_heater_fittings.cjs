@@ -3,7 +3,10 @@
 // finished-goods order); Design's list must hold each fitting's part; a fitting
 // added later sends the list back to Design; a Pocket takes 1 more ring per
 // heater at Brazing (and in the stock held, and through a split); a Cap makes the
-// sleeve weight compulsory at Brazing. Rolled back — nothing kept.
+// sleeve weight compulsory at Brazing, and the sleeve leaves stock by that
+// weight. Also: Heater Plates leave stock at Brazing like Flange Spare did, and a
+// split moves the split pieces' share of what the card took (record only).
+// Rolled back — nothing kept.
 //   node scripts/test_heater_fittings.cjs
 const path = require('path');
 const S = path.join(__dirname, '..');
@@ -44,6 +47,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
   const app = express(); app.use(express.json());
   app.use('/api/orders', require(S + '/src/routes/orders.js'));
   app.use('/api/job-cards', require(S + '/src/routes/jobCards.js'));
+  app.use('/api/qc', require(S + '/src/routes/qc.js'));
   const server = app.listen(0); const base = 'http://127.0.0.1:' + server.address().port;
   const call = async (method, url, body, as = owner) => { actor = as; const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(30000) }); actor = owner; return { status: r.status, body: await r.json().catch(() => ({})) }; };
   const stock = async (id) => Number((await q1('SELECT current_stock FROM inventory_items WHERE id=$1', [id])).current_stock);
@@ -80,7 +84,10 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     r = await put(A, [[SLV, 4], [MID, 4], [NUT, 24]]);
     ok('2b. …without a flange cap: refused, naming it', r.status === 400 && /Cap: Flange Cap/.test(r.body.error), `${r.status} ${r.body.error}`);
     r = await put(A, [[CAP, 4], [MID, 4], [SLV, 4], [NUT, 24]]);
-    ok('2c. Flange Cap + Flange Mid Patti + Sleeve: saved', r.status === 200, `${r.status} ${JSON.stringify(r.body)}`);
+    const slvLine = await q1('SELECT qty::float q FROM order_item_inventory WHERE order_item_id=$1 AND inventory_item_id=$2', [A, SLV]);
+    ok('2c. Flange Cap + Flange Mid Patti + Sleeve: saved — the sleeve with no quantity (it goes by weight at Brazing)', r.status === 200 && slvLine?.q === 0, `${r.status} ${JSON.stringify(r.body)} sleeve qty ${slvLine?.q}`);
+    r = await put(A, [[CAP, 4], [MID, 4], [SLV, ''], [NUT, 24]]);
+    ok('2d. …and a blank sleeve quantity is accepted', r.status === 200, `${r.status} ${r.body.error || ''}`);
 
     // 3. A fitting added after the list was made sends it back to Design.
     const cur = await q1('SELECT * FROM order_items WHERE id=$1', [A]);
@@ -107,7 +114,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const spec3 = JSON.stringify({ input: { tubeDiameterMm: 8 }, computed: { elements: 3 } });
     const card = (await q1(`INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, drawing_no, generated_spec) VALUES ('ZZT-FIT-A',$1,$2,4,'in_progress',CURRENT_DATE,'ZZTEST-FIT-38U-3in1',$3) RETURNING id`, [o, A, spec3])).id;
     const brazing = (extra) => JSON.stringify({ airPressure: 'pass', airPressureRemark: '', airCleaning: true, remark: '', ...extra });
-    const s8 = await stock(B8);
+    const s8 = await stock(B8), sSlv0 = await stock(SLV), sCap0 = await stock(CAP);
     r = await call('PUT', `/api/job-cards/${card}/checklist/15`, { done: true, value1: brazing({}) }, floor);
     ok('5a. a Cap heater: Brazing refused without the sleeve weight, nothing taken', r.status === 400 && r.body.code === 'SLEEVE_WEIGHT_REQUIRED' && near(await stock(B8), s8), `${r.status} ${r.body.error}`);
     r = await call('PUT', `/api/job-cards/${card}/checklist/15`, { done: true, value1: brazing({ sleeveWeightG: 0 }) }, floor);
@@ -120,6 +127,9 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       `${r.status} ${JSON.stringify(r.body).slice(0, 120)} ${s8}→${await stock(B8)} ${JSON.stringify(c.rings_taken)}`);
     const note = await q1(`SELECT notes FROM inventory_transactions WHERE job_card_id=$1 AND item_id=$2 AND source='brazing' ORDER BY id DESC LIMIT 1`, [card, B8]);
     ok('5d. the ledger line says how: 4 × (3 elements × 2 + 1 pocket)', /4 × \(3 elements × 2 \+ 1 pocket\)/.test(note?.notes || ''), note?.notes);
+    const nt = await q1(`SELECT description FROM activity_log WHERE job_card_id=$1 AND activity_type='sleeve_not_taken'`, [card]);
+    ok('5e. the sleeve is still counted in pcs: its weight is not taken (noted on the card), and the list\'s sleeve line is not taken either; the flange cap is',
+      !!nt && near(await stock(SLV), sSlv0) && near(await stock(CAP), sCap0 - 4), `${nt?.description} sleeve ${sSlv0}→${await stock(SLV)} cap ${sCap0}→${await stock(CAP)}`);
 
     // 6. A split after Brazing: the split heaters' rings (7 a heater) move with them.
     const { approveSplitRequest } = require(S + '/src/services/actions/splitRequests.js');
@@ -139,6 +149,65 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const s8b = await stock(B8);
     r = await call('PUT', `/api/job-cards/${card2}/checklist/15`, { done: true, value1: brazing({}) }, floor);
     ok('7b. a Pocket-only 2in1 (uploaded card): no sleeve weight asked, 10 rings taken (2 × (2 × 2 + 1))', r.status === 200 && near(await stock(B8), s8b - 10), `${r.status} ${r.body.error || ''} ${s8b}→${await stock(B8)}`);
+
+    // 8. The sleeve by weight, once it is kept in kg.
+    await client.query("UPDATE inventory_items SET unit='kgs' WHERE id=$1", [SLV]);
+    const card3 = (await q1(`INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, drawing_no, generated_spec) VALUES ('ZZT-FIT-W',$1,$2,4,'in_progress',CURRENT_DATE,'ZZTEST-FIT-38U-3in1',$3) RETURNING id`, [o, A, spec3])).id;
+    const sSlv = await stock(SLV);
+    r = await call('PUT', `/api/job-cards/${card3}/checklist/15`, { done: true, value1: brazing({ sleeveWeightG: 48 }) }, floor);
+    let w = await q1('SELECT sleeve_taken FROM job_cards WHERE id=$1', [card3]);
+    ok('8a. Brazing with 48 g of sleeve: 0.048 kg FPS-PVC-FMP taken, recorded on the card', r.status === 200 && near(await stock(SLV), sSlv - 0.048) && near(w.sleeve_taken?.qty, 0.048), `${r.status} ${sSlv}→${await stock(SLV)} ${JSON.stringify(w.sleeve_taken)}`);
+    r = await call('PUT', `/api/job-cards/${card3}/checklist/15`, { done: false }, floor);
+    ok('8b. Brazing unticked: the 0.048 kg go back', r.status === 200 && near(await stock(SLV), sSlv) && !(await q1('SELECT sleeve_taken_at FROM job_cards WHERE id=$1', [card3])).sleeve_taken_at, `${await stock(SLV)}`);
+    r = await call('PUT', `/api/job-cards/${card3}/checklist/15`, { done: true, value1: brazing({ sleeveWeightG: 40 }) }, floor);
+    ok('8c. ticked again with 40 g: 0.04 kg taken, once', r.status === 200 && near(await stock(SLV), sSlv - 0.04), `${await stock(SLV)}`);
+    const srw = (await q1(`INSERT INTO job_card_split_requests (job_card_id, qty, reason, status) VALUES ($1,1,'test','pending') RETURNING id`, [card3])).id;
+    const sw = await approveSplitRequest(txDb, { requestId: srw, actor: owner });
+    const cw = await q1('SELECT sleeve_taken FROM job_cards WHERE id=$1', [sw.data.childJobCardId]);
+    w = await q1('SELECT sleeve_taken FROM job_cards WHERE id=$1', [card3]);
+    ok('8d. 1 of the 4 split off: the split card holds 0.01 kg of the sleeve, the main card 0.03 kg; stock unchanged',
+      near(cw.sleeve_taken?.qty, 0.01) && near(w.sleeve_taken?.qty, 0.03) && near(await stock(SLV), sSlv - 0.04), JSON.stringify({ cw: cw.sleeve_taken, w: w.sleeve_taken }));
+
+    // 9. Heater Plates leave stock at Brazing, as Flange Spare did.
+    const FFB = await id('FFB-3H');
+    await client.query("UPDATE inventory_items SET category='Heater Plates' WHERE id=$1", [FFB]);
+    r = await call('POST', `/api/orders/${o}/items`, itemBody('ZZTEST-FIT-HP', 5, []));
+    const HP = r.body.id;
+    await client.query('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty, qty_deducted) VALUES ($1,$2,5,0)', [HP, FFB]);
+    const cardHP = (await q1(`INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, drawing_no) VALUES ('ZZT-FIT-HP',$1,$2,5,'in_progress',CURRENT_DATE,'ZZTEST-FIT-HP') RETURNING id`, [o, HP])).id;
+    r = await call('PUT', `/api/job-cards/${cardHP}/checklist/29`, { done: true, worker_name: 'ZZ' }, floor);
+    ok('9a. a list with a Heater Plate makes Brazing compulsory before the last stage', r.status === 400 && (r.body.missing || []).includes(15), `${r.status} ${JSON.stringify(r.body).slice(0, 160)}`);
+    const sF = await stock(FFB);
+    r = await call('PUT', `/api/job-cards/${cardHP}/checklist/15`, { done: true, value1: brazing({}) }, floor);
+    ok('9b. Brazing ticked: the 5 FFB-3H (now Heater Plates) are taken', r.status === 200 && near(await stock(FFB), sF - 5), `${r.status} ${sF}→${await stock(FFB)}`);
+
+    // 10. A split moves the split pieces' share of what the card took.
+    r = await call('POST', `/api/orders/${o}/items`, itemBody('ZZTEST-FIT-SPLIT', 50, []));
+    const SP = r.body.id;
+    const TUBE = await id('TUB-SS304-038-T06'), PVC = await id('PVC-FB08-M4'), MGO = await id('MGO-65A');
+    const cardS = (await q1(`INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, drawing_no, tube_deducted, tube_used_qty, tube_scrap_qty, fill_deducted, fill_pvc_qty, fill_mgo_qty)
+       VALUES ('ZZT-FIT-S',$1,$2,50,'in_progress',CURRENT_DATE,'ZZTEST-FIT-SPLIT',TRUE,70,1.4583,TRUE,100,3.087) RETURNING id`, [o, SP])).id;
+    for (const [inv, q] of [[TUBE, 71.4583], [PVC, 100], [MGO, 3.087]]) {
+      await client.query(`INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by, order_item_id, source, job_card_id)
+         VALUES ($1,'dispatch_to_production',$2,0,'Order: ZZT-FIT-O | test take (JC ZZT-FIT-S)',$3,$4,'material',$5)`, [inv, q, owner.id, SP, cardS]);
+    }
+    const before = { t: await stock(TUBE), p: await stock(PVC), m: await stock(MGO) };
+    const srs = (await q1(`INSERT INTO job_card_split_requests (job_card_id, qty, reason, status) VALUES ($1,40,'test','pending') RETURNING id`, [cardS])).id;
+    const ss = await approveSplitRequest(txDb, { requestId: srs, actor: owner });
+    const childS = ss.data.childJobCardId;
+    const pv = (await call('GET', `/api/qc/${cardS}/inventory`)).body;
+    const cv = (await call('GET', `/api/qc/${childS}/inventory`)).body;
+    const tk = (v, inv) => (v.items || []).find(x => x.inventory_item_id === inv) || {};
+    ok('10a. 40 of 50 split off: the card left with 10 shows its own share — tube 14.2917, filling bush 20, MgO 0.6174 — none of it as a give-back',
+      near(tk(pv, TUBE).taken, 14.2917) && tk(pv, PVC).taken === 20 && near(tk(pv, MGO).taken, 0.6174) && !tk(pv, PVC).given_back,
+      JSON.stringify([tk(pv, TUBE), tk(pv, PVC)].map(x => ({ t: x.taken, g: x.given_back, s: x.split }))));
+    ok('10b. the split card shows the 40 pieces\' share — tube 57.1666, bush 80, MgO 2.4696',
+      near(tk(cv, TUBE).taken, 57.1666) && tk(cv, PVC).taken === 80 && near(tk(cv, MGO).taken, 2.4696), JSON.stringify([tk(cv, TUBE).taken, tk(cv, PVC).taken, tk(cv, MGO).taken]));
+    ok('10c. stock did not move', near(await stock(TUBE), before.t) && near(await stock(PVC), before.p) && near(await stock(MGO), before.m));
+    const pc = await q1('SELECT tube_used_qty::float t, fill_pvc_qty::float p, fill_mgo_qty::float m FROM job_cards WHERE id=$1', [cardS]);
+    const cc = await q1('SELECT tube_used_qty::float t, fill_pvc_qty::float p, fill_mgo_qty::float m FROM job_cards WHERE id=$1', [childS]);
+    ok('10d. the card\'s own tube / filling figures are shared too (so a later untick gives back only its own)',
+      near(pc.t, 14) && pc.p === 20 && near(cc.t, 56) && cc.p === 80 && near(pc.m + cc.m, 3.087), JSON.stringify({ pc, cc }));
   } catch (e) { failed = true; console.error('ERROR', e); }
   finally {
     await client.query('ROLLBACK'); client.release(); server.close(); await realPool.end();

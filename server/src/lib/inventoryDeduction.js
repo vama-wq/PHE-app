@@ -22,8 +22,10 @@ const { recordMove } = require('./stockLedger');
 const { isCountedItem } = require('./countedStock');
 const dbmod = require('../db');
 
+// Heater Plates (owner, 12 Oct 2026: the heater pattis and SS plates moved out
+// of Flange Spare into their own category) still leave stock at Brazing.
 const STAGE_CATEGORY_MAP = {
-  15: ['Flange', 'Flange Cap', 'Flange Spare', 'Brazing EQ'],
+  15: ['Flange', 'Flange Cap', 'Flange Spare', 'Heater Plates', 'Brazing EQ'],
   21: ['Nipple Fastner', 'Nipple Washer', 'Nipple Nut+Washer'],
 };
 const STAGE_LABEL = { 15: 'Stage 15 Brazing', 21: 'Stage 21 Nipple Press' };
@@ -47,7 +49,7 @@ const fgTakes = (category) =>
   FG_PREP_CATEGORIES.some(c => c.toLowerCase() === String(category || '').trim().toLowerCase());
 
 const BUILD_ONLY_CATEGORIES = [
-  'Tube', 'Spring Guage', 'Finns', 'Flange', 'Flange Cap', 'Flange Spare',
+  'Tube', 'Spring Guage', 'Finns', 'Flange', 'Flange Cap', 'Flange Spare', 'Heater Plates',
   'Brazing EQ', 'Powder', 'Chemical Oil', 'Sealing Liquid', 'Wire', 'Lugs',
 ];
 const buildOnlyOnFg = (category) =>
@@ -149,8 +151,13 @@ async function deductStageCategories(db, jc, stageNo, userId) {
   // Brazing rings come from the job card on a multi-element heater (owner,
   // 10 Oct 2026; lib/brazingRings.js): the list's ring lines are not taken here.
   const rings = stageNo === 15 ? await require('./brazingRings').ringPlan(db, jc) : null;
+  // A Cap heater's sleeve leaves stock by its weight at Brazing (owner, 12 Oct
+  // 2026; lib/heaterFittings.js), never by a list quantity.
+  const hf = require('./heaterFittings');
+  const capSleeve = stageNo === 15 && (await hf.forCard(db, jc)).includes('cap');
   for (const sel of sels) {
     if (rings && require('./brazingRings').isRingCode((await db.get('SELECT item_code FROM inventory_items WHERE id=$1', [sel.inventory_item_id]))?.item_code)) continue;
+    if (capSleeve && hf.isSleeve(await db.get('SELECT name, category FROM inventory_items WHERE id=$1', [sel.inventory_item_id]))) continue;
     const total = parseFloat(sel.qty || 0);
     const already = parseFloat(sel.qty_deducted || 0) + parseFloat(sel.qty_waived || 0);
     const ded = Math.min(total * ratio, total - already);

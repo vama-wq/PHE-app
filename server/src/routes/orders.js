@@ -919,9 +919,12 @@ router.get('/:id/items/:itemId/fg-plan', authenticate, async (req, res) => {
 router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'admin', 'owner'), async (req, res) => {
   const db = getDB();
   const raw = (req.body.inventory_item_ids || []).filter(s => s && s.id);
-  // Fins consume by tube length at QC — they carry no qty in the BOM
+  // Fins consume by tube length at QC — they carry no qty in the BOM; nor does
+  // a Cap heater's sleeve, taken by its weight at Brazing (owner, 12 Oct 2026).
   const fins = await finsIdSet(db, raw.map(s => parseInt(s.id)));
-  const sels = await dropTerminalPins(db, raw.filter(s => parseFloat(s.qty) > 0 || fins.has(parseInt(s.id))), req.params.id);
+  const byWeight = await heaterFittings.sleeveByWeightIds(db, parseInt(req.params.itemId, 10), raw.map(s => s.id));
+  const sels = (await dropTerminalPins(db, raw.filter(s => parseFloat(s.qty) > 0 || fins.has(parseInt(s.id)) || byWeight.has(parseInt(s.id))), req.params.id))
+    .map(s => (byWeight.has(parseInt(s.id)) ? { ...s, qty: 0, rework_qty: 0 } : s));
   if (!sels.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) — terminal pins are not added to the list, they come from the job card' });
   const item = await db.get('SELECT id, inventory_deducted, remark FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
@@ -1013,7 +1016,10 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     invSelections = (invSelections || []).filter(s => s && s.id);
     // Fins lines carry no qty — they deduct by tube length at QC approval
     const finsIds = await finsIdSet(db, invSelections.map(s => parseInt(s.id)));
-    invSelections = await dropTerminalPins(db, invSelections.filter(s => parseFloat(s.qty) > 0 || finsIds.has(parseInt(s.id))), req.params.id);
+    // A Cap heater's sleeve carries no qty either — taken by weight at Brazing.
+    const byWeight = await heaterFittings.sleeveByWeightIds(db, parseInt(item_id, 10), invSelections.map(s => s.id));
+    invSelections = (await dropTerminalPins(db, invSelections.filter(s => parseFloat(s.qty) > 0 || finsIds.has(parseInt(s.id)) || byWeight.has(parseInt(s.id))), req.params.id))
+      .map(s => (byWeight.has(parseInt(s.id)) ? { ...s, qty: 0, rework_qty: 0 } : s));
     if (!invSelections.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing — terminal pins are not added to the list, they come from the job card' });
     if (!isFgOrder) {
       const itemRow = await db.get('SELECT remark FROM order_items WHERE id=$1 AND order_id=$2', [parseInt(item_id), req.params.id]);

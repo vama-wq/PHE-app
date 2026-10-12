@@ -106,7 +106,81 @@ async function cloneChildCard(tx, parent, { childNo, qty, status, notes, columns
         [parent.order_id, id, text]);
     }
   }
+  await moveTakenShare(tx, parent, childId, childNo, qty);
   return childId;
 }
 
-module.exports = { cloneChildCard, readyStageFor };
+// Everything the parent already took for the batch moves with the split pieces
+// (owner, 12 Oct 2026: "I allowed a partial dispatch of 40 but the inventory of
+// the 10 left did not change"): for each part, the split pieces' share of what
+// the parent took (taken − given back) goes onto the child — a pair of
+// record-only rows, stock unchanged — so each card's "Inventory taken" shows
+// only its own pieces and a later give-back on either returns only its own.
+// The card's tube / coil / filling / fins figures are shared the same way.
+// A parent whose Inventory QC is done is closed: nothing moves (its pieces'
+// inventory stays recorded there, as before).
+async function moveTakenShare(tx, parent, childId, childNo, qty) {
+  const before = Number(parent.qty) || 0, n = Number(qty) || 0;
+  if (!(before > n) || !(n > 0) || parent.inventory_qc_at) return;
+  const frac = n / before;
+  const r4 = (v) => Math.round(Number(v) * 10000) / 10000;
+  const { isPieceUnit } = require('./rework');
+  const no = parent.job_card_no;
+  const q = async (sql, p) => { const r = await tx.run(sql, p); return r.rows || []; };
+  const nets = await q(
+    `SELECT t.item_id, ii.unit, ii.item_code, ii.current_stock::float AS stock,
+            SUM(CASE WHEN t.transaction_type='dispatch_to_production' THEN t.quantity
+                     WHEN t.transaction_type='return_from_production' THEN -t.quantity ELSE 0 END)::float AS net
+       FROM inventory_transactions t JOIN inventory_items ii ON ii.id = t.item_id
+      WHERE t.job_card_id = $1 OR (t.job_card_id IS NULL AND (strpos(t.notes, $2) > 0 OR strpos(t.notes, $3) > 0 OR right(t.notes, length($4)) = $4))
+      GROUP BY t.item_id, ii.unit, ii.item_code, ii.current_stock`,
+    [parent.id, `(JC ${no})`, `, JC ${no})`, `JC ${no}`]);
+  const oc = (await q('SELECT order_code FROM orders WHERE id=$1', [parent.order_id]))[0]?.order_code || '';
+  const moved = [];
+  for (const r of nets) {
+    if (!(r.net > 0)) continue;
+    const share = isPieceUnit(r.unit) ? Math.round(r.net * frac) : r4(r.net * frac);
+    if (!(share > 0)) continue;
+    const ins = (card, type, notes) => tx.run(
+      `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, notes, created_by, order_item_id, source, job_card_id)
+       VALUES ($1,$2,$3,$4,$5,NULL,$6,'split',$7)`, [r.item_id, type, share, r.stock, notes, parent.order_item_id || null, card]);
+    await ins(parent.id, 'return_from_production',
+      `Order: ${oc} | Split: ${share} of the ${r4(r.net)} taken go with the ${n} pieces to ${childNo} — record only, stock unchanged (JC ${no})`);
+    await ins(childId, 'dispatch_to_production',
+      `Order: ${oc} | Split: ${share} came with these ${n} pieces from ${no}, taken there — record only, stock unchanged (JC ${childNo})`);
+    moved.push(`${share} ${r.item_code}`);
+  }
+  // The card's own material figures (a later Stage 4/5/6 untick gives back its own).
+  const sets = [], vals = [];
+  const childSets = [], childVals = [];
+  for (const f of ['tube_used_qty', 'tube_scrap_qty', 'coil_used_qty', 'coil_scrap_qty', 'fill_pvc_qty', 'fill_mgo_qty', 'fins_kg']) {
+    const v = Number(parent[f]);
+    if (!(v > 0)) continue;
+    const c = f === 'fill_pvc_qty' ? Math.round(v * frac) : r4(v * frac);
+    sets.push(`${f}=$${sets.length + 1}`); vals.push(r4(v - c));
+    childSets.push(`${f}=$${childSets.length + 1}`); childVals.push(c);
+  }
+  // A Cap heater's sleeve taken by weight at Brazing: its record shares too, so
+  // unticking Brazing on either card gives back only its own.
+  let sl = parent.sleeve_taken;
+  try { sl = typeof sl === 'string' ? JSON.parse(sl) : sl; } catch { sl = null; }
+  if (parent.sleeve_taken_at && sl && Number(sl.qty) > 0) {
+    const c = r4(Number(sl.qty) * frac), cg = r4(Number(sl.grams || 0) * frac);
+    await tx.run('UPDATE job_cards SET sleeve_taken = $2 WHERE id=$1', [parent.id, JSON.stringify({ ...sl, qty: r4(sl.qty - c), grams: r4((sl.grams || 0) - cg) })]);
+    await tx.run('UPDATE job_cards SET sleeve_taken_at = $2, sleeve_taken = $3 WHERE id=$1', [childId, parent.sleeve_taken_at, JSON.stringify({ ...sl, qty: c, grams: cg })]);
+  }
+  if (sets.length) {
+    await tx.run(`UPDATE job_cards SET ${sets.join(', ')} WHERE id=$${sets.length + 1}`, [...vals, parent.id]);
+    await tx.run(`UPDATE job_cards SET ${childSets.join(', ')}${parent.fins_deducted ? ', fins_deducted=TRUE' : ''} WHERE id=$${childSets.length + 1}`, [...childVals, childId]);
+  }
+  if (moved.length) {
+    for (const [id, text] of [[parent.id, `Split: the ${n} pieces' share of what ${no} took moved to ${childNo} — ${moved.join(', ')} (record only, stock unchanged)`],
+                              [childId, `Split: came with these ${n} pieces from ${no} — ${moved.join(', ')} (taken there; record only)`]]) {
+      await tx.run(`INSERT INTO activity_log (order_id, job_card_id, activity_type, description, created_by) VALUES ($1,$2,'inventory_split',$3,NULL)`,
+        [parent.order_id, id, text]);
+    }
+  }
+  return moved;
+}
+
+module.exports = { cloneChildCard, readyStageFor, moveTakenShare };

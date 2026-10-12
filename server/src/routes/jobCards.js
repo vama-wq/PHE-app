@@ -49,7 +49,7 @@ router.get('/', authenticate, async (req, res) => {
         SELECT 1 FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
         WHERE oii.order_item_id = COALESCE(jc.order_item_id,
             (SELECT id FROM order_items WHERE order_id = jc.order_id AND drawing_number = jc.drawing_no ORDER BY id LIMIT 1))
-          AND TRIM(ii.category) IN ('Flange','Flange Cap','Flange Spare','Brazing EQ')
+          AND TRIM(ii.category) IN ('Flange','Flange Cap','Flange Spare','Heater Plates','Brazing EQ')
       ) as requires_stage_15,
       EXISTS(
         SELECT 1 FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
@@ -1355,7 +1355,7 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
          FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
          WHERE oii.order_item_id=$1`, [bomItemId]);
       const cats = new Set(catRows.map(r => r.c));
-      if (['Flange', 'Flange Cap', 'Flange Spare', 'Brazing EQ'].some(c => cats.has(c))) mandatory.push(15);
+      if (['Flange', 'Flange Cap', 'Flange Spare', 'Heater Plates', 'Brazing EQ'].some(c => cats.has(c))) mandatory.push(15);
       if (['Nipple Fastner', 'Nipple Washer', 'Nipple Nut+Washer'].some(c => cats.has(c))) mandatory.push(21);
     }
     const doneRows = await db.all(
@@ -1539,6 +1539,12 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
         if (done) await brazingRings.takeRingsAtBrazing(db, jobCardId, req.user.id);
         else await brazingRings.giveRingsBack(db, jobCardId, req.user.id);
       } catch (e) { console.error('[checklist] brazing rings failed:', e.message); }
+      // A Cap heater's sleeve by its weight (owner, 12 Oct 2026).
+      try {
+        const hf = require('../lib/heaterFittings');
+        if (done) await hf.takeSleeveAtBrazing(db, jobCardId, req.user.id);
+        else await hf.giveSleeveBack(db, jobCardId, req.user.id);
+      } catch (e) { console.error('[checklist] sleeve by weight failed:', e.message); }
     }
 
     // Category-timed BOM deduction: Stage 15 (Brazing) → flange/brazing categories,

@@ -615,7 +615,10 @@ function InventoryTakenBox({ jcId }) {
                     <tr key={i.inventory_item_id} className={`border-b border-gray-100 ${off(i) ? 'bg-amber-50' : ''}`}>
                       <td className="py-1.5 pr-3"><span className="font-mono font-semibold text-gray-800">{i.item_code}</span> <span className="text-gray-500">{i.name}</span></td>
                       <td className="py-1.5 px-2 text-right tabular-nums text-gray-600" title={i.no_guide || ''}>{i.list_qty_for_card != null ? fmt(i.list_qty_for_card) : (i.no_guide ? '—' : i.on_list ? '' : 'not on list')}</td>
-                      <td className="py-1.5 px-2 text-right tabular-nums">{i.taken || i.scrap ? fmt(Number(i.taken) + Number(i.scrap)) : '—'}</td>
+                      <td className="py-1.5 px-2 text-right tabular-nums" title={Number(i.split) ? `${Number(i.split) < 0 ? `${fmt(-Number(i.split))} moved to the split card` : `${fmt(i.split)} came with the split pieces`} — record only, stock unchanged` : undefined}>
+                        {i.taken || i.scrap ? fmt(Number(i.taken) + Number(i.scrap)) : '—'}
+                        {Number(i.split) ? <div className="text-[10px] text-gray-400 whitespace-nowrap">{Number(i.split) < 0 ? `after split −${fmt(-Number(i.split))}` : `from split +${fmt(i.split)}`}</div> : null}
+                      </td>
                       <td className="py-1.5 px-2 text-right tabular-nums">{i.given_back ? fmt(i.given_back) : '—'}</td>
                       <td className="py-1.5 px-2 text-right tabular-nums text-sky-700">{i.from_rework_bin ? fmt(i.from_rework_bin) : '—'}</td>
                       <td className="py-1.5 px-2 text-right tabular-nums text-sky-700">{i.reworked ? fmt(i.reworked) : '—'}</td>

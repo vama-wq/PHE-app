@@ -2432,6 +2432,10 @@ async function initDB(retries = 20, delayMs = 10000) {
     // Heater fittings on an Xin1 item (owner, 12 Oct 2026): ["pocket", "cap",
     // "short_patti", "gasket", "thermostat"] — lib/heaterFittings.js.
     await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fittings JSONB`);
+    // A Cap heater's sleeve, taken by its weight at Brazing (owner, 12 Oct 2026):
+    // when, and exactly what — so unticking Brazing gives that back.
+    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS sleeve_taken_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS sleeve_taken JSONB`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
