@@ -978,7 +978,7 @@ export default function OrderDetail() {
                   const hasJC = fgCards.length > 0 && fgCovered >= (Number(item.quantity) || 0);
                   return (
                     <div key={item.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${
-                      hasJC ? 'border-gray-200 bg-gray-50' : drawingStatus === 'approved' ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'
+                      hasJC ? 'border-gray-200 bg-gray-50' : drawingStatus === 'approved' || order.drawing_bypassed ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'
                     }`}>
                       <div>
                         <span className={`font-medium ${hasJC ? 'text-gray-500' : 'text-gray-800'}`}>{item.drawing_number || `Item ${idx + 1}`}</span>
@@ -990,7 +990,8 @@ export default function OrderDetail() {
                         <span className="text-xs text-gray-500 font-medium flex items-center gap-1">
                           <CheckCircle2 size={11} className="text-green-500" /> Job Card Created
                         </span>
-                      ) : drawingStatus === 'approved' ? (
+                      ) : drawingStatus === 'approved' || order.drawing_bypassed ? (
+                        // The owner's drawing bypass lets the card be made without a drawing, as on a production order.
                         <button className="btn-primary btn-sm py-1 px-2 text-xs"
                           onClick={() => setFgJobCardItem({ ...item, remaining: (Number(item.quantity) || 0) - fgCovered })}>
                           <Plus size={12} /> {fgCovered > 0 ? `Create Job Card for the ${(Number(item.quantity) || 0) - fgCovered} left` : 'Create Inventory Job Card'}
