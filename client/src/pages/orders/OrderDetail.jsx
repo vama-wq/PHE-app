@@ -2403,7 +2403,8 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
   // What is left of the item to card — the whole of it the first time, the rest
   // after a card made for part of it (owner, 10 Oct 2026).
   const remaining = item.remaining != null ? item.remaining : (Number(item.quantity) || 0);
-  const [qty, setQty] = useState(remaining || '');
+  // One card holds at most 50; fewer is fine — the rest is another card (owner, 13 Oct 2026).
+  const [qty, setQty] = useState(Math.min(remaining, MAX_CARD_QTY) || '');
   const [dispatchDate, setDispatchDate] = useState(order.dispatch_date ? order.dispatch_date.slice(0, 10) : '');
   const [notes, setNotes] = useState('');
   const [file, setFile] = useState(null);
@@ -2432,6 +2433,7 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
     if (!store) return setError(`No Finished Goods stock found for ${item.drawing_number || 'this item'}.`);
     if (!(parseInt(qty, 10) > 0)) return setError('Enter a valid quantity.');
     if (parseInt(qty, 10) > remaining) return setError(`Only ${remaining} pcs of this item are left to card.`);
+    if (parseInt(qty, 10) > MAX_CARD_QTY) return setError(`One inventory job card holds at most ${MAX_CARD_QTY} — make another card for the rest.`);
     if (short) return setError(`Only ${store.qty_available} available in stock.`);
     if (!dispatchDate) return setError('Dispatch date is required.');
     if (!file && !fixture.trim()) return setError('Enter the fixture type.');
@@ -2514,7 +2516,8 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="label">Qty <span className="text-red-500">*</span></label>
-            <input className="input" type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} required />
+            <input className="input" type="number" min="1" max={Math.min(remaining, MAX_CARD_QTY)} value={qty} onChange={e => setQty(e.target.value)} required />
+            <p className="text-[11px] text-gray-400 mt-1">Up to {MAX_CARD_QTY} per card{remaining > MAX_CARD_QTY ? ` — ${remaining} left on this item, so another card for the rest` : ''}.</p>
             {short && <p className="text-xs text-red-600 mt-1">Only {store.qty_available} available — cannot draw more.</p>}
           </div>
           <div>

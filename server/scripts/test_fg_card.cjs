@@ -94,6 +94,15 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     r = await post({ order_id: o, order_item_id: it, qty: 1, dispatch_date: '2026-10-20' }, { body: '%PDF-1.4 test', type: 'application/pdf', name: 'card.pdf' });
     const card3 = r.body.id ? await q1('SELECT * FROM job_cards WHERE id=$1', [r.body.id]) : null;
     ok('5. a file attached: no fixture needed, the file is the card, nothing generated', r.status === 201 && !!card3?.file_name && !card3.fg_card, `${r.status} ${JSON.stringify(r.body).slice(0, 160)}`);
+
+    // 6. One card holds at most 50; fewer is fine on a bigger order.
+    const it80 = (await q1(`INSERT INTO order_items (order_id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity)
+       VALUES ($1,'PT-UType','PT-UType-18U-750W','TUB-SS304-038-T06',8,750,230,'No Plating',80) RETURNING id`, [o])).id;
+    await client.query('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,320)', [it80, nut]);
+    r = await post({ order_id: o, order_item_id: it80, qty: 60, dispatch_date: '2026-10-20', fixture: 'Nut washer' });
+    ok('6a. an order of 80: a card for 60 is refused (at most 50 per card), nothing split', r.status === 400 && r.body.code === 'FG_CARD_MAX', `${r.status} ${r.body.error}`);
+    r = await post({ order_id: o, order_item_id: it80, qty: 30, dispatch_date: '2026-10-20', fixture: 'Nut washer' });
+    ok('6b. …a card for 30 is made — one card, 30 pcs', r.status === 201 && r.body.cards?.length === 1 && r.body.cards[0].qty === 30, `${r.status} ${JSON.stringify(r.body).slice(0, 120)}`);
   } catch (e) { failed = true; console.error('ERROR', e); }
   finally {
     await client.query('ROLLBACK'); client.release(); server.close(); await realPool.end();
