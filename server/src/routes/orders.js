@@ -918,13 +918,22 @@ router.get('/:id/replacement-draft', authenticate, authorize('owner', 'admin'), 
 router.get('/:id/items/:itemId/fg-plan', authenticate, async (req, res) => {
   const db = getDB();
   const item = await db.get(
-    `SELECT oi.id, oi.drawing_number, o.order_type FROM order_items oi JOIN orders o ON o.id = oi.order_id
+    `SELECT oi.id, oi.drawing_number, oi.wattage, oi.voltage, o.order_type FROM order_items oi JOIN orders o ON o.id = oi.order_id
       WHERE oi.id=$1 AND oi.order_id=$2`, [req.params.itemId, req.params.id]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
   if (item.order_type !== 'finished_goods') return res.json({ store: null, parts: [], short: 0 });
   const fgFifo = require('../lib/fgFifo');
-  const fg = await fgFifo.storeRowFor(db, item);
-  if (!fg) return res.json({ store: null, parts: [], short: 0 });
+  // The generated inventory card (owner, 13 Oct 2026) asks which store stock the
+  // order is cut from: every row with pieces, the item's own drawing first; and
+  // the stamping as the complete job card derives it.
+  const own = await fgFifo.storeRowFor(db, item);
+  const stores = await db.all(
+    `SELECT id, COALESCE(base_drawing_no, drawing_no) AS drawing, qty_available::float AS qty_available, location
+       FROM finished_goods WHERE qty_available > 0 OR id = $1 ORDER BY (id = $1) DESC, COALESCE(base_drawing_no, drawing_no)`, [own?.id || 0]);
+  const stamping = require('../lib/jobCardDraft').derivePunching(item.wattage, item.voltage);
+  const picked = parseInt(req.query.store_id, 10) || null;
+  const fg = picked ? await db.get('SELECT * FROM finished_goods WHERE id=$1', [picked]) : own;
+  if (!fg) return res.json({ store: null, parts: [], short: 0, stores, default_store_id: own?.id || null, stamping });
   const qty = Math.max(0, parseInt(req.query.qty, 10) || 0);
   const { parts, short } = fgFifo.allocate(await fgFifo.batchesLeft(db, fg.id), qty);
   const { byCard, avg, mmFor } = await fgFifo.intakeLengths(db, fg.id);
@@ -933,6 +942,7 @@ router.get('/:id/items/:itemId/fg-plan', authenticate, async (req, res) => {
     parts: parts.map(p => ({ ...p, hand: !p.job_card_no, mm: mmFor(p),
                              mm_from: p.job_card_no && byCard.get(p.job_card_no) ? 'card' : avg ? 'average' : null })),
     short, average_mm: avg,
+    stores, default_store_id: own?.id || null, stamping,
   });
 });
 

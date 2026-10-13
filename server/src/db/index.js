@@ -2436,6 +2436,10 @@ async function initDB(retries = 20, delayMs = 10000) {
     // when, and exactly what — so unticking Brazing gives that back.
     await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS sleeve_taken_at TIMESTAMPTZ`);
     await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS sleeve_taken JSONB`);
+    // The app-made inventory job card of a Finished Goods order (owner, 13 Oct
+    // 2026): what it was made with — stamping, fixture, the store stock it was
+    // cut from — kept with the card (lib/fgCardRender.js).
+    await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fg_card JSONB`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');

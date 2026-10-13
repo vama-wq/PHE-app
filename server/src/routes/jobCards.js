@@ -1961,7 +1961,12 @@ router.post('/:id/replace', authenticate, authorize('owner', 'admin'), async (re
 router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, async (req, res) => {
   try {
     const { order_id, order_item_id, qty, dispatch_date, notes } = req.body;
-    if (!req.file) return res.status(400).json({ error: 'Job card file is required' });
+    // The app makes the card when no file is attached (owner, 13 Oct 2026): it
+    // asks which store stock the order is cut from, the fixture and the
+    // stamping; an attached file is still taken as the card instead.
+    const generate = !req.file;
+    const fixture = String(req.body.fixture || '').trim();
+    if (generate && !fixture) return res.status(400).json({ error: 'Fixture type is required to make the job card' });
     const db = getDB();
     const order = await db.get('SELECT * FROM orders WHERE id=$1', [order_id]);
     if (!order) return res.status(404).json({ error: 'Order not found' });
@@ -1979,8 +1984,9 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
     if (remaining <= 0) return res.status(409).json({ error: `All ${item.quantity} pcs of this item already have inventory job cards` });
     if (parsedQty > remaining) return res.status(400).json({ error: `Only ${remaining} pcs of this item are left to card (${carded.n} of ${item.quantity} already have a card)` });
 
-    const fg = await fgFifo.storeRowFor(db, item);
-    if (!fg) return res.status(400).json({ error: `No Finished Goods stock found for ${item.drawing_number || 'this item'} — the store has no row for that drawing.` });
+    const pickedStore = parseInt(req.body.fg_store_id, 10) || null;
+    const fg = pickedStore ? await db.get('SELECT * FROM finished_goods WHERE id=$1', [pickedStore]) : await fgFifo.storeRowFor(db, item);
+    if (!fg) return res.status(400).json({ error: pickedStore ? 'That Finished Goods stock was not found' : `No Finished Goods stock found for ${item.drawing_number || 'this item'} — the store has no row for that drawing.` });
     if (Number(fg.qty_available) < parsedQty) {
       return res.status(400).json({ error: `Insufficient Finished Goods stock: need ${parsedQty}, only ${fg.qty_available} available` });
     }
@@ -2031,7 +2037,7 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
         const { rows: ins } = await client.query(
           `INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, drawing_no, product_name, uploaded_by, order_item_id, is_fg, fg_source_id, fg_batches)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,TRUE,$13,$14) RETURNING id`,
-          [numbers[i], order_id, req.file.storagePath, req.file.filename, req.file.originalname,
+          [numbers[i], order_id, req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null,
            parts[i], dispatch_date, notes || null, item.drawing_number || null, item.product_code || null,
            req.user.id, order_item_id, fg.id, JSON.stringify(took)]
         );
@@ -2057,6 +2063,33 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
       throw e;
     }
 
+    // The app-made card: one printable sheet per card, stored as the card's file
+    // so View and Print open it like any other job card.
+    const cutFrom = fg.base_drawing_no || fg.drawing_no;
+    let renderWarning = null;
+    if (generate) {
+      const { renderFgCard } = require('../lib/fgCardRender');
+      const { derivePunching } = require('../lib/jobCardDraft');
+      const cust = await db.get('SELECT customer_code FROM customers WHERE id=$1', [order.customer_id]);
+      const stamping = String(req.body.stamping ?? '').trim() || derivePunching(item.wattage, item.voltage);
+      const orderDate = (await db.get('SELECT order_date::text AS d FROM orders WHERE id=$1', [order.id]))?.d;
+      for (const c of created) {
+        const html = renderFgCard({ card_no: c.job_card_no, order_code: order.order_code, client_code: cust?.customer_code,
+          order_date: orderDate, dispatch_date: dispatch_date, product_code: item.product_code, drawing_no: item.drawing_number,
+          stamping, fixture, remark: item.remark, qty: c.qty, cut_from: cutFrom, took: c.took });
+        const fname = `${Date.now()}-${c.job_card_no.replace(/[^A-Za-z0-9._-]+/g, '-')}.html`;
+        try {
+          const path = await uploadToStorage('job-cards', fname, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+          await db.run('UPDATE job_cards SET file_path=$1, file_name=$2, original_name=$3, fg_card=$4 WHERE id=$5',
+            [path, fname, `${c.job_card_no}.html`, JSON.stringify({ generated: true, stamping, fixture, store_id: fg.id, cut_from: cutFrom }), c.id]);
+        } catch (e) {
+          renderWarning = `The card${created.length > 1 ? 's were' : ' was'} made, but the printable sheet could not be saved: ${e.message}`;
+          await db.run('UPDATE job_cards SET fg_card=$1 WHERE id=$2',
+            [JSON.stringify({ generated: true, stamping, fixture, store_id: fg.id, cut_from: cutFrom, render_failed: true }), c.id]);
+        }
+      }
+    }
+
     // Surface them in production's Today's Work immediately (admin-created, ready to run)
     for (const c of created) {
       try {
@@ -2068,10 +2101,10 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
     await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [order_id]);
     for (const c of created) {
       await logActivity(order_id, c.id, 'job_card_created',
-        `Inventory job card ${c.job_card_no} created — ${c.qty} pcs drawn from Finished Goods (${fg.base_drawing_no || fg.drawing_no}), oldest first: ${c.took.map(t => `${t.qty} from ${t.job_card_no || 'a hand entry'}`).join(', ')}`
+        `Inventory job card ${c.job_card_no} ${generate ? 'made by the app' : 'created'} — ${c.qty} pcs drawn from Finished Goods (${cutFrom}${cutFrom !== item.drawing_number ? `, for ${item.drawing_number}` : ''}), oldest first: ${c.took.map(t => `${t.qty} from ${t.job_card_no || 'a hand entry'}`).join(', ')}`
         + (split ? ` (${describeSplit(parts)}, max ${MAX_CARD_QTY} per card)` : ''), req.user.id);
     }
-    res.status(201).json({ id: created[0].id, job_card_no: created[0].job_card_no, split, cards: created });
+    res.status(201).json({ id: created[0].id, job_card_no: created[0].job_card_no, split, cards: created, generated: generate, warning: renderWarning });
   } catch (e) {
     console.error('fg job card create error:', e);
     res.status(500).json({ error: 'Failed to create inventory job card' });

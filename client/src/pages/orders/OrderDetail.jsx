@@ -2390,11 +2390,13 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
 }
 
 // ── FG inventory job card creation ──────────────────────────────────────────
-// The heaters come from the store row for the item's drawing, OLDEST intake
-// first (owner, 9 Oct 2026: "no selecting anymore — just take out as FIFO"):
-// nothing to pick. The form shows which intakes the card will take and the tube
-// length its fins will go by. The stock deducts immediately (blocked if short)
-// and the card enters production with the short 4-stage checklist.
+// The heaters come from a store row, OLDEST intake first (owner, 9 Oct 2026:
+// "just take out as FIFO"). The app makes the card itself (owner, 13 Oct 2026):
+// it asks which store stock the order is cut from — the item's own drawing
+// first — the qty, dispatch date, fixture type and stamping (derived from the
+// item's rating, as on the complete job card), and prints the Inventory Orders
+// sheet. An attached file is still taken as the card instead. The stock deducts
+// immediately (blocked if short) and the card runs the short 4-stage checklist.
 function FgJobCardModal({ order, item, onClose, onSaved }) {
   const { user } = useAuthStore();
   const [plan, setPlan] = useState(null);
@@ -2405,17 +2407,21 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
   const [dispatchDate, setDispatchDate] = useState(order.dispatch_date ? order.dispatch_date.slice(0, 10) : '');
   const [notes, setNotes] = useState('');
   const [file, setFile] = useState(null);
+  const [storeId, setStoreId] = useState('');      // '' = the item's own drawing
+  const [fixture, setFixture] = useState('');
+  const [stamping, setStamping] = useState(null);  // null until the derived one arrives
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     const n = parseInt(qty, 10) || 0;
     const t = setTimeout(() => {
-      api.get(`/orders/${order.id}/items/${item.id}/fg-plan`, { params: { qty: n } })
-        .then(r => setPlan(r.data)).catch(() => setPlan({ store: null, parts: [], short: 0 }));
+      api.get(`/orders/${order.id}/items/${item.id}/fg-plan`, { params: { qty: n, ...(storeId ? { store_id: storeId } : {}) } })
+        .then(r => { setPlan(r.data); setStamping(s => (s == null ? (r.data?.stamping || '') : s)); })
+        .catch(() => setPlan({ store: null, parts: [], short: 0 }));
     }, 250);
     return () => clearTimeout(t);
-  }, [qty, order.id, item.id]);
+  }, [qty, storeId, order.id, item.id]);
 
   const store = plan?.store || null;
   const short = !!store && parseInt(qty, 10) > Number(store.qty_available);
@@ -2428,18 +2434,22 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
     if (parseInt(qty, 10) > remaining) return setError(`Only ${remaining} pcs of this item are left to card.`);
     if (short) return setError(`Only ${store.qty_available} available in stock.`);
     if (!dispatchDate) return setError('Dispatch date is required.');
-    if (!file) return setError('Upload the job card file.');
+    if (!file && !fixture.trim()) return setError('Enter the fixture type.');
     setSaving(true);
     let fd;
     try {
       fd = new FormData();
-      fd.append('file', file);
+      if (file) fd.append('file', file);
+      fd.append('fg_store_id', store.id);
+      fd.append('fixture', fixture.trim());
+      fd.append('stamping', (stamping || '').trim());
       fd.append('order_id', order.id);
       fd.append('order_item_id', item.id);
       fd.append('qty', parseInt(qty, 10));
       fd.append('dispatch_date', dispatchDate);
       if (notes) fd.append('notes', notes);
-      await api.post('/job-cards/fg', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const r = await api.post('/job-cards/fg', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (r.data?.warning) alert(r.data.warning);
       onSaved();
     } catch (err) {
       if (err.response?.data?.code === 'NO_BOM' && user?.role === 'owner'
@@ -2460,10 +2470,20 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
     <Modal open title={`Inventory Job Card — ${item.drawing_number || 'Item'}`} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <p className="text-sm text-gray-500">
-          The heaters come out of the Finished Goods store for this drawing, oldest first. The stock deducts immediately and the card runs the 4-stage checklist (Nut Washer → HV+Light+Ohms → Megger → Ready) before QC.
+          The app makes the Inventory Orders job card. The heaters come out of the Finished Goods store you pick, oldest first; the stock deducts immediately and the card runs the 4-stage checklist (Nut Washer → HV+Light+Ohms → Megger → Ready) before QC.
         </p>
         <div>
-          <label className="label">From the store</label>
+          <label className="label">Cut from which Finished Goods stock <span className="text-red-500">*</span></label>
+          {plan?.stores?.length > 0 && (
+            <select className="input mb-2" value={storeId || plan.default_store_id || ''} onChange={e => setStoreId(e.target.value)}>
+              {!plan.default_store_id && <option value="">— pick the stock —</option>}
+              {plan.stores.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.drawing} — {s.qty_available} in store{s.id === plan.default_store_id ? ' (this item\'s drawing)' : ''}
+                </option>
+              ))}
+            </select>
+          )}
           {!plan ? (
             <p className="text-sm text-gray-400">Loading stock…</p>
           ) : !store ? (
@@ -2501,12 +2521,25 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
             <label className="label">Dispatch Date <span className="text-red-500">*</span></label>
             <input className="input" type="date" value={dispatchDate} onChange={e => setDispatchDate(e.target.value)} required />
           </div>
+          <div>
+            <label className="label">Fixture type <span className="text-red-500">*</span></label>
+            <input className="input" value={fixture} onChange={e => setFixture(e.target.value)} placeholder="e.g. Nut washer, 90° terminals" />
+          </div>
+          <div>
+            <label className="label">Stamping</label>
+            <input className="input" value={stamping ?? ''} onChange={e => setStamping(e.target.value)} placeholder="BHA-500W-230V" />
+            <p className="text-[11px] text-gray-400 mt-1">From the item's rating, as on the complete job card — change it if this order is stamped differently.</p>
+          </div>
+        </div>
+        <div className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+          On the card from the order: client code, order date, product code <b>{item.product_code || '—'}</b>, drawing no. <b>{item.drawing_number || '—'}</b>{item.remark ? <> and the remark (in English, Hindi and Gujarati)</> : ''}.
+          {store && store.drawing !== item.drawing_number && <div className="text-amber-700 mt-1">Cut from {store.drawing} — the card says so.</div>}
         </div>
         <div>
-          <label className="label">Job Card File <span className="text-red-500">*</span></label>
+          <label className="label">Attach your own job card instead <span className="text-gray-400 font-normal">(optional)</span></label>
           <label className="flex items-center gap-2 cursor-pointer border border-gray-200 rounded-lg px-3 py-2 hover:border-brand-400 transition-colors bg-gray-50">
             <Upload size={15} className="text-gray-400 flex-shrink-0" />
-            <span className="text-sm text-gray-600 flex-1 truncate">{file ? file.name : 'Click to attach the job card…'}</span>
+            <span className="text-sm text-gray-600 flex-1 truncate">{file ? file.name : 'Leave empty — the app makes the card'}</span>
             <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx" className="hidden"
               onChange={e => { setFile(e.target.files[0] || null); setError(''); }} />
           </label>
@@ -2518,8 +2551,8 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
         {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
         <div className="flex gap-3 pt-1">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn-primary flex-1" disabled={saving || short || !file || !store}>
-            {saving ? 'Creating…' : 'Create & Deduct Stock'}
+          <button type="submit" className="btn-primary flex-1" disabled={saving || short || !store || (!file && !fixture.trim())}>
+            {saving ? 'Creating…' : file ? 'Create & Deduct Stock' : 'Make Job Card & Deduct Stock'}
           </button>
         </div>
       </form>
