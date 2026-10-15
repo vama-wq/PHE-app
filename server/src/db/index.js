@@ -616,10 +616,14 @@ async function initDB(retries = 20, delayMs = 10000) {
         if (!e.message.includes('already exists')) console.log('Note: supplier_code unique constraint may already exist');
       }
       // Fix incorrectly auto-approved job cards: reset to qc_pending if they have no QC reports
-      // A card should only be qc_approved if it actually has a QC report from the QC team
+      // A card should only be qc_approved if it actually has a QC report from the QC team.
+      // Not a card that passed Product QC, or that the owner sent straight to
+      // dispatch without a report (product_qc_at stamped) — this ran on every
+      // restart and quietly put those back in the QC queue (owner, 15 Oct 2026).
       await pool.query(`
         UPDATE job_cards SET status = 'qc_pending'
         WHERE status = 'qc_approved'
+          AND product_qc_at IS NULL
           AND id NOT IN (
             SELECT DISTINCT job_card_id FROM qc_reports
           )
