@@ -86,6 +86,8 @@ export default function ProspectingList() {
   const [impResult, setImpResult] = useState(null);
   // Per-company tailored campaign copy (e.g. expo cards) — opens in a modal
   const [campaignRow, setCampaignRow] = useState(null);
+  const [seqTab, setSeqTab] = useState(0);              // active email in a multi-touch sequence
+  useEffect(() => { setSeqTab(0); }, [campaignRow]);
 
   const loadSegments = () =>
     api.get('/prospects/segments').then(r => {
@@ -189,14 +191,21 @@ export default function ProspectingList() {
     URL.revokeObjectURL(url);
   };
 
-  // --- Per-company tailored campaign (expo cards) ---
-  const hasCampaign = p => !!((p.email_body && p.email_body.trim()) || (p.whatsapp_msg && p.whatsapp_msg.trim()));
+  // --- Per-company tailored campaign (expo cards / multi-touch sequence) ---
+  const hasCampaign = p => !!((p.email_body && p.email_body.trim()) || (p.whatsapp_msg && p.whatsapp_msg.trim()) || (p.campaign_sequence && p.campaign_sequence.trim()));
   // wa.me click-to-send: digits-only number + URL-encoded prefilled message
-  const waLink = p => {
-    const num = String(p.phone || '').replace(/[^0-9]/g, '');
+  const waLinkFor = (phone, text) => {
+    const num = String(phone || '').replace(/[^0-9]/g, '');
     if (!num) return null;
-    return `https://wa.me/${num}${p.whatsapp_msg ? `?text=${encodeURIComponent(p.whatsapp_msg)}` : ''}`;
+    return `https://wa.me/${num}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
   };
+  const waLink = p => waLinkFor(p.phone, p.whatsapp_msg);
+  // Parse the multi-touch sequence JSON on the open prospect (null for single-email campaigns)
+  const campaignSeq = (() => {
+    if (!campaignRow || !campaignRow.campaign_sequence) return null;
+    try { return JSON.parse(campaignRow.campaign_sequence); } catch { return null; }
+  })();
+  const seqEmail = campaignSeq && campaignSeq.emails ? campaignSeq.emails[Math.min(seqTab, campaignSeq.emails.length - 1)] : null;
   const copyRaw = async (text, key) => {
     try { await navigator.clipboard.writeText(text || ''); setCopied(key); setTimeout(() => setCopied(''), 2000); }
     catch { /* clipboard unavailable */ }
@@ -580,7 +589,81 @@ export default function ProspectingList() {
               {campaignRow.contact_role && <span>{campaignRow.contact_role} · </span>}
               {campaignRow.email && <span className="font-mono">{campaignRow.email}</span>}
               {campaignRow.phone && <span className="font-mono"> · {campaignRow.phone}</span>}
+              {campaignRow.application && <span> · {campaignRow.application}</span>}
             </div>
+
+            {campaignSeq && seqEmail ? (
+              <>
+                {/* Sequence email tabs */}
+                <div className="flex flex-wrap gap-1.5">
+                  {campaignSeq.emails.map((e, i) => (
+                    <button key={i}
+                      className={`text-xs px-2.5 py-1.5 rounded-md border ${seqTab === i ? 'bg-brand-700 text-white border-brand-700' : 'bg-white text-gray-600'}`}
+                      onClick={() => setSeqTab(i)}>
+                      {e.label}{e.day != null ? ` · D${e.day}` : ''}
+                    </button>
+                  ))}
+                </div>
+                {/* Active email in the sequence */}
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Mail size={15} className="text-brand-700" />
+                    <h4 className="text-sm font-semibold">{seqEmail.label} email</h4>
+                    {seqEmail.day != null && <span className="text-xs text-gray-400">send Day {seqEmail.day}</span>}
+                  </div>
+                  <input className="input w-full mb-2 font-medium text-sm" readOnly value={seqEmail.subject || ''} />
+                  <textarea className="input w-full font-sans text-sm leading-relaxed" rows={13} readOnly value={seqEmail.body || ''} />
+                  <div className="flex flex-wrap items-center gap-2 mt-2">
+                    <button className="btn-primary flex items-center gap-1.5"
+                      onClick={() => downloadCampaignHtml({ email_subject: seqEmail.subject, email_body: seqEmail.body, application: campaignRow.application, company: `${campaignRow.company}-${seqEmail.key || seqTab + 1}` })}>
+                      <Download size={15} /> Download email (.html)
+                    </button>
+                    <button className="btn-secondary text-xs flex items-center gap-1.5"
+                      onClick={() => copyRaw(`${seqEmail.subject}\n\n${seqEmail.body}`, 'seq-email')}>
+                      <Copy size={13} /> {copied === 'seq-email' ? 'Copied ✓' : 'Copy email'}
+                    </button>
+                    {seqEmail.whatsapp && waLinkFor(campaignRow.phone, seqEmail.whatsapp) && (
+                      <a className="btn-secondary text-xs flex items-center gap-1.5" style={{ color: '#128C7E' }}
+                        href={waLinkFor(campaignRow.phone, seqEmail.whatsapp)} target="_blank" rel="noopener noreferrer">
+                        <MessageSquare size={13} /> WhatsApp this
+                      </a>
+                    )}
+                    {seqEmail.whatsapp && (
+                      <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(seqEmail.whatsapp, 'seq-wa')}>
+                        <Copy size={13} /> {copied === 'seq-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
+                      </button>
+                    )}
+                  </div>
+                  {seqEmail.whatsapp && (
+                    <div className="mt-2 text-xs text-gray-600 bg-emerald-50 border border-emerald-100 rounded p-2 whitespace-pre-wrap">{seqEmail.whatsapp}</div>
+                  )}
+                </div>
+                {/* Call schedule */}
+                {campaignSeq.calls && campaignSeq.calls.length > 0 && (
+                  <div className="pt-2 border-t border-gray-100">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Phone size={15} className="text-brand-700" />
+                      <h4 className="text-sm font-semibold">Call schedule</h4>
+                    </div>
+                    <div className="space-y-2">
+                      {campaignSeq.calls.map((c, i) => (
+                        <details key={i} className="border border-gray-200 rounded-md">
+                          <summary className="cursor-pointer px-3 py-2 text-sm font-medium flex items-center justify-between">
+                            <span>{c.label}{c.day != null ? ` — Day ${c.day}` : ''}</span>
+                            <span role="button" tabIndex={0} className="text-xs text-brand-700"
+                              onClick={(e) => { e.preventDefault(); copyRaw(c.script, 'call-' + i); }}>
+                              {copied === 'call-' + i ? 'Copied ✓' : 'Copy'}
+                            </span>
+                          </summary>
+                          <div className="px-3 pb-3 text-xs whitespace-pre-wrap text-gray-700 bg-amber-50">{c.script}</div>
+                        </details>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+            <>
 
             {/* Tailored email */}
             {campaignRow.email_body ? (
@@ -647,6 +730,8 @@ export default function ProspectingList() {
                   </button>
                 </div>
               </div>
+            )}
+            </>
             )}
           </div>
         )}
