@@ -52,20 +52,22 @@ async function main() {
       p.app || p.application || p.seg || null,
       // Per-prospect bespoke campaign copy (optional) — tailored email + WhatsApp + call script per company
       p.email_subject || null, p.email_body || null, p.whatsapp_msg || p.whatsapp || null, p.call_script || null,
+      // Multi-touch sequence (JSON string): several dated emails + calls
+      p.campaign_sequence == null ? null : (typeof p.campaign_sequence === 'string' ? p.campaign_sequence : JSON.stringify(p.campaign_sequence)),
     ];
     // Upsert keyed on company+segment so re-runs (e.g. after a verification pass)
     // refresh contact details in place instead of creating duplicates.
     const upd = await db.run(
       `UPDATE prospects SET city=$1, state=$2, country=$3, email=$4, phone=$5,
          contact_role=$6, product_fit=$7, priority=$8, source=$9, notes=$10, application=$11,
-         email_subject=$12, email_body=$13, whatsapp_msg=$14, call_script=$15
-       WHERE lower(company)=lower($16) AND segment=$17`,
+         email_subject=$12, email_body=$13, whatsapp_msg=$14, call_script=$15, campaign_sequence=$16
+       WHERE lower(company)=lower($17) AND segment=$18`,
       [...v, company, segment]
     );
     if (upd.rowCount > 0) { updated++; continue; }
     await db.run(
-      `INSERT INTO prospects (city, state, country, email, phone, contact_role, product_fit, priority, source, notes, application, email_subject, email_body, whatsapp_msg, call_script, company, segment)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+      `INSERT INTO prospects (city, state, country, email, phone, contact_role, product_fit, priority, source, notes, application, email_subject, email_body, whatsapp_msg, call_script, campaign_sequence, company, segment)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
       [...v, company, segment]
     );
     inserted++;
