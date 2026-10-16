@@ -1320,6 +1320,9 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
   const [rejectedQty, setRejectedQty] = useState('');
   const [observations, setObservations] = useState('');
   const [mode, setMode] = useState('approved'); // approved | partial | rejected
+  // A full rejection goes to a debit note, or the goods are sent back to the
+  // supplier for repair (owner, 16 Oct 2026). Repair only for a full rejection.
+  const [rejectAction, setRejectAction] = useState('debit_note');
   const [rejectReason, setRejectReason] = useState('');
   const [rejPhotos, setRejPhotos] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -1398,6 +1401,7 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
         <span className="text-sm font-medium text-gray-800">
           {item.description} <span className="text-xs text-gray-400">· qty {item.qty}</span>{drawingLink}
           {item.split_from_item_id && <span className="text-[11px] text-amber-700 ml-2">balance of a part delivery</span>}
+          {item.repair_sent_at && <span className="text-[11px] text-orange-700 bg-orange-50 border border-orange-200 rounded px-1.5 py-0.5 ml-2" title={item.repair_reason || ''}>↩ sent for repair — receive again when it returns</span>}
         </span>
         <span className="flex items-center gap-2">
           {/* A balance the supplier never sent can be closed off so it stops
@@ -1443,6 +1447,7 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
         if (rejectedQty) fd.append('rejected_qty', rejectedQty);
         rejPhotos.forEach(p => fd.append('rejection_photos', p));
       }
+      if (mode === 'rejected') fd.append('rejection_action', rejectAction);
       await uploadApi.post(`/purchase-orders/${poId}/items/${item.id}/qc`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onDone();
     } catch (e) { setError(e.response?.data?.error || 'Failed'); setSaving(false); }
@@ -1526,10 +1531,23 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
             <button className={`btn-sm text-xs flex-1 ${mode === 'partial' ? 'btn-primary bg-amber-600 border-amber-600 hover:bg-amber-700' : 'btn-secondary'}`} onClick={() => setMode('partial')}>Partial</button>
             <button className={`btn-sm text-xs flex-1 ${mode === 'rejected' ? 'btn-primary bg-red-600 border-red-600 hover:bg-red-700' : 'btn-secondary'}`} onClick={() => setMode('rejected')}>Reject all</button>
           </div>
-          {mode !== 'approved' && (
+          {mode === 'partial' && (
             <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
               The rejected quantity opens a <b>debit note</b> for accounts to raise with the supplier — rejection photos are compulsory.
             </p>
+          )}
+          {mode === 'rejected' && (
+            <div className="space-y-1.5">
+              <div className="flex gap-2">
+                <button type="button" className={`btn-sm text-xs flex-1 ${rejectAction === 'debit_note' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setRejectAction('debit_note')}>Raise debit note</button>
+                <button type="button" className={`btn-sm text-xs flex-1 ${rejectAction === 'repair' ? 'btn-primary bg-orange-600 border-orange-600 hover:bg-orange-700' : 'btn-secondary'}`} onClick={() => setRejectAction('repair')}>Send for repair</button>
+              </div>
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                {rejectAction === 'debit_note'
+                  ? <>A <b>debit note</b> opens for accounts to claim the rejected value back from the supplier — rejection photos are compulsory.</>
+                  : <>The goods go <b>back to the supplier for repair</b>: this item is un-received and the PO returns to its original numbers. Receive and QC it again when it returns — no debit note. Rejection photos are compulsory.</>}
+              </p>
+            </div>
           )}
           {mode !== 'rejected' && (
             <>

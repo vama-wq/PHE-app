@@ -449,7 +449,7 @@ router.get('/:id', authenticate, async (req, res) => {
     const items = await db.all(
       `SELECT poi.id, poi.description, poi.qty, poi.unit, poi.received, poi.received_at, poi.qc_at,
               poi.qc_status, poi.qc_weight_10, poi.qc_received_qty, poi.qc_rejected_qty, poi.qc_image_file, poi.qc_image_name,
-              poi.qc_observations, poi.qc_rejection_reason,
+              poi.qc_observations, poi.qc_rejection_reason, poi.repair_sent_at, poi.repair_reason,
               ii.item_code, ii.name as item_name, ii.unit as item_unit,
               ii.drawing_file, ii.drawing_original_name
        FROM purchase_order_items poi
@@ -1345,6 +1345,52 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
       if (!rejection_reason?.trim()) return res.status(400).json({ error: 'A rejection reason is required' });
       if (!rejPhotos.length) return res.status(400).json({ error: 'At least one rejection photo is required for any rejection' });
       if (!(rejectedQty > 0)) return res.status(400).json({ error: 'Enter the rejected quantity' });
+    }
+
+    // Rejected material can go back to the supplier for REPAIR instead of a debit
+    // note (owner, 16 Oct 2026): the item is un-received and the PO reverts to its
+    // original numbers; it is received and QC'd again when the repaired goods
+    // return. Only a full rejection (nothing accepted to stock) can be repaired.
+    if (result === 'rejected' && String(req.body.rejection_action || '') === 'repair') {
+      const undo = item.receive_undo || null;
+      const backQty = undo && undo.qty != null ? Number(undo.qty) : Number(item.qty);
+      const backRate = undo && undo.rate != null ? Number(undo.rate) : Number(item.rate);
+      await db.withTransaction(async (client) => {
+        for (const p of rejPhotos) {
+          await client.query(
+            'INSERT INTO purchase_item_rejection_photos (item_id, file_path, original_name, created_by) VALUES ($1,$2,$3,$4)',
+            [item.id, p.storagePath, p.originalname, req.user.id]);
+        }
+        // Back to how the line stood before this receipt (same as un-receive),
+        // then mark it out for repair — qc_status stays NULL so it is QC'd again.
+        await client.query(
+          `UPDATE purchase_order_items
+              SET received=FALSE, received_at=NULL, invoice_file=NULL, invoice_original_name=NULL,
+                  receive_other_cost=NULL, receive_other_cost_reason=NULL,
+                  receive_transport_cost=NULL, receive_transport_paid_to=NULL,
+                  receive_local_transport_cost=NULL, receive_local_transport_paid_to=NULL,
+                  po_doc_file=NULL, po_doc_original_name=NULL,
+                  billed_qty=NULL, invoice_no=NULL, invoice_date=NULL, billed_pf=NULL, receive_undo=NULL,
+                  over_qty_pending=NULL, qty=$2, rate=$3, amount=$4,
+                  repair_sent_at=NOW(), repair_reason=$5
+            WHERE id=$1`,
+          [item.id, backQty, backRate, Math.round(backQty * backRate * 100) / 100, rejection_reason.trim()]);
+      });
+      await settleBillCharges(db, po.id);
+      await recomputePoTotals(db, po.id);
+      const stillReceived = await db.get('SELECT COUNT(*)::int AS n FROM purchase_order_items WHERE po_id=$1 AND received=TRUE', [po.id]);
+      if (stillReceived.n === 0 && po.delivery_status === 'qc_pending') {
+        await db.run("UPDATE purchase_orders SET delivery_status='purchase_accepted', received_at=NULL WHERE id=$1", [po.id]);
+      }
+      await logActivity(null, null, 'purchase_repair',
+        `PO ${po.po_number}: "${item.description}" rejected and sent to the supplier for repair — un-received, receive & QC it again when it returns. Reason: ${rejection_reason.trim()}`, req.user.id);
+      try {
+        const who = await db.all("SELECT id FROM users WHERE role IN ('accounts','owner','admin') AND id != $1", [req.user.id]);
+        for (const u of who) await createNotification(db, { userId: u.id, type: 'purchase_repair',
+          title: `Sent for repair — ${po.po_number}`, body: `${item.description} rejected and sent back to the supplier for repair. No debit note; receive it again when it returns.`,
+          link: `/purchases/${po.id}`, sourceUserId: req.user.id });
+      } catch (e) { console.error('repair notify failed:', e.message); }
+      return res.json({ message: 'Rejected and sent for repair — the item is back to Awaiting receipt; receive and QC it again when it returns.', repaired: true });
     }
 
     let debitNoteId = null;

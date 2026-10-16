@@ -2438,6 +2438,11 @@ async function initDB(retries = 20, delayMs = 10000) {
     // Heater fittings on an Xin1 item (owner, 12 Oct 2026): ["pocket", "cap",
     // "short_patti", "gasket", "thermostat"] — lib/heaterFittings.js.
     await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fittings JSONB`);
+    // Purchase material rejected → sent back to the supplier for repair instead
+    // of a debit note (owner, 16 Oct 2026): the item is un-received and the PO
+    // goes back to its original numbers; it is received and QC'd again on return.
+    await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS repair_sent_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS repair_reason TEXT`);
     // A Cap heater's sleeve, taken by its weight at Brazing (owner, 12 Oct 2026):
     // when, and exactly what — so unticking Brazing gives that back.
     await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS sleeve_taken_at TIMESTAMPTZ`);
