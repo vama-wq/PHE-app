@@ -8,7 +8,7 @@ import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import { fmtDate, downloadExcel, STATUS_LABELS, orderTypeLabel, reuseListNote } from '../../lib/utils';
 import HeaterFittingsPicker, { FittingsText } from '../../components/HeaterFittings';
-import { isMultiElement, normalizeFittings } from '../../lib/heaterFittings';
+import { isMultiElement, normalizeFittings, fittingsChosen } from '../../lib/heaterFittings';
 
 // Every status an ORDER can hold, in the order it moves through them. Labels
 // come from STATUS_LABELS so the filter reads the same as the badge beside it.
@@ -349,6 +349,10 @@ function ItemModal({ item, images: initialImages = [], orderType, customerId, on
     const missing = validateItem(f);
     if (missing.length) {
       setError(`Required fields missing: ${missing.join(', ')}`);
+      return;
+    }
+    if (askFittings && !fittingsChosen(f.fittings)) {
+      setError('Choose the heater fittings for this 2in1 / 3in1 item, or tick "None of the above".');
       return;
     }
     // Inventory is no longer chosen here — design selects it at the drawing stage.

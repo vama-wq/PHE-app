@@ -54,12 +54,28 @@ function elementsFromName(...names) {
 const isMultiElement = (drawingNumber, productCode) => (elementsFromName(drawingNumber, productCode) || 1) > 1;
 
 // A clean list of known keys in the dropdown's order; anything else dropped.
+// 'none' is "None of the above" — an explicit choice that the heater has none
+// of the fittings (owner, 16 Oct 2026). It is kept so a chosen-none item is
+// told apart from one not chosen yet (null/[]), but it is inert everywhere a
+// real fitting would add a part. A real fitting and 'none' never coexist.
+const NONE = 'none';
 function normalize(raw) {
   let v = raw;
   if (typeof v === 'string') { try { v = JSON.parse(v); } catch { v = v.split(','); } }
   if (!Array.isArray(v)) return [];
   const set = new Set(v.map(k => String(k || '').trim().toLowerCase()));
-  return KEYS.filter(k => set.has(k));
+  const real = KEYS.filter(k => set.has(k));
+  if (real.length) return real;
+  return set.has(NONE) ? [NONE] : [];
+}
+// An Xin1 item must have the fittings chosen — real ones or "None of the above"
+// (owner, 16 Oct 2026). A reused item whose fittings were never chosen comes in
+// null, so this forces the choice again.
+function choiceError(raw, { drawingNumber, productCode, orderType }) {
+  if (orderType === 'finished_goods') return null;
+  if (!isMultiElement(drawingNumber, productCode)) return null;
+  return normalize(raw).length ? null
+    : 'This is a 2in1 / 3in1 heater — choose its fittings (Pocket, Cap, Short Patti, Gasket, Thermostat) or "None of the above".';
 }
 
 // What the item may carry: only a multi-element heater, never on a
@@ -113,7 +129,7 @@ async function forCard(db, card) {
   return forItem(it.fittings, { drawingNumber: it.drawing_number, productCode: it.product_code, orderType: o?.order_type });
 }
 
-const labels = (fittings) => normalize(fittings).map(k => LABEL[k]);
+const labels = (fittings) => normalize(fittings).map(k => (k === NONE ? 'None' : LABEL[k]));
 
 // The sleeve lines on a Cap item's list go by weight, not quantity: the ids of
 // those among invIds (an empty set when the item has no Cap).
@@ -215,5 +231,5 @@ async function giveSleeveBack(db, jobCardId, userId) {
   });
 }
 
-module.exports = { FITTINGS, KEYS, LABEL, NEEDS, normalize, forItem, isMultiElement, isSleeve, missingParts, listError, itemForCard, forCard, labels,
+module.exports = { FITTINGS, KEYS, LABEL, NONE, NEEDS, normalize, forItem, choiceError, isMultiElement, isSleeve, missingParts, listError, itemForCard, forCard, labels,
   sleeveByWeightIds, gramsInUnit, takeSleeveAtBrazing, giveSleeveBack };

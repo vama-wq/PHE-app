@@ -603,6 +603,10 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
   // heater, never on a finished-goods order.
   const ordType = (await db.get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]))?.order_type;
   const fits = heaterFittings.forItem(req.body.fittings, { drawingNumber: dNo, productCode: pCode, orderType: ordType });
+  // An Xin1 item must have its fittings chosen (owner, 16 Oct 2026) — including a
+  // reused item whose fittings were never selected (it arrives here unset).
+  const fitChoiceErr = heaterFittings.choiceError(req.body.fittings, { drawingNumber: dNo, productCode: pCode, orderType: ordType });
+  if (fitChoiceErr) return res.status(400).json({ error: fitChoiceErr, code: 'FITTINGS_REQUIRED' });
   const r = await db.insert(
     `INSERT INTO order_items (order_id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark, fittings)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
@@ -769,8 +773,10 @@ router.put('/:id/items/:itemId', authenticate, authorize('admin', 'owner'), asyn
   }
   const ordType = (await db.get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]))?.order_type;
   // An older screen that sends no fittings leaves them as they were.
-  const fits = heaterFittings.forItem(req.body.fittings === undefined ? before?.fittings : req.body.fittings,
-    { drawingNumber: drawing_number, productCode: product_code, orderType: ordType });
+  const fitsSource = req.body.fittings === undefined ? before?.fittings : req.body.fittings;
+  const fits = heaterFittings.forItem(fitsSource, { drawingNumber: drawing_number, productCode: product_code, orderType: ordType });
+  const fitChoiceErr = heaterFittings.choiceError(fitsSource, { drawingNumber: drawing_number, productCode: product_code, orderType: ordType });
+  if (fitChoiceErr) return res.status(400).json({ error: fitChoiceErr, code: 'FITTINGS_REQUIRED' });
   await db.run(
     `UPDATE order_items SET product_code=$1, drawing_number=$2, tube_material=$3, tube_diameter=$4, wattage=$5,
        voltage=$6, plating_instructions=$7, quantity=$8, remark=$9, fittings=$12

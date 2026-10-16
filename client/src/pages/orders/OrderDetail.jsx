@@ -8,7 +8,7 @@ import FileUpload from '../../components/ui/FileUpload';
 import DrawingUploadModal from '../../components/DrawingUploadModal';
 import InventoryEditModal from '../../components/InventoryEditModal';
 import HeaterFittingsPicker, { FittingsText } from '../../components/HeaterFittings';
-import { isMultiElement, normalizeFittings } from '../../lib/heaterFittings';
+import { isMultiElement, normalizeFittings, fittingsChosen } from '../../lib/heaterFittings';
 import TerminalPinsBox, { TERMINAL_ROLES } from '../../components/TerminalPinsBox';
 import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati, ORDER_TYPE_COLORS, orderTypeLabel, reuseListNote } from '../../lib/utils';
 import { printJobCardSlip } from '../../lib/printJobCardSlip';
@@ -1661,6 +1661,7 @@ function ItemModal({ item, orderId, orderType, customerId, onClose, onSave }) {
   const handleSave = async () => {
     const missing = validateItem(f);
     if (missing.length) { setError(`Required fields missing: ${missing.join(', ')}`); return; }
+    if (askFittings && !fittingsChosen(f.fittings)) { setError('Choose the heater fittings for this 2in1 / 3in1 item, or tick "None of the above".'); return; }
     // Inventory is chosen by design at the drawing stage, not here.
     const payload = { ...f, fittings: askFittings ? normalizeFittings(f.fittings) : [] };
     if (!item?.id && copyFromItemId) payload.copy_from_item_id = copyFromItemId;

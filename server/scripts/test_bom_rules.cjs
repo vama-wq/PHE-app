@@ -65,6 +65,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
   const unchanged = async (snap) => { for (const [id, v] of Object.entries(snap)) if (Math.abs((await stock(id)) - v) > 1e-6) return `item ${id}: ${v} → ${await stock(id)}`; return null; };
   const pickStock = async (exclude, min, cat = null) => q1(`SELECT id, item_code, current_stock::float AS s FROM inventory_items
       WHERE current_stock >= $1 AND id <> ALL($2) AND TRIM(COALESCE(category,'')) NOT ILIKE 'finns' AND item_code NOT ILIKE '%TRAIN%'
+        AND item_code <> 'NUT-BR-M4-08' AND item_code NOT ILIKE 'TUB-%'
         AND COALESCE(approval_status,'approved')='approved' AND lower(COALESCE(unit,'')) IN ('pcs','nos','pc')
         ${cat ? `AND TRIM(category) = '${cat}'` : `AND TRIM(COALESCE(category,'')) NOT IN ('Flange','Flange Cap','Flange Spare','Brazing EQ','Nipple Fastner','Nipple Washer','Nipple Nut+Washer','Terminal Pin','Heavy Terminal Pin')`}
       ORDER BY current_stock DESC LIMIT 1`, [min, exclude]);

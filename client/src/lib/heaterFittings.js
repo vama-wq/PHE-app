@@ -8,7 +8,9 @@ export const FITTINGS = [
   { key: 'thermostat', label: 'Thermostat', hint: 'one Thermostat on the list' },
 ];
 const KEYS = FITTINGS.map(f => f.key);
-export const FITTING_LABEL = Object.fromEntries(FITTINGS.map(f => [f.key, f.label]));
+// "None of the above" — an explicit choice, compulsory for an Xin1 item (owner, 16 Oct 2026).
+export const NONE = 'none';
+export const FITTING_LABEL = { ...Object.fromEntries(FITTINGS.map(f => [f.key, f.label])), [NONE]: 'None' };
 
 const cat = (i) => String(i?.category || '').trim().toLowerCase();
 const nm = (i) => String(i?.name || '');
@@ -40,9 +42,14 @@ export function normalizeFittings(raw) {
   if (typeof v === 'string') { try { v = JSON.parse(v); } catch { v = v.split(','); } }
   if (!Array.isArray(v)) return [];
   const set = new Set(v.map(k => String(k || '').trim().toLowerCase()));
-  return KEYS.filter(k => set.has(k));
+  const real = KEYS.filter(k => set.has(k));
+  if (real.length) return real;
+  return set.has(NONE) ? [NONE] : [];
 }
+// An Xin1 item must have the fittings chosen (real or None of the above).
+export const fittingsChosen = (raw) => normalizeFittings(raw).length > 0;
 export const fittingLabels = (raw) => normalizeFittings(raw).map(k => FITTING_LABEL[k]);
+// Real fitting parts only — 'none' needs nothing.
 
 // Every part the fittings need, and whether the list (inventory rows) has it.
 export function fittingParts(raw, invRows) {

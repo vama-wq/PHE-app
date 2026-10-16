@@ -77,6 +77,21 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     r = await call('GET', `/api/orders/customer/${cust}/previous-items`);
     ok('1d. "reuse a previous item" carries the fittings', (r.body || []).some(p => p.id === A && JSON.stringify(p.fittings) === '["pocket","cap"]'));
 
+    // 1e. An Xin1 item requires a fittings choice; 'None of the above' satisfies it.
+    // On a separate order so these extra 3in1 items do not skew order o's ring-hold total (test 4).
+    const oc = await mkOrder('ZZT-FIT-COMP', 'local_he');
+    r = await call('POST', `/api/orders/${oc}/items`, itemBody('ZZTEST-FIT-COMP-3in1', 4, undefined));
+    ok('1e. a 3in1 item with no fittings chosen is refused (compulsory)', r.status === 400 && r.body.code === 'FITTINGS_REQUIRED', `${r.status} ${r.body.error}`);
+    r = await call('POST', `/api/orders/${oc}/items`, itemBody('ZZTEST-FIT-COMP-3in1', 4, []));
+    ok('1f. an empty fittings array is refused too', r.status === 400 && r.body.code === 'FITTINGS_REQUIRED', `${r.status}`);
+    r = await call('POST', `/api/orders/${oc}/items`, itemBody('ZZTEST-FIT-NONE-3in1', 4, ['none']));
+    const noneItem = r.body.id;
+    ok('1g. "None of the above" is a valid choice and is stored', r.status === 201 && JSON.stringify(await fitsOf(noneItem)) === '["none"]', `${r.status} ${JSON.stringify(await fitsOf(noneItem))}`);
+    r = await call('POST', `/api/orders/${oc}/items`, itemBody('ZZTEST-FIT-NONE2-3in1', 4, ['none', 'pocket']));
+    ok('1h. a real fitting wins over none (never both)', r.status === 201 && JSON.stringify(await fitsOf(r.body.id)) === '["pocket"]', JSON.stringify(await fitsOf(r.body.id)));
+    r = await call('POST', `/api/orders/${oc}/items`, itemBody('ZZTEST-FIT-SINGLE2', 4, undefined));
+    ok('1i. a single-element item needs no fittings choice', r.status === 201, `${r.status} ${r.body.error || ''}`);
+
     // 2. Design's list must hold the Cap's three parts.
     const put = (itemId, rows) => call('PUT', `/api/orders/${o}/items/${itemId}/inventory`, { inventory_item_ids: rows.map(([i, q]) => ({ id: i, qty: q })) });
     r = await put(A, [[CAP, 4], [MID, 4], [NUT, 24]]);

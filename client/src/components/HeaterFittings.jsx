@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Check } from 'lucide-react';
-import { FITTINGS, normalizeFittings, fittingLabels, fittingParts } from '../lib/heaterFittings';
+import { FITTINGS, NONE, normalizeFittings, fittingLabels, fittingParts } from '../lib/heaterFittings';
 
 // The fittings dropdown on an Xin1 item (owner, 12 Oct 2026): tick any number.
 export default function HeaterFittingsPicker({ value, onChange, disabled = false }) {
@@ -13,14 +13,19 @@ export default function HeaterFittingsPicker({ value, onChange, disabled = false
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [open]);
-  const toggle = (k) => onChange(normalizeFittings(picked.includes(k) ? picked.filter(x => x !== k) : [...picked, k]));
+  // 'None of the above' and real fittings are mutually exclusive.
+  const toggle = (k) => {
+    if (k === NONE) return onChange(picked.includes(NONE) ? [] : [NONE]);
+    const real = picked.filter(x => x !== NONE);
+    onChange(normalizeFittings(real.includes(k) ? real.filter(x => x !== k) : [...real, k]));
+  };
   return (
     <div className="relative" ref={ref}>
       <button type="button" disabled={disabled}
         className="input flex items-center justify-between text-left disabled:bg-gray-100 disabled:text-gray-500"
         onClick={() => setOpen(o => !o)}>
-        <span className={picked.length ? 'text-gray-800' : 'text-gray-400'}>
-          {picked.length ? fittingLabels(picked).join(', ') : 'None — tick what this heater has'}
+        <span className={picked.length ? 'text-gray-800' : 'text-red-500'}>
+          {picked.length ? fittingLabels(picked).join(', ') : 'Required — tick the fittings or None of the above'}
         </span>
         <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
       </button>
@@ -41,6 +46,14 @@ export default function HeaterFittingsPicker({ value, onChange, disabled = false
               </button>
             );
           })}
+          <button type="button" className="w-full text-left px-3 py-2 hover:bg-brand-50 flex items-start gap-2.5 border-t border-gray-100"
+            onClick={() => toggle(NONE)}>
+            <span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${picked.includes(NONE) ? 'bg-brand-600 border-brand-600 text-white' : 'border-gray-300'}`}>
+              {picked.includes(NONE) && <Check size={12} />}
+            </span>
+            <span><span className="text-sm font-medium text-gray-800">None of the above</span>
+              <span className="block text-[11px] text-gray-500">this heater has none of these fittings</span></span>
+          </button>
         </div>
       )}
     </div>
