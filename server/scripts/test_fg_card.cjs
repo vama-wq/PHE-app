@@ -100,9 +100,9 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
        VALUES ($1,'PT-UType','PT-UType-18U-750W','TUB-SS304-038-T06',8,750,230,'No Plating',80) RETURNING id`, [o])).id;
     await client.query('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,320)', [it80, nut]);
     r = await post({ order_id: o, order_item_id: it80, qty: 60, dispatch_date: '2026-10-20', fixture: 'Nut washer' });
-    ok('6a. an order of 80: a card for 60 is refused (at most 50 per card), nothing split', r.status === 400 && r.body.code === 'FG_CARD_MAX', `${r.status} ${r.body.error}`);
-    r = await post({ order_id: o, order_item_id: it80, qty: 30, dispatch_date: '2026-10-20', fixture: 'Nut washer' });
-    ok('6b. …a card for 30 is made — one card, 30 pcs', r.status === 201 && r.body.cards?.length === 1 && r.body.cards[0].qty === 30, `${r.status} ${JSON.stringify(r.body).slice(0, 120)}`);
+    ok('6a. qty 60: split into two cards of 50 + 10 (owner, 16 Oct 2026)', r.status === 201 && r.body.split === true && r.body.cards?.length === 2 && r.body.cards[0].qty === 50 && r.body.cards[1].qty === 10, `${r.status} ${JSON.stringify(r.body.cards?.map(c=>c.qty))}`);
+    r = await post({ order_id: o, order_item_id: it80, qty: 20, dispatch_date: '2026-10-20', fixture: 'Nut washer' });
+    ok('6b. a quantity under 50 is one card', r.status === 201 && r.body.cards?.length === 1 && r.body.cards[0].qty === 20, `${r.status} ${JSON.stringify(r.body).slice(0, 120)}`);
   } catch (e) { failed = true; console.error('ERROR', e); }
   finally {
     await client.query('ROLLBACK'); client.release(); server.close(); await realPool.end();

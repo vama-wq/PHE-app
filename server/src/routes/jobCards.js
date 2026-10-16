@@ -1983,10 +1983,10 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
     const remaining = (Number(item.quantity) || 0) - (Number(carded?.n) || 0);
     if (remaining <= 0) return res.status(409).json({ error: `All ${item.quantity} pcs of this item already have inventory job cards` });
     if (parsedQty > remaining) return res.status(400).json({ error: `Only ${remaining} pcs of this item are left to card (${carded.n} of ${item.quantity} already have a card)` });
-    // One inventory job card holds at most 50, and the owner picks how many —
-    // fewer is fine even on an order of 80; the rest is another card (owner,
-    // 13 Oct 2026). Nothing is split automatically.
-    if (parsedQty > MAX_CARD_QTY) return res.status(400).json({ error: `An inventory job card holds at most ${MAX_CARD_QTY} pcs — make this one for up to ${MAX_CARD_QTY} and another card for the rest`, code: 'FG_CARD_MAX' });
+    // A card never runs more than 50: the quantity entered is split into cards
+    // of 50 automatically (owner, 16 Oct 2026: "if I add 200, make 4 cards of 50
+    // instead of me making 50 four times") — splitQuantity, same as a
+    // production card. A quantity under 50 is one card, as before.
 
     const pickedStore = parseInt(req.body.fg_store_id, 10) || null;
     const fg = pickedStore ? await db.get('SELECT * FROM finished_goods WHERE id=$1', [pickedStore]) : await fgFifo.storeRowFor(db, item);
