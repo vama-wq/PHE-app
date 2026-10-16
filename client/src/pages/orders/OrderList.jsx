@@ -8,7 +8,7 @@ import Modal from '../../components/ui/Modal';
 import FileUpload from '../../components/ui/FileUpload';
 import { fmtDate, downloadExcel, STATUS_LABELS, orderTypeLabel, reuseListNote } from '../../lib/utils';
 import HeaterFittingsPicker, { FittingsText } from '../../components/HeaterFittings';
-import { isMultiElement, normalizeFittings, fittingsChosen } from '../../lib/heaterFittings';
+import { isBrazedHeater, normalizeFittings, fittingsChosen } from '../../lib/heaterFittings';
 
 // Every status an ORDER can hold, in the order it moves through them. Labels
 // come from STATUS_LABELS so the filter reads the same as the badge beside it.
@@ -245,7 +245,7 @@ function ItemModal({ item, images: initialImages = [], orderType, customerId, on
   };
   const [f, setF] = useState(item || blank);
   // Heater fittings — asked only for a 2in1 / 3in1 / Xin1 heater (owner, 12 Oct 2026).
-  const askFittings = orderType !== 'finished_goods' && isMultiElement(f.drawing_number, f.product_code);
+  const askFittings = orderType !== 'finished_goods' && isBrazedHeater(f.drawing_number, f.product_code);
   const [images, setImages] = useState(initialImages); // File[] for new images
   const [error, setError] = useState('');
   const [products, setProducts] = useState([]);

@@ -223,6 +223,23 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const cc = await q1('SELECT tube_used_qty::float t, fill_pvc_qty::float p, fill_mgo_qty::float m FROM job_cards WHERE id=$1', [childS]);
     ok('10d. the card\'s own tube / filling figures are shared too (so a later untick gives back only its own)',
       near(pc.t, 14) && pc.p === 20 && near(cc.t, 56) && cc.p === 80 && near(pc.m + cc.m, 3.087), JSON.stringify({ pc, cc }));
+
+    // 11. A 1in1 is a brazed single-element heater (owner, 16 Oct 2026): 2 rings
+    // per heater, +1 with a pocket; its fittings choice is compulsory.
+    const B8b = (await q1("SELECT id, current_stock::float s FROM inventory_items WHERE item_code='BRZ-08'")).s;
+    r = await call('POST', `/api/orders/${o}/items`, itemBody('ZZTEST-QU-1in1', 5, undefined));
+    ok('11a. a 1in1 item needs a fittings choice (compulsory)', r.status === 400 && r.body.code === 'FITTINGS_REQUIRED', `${r.status} ${r.body.error}`);
+    r = await call('POST', `/api/orders/${o}/items`, itemBody('ZZTEST-QU-1in1', 5, ['none']));
+    const it1 = r.body.id;
+    const card1 = (await q1(`INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, drawing_no, generated_spec) VALUES ('ZZT-1IN1-A',$1,$2,5,'in_progress',CURRENT_DATE,'ZZTEST-QU-1in1',$3) RETURNING id`, [o, it1, JSON.stringify({ input: { tubeDiameterMm: 8 }, computed: { elements: 1 } })])).id;
+    r = await call('PUT', `/api/job-cards/${card1}/checklist/15`, { done: true, value1: brazing({}) }, floor);
+    ok('11b. a 1in1 takes 2 rings per heater at Brazing (5 × 1 × 2 = 10)', r.status === 200 && near(await stock(B8), B8b - 10), `${r.status} ${B8b}->${await stock(B8)}`);
+    r = await call('POST', `/api/orders/${o}/items`, itemBody('ZZTEST-QU2-1in1', 5, ['pocket']));
+    const it1p = r.body.id;
+    const card1p = (await q1(`INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, drawing_no, generated_spec) VALUES ('ZZT-1IN1-P',$1,$2,5,'in_progress',CURRENT_DATE,'ZZTEST-QU2-1in1',$3) RETURNING id`, [o, it1p, JSON.stringify({ input: { tubeDiameterMm: 8 }, computed: { elements: 1 } })])).id;
+    const s2 = await stock(B8);
+    r = await call('PUT', `/api/job-cards/${card1p}/checklist/15`, { done: true, value1: brazing({}) }, floor);
+    ok('11c. a 1in1 with a pocket takes 3 per heater (5 × (1×2 + 1) = 15)', r.status === 200 && near(await stock(B8), s2 - 15), `${r.status} ${s2}->${await stock(B8)}`);
   } catch (e) { failed = true; console.error('ERROR', e); }
   finally {
     await client.query('ROLLBACK'); client.release(); server.close(); await realPool.end();

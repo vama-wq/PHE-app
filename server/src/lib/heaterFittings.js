@@ -52,6 +52,10 @@ function elementsFromName(...names) {
   return null;
 }
 const isMultiElement = (drawingNumber, productCode) => (elementsFromName(drawingNumber, productCode) || 1) > 1;
+// A brazed heater: named "Nin1" for any N >= 1 (owner, 16 Oct 2026). A "1in1" is
+// a single-element heater that is still brazed — eligible for the fittings
+// dropdown and the auto ring deduction (2 rings per element, + 1 for a pocket).
+const isBrazedHeater = (drawingNumber, productCode) => elementsFromName(drawingNumber, productCode) != null;
 
 // A clean list of known keys in the dropdown's order; anything else dropped.
 // 'none' is "None of the above" — an explicit choice that the heater has none
@@ -73,16 +77,16 @@ function normalize(raw) {
 // null, so this forces the choice again.
 function choiceError(raw, { drawingNumber, productCode, orderType }) {
   if (orderType === 'finished_goods') return null;
-  if (!isMultiElement(drawingNumber, productCode)) return null;
+  if (!isBrazedHeater(drawingNumber, productCode)) return null;
   return normalize(raw).length ? null
-    : 'This is a 2in1 / 3in1 heater — choose its fittings (Pocket, Cap, Short Patti, Gasket, Thermostat) or "None of the above".';
+    : 'This is a brazed (Xin1) heater — choose its fittings (Pocket, Cap, Short Patti, Gasket, Thermostat) or "None of the above".';
 }
 
 // What the item may carry: only a multi-element heater, never on a
 // finished-goods order (the heater is already built).
 function forItem(raw, { drawingNumber, productCode, orderType }) {
   if (orderType === 'finished_goods') return [];
-  if (!isMultiElement(drawingNumber, productCode)) return [];
+  if (!isBrazedHeater(drawingNumber, productCode)) return [];
   return normalize(raw);
 }
 
@@ -231,5 +235,5 @@ async function giveSleeveBack(db, jobCardId, userId) {
   });
 }
 
-module.exports = { FITTINGS, KEYS, LABEL, NONE, NEEDS, normalize, forItem, choiceError, isMultiElement, isSleeve, missingParts, listError, itemForCard, forCard, labels,
+module.exports = { FITTINGS, KEYS, LABEL, NONE, NEEDS, normalize, forItem, choiceError, isMultiElement, isBrazedHeater, isSleeve, missingParts, listError, itemForCard, forCard, labels,
   sleeveByWeightIds, gramsInUnit, takeSleeveAtBrazing, giveSleeveBack };

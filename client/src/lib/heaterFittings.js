@@ -36,6 +36,9 @@ export function elementsFromName(...names) {
   return null;
 }
 export const isMultiElement = (drawingNumber, productCode) => (elementsFromName(drawingNumber, productCode) || 1) > 1;
+// A brazed heater: named "Nin1" for any N >= 1 (owner, 16 Oct 2026) — a "1in1"
+// single-element heater is brazed too, so it gets the fittings dropdown.
+export const isBrazedHeater = (drawingNumber, productCode) => elementsFromName(drawingNumber, productCode) != null;
 
 export function normalizeFittings(raw) {
   let v = raw;

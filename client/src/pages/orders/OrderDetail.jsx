@@ -8,7 +8,7 @@ import FileUpload from '../../components/ui/FileUpload';
 import DrawingUploadModal from '../../components/DrawingUploadModal';
 import InventoryEditModal from '../../components/InventoryEditModal';
 import HeaterFittingsPicker, { FittingsText } from '../../components/HeaterFittings';
-import { isMultiElement, normalizeFittings, fittingsChosen } from '../../lib/heaterFittings';
+import { isBrazedHeater, normalizeFittings, fittingsChosen } from '../../lib/heaterFittings';
 import TerminalPinsBox, { TERMINAL_ROLES } from '../../components/TerminalPinsBox';
 import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati, ORDER_TYPE_COLORS, orderTypeLabel, reuseListNote } from '../../lib/utils';
 import { printJobCardSlip } from '../../lib/printJobCardSlip';
@@ -1551,7 +1551,7 @@ function ItemModal({ item, orderId, orderType, customerId, onClose, onSave }) {
   };
   const [f, setF] = useState(item ? { ...item, fittings: normalizeFittings(item.fittings) } : blank);
   // Heater fittings — asked only for a 2in1 / 3in1 / Xin1 heater (owner, 12 Oct 2026).
-  const askFittings = orderType !== 'finished_goods' && isMultiElement(f.drawing_number, f.product_code);
+  const askFittings = orderType !== 'finished_goods' && isBrazedHeater(f.drawing_number, f.product_code);
   const [existingImages, setExistingImages] = useState(item?.images || []);
   const [newFiles, setNewFiles] = useState([]);
   const [saving, setSaving] = useState(false);

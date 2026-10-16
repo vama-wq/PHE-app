@@ -63,8 +63,12 @@ async function heldByOrders(db) {
       const cards = cardsAll.filter(c => c.order_item_id === it.order_item_id);
       let el = null, dia = Number(String(it.tube_diameter || '').match(/\d+/)?.[0]) || null;
       for (const c of cards) { el = el || parseInt(c.el, 10) || null; dia = Number(c.dia) || dia; }
-      if (!(el > 1)) el = br.elementsFromName(it.drawing_number, ...cards.map(c => c.job_card_no)) || el || 1;
-      if (!(el > 1)) continue;                                   // single element: the list stands
+      // A brazed heater: elements, else the explicit "Nin1" — any N >= 1, so a
+      // "1in1" counts (owner, 16 Oct 2026). Not a heater that never says "in1".
+      const named = br.elementsFromName(it.drawing_number, ...cards.map(c => c.job_card_no));
+      if (!(el > 1)) el = named || el;
+      if (!(named != null || el > 1)) continue;                  // not a brazed heater: the list stands
+      el = Math.max(el || 1, 1);
       // The list's ring lines for this item no longer count …
       for (const l of lines) if (l.order_id === it.order_id && ringIds.has(l.item_id) && l.order_item_id === it.order_item_id) l.qty = 0;
       const invId = ringByCode[br.RING_CODES[dia]];

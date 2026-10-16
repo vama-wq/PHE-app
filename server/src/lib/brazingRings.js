@@ -36,7 +36,7 @@ function elementsFromName(...names) {
 }
 
 // What this card's brazing takes: { inv, qty, elements, dia } or null when the
-// heater is single-element, its tube is neither 8 nor 11 mm, or the card took
+// heater is not a brazed (Nin1) heater, its tube is neither 8 nor 11 mm, or the card took
 // rings off its list at Stage 15 before this rule.
 async function ringPlan(db, card) {
   if (!card || card.is_fg) return null;
@@ -45,9 +45,15 @@ async function ringPlan(db, card) {
   try { spec = typeof spec === 'string' ? JSON.parse(spec) : spec; } catch { spec = null; }
   const item = card.order_item_id
     ? await db.get('SELECT id, drawing_number, tube_diameter, quantity, fittings FROM order_items WHERE id=$1', [card.order_item_id]) : null;
-  let elements = parseInt(spec?.computed?.elements, 10) || null;
-  if (!(elements > 1)) elements = elementsFromName(item?.drawing_number, card.drawing_no, card.job_card_no) || elements || 1;
-  if (!(elements > 1)) return null;
+  // A brazed heater: elements from the spec, else the explicit "Nin1" in the
+  // name — any N >= 1, so a "1in1" single-element heater is brazed too (owner,
+  // 16 Oct 2026: 2 rings per element, + 1 for a pocket). Not a heater whose name
+  // never says "in1" and whose spec is single-element.
+  const named = elementsFromName(item?.drawing_number, card.drawing_no, card.job_card_no);
+  let elements = parseInt(spec?.computed?.elements, 10) || 0;
+  if (!(elements > 1)) elements = named || elements;
+  if (!(named != null || elements > 1)) return null;
+  elements = Math.max(elements, 1);
   const dia = Number(spec?.input?.tubeDiameterMm) || Number(String(item?.tube_diameter || '').match(/\d+/)?.[0]) || null;
   const code = RING_CODES[dia];
   if (!code) return null;
