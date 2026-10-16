@@ -2425,7 +2425,10 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
   }, [qty, storeId, order.id, item.id]);
 
   const store = plan?.store || null;
-  const short = !!store && parseInt(qty, 10) > Number(store.qty_available);
+  // A multi-element heater (3in1) draws elements × qty from the store (owner, 16 Oct 2026).
+  const elements = Math.max(1, Number(plan?.elements) || 1);
+  const storeDraw = (parseInt(qty, 10) || 0) * elements;
+  const short = !!store && storeDraw > Number(store.qty_available);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -2433,7 +2436,7 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
     if (!store) return setError(`No Finished Goods stock found for ${item.drawing_number || 'this item'}.`);
     if (!(parseInt(qty, 10) > 0)) return setError('Enter a valid quantity.');
     if (parseInt(qty, 10) > remaining) return setError(`Only ${remaining} pcs of this item are left to card.`);
-    if (short) return setError(`Only ${store.qty_available} available in stock.`);
+    if (short) return setError(`Needs ${storeDraw}${elements > 1 ? ` (${parseInt(qty, 10)} × ${elements} elements)` : ''} from the store, only ${store.qty_available} available.`);
     if (!dispatchDate) return setError('Dispatch date is required.');
     if (!file && !fixture.trim()) return setError('Enter the fixture type.');
     setSaving(true);
@@ -2516,6 +2519,7 @@ function FgJobCardModal({ order, item, onClose, onSaved }) {
           <div>
             <label className="label">Qty <span className="text-red-500">*</span></label>
             <input className="input" type="number" min="1" max={remaining} value={qty} onChange={e => setQty(e.target.value)} required />
+            {elements > 1 && parseInt(qty, 10) > 0 && <p className="text-[11px] text-gray-500 mt-1">Draws <b>{storeDraw}</b> single heaters from the store ({parseInt(qty, 10)} × {elements} elements) to make {parseInt(qty, 10)} × {elements}in1.</p>}
             {parseInt(qty, 10) > MAX_CARD_QTY && <p className="text-[11px] text-gray-500 mt-1">Made as {Math.ceil(parseInt(qty, 10) / MAX_CARD_QTY)} cards of up to {MAX_CARD_QTY} each.</p>}
             {short && <p className="text-xs text-red-600 mt-1">Only {store.qty_available} available — cannot draw more.</p>}
           </div>

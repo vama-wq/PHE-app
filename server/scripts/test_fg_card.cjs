@@ -103,6 +103,26 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('6a. qty 60: split into two cards of 50 + 10 (owner, 16 Oct 2026)', r.status === 201 && r.body.split === true && r.body.cards?.length === 2 && r.body.cards[0].qty === 50 && r.body.cards[1].qty === 10, `${r.status} ${JSON.stringify(r.body.cards?.map(c=>c.qty))}`);
     r = await post({ order_id: o, order_item_id: it80, qty: 20, dispatch_date: '2026-10-20', fixture: 'Nut washer' });
     ok('6b. a quantity under 50 is one card', r.status === 201 && r.body.cards?.length === 1 && r.body.cards[0].qty === 20, `${r.status} ${JSON.stringify(r.body).slice(0, 120)}`);
+
+    // 7. A 3in1 item: QTY is finished heaters, the store draw is qty × elements.
+    const it3 = (await q1(`INSERT INTO order_items (order_id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark)
+       VALUES ($1,'PT-FlangeHe','PT-FlangeHe-38U-2.1kw-3in1','TUB-SS304-038-T06',8,2100,230,'No Plating',10,'SS Flange Patti') RETURNING id`, [o])).id;
+    await client.query('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,30)', [it3, nut]);
+    const plan3 = await fetch(`${base}/api/orders/${o}/items/${it3}/fg-plan?qty=3&store_id=${row17.id}`).then(x => x.json());
+    ok('7a. fg-plan for a 3in1: elements 3, qty 3 draws 9 singles from the store', plan3.elements === 3 && plan3.store_qty === 9 && (plan3.parts || []).reduce((n, p) => n + p.qty, 0) === 9, `${JSON.stringify({ el: plan3.elements, sq: plan3.store_qty })}`);
+    const before18 = Number((await q1('SELECT qty_available FROM finished_goods WHERE id=$1', [row17.id])).qty_available);
+    r = await post({ order_id: o, order_item_id: it3, qty: 3, dispatch_date: '2026-10-23', fixture: 'Nut washer', fg_store_id: row17.id });
+    const c3 = r.body.id ? await q1('SELECT * FROM job_cards WHERE id=$1', [r.body.id]) : null;
+    ok('7b. 3in1 card: qty is the 3 finished heaters, 9 singles drawn from the 17U store, 9 in fg_batches',
+      r.status === 201 && c3?.qty === 3 && Number((await q1('SELECT qty_available FROM finished_goods WHERE id=$1', [row17.id])).qty_available) === before18 - 9
+      && (c3.fg_batches || []).reduce((n, t) => n + Number(t.qty), 0) === 9, `${r.status} card qty ${c3?.qty} store ${before18}->${Number((await q1('SELECT qty_available FROM finished_goods WHERE id=$1', [row17.id])).qty_available)}`);
+    ok('7c. the card sheet notes the assembly (9 single heaters → 3 × 3in1)', /9 single heaters assembled into 3 . 3in1/.test(uploads[c3.file_path] || ''), (uploads[c3.file_path] || '').slice((uploads[c3.file_path]||'').indexOf('Qty'), (uploads[c3.file_path]||'').indexOf('Qty')+180));
+    const it3big = (await q1(`INSERT INTO order_items (order_id, product_code, drawing_number, tube_material, tube_diameter, wattage, voltage, plating_instructions, quantity, remark)
+       VALUES ($1,'PT-FlangeHe','PT-FlangeHe-99U-3in1','TUB-SS304-038-T06',8,2100,230,'No Plating',100,'x') RETURNING id`, [o])).id;
+    await client.query('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty) VALUES ($1,$2,300)', [it3big, nut]);
+    const left18 = Number((await q1('SELECT qty_available FROM finished_goods WHERE id=$1', [row18.id])).qty_available);
+    r = await post({ order_id: o, order_item_id: it3big, qty: left18, dispatch_date: '2026-10-23', fixture: 'Nut washer', fg_store_id: row18.id });
+    ok('7d. the store-short refusal names the ×elements figure (needs qty×3, store has fewer)', r.status === 400 && /elements/.test(r.body.error || '') && /Insufficient/.test(r.body.error || ''), `${r.status} ${r.body.error}`);
   } catch (e) { failed = true; console.error('ERROR', e); }
   finally {
     await client.query('ROLLBACK'); client.release(); server.close(); await realPool.end();

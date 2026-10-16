@@ -65,7 +65,7 @@ function renderFgCard(c) {
     ${row('Stamping', esc(c.stamping || '—'), { cls: 'big' })}
     ${row('Fixture', lines(trilingual(c.fixture)))}
     ${row('Remark', lines(trilingual(c.remark)), { cls: 'remark' })}
-    ${row('Qty', `${esc(c.qty)} Nos`, { cls: 'big' })}
+    ${row('Qty', `${esc(c.qty)} Nos${Number(c.elements) > 1 ? `<div style="font-size:13px;color:#444;margin-top:4px">${esc(c.store_qty)} single heaters assembled into ${esc(c.qty)} × ${esc(c.elements)}in1</div>` : ''}`, { cls: 'big' })}
     ${row('Final ohms', '&nbsp;', { cls: 'fill' })}
     ${row('Megger', '&nbsp;', { cls: 'fill' })}
     ${row('HV test report', '&nbsp;', { cls: 'fill' })}

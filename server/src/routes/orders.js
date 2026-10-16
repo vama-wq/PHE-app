@@ -933,15 +933,20 @@ router.get('/:id/items/:itemId/fg-plan', authenticate, async (req, res) => {
   const stamping = require('../lib/jobCardDraft').derivePunching(item.wattage, item.voltage);
   const picked = parseInt(req.query.store_id, 10) || null;
   const fg = picked ? await db.get('SELECT * FROM finished_goods WHERE id=$1', [picked]) : own;
-  if (!fg) return res.json({ store: null, parts: [], short: 0, stores, default_store_id: own?.id || null, stamping });
-  const qty = Math.max(0, parseInt(req.query.qty, 10) || 0);
-  const { parts, short } = fgFifo.allocate(await fgFifo.batchesLeft(db, fg.id), qty);
+  // A multi-element heater (3in1, 2in1) is assembled from single heaters in the
+  // store: 10 × 3in1 draw 30 singles (owner, 16 Oct 2026). The QTY entered is the
+  // finished heaters; the store draw is qty × elements.
+  const elements = require('../lib/brazingRings').elementsFromName(item.drawing_number, item.product_code) || 1;
+  if (!fg) return res.json({ store: null, parts: [], short: 0, stores, default_store_id: own?.id || null, stamping, elements });
+  const finishedQty = Math.max(0, parseInt(req.query.qty, 10) || 0);
+  const storeQty = finishedQty * elements;
+  const { parts, short } = fgFifo.allocate(await fgFifo.batchesLeft(db, fg.id), storeQty);
   const { byCard, avg, mmFor } = await fgFifo.intakeLengths(db, fg.id);
   res.json({
     store: { id: fg.id, drawing: fg.base_drawing_no || fg.drawing_no, qty_available: Number(fg.qty_available) || 0 },
     parts: parts.map(p => ({ ...p, hand: !p.job_card_no, mm: mmFor(p),
                              mm_from: p.job_card_no && byCard.get(p.job_card_no) ? 'card' : avg ? 'average' : null })),
-    short, average_mm: avg,
+    short, average_mm: avg, elements, store_qty: storeQty,
     stores, default_store_id: own?.id || null, stamping,
   });
 });
