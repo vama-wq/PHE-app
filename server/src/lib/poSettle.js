@@ -10,10 +10,13 @@ const QC_RESOLVED = ['approved', 'rejected', 'partial'];
 // Totals carry paise up to the tax line, then the payable is rounded to the
 // nearest rupee the way a supplier bill does — the difference is kept as
 // round_off so the arithmetic on the printed PO still adds up.
-function calcTotals(items, transportCharges, igstPercent) {
+// packagingNoGst (owner, 16 Oct 2026): a packaging charge some suppliers add
+// WITHOUT GST. Added to the total AFTER igst, so no tax falls on it; it is not
+// part of the subtotal the GST is worked out on.
+function calcTotals(items, transportCharges, igstPercent, packagingNoGst = 0) {
   const subtotal = items.reduce((s, i) => s + i.amount, 0) + Number(transportCharges || 0);
   const igstAmount = Math.round(subtotal * (igstPercent / 100) * 100) / 100;
-  const beforeRounding = Math.round((subtotal + igstAmount) * 100) / 100;
+  const beforeRounding = Math.round((subtotal + igstAmount + Number(packagingNoGst || 0)) * 100) / 100;
   const grandTotal = Math.round(beforeRounding);
   const roundOff = Math.round((grandTotal - beforeRounding) * 100) / 100;
   return { subtotal, igstAmount, grandTotal, roundOff };
@@ -21,12 +24,12 @@ function calcTotals(items, transportCharges, igstPercent) {
 
 // Rewrite the PO's totals from the lines still expected.
 async function recomputePoTotals(db, poId) {
-  const po = await db.get('SELECT id, transport_charges, igst_percent FROM purchase_orders WHERE id=$1', [poId]);
+  const po = await db.get('SELECT id, transport_charges, igst_percent, packaging_no_gst FROM purchase_orders WHERE id=$1', [poId]);
   if (!po) return null;
   const lines = await db.all(
     'SELECT amount FROM purchase_order_items WHERE po_id=$1 AND NOT short_closed', [poId]);
   const t = calcTotals(lines.map(l => ({ amount: Number(l.amount) || 0 })),
-    po.transport_charges, Number(po.igst_percent) || 0);
+    po.transport_charges, Number(po.igst_percent) || 0, Number(po.packaging_no_gst) || 0);
   await db.run(
     'UPDATE purchase_orders SET subtotal=$1, igst_amount=$2, round_off=$3, grand_total=$4 WHERE id=$5',
     [t.subtotal, t.igstAmount, t.roundOff, t.grandTotal, poId]);

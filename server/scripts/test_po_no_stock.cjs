@@ -113,6 +113,20 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const s2 = await stock(ITEM);
     const rq = await qcPass(D);
     ok('D1. on then off before QC: QC adds the stock as usual', r.status === 200 && r.body.no_stock === false && rq.status === 200 && (await stock(ITEM)) === s2 + 10, `${s2} → ${await stock(ITEM)}`);
+
+    // Packaging (no GST): added to the total after GST, owed in full (owner, 16 Oct 2026).
+    const P = (await q1(`INSERT INTO purchase_orders (po_number, supplier_id, status, delivery_status, igst_percent, transport_charges, subtotal, igst_amount, grand_total, received_at, created_by)
+      VALUES ('ZZT-PKG-'||floor(random()*1e6)::int,$1,'approved','qc_pending',18,0,1000,180,1180,NOW(),$2) RETURNING id`, [sup, owner.id])).id;
+    const pit = (await q1(`INSERT INTO purchase_order_items (po_id, inventory_item_id, description, unit, qty, rate, amount, received, received_at, billed_qty)
+      VALUES ($1,$2,'ZZT pkg item','pcs',10,100,1000,TRUE,NOW(),10) RETURNING id`, [P, ITEM])).id;
+    let rp = await call('PUT', `/api/purchase-orders/${P}/packaging-no-gst`, { packaging_no_gst: 500 });
+    const pg = await q1('SELECT packaging_no_gst::float p, grand_total::float g, igst_amount::float i FROM purchase_orders WHERE id=$1', [P]);
+    ok('PKG a. ₹500 packaging (no GST): grand total 1180 → 1680, GST unchanged at 180', rp.status === 200 && pg.p === 500 && pg.g === 1680 && pg.i === 180, JSON.stringify(pg));
+    await call('POST', `/api/purchase-orders/${P}/items/${pit}/qc`, { result: 'approved', weight_10: 1, received_qty: 10 });
+    const duep = await call('GET', '/api/purchase-orders/payments-due');
+    const billp = (duep.body.bills || []).find(b => b.po_id === P);
+    // payable = material 1000 + 18% = 1180, + packaging 500 = 1680
+    ok('PKG b. Payments Due shows it: payable 1680 (1180 + 500 no GST), packaging_no_gst 500', !!billp && Math.abs(billp.received_value - 1680) < 0.01 && billp.packaging_no_gst === 500, JSON.stringify(billp && { v: billp.received_value, p: billp.packaging_no_gst }));
   } catch (e) {
     failed = true;
     console.error('ERROR', e);

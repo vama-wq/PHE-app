@@ -2443,6 +2443,9 @@ async function initDB(retries = 20, delayMs = 10000) {
     // goes back to its original numbers; it is received and QC'd again on return.
     await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS repair_sent_at TIMESTAMPTZ`);
     await pool.query(`ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS repair_reason TEXT`);
+    // A packaging charge a supplier adds WITHOUT GST (owner, 16 Oct 2026): added
+    // to the PO total after GST, and owed in full on Payments Due.
+    await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS packaging_no_gst NUMERIC DEFAULT 0`);
     // A Cap heater's sleeve, taken by its weight at Brazing (owner, 12 Oct 2026):
     // when, and exactly what — so unticking Brazing gives that back.
     await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS sleeve_taken_at TIMESTAMPTZ`);

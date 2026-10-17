@@ -307,9 +307,11 @@ async function payableParts(db, pos) {
     let pfLeft = r2(po.transport_charges);
     for (const pt of parts) { pt.pf = r2(Math.min(pfLeft, pfMonth.get(pt.month) || 0)); pfLeft = r2(pfLeft - pt.pf); }
     if (parts.length && pfLeft > 0) parts[0].pf = r2(parts[0].pf + pfLeft);   // P&F not tied to a bill
+    // A packaging charge billed without GST rides with the first part, untaxed.
+    if (parts.length) parts[0].packaging_no_gst = r2(po.packaging_no_gst);
     let cleared = Number(po.paid_cleared || 0), pending = Number(po.paid_pending || 0);
     parts.forEach((pt) => {
-      pt.payable = receivedPayable(pt.material + pt.pf, po.igst_percent);   // GST-incl, rounded
+      pt.payable = r2(receivedPayable(pt.material + pt.pf, po.igst_percent) + (Number(pt.packaging_no_gst) || 0));   // GST on material+P&F only
       pt.paid_cleared = r2(Math.min(cleared, pt.payable)); cleared = r2(cleared - pt.paid_cleared);
       pt.paid_pending = r2(Math.min(pending, pt.payable - pt.paid_cleared)); pending = r2(pending - pt.paid_pending);
       pt.remaining = r2(pt.payable - pt.paid_cleared - pt.paid_pending);
@@ -327,7 +329,7 @@ const PO_PAID_SQL = `
 router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const db = getDB();
   const pos = await db.all(`
-    SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.created_at, s.name AS supplier_name, ${PO_PAID_SQL}
+    SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.packaging_no_gst, po.created_at, s.name AS supplier_name, ${PO_PAID_SQL}
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
     WHERE po.status NOT IN ('draft', 'rejected')`);
@@ -341,6 +343,7 @@ router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'
         id: `${po.id}-${pt.month || 'undated'}`, po_id: po.id, po_number: po.po_number, supplier_name: po.supplier_name,
         month: pt.month, received_at: pt.received_at, part_no: i + 1, parts_count: list.length,
         igst_percent: Number(po.igst_percent || 0), material_value: pt.material, packaging_forwarding: pt.pf,
+        packaging_no_gst: Number(pt.packaging_no_gst) || 0,
         received_value: pt.payable, paid_cleared: pt.paid_cleared, paid_pending: pt.paid_pending, remaining: pt.remaining,
       });
     });
@@ -364,7 +367,7 @@ router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'acco
         const amount = Math.round(Number(p.amount) * 100) / 100;
         if (!Number.isInteger(poId) || !(amount > 0)) { errors.push('Invalid payment row skipped'); continue; }
         const po = await client.query(
-          `SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, s.name AS supplier_name, ${PO_PAID_SQL}
+          `SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.packaging_no_gst, s.name AS supplier_name, ${PO_PAID_SQL}
            FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id=$1`, [poId]);
         const row = po.rows[0];
         if (!row) { errors.push(`PO ${poId} not found`); continue; }
@@ -529,16 +532,17 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (r
   const db = getDB();
   const igst = igst_percent !== undefined ? Number(igst_percent) : 18;
   const tc = Number(transport_charges || 0);
-  const { subtotal, igstAmount, grandTotal, roundOff } = calcTotals(items, tc, igst);
+  const pkgNoGst = Number(req.body.packaging_no_gst || 0);
+  const { subtotal, igstAmount, grandTotal, roundOff } = calcTotals(items, tc, igst, pkgNoGst);
   const poNumber = await nextPoNumber(db);
 
   const r = await db.insert(
     `INSERT INTO purchase_orders
        (po_number, supplier_id, transport_charges, igst_percent, subtotal, igst_amount, round_off, grand_total,
-        notes, expected_delivery_date, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        notes, expected_delivery_date, created_by, packaging_no_gst)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [poNumber, supplier_id, tc, igst, subtotal, igstAmount, roundOff, grandTotal,
-     notes||null, expected_delivery_date||null, req.user.id]
+     notes||null, expected_delivery_date||null, req.user.id, pkgNoGst]
   );
 
   const poId = r.lastInsertRowid;
@@ -570,15 +574,16 @@ router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async 
 
   const igst = igst_percent !== undefined ? Number(igst_percent) : po.igst_percent;
   const tc = Number(transport_charges !== undefined ? transport_charges : po.transport_charges);
-  const { subtotal, igstAmount, grandTotal, roundOff } = calcTotals(items, tc, igst);
+  const pkgNoGst = Number(req.body.packaging_no_gst !== undefined ? req.body.packaging_no_gst : po.packaging_no_gst) || 0;
+  const { subtotal, igstAmount, grandTotal, roundOff } = calcTotals(items, tc, igst, pkgNoGst);
 
   await db.run(
     `UPDATE purchase_orders SET
        supplier_id=$1, transport_charges=$2, igst_percent=$3, subtotal=$4,
-       igst_amount=$5, round_off=$6, grand_total=$7, notes=$8, expected_delivery_date=$9, status='draft'
+       igst_amount=$5, round_off=$6, grand_total=$7, notes=$8, expected_delivery_date=$9, status='draft', packaging_no_gst=$11
      WHERE id=$10`,
     [supplier_id||po.supplier_id, tc, igst, subtotal, igstAmount, roundOff, grandTotal,
-     notes||null, expected_delivery_date||po.expected_delivery_date||null, po.id]
+     notes||null, expected_delivery_date||po.expected_delivery_date||null, po.id, pkgNoGst]
   );
 
   await db.run('DELETE FROM purchase_order_items WHERE po_id=$1', [po.id]);
@@ -633,7 +638,7 @@ router.put('/:id/packaging-forwarding', authenticate, authorize('owner', 'admin'
   // short-closed balance is not coming, so it does not count.
   const items = await db.all('SELECT amount FROM purchase_order_items WHERE po_id=$1 AND NOT short_closed', [po.id]);
   const { subtotal, igstAmount, grandTotal, roundOff } =
-    calcTotals(items.map(i => ({ amount: Number(i.amount) || 0 })), amount, Number(po.igst_percent) || 0);
+    calcTotals(items.map(i => ({ amount: Number(i.amount) || 0 })), amount, Number(po.igst_percent) || 0, Number(po.packaging_no_gst) || 0);
 
   await db.run(
     `UPDATE purchase_orders SET transport_charges=$1, subtotal=$2, igst_amount=$3, round_off=$4, grand_total=$5
@@ -644,6 +649,29 @@ router.put('/:id/packaging-forwarding', authenticate, authorize('owner', 'admin'
     `PO ${po.po_number}: packaging & forwarding changed ₹${Number(po.transport_charges) || 0} → ₹${amount} (total now ₹${grandTotal})`,
     req.user.id);
   res.json({ message: 'Packaging & forwarding updated', subtotal, igst_amount: igstAmount, round_off: roundOff, grand_total: grandTotal });
+});
+
+// A packaging charge the supplier adds WITHOUT GST (owner, 16 Oct 2026): added
+// to the PO total after GST, and owed in full on Payments Due. It is not part
+// of the material cost, so it does not change any item's landed/unit cost —
+// which is why it can be set even after the PO is received.
+router.put('/:id/packaging-no-gst', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const db = getDB();
+  const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+  if (!po) return res.status(404).json({ error: 'Not found' });
+  if (['draft', 'rejected'].includes(po.status)) {
+    return res.status(400).json({ error: 'Set packaging on a draft PO from the PO form; this is for after it is sent/received.' });
+  }
+  const amount = Number(req.body.packaging_no_gst);
+  if (!Number.isFinite(amount) || amount < 0) {
+    return res.status(400).json({ error: 'Enter a valid packaging amount (0 or more)' });
+  }
+  const before = Number(po.packaging_no_gst) || 0;
+  await db.run('UPDATE purchase_orders SET packaging_no_gst=$1 WHERE id=$2', [amount, po.id]);
+  const t = await recomputePoTotals(db, po.id);
+  await logActivity(null, null, 'po_updated',
+    `PO ${po.po_number}: packaging (no GST) changed ₹${before} → ₹${amount} (total now ₹${t ? t.grandTotal : '?'})`, req.user.id);
+  res.json({ message: 'Packaging (no GST) updated', grand_total: t ? t.grandTotal : null });
 });
 
 router.put('/:id/send', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {

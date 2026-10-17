@@ -215,7 +215,7 @@ export default function PurchasePaymentsDue() {
                           {b.parts_count > 1 && <span className="ml-1.5 text-[10px] font-semibold bg-sky-100 text-sky-800 rounded px-1.5 py-0.5" title="This PO came in parts — each delivery is due in the month it was received">part {b.part_no} of {b.parts_count}</span>}
                         </td>
                         <td className="table-cell text-xs text-gray-500">{fmtDate(b.received_at)}</td>
-                        <td className="table-cell text-right text-sm" title={`Material ${inr(b.material_value)}${b.packaging_forwarding > 0 ? ` + P&F ${inr(b.packaging_forwarding)}` : ''} + ${b.igst_percent}% GST`}>{inr(b.received_value)}</td>
+                        <td className="table-cell text-right text-sm" title={`Material ${inr(b.material_value)}${b.packaging_forwarding > 0 ? ` + P&F ${inr(b.packaging_forwarding)}` : ''} + ${b.igst_percent}% GST${b.packaging_no_gst > 0 ? ` + packaging (no GST) ${inr(b.packaging_no_gst)}` : ''}`}>{inr(b.received_value)}</td>
                         <td className="table-cell text-right text-sm text-green-700">{b.paid_cleared > 0 ? inr(b.paid_cleared) : '—'}</td>
                         <td className="table-cell text-right text-sm text-amber-700">{b.paid_pending > 0 ? inr(b.paid_pending) : '—'}</td>
                         <td className="table-cell text-right text-sm font-bold text-red-700">{inr(b.remaining)}</td>

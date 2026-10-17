@@ -328,6 +328,8 @@ export default function PurchaseOrderDetail() {
       {canManagePO && po.status !== 'received' && !po.items.some(i => i.received) && (
         <PackagingForwarding po={po} onSaved={load} />
       )}
+      {/* Packaging (no GST) — editable even after receiving (a billing figure). */}
+      {canManagePO && <PackagingNoGst po={po} onSaved={load} />}
 
       {/* ── Item Receiving & QC panel (approved POs, screen only) ── */}
       {((po.status === 'approved' && po.delivery_status !== 'order_cancelled') || po.status === 'received'
@@ -503,6 +505,12 @@ export default function PurchaseOrderDetail() {
               <td style={{ border: '1px solid #ccc' }}></td>
               <td style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right' }}>{fmt(po.igst_amount)}</td>
             </tr>
+            {Number(po.packaging_no_gst) > 0 && (
+              <tr>
+                <td colSpan={5} style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right', fontWeight: 600 }}>Packaging (no GST)</td>
+                <td style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right' }}>{fmt(po.packaging_no_gst)}</td>
+              </tr>
+            )}
             {/* Round Off — only shown when there was actually a fraction to
                 drop, so a PO that lands on a whole rupee stays clean. */}
             {Number(po.round_off) !== 0 && (
@@ -1274,6 +1282,50 @@ function PackagingForwarding({ po, onSaved }) {
             <span className="text-lg font-semibold text-gray-900">
               ₹{Number(po.transport_charges || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
+            <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>Edit</button>
+          </div>
+        )}
+      </div>
+      {error && <p className="text-red-600 text-xs mt-2">{error}</p>}
+    </div>
+  );
+}
+
+// A packaging charge the supplier adds WITHOUT GST (owner, 16 Oct 2026): added
+// to the PO total after GST and owed in full. Editable even after the PO is
+// received — it is a billing figure, not part of any item's cost.
+function PackagingNoGst({ po, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(Number(po.packaging_no_gst) || 0));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  if (['draft', 'rejected'].includes(po.status)) return null;  // set on the form for a draft
+  const save = async () => {
+    setSaving(true); setError('');
+    try {
+      await api.put(`/purchase-orders/${po.id}/packaging-no-gst`, { packaging_no_gst: Number(value) });
+      setEditing(false);
+      await onSaved();
+    } catch (err) { setError(err.response?.data?.error || 'Failed to update'); }
+    finally { setSaving(false); }
+  };
+  return (
+    <div className="card p-4 mb-5 no-print">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-sm font-semibold text-gray-900">Packaging (no GST)</div>
+          <div className="text-xs text-gray-400">Added to the total after GST — no tax on it. Can be set after the PO is received.</div>
+        </div>
+        {editing ? (
+          <div className="flex items-center gap-2">
+            <input className="input w-32 text-right" type="number" step="0.01" min="0" autoFocus
+              value={value} onChange={e => setValue(e.target.value)} />
+            <button className="btn-primary btn-sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+            <button className="btn-secondary btn-sm" onClick={() => { setEditing(false); setValue(String(Number(po.packaging_no_gst) || 0)); setError(''); }}>Cancel</button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            <span className="text-lg font-semibold text-gray-900">₹{Number(po.packaging_no_gst || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>Edit</button>
           </div>
         )}
