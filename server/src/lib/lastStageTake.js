@@ -65,7 +65,7 @@ async function runTake(tx, jobCardId, userId) {
   const taken = [];
 
   const lines = await tx.all(
-    `SELECT oii.*, ii.item_code, ii.unit, TRIM(ii.category) AS category
+    `SELECT oii.*, ii.item_code, ii.name, ii.unit, TRIM(ii.category) AS category
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
       WHERE oii.order_item_id=$1 ORDER BY oii.inventory_item_id`, [item.id]);
 
@@ -114,6 +114,7 @@ async function runTake(tx, jobCardId, userId) {
     } else {
       if (FINS_CODES.includes(line.item_code)) { finsLines = true; continue; } // by tube length, below
       if (terminalsByRows && isTerminalCategory(line.category)) continue;      // taken by the card's rows, above
+      if (card.sleeve_taken_at && require('./heaterFittings').isSleeve(line)) continue; // sleeve taken by inch at Nut Washer
       const st = stageOf(line.category);
       if (st && stageTicked[st]) continue;
     }

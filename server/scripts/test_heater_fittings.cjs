@@ -100,7 +100,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('2b. …without a flange cap: refused, naming it', r.status === 400 && /Cap: Flange Cap/.test(r.body.error), `${r.status} ${r.body.error}`);
     r = await put(A, [[CAP, 4], [MID, 4], [SLV, 4], [NUT, 24]]);
     const slvLine = await q1('SELECT qty::float q FROM order_item_inventory WHERE order_item_id=$1 AND inventory_item_id=$2', [A, SLV]);
-    ok('2c. Flange Cap + Flange Mid Patti + Sleeve: saved — the sleeve with no quantity (it goes by weight at Brazing)', r.status === 200 && slvLine?.q === 0, `${r.status} ${JSON.stringify(r.body)} sleeve qty ${slvLine?.q}`);
+    ok('2c. Flange Cap + Flange Mid Patti + Sleeve: saved — the sleeve with no quantity (it goes by inch at Nut Washer)', r.status === 200 && slvLine?.q === 0, `${r.status} ${JSON.stringify(r.body)} sleeve qty ${slvLine?.q}`);
     r = await put(A, [[CAP, 4], [MID, 4], [SLV, ''], [NUT, 24]]);
     ok('2d. …and a blank sleeve quantity is accepted', r.status === 200, `${r.status} ${r.body.error || ''}`);
 

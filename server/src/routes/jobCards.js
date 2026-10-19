@@ -1309,16 +1309,17 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
     }
   }
 
-  // A heater with a Cap (owner, 12 Oct 2026): the sleeve's weight is
-  // compulsory at Brazing — typed in grams, kept in the stage's brazing record.
-  if (done && !isFg && stageNo === 15) {
+  // A heater with a Cap (owner, 19 Oct 2026): the sleeve's length of one piece is
+  // compulsory at Nut Washer — typed in inch, kept in that stage's record. The
+  // take is inchPerPiece × the card's qty (lib/heaterFittings.js).
+  if (done && !isFg && stageNo === 26) {
     const fits = await require('../lib/heaterFittings').forCard(db, jcCard);
     if (fits.includes('cap')) {
       let b = value1;
       try { b = typeof b === 'string' ? JSON.parse(b) : b; } catch { b = null; }
-      const g = Number(b?.sleeveWeightG);
-      if (!(g > 0)) {
-        return res.status(400).json({ error: 'This heater has a Cap — enter the sleeve weight (grams) before marking Brazing done', code: 'SLEEVE_WEIGHT_REQUIRED' });
+      const inch = Number(b?.sleeveInchPerPiece);
+      if (!(inch > 0)) {
+        return res.status(400).json({ error: 'This heater has a Cap — enter the sleeve length per piece (inch) before marking Nut Washer done', code: 'SLEEVE_INCH_REQUIRED' });
       }
     }
   }
@@ -1539,12 +1540,16 @@ router.put('/:id/checklist/:stage', authenticate, authorize('production', 'owner
         if (done) await brazingRings.takeRingsAtBrazing(db, jobCardId, req.user.id);
         else await brazingRings.giveRingsBack(db, jobCardId, req.user.id);
       } catch (e) { console.error('[checklist] brazing rings failed:', e.message); }
-      // A Cap heater's sleeve by its weight (owner, 12 Oct 2026).
+    }
+
+    // A Cap heater's sleeve by inch at Nut Washer (owner, 19 Oct 2026): ticked →
+    // inchPerPiece × qty taken; unticked → given back.
+    if (stageNo === 26) {
       try {
         const hf = require('../lib/heaterFittings');
-        if (done) await hf.takeSleeveAtBrazing(db, jobCardId, req.user.id);
+        if (done) await hf.takeSleeveAtNutWasher(db, jobCardId, req.user.id);
         else await hf.giveSleeveBack(db, jobCardId, req.user.id);
-      } catch (e) { console.error('[checklist] sleeve by weight failed:', e.message); }
+      } catch (e) { console.error('[checklist] sleeve by inch failed:', e.message); }
     }
 
     // Category-timed BOM deduction: Stage 15 (Brazing) → flange/brazing categories,

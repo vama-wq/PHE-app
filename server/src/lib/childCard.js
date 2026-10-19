@@ -160,14 +160,14 @@ async function moveTakenShare(tx, parent, childId, childNo, qty) {
     sets.push(`${f}=$${sets.length + 1}`); vals.push(r4(v - c));
     childSets.push(`${f}=$${childSets.length + 1}`); childVals.push(c);
   }
-  // A Cap heater's sleeve taken by weight at Brazing: its record shares too, so
-  // unticking Brazing on either card gives back only its own.
+  // A Cap heater's sleeve taken by inch at Nut Washer: its record (total inches)
+  // shares too, so unticking Nut Washer on either card gives back only its own.
   let sl = parent.sleeve_taken;
   try { sl = typeof sl === 'string' ? JSON.parse(sl) : sl; } catch { sl = null; }
   if (parent.sleeve_taken_at && sl && Number(sl.qty) > 0) {
-    const c = r4(Number(sl.qty) * frac), cg = r4(Number(sl.grams || 0) * frac);
-    await tx.run('UPDATE job_cards SET sleeve_taken = $2 WHERE id=$1', [parent.id, JSON.stringify({ ...sl, qty: r4(sl.qty - c), grams: r4((sl.grams || 0) - cg) })]);
-    await tx.run('UPDATE job_cards SET sleeve_taken_at = $2, sleeve_taken = $3 WHERE id=$1', [childId, parent.sleeve_taken_at, JSON.stringify({ ...sl, qty: c, grams: cg })]);
+    const c = r4(Number(sl.qty) * frac), cp = r4(Number(sl.pieces || 0) * frac);
+    await tx.run('UPDATE job_cards SET sleeve_taken = $2 WHERE id=$1', [parent.id, JSON.stringify({ ...sl, qty: r4(sl.qty - c), pieces: r4((sl.pieces || 0) - cp) })]);
+    await tx.run('UPDATE job_cards SET sleeve_taken_at = $2, sleeve_taken = $3 WHERE id=$1', [childId, parent.sleeve_taken_at, JSON.stringify({ ...sl, qty: c, pieces: cp })]);
   }
   if (sets.length) {
     await tx.run(`UPDATE job_cards SET ${sets.join(', ')} WHERE id=$${sets.length + 1}`, [...vals, parent.id]);
