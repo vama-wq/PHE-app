@@ -612,9 +612,16 @@ export default function ProspectingList() {
                     {seqEmail.day != null && <span className="text-xs text-gray-400">send {typeof seqEmail.day === 'number' ? 'Day ' + seqEmail.day : seqEmail.day}</span>}
                   </div>
                   {seqEmail.attach && (
-                    <div className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-900">
-                      📎 Send with this: {seqEmail.attach}
-                    </div>
+                    seqEmail.flyer ? (
+                      <a href={seqEmail.flyer} target="_blank" rel="noopener noreferrer"
+                        className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-900 hover:bg-amber-100">
+                        📎 Send with this: {seqEmail.attach} — open / download flyer ↗
+                      </a>
+                    ) : (
+                      <div className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-900">
+                        📎 Send with this: {seqEmail.attach}
+                      </div>
+                    )
                   )}
                   <input className="input w-full mb-2 font-medium text-sm" readOnly value={seqEmail.subject || ''} />
                   <textarea className="input w-full font-sans text-sm leading-relaxed" rows={13} readOnly value={seqEmail.body || ''} />
