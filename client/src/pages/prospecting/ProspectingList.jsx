@@ -645,6 +645,11 @@ export default function ProspectingList() {
                         <Copy size={13} /> {copied === 'seq-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
                       </button>
                     )}
+                    {seqEmail.waImage && (
+                      <a className="btn-secondary text-xs flex items-center gap-1.5" href={seqEmail.waImage} target="_blank" rel="noopener noreferrer">
+                        🖼️ Send this image ↗
+                      </a>
+                    )}
                   </div>
                   {seqEmail.whatsapp && (
                     <div className="mt-2 text-xs text-gray-600 bg-emerald-50 border border-emerald-100 rounded p-2 whitespace-pre-wrap">{seqEmail.whatsapp}</div>
