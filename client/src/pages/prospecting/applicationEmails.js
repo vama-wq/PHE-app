@@ -178,7 +178,7 @@ const CAT_BASE = 'https://catalog.weblink.in/dynamic-files/ei/other-files/147463
 // The full product catalogue is linked in every email, for every application
 // (per Vama's instruction). The email copy stays application-tailored; only the
 // catalogue attachment is always the complete one.
-const FULL_CATALOGUE = { label: 'Full product catalogue', url: `${CAT_BASE}/phe-catalogue_compressed.pdf` };
+const FULL_CATALOGUE = { label: 'Full product catalogue', url: 'https://drive.google.com/file/d/11BAdVPcRV1NW3kz5E7EO55EeDu_veXU9/view' };
 
 export function catalogueFor(_application) {
   return FULL_CATALOGUE;
@@ -241,7 +241,7 @@ export function bodyToHtml(bodyText, application) {
   for (const raw of String(bodyText).split('\n')) {
     const line = raw.replace(/\s+$/, '');
     // the plain-text catalogue line renders as the clickable button instead
-    if (line.includes(cat.url) || /\(PDF\):\s*https?:\/\/\S+\.pdf/i.test(line)) {
+    if (line.includes(cat.url) || /^Catalogue:\s*https?:\/\//i.test(line) || /\(PDF\):\s*https?:\/\/\S+\.pdf/i.test(line)) {
       flushBullets(); flushPara();
       out.push(catalogueButtonHtml(application));
       continue;
