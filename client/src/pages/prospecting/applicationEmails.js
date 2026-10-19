@@ -256,7 +256,22 @@ export function bodyToHtml(bodyText, application) {
   return (
     '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1f2937;max-width:620px;">' +
     out.join('\n') +
+    whatsappQrHtml() +
     '</div>'
+  );
+}
+
+// WhatsApp click-to-chat QR footer appended to every campaign email (scans to wa.me/Vama).
+export function whatsappQrHtml() {
+  return (
+    '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0 0;border-top:1px solid #e5e7eb;padding-top:14px;"><tr>' +
+    '<td style="vertical-align:middle;padding-right:12px;">' +
+    '<img src="https://www.peenaheatelements.com/phe-whatsapp-qr.png" width="92" height="92" alt="WhatsApp QR" style="display:block;width:92px;height:92px;border:1px solid #e5e7eb;border-radius:6px;">' +
+    '</td>' +
+    '<td style="vertical-align:middle;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#374151;line-height:1.5;">' +
+    '<strong style="color:#128C7E;">Scan to chat with us on WhatsApp</strong><br>' +
+    'or message Vama directly: <a href="https://wa.me/918452055836" style="color:#b91c1c;text-decoration:none;">+91 84520 55836</a>' +
+    '</td></tr></table>'
   );
 }
 
