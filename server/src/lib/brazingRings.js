@@ -90,6 +90,7 @@ async function takeRingsAtBrazing(db, jobCardId, userId) {
     const card = await tx.get(
       `SELECT jc.*, o.order_code FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1 FOR UPDATE OF jc`, [jobCardId]);
     if (!card || card.is_fg || card.rings_taken_at || card.inventory_qc_at) return null;
+    if (require('./inventoryFreeze').isFrozenCode(card.order_code)) return null;   // frozen order: take nothing (owner, 19 Oct 2026)
     const plan = await ringPlan(tx, card);
     if (!plan) return null;
     if (plan.item) {

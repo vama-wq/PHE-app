@@ -678,6 +678,7 @@ async function takePinsAtSpot(db, jobCardId, userId) {
   return db.withTransaction(async (client) => {
     const tx = txDb(client);
     const { card, item, tpLines, orderCode } = await spotContext(tx, jobCardId);
+    if (require('./inventoryFreeze').isFrozenCode(orderCode)) return null;   // frozen order: take nothing (owner, 19 Oct 2026)
     if (!card || !newRule(card) || noTerminals(card) || pastPins(card) || !item || item.inventory_deducted) return null;
     const r = await takeTerminalRows(tx, card, item, tpLines, orderCode, userId, { at: 'Spot' });
     if (!r || !r.taken.length) return null;

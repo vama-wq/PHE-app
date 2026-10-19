@@ -36,6 +36,10 @@ async function runTake(tx, jobCardId, userId) {
   if (!card || card.last_stage_taken_at) return { taken: [] };
   const stamp = () => tx.run('UPDATE job_cards SET last_stage_taken_at = NOW() WHERE id=$1', [card.id]);
 
+  // Frozen order (owner, 19 Oct 2026): an old order dispatched long ago and only
+  // now pushed through the app — it takes nothing. Stamp so it still progresses.
+  if (require('./inventoryFreeze').isFrozenCode(card.order_code)) { await stamp(); return { taken: [] }; }
+
   // Closed at Inventory QC: nothing ever moves again.
   if (card.inventory_qc_at) { await stamp(); return { taken: [] }; }
 
