@@ -979,7 +979,6 @@ function ChecklistModal({ card, onClose, onSave }) {
                             <span className={d.airCleaning ? 'text-green-600 font-medium' : 'text-gray-400'}>
                               Air Cleaning {d.airCleaning ? '✅' : '—'}
                             </span>
-                            {d.sleeveWeightG > 0 && <span className="text-blue-600 font-medium">Sleeve Wt: {d.sleeveWeightG} g</span>}
                             {d.remark && <span className="text-gray-500">{d.remark}</span>}
                           </>;
                         })() : null}
@@ -993,6 +992,12 @@ function ChecklistModal({ card, onClose, onSave }) {
                             ? <span key="lt" className="text-green-600 font-medium">Light ✅</span>
                             : <span key="lt" className="text-red-600 font-medium">Light ❌ {d.lightCount} — {d.lightReason}</span>;
                           return <>{hvBadge}{ltBadge}{d.ohms && <span key="ohms" className="text-gray-500">{d.ohms} Ω</span>}</>;
+                        })() : def.no === 26 && sData.value1 ? (() => {
+                          let d = {};
+                          try { d = JSON.parse(sData.value1); } catch {}
+                          return d.sleeveInchPerPiece > 0
+                            ? <span className="text-blue-600 font-medium">Sleeve: {d.sleeveInchPerPiece}″/pc</span>
+                            : null;
                         })() : (
                           <>
                             {sData.value1 && <span>{sData.value1}</span>}
@@ -1267,10 +1272,16 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
   const [brazingAirPressureRemark, setBrazingAirPressureRemark] = useState(brazingData.airPressureRemark || '');
   const [brazingAirCleaning, setBrazingAirCleaning] = useState(!!brazingData.airCleaning);
   const [brazingRemark, setBrazingRemark] = useState(brazingData.remark || '');
-  // A heater with a Cap (owner, 12 Oct 2026): the total sleeve weight, in grams,
-  // is compulsory at Brazing.
-  const needsSleeveWeight = isBrazing && normalizeFittings(card?.fittings).includes('cap');
-  const [sleeveWeightG, setSleeveWeightG] = useState(brazingData.sleeveWeightG != null ? String(brazingData.sleeveWeightG) : '');
+  // A heater with a Cap (owner, 19 Oct 2026): the sleeve length of one piece, in
+  // inches, is compulsory at Nut Washer (stage 26); the app takes inchPerPiece ×
+  // the card's qty from the sleeve stock.
+  const isNutWasher = stageDef.no === 26;
+  const needsSleeveInch = isNutWasher && normalizeFittings(card?.fittings).includes('cap');
+  const nutWasherData = (() => {
+    if (!isNutWasher || !stageData.value1) return {};
+    try { return JSON.parse(stageData.value1); } catch { return {}; }
+  })();
+  const [sleeveInch, setSleeveInch] = useState(nutWasherData.sleeveInchPerPiece != null ? String(nutWasherData.sleeveInchPerPiece) : '');
 
   // Stage 1 (Coil) — gauge picked from inventory items in category "Spring Guage".
   // Stored in value1 (just a record of which gauge was used; no stock deduction).
@@ -1323,8 +1334,8 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       if (!brazingAirPressure) return false;
       if (brazingAirPressure === 'fail' && !brazingAirPressureRemark.trim()) return false;
       if (!brazingAirCleaning) return false;
-      if (needsSleeveWeight && !(parseFloat(sleeveWeightG) > 0)) return false;
     }
+    if (needsSleeveInch && !(parseFloat(sleeveInch) > 0)) return false;
     if (isHvLight) {
       if (!hvTestResult || !hvLightResult) return false;
       if (hvTestResult === 'fail' && (!hvTestFailCount || !hvTestFailReason.trim())) return false;
@@ -1377,8 +1388,11 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
       v2: null,
     };
     if (isBrazing) return {
-      v1: JSON.stringify({ airPressure: brazingAirPressure, airPressureRemark: brazingAirPressureRemark, airCleaning: brazingAirCleaning, remark: brazingRemark,
-        ...(needsSleeveWeight ? { sleeveWeightG: parseFloat(sleeveWeightG) } : {}) }),
+      v1: JSON.stringify({ airPressure: brazingAirPressure, airPressureRemark: brazingAirPressureRemark, airCleaning: brazingAirCleaning, remark: brazingRemark }),
+      v2: null,
+    };
+    if (needsSleeveInch) return {
+      v1: JSON.stringify({ sleeveInchPerPiece: parseFloat(sleeveInch) }),
       v2: null,
     };
     if (isBending) return { v1: heaterAdjustDone ? 'adjusted' : null, v2: null };
@@ -1937,25 +1951,6 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
             )}
           </div>
 
-          {/* Sleeve weight — a heater with a Cap */}
-          {needsSleeveWeight && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Total Sleeve Weight (grams) <span className="text-red-500">*</span>
-              </label>
-              {isDone ? (
-                <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
-                  {brazingData.sleeveWeightG ? `${brazingData.sleeveWeightG} g` : '—'}
-                </div>
-              ) : (
-                <input className="input w-full" type="number" min="0" step="any" inputMode="decimal"
-                  placeholder="Weight of all sleeves used, in grams — required"
-                  value={sleeveWeightG} onChange={e => setSleeveWeightG(e.target.value)} />
-              )}
-              <p className="text-[11px] text-gray-500 mt-1">This heater has a Cap — the sleeve weight is needed to mark Brazing done.</p>
-            </div>
-          )}
-
           {/* Brazing remark */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1970,6 +1965,25 @@ function StageDetailView({ card, stageDef, stageData, stageMap, onBack, onSaved 
                 value={brazingRemark} onChange={e => setBrazingRemark(e.target.value)} />
             )}
           </div>
+        </div>
+      )}
+
+      {/* Sleeve length — a heater with a Cap, entered at Nut Washer (owner, 19 Oct 2026) */}
+      {needsSleeveInch && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Sleeve length per piece (inch) <span className="text-red-500">*</span>
+          </label>
+          {isDone ? (
+            <div className="text-sm text-gray-700 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+              {nutWasherData.sleeveInchPerPiece ? `${nutWasherData.sleeveInchPerPiece}" per piece` : '—'}
+            </div>
+          ) : (
+            <input className="input w-full" type="number" min="0" step="any" inputMode="decimal"
+              placeholder="Length of sleeve on one heater, in inches — required"
+              value={sleeveInch} onChange={e => setSleeveInch(e.target.value)} />
+          )}
+          <p className="text-[11px] text-gray-500 mt-1">This heater has a Cap — the app takes this length × the card's quantity from sleeve stock when Nut Washer is marked done.</p>
         </div>
       )}
 

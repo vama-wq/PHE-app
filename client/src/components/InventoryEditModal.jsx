@@ -58,8 +58,8 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
   // store heaters were made on, oldest first. Never typed in kg.
   const isFins = (i) => (i?.category || '').trim().toLowerCase() === 'finns';
   const finsIds = new Set(inventoryItems.filter(isFins).map(i => String(i.id)));
-  // A Cap heater's sleeve is weighed at Brazing and taken by its weight (owner,
-  // 12 Oct 2026) — no quantity here, like the fins.
+  // A Cap heater's sleeve is taken by inch at Nut Washer — length per piece ×
+  // the card's qty (owner, 19 Oct 2026) — no quantity here, like the fins.
   const byWeight = (i) => !fgOrder && sleeveByWeight(item?.fittings, i);
   const weightIds = new Set(inventoryItems.filter(byWeight).map(i => String(i.id)));
 
@@ -151,8 +151,8 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
                 <StockNote item={i} orderId={orderId} qty={isFins(i) || byWeight(i) ? null : lineQty(i.id)} />
                 {byWeight(i) ? (
                   <span className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1 whitespace-nowrap"
-                    title="This heater has a Cap: production weighs the sleeves at Brazing and that weight is taken from stock">
-                    auto — weighed at Brazing
+                    title="This heater has a Cap: production enters the sleeve length per piece at Nut Washer, and that length × the card's quantity is taken from stock">
+                    auto — by inch at Nut Washer
                   </span>
                 ) : isFins(i) ? (
                   <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 whitespace-nowrap"

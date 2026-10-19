@@ -2,7 +2,7 @@
 // rules as server/src/lib/heaterFittings.js, which has the final say.
 export const FITTINGS = [
   { key: 'pocket', label: 'Pocket', hint: '1 more brazing ring per heater' },
-  { key: 'cap', label: 'Cap', hint: 'Flange Cap, Flange Mid Patti and Sleeve on the list; the sleeve is weighed at Brazing and taken by its weight' },
+  { key: 'cap', label: 'Cap', hint: 'Flange Cap, Flange Mid Patti and Sleeve on the list; the sleeve is taken by inch at Nut Washer (length per piece × qty)' },
   { key: 'short_patti', label: 'Short Patti', hint: 'one Short Patti on the list' },
   { key: 'gasket', label: 'Gasket', hint: 'one Gasket on the list' },
   { key: 'thermostat', label: 'Thermostat', hint: 'one Thermostat on the list' },
@@ -15,7 +15,7 @@ export const FITTING_LABEL = { ...Object.fromEntries(FITTINGS.map(f => [f.key, f
 const cat = (i) => String(i?.category || '').trim().toLowerCase();
 const nm = (i) => String(i?.name || '');
 export const isSleeve = (i) => cat(i) === 'flange spare' && /sleeve/i.test(nm(i));
-// A Cap heater's sleeve goes by weight at Brazing — no quantity on the list.
+// A Cap heater's sleeve goes by inch at Nut Washer — no quantity on the list.
 export const sleeveByWeight = (fittings, i) => normalizeFittings(fittings).includes('cap') && isSleeve(i);
 const NEEDS = {
   cap: [
