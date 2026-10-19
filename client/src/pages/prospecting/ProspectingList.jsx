@@ -600,7 +600,7 @@ export default function ProspectingList() {
                     <button key={i}
                       className={`text-xs px-2.5 py-1.5 rounded-md border ${seqTab === i ? 'bg-brand-700 text-white border-brand-700' : 'bg-white text-gray-600'}`}
                       onClick={() => setSeqTab(i)}>
-                      {e.label}{e.day != null ? ` · D${e.day}` : ''}
+                      {e.label}{e.day != null ? ` · ${typeof e.day === 'number' ? 'D' + e.day : e.day}` : ''}
                     </button>
                   ))}
                 </div>
@@ -609,7 +609,7 @@ export default function ProspectingList() {
                   <div className="flex items-center gap-2 mb-2">
                     <Mail size={15} className="text-brand-700" />
                     <h4 className="text-sm font-semibold">{seqEmail.label} email</h4>
-                    {seqEmail.day != null && <span className="text-xs text-gray-400">send Day {seqEmail.day}</span>}
+                    {seqEmail.day != null && <span className="text-xs text-gray-400">send {typeof seqEmail.day === 'number' ? 'Day ' + seqEmail.day : seqEmail.day}</span>}
                   </div>
                   <input className="input w-full mb-2 font-medium text-sm" readOnly value={seqEmail.subject || ''} />
                   <textarea className="input w-full font-sans text-sm leading-relaxed" rows={13} readOnly value={seqEmail.body || ''} />
@@ -649,7 +649,7 @@ export default function ProspectingList() {
                       {campaignSeq.calls.map((c, i) => (
                         <details key={i} className="border border-gray-200 rounded-md">
                           <summary className="cursor-pointer px-3 py-2 text-sm font-medium flex items-center justify-between">
-                            <span>{c.label}{c.day != null ? ` — Day ${c.day}` : ''}</span>
+                            <span>{c.label}{c.day != null ? ` — ${typeof c.day === 'number' ? 'Day ' + c.day : c.day}` : ''}</span>
                             <span role="button" tabIndex={0} className="text-xs text-brand-700"
                               onClick={(e) => { e.preventDefault(); copyRaw(c.script, 'call-' + i); }}>
                               {copied === 'call-' + i ? 'Copied ✓' : 'Copy'}
