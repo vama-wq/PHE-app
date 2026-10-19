@@ -34,8 +34,8 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
   const stock = async (id) => Number((await q1('SELECT current_stock FROM inventory_items WHERE id=$1', [id])).current_stock);
   try {
     // Unit: the cutoff.
-    ok('cutoff: <126 frozen, 126 not, 127 frozen, 128+ not',
-      fz.isFrozenCode('ORD-005-26') && fz.isFrozenCode('ORD-125-26') && !fz.isFrozenCode('ORD-126-26')
+    ok('cutoff: through 127 frozen, 128+ not',
+      fz.isFrozenCode('ORD-005-26') && fz.isFrozenCode('ORD-125-26') && fz.isFrozenCode('ORD-126-26')
       && fz.isFrozenCode('ORD-127-26') && !fz.isFrozenCode('ORD-128-26') && !fz.isFrozenCode('ORD-171-26'),
       [5, 125, 126, 127, 128, 171].map(n => fz.isFrozenCode(`ORD-${n}-26`)).join(','));
 

@@ -2,13 +2,13 @@
 // Old orders physically dispatched long ago are only now being pushed through
 // dispatch in the app (~50 days late). Their material was used at the time, so
 // nothing more must leave stock when they move through production / QC / dispatch
-// now. The owner froze every order BELOW ORD-126-26, and ORD-127-26 as well.
-// ORD-126-26 itself is NOT frozen. A frozen card still progresses — it simply
+// now. The owner froze every order through ORD-127-26 (below 126, plus
+// ORD-126-26 and ORD-127-26). ORD-128-26 and up are normal. A frozen card still
 // takes nothing: the last-stage take stamps the card and deducts nothing, and
 // every stage/QC deduction is a no-op. Give-backs self-guard (nothing was taken,
 // so the "was it taken?" flags make them no-ops).
-const FROZEN_BELOW = 126;
-const ALSO_FROZEN = new Set([127]);
+const FROZEN_BELOW = 128;   // every order below 128 (i.e. through ORD-127-26) is frozen
+const ALSO_FROZEN = new Set();
 
 function orderNum(code) {
   const m = String(code || '').match(/^ORD-0*(\d+)-/i);
