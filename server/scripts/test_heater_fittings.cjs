@@ -125,26 +125,22 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const mine = (Array.isArray(h8) ? h8 : h8.by || []).find(x => x.order_id === o);
     ok('4. the stock held for the order counts the pocket: 28 BRZ-08 (4 × (3 × 2 + 1))', mine && near(mine.qty, 28), JSON.stringify(h8).slice(0, 200));
 
-    // 5. Brazing: a Cap needs the sleeve weight; the Pocket adds 1 ring a heater.
+    // 5. Brazing (stage 15): the Pocket adds 1 ring a heater and the flange cap
+    // leaves stock as pieces, but the sleeve is NOT touched here — it waits for
+    // Nut Washer (owner, 19 Oct 2026). No sleeve field is asked at Brazing.
     const spec3 = JSON.stringify({ input: { tubeDiameterMm: 8 }, computed: { elements: 3 } });
     const card = (await q1(`INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, drawing_no, generated_spec) VALUES ('ZZT-FIT-A',$1,$2,4,'in_progress',CURRENT_DATE,'ZZTEST-FIT-38U-3in1',$3) RETURNING id`, [o, A, spec3])).id;
     const brazing = (extra) => JSON.stringify({ airPressure: 'pass', airPressureRemark: '', airCleaning: true, remark: '', ...extra });
     const s8 = await stock(B8), sSlv0 = await stock(SLV), sCap0 = await stock(CAP);
     r = await call('PUT', `/api/job-cards/${card}/checklist/15`, { done: true, value1: brazing({}) }, floor);
-    ok('5a. a Cap heater: Brazing refused without the sleeve weight, nothing taken', r.status === 400 && r.body.code === 'SLEEVE_WEIGHT_REQUIRED' && near(await stock(B8), s8), `${r.status} ${r.body.error}`);
-    r = await call('PUT', `/api/job-cards/${card}/checklist/15`, { done: true, value1: brazing({ sleeveWeightG: 0 }) }, floor);
-    ok('5b. a sleeve weight of 0 is refused too', r.status === 400 && r.body.code === 'SLEEVE_WEIGHT_REQUIRED', `${r.status}`);
-    r = await call('PUT', `/api/job-cards/${card}/checklist/15`, { done: true, value1: brazing({ sleeveWeightG: 36 }) }, floor);
     const c = await q1('SELECT rings_taken FROM job_cards WHERE id=$1', [card]);
-    const row = await q1('SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=15', [card]);
-    ok('5c. with 36 g: Brazing done, the weight kept on the stage, and 28 BRZ-08 taken (4 × (3 × 2 + 1 pocket))',
-      r.status === 200 && JSON.parse(row.value1).sleeveWeightG === 36 && near(await stock(B8), s8 - 28) && c.rings_taken?.qty === 28 && c.rings_taken?.pocket === 1,
+    ok('5a. Brazing done with no sleeve field: 28 BRZ-08 taken (4 × (3 × 2 + 1 pocket))',
+      r.status === 200 && near(await stock(B8), s8 - 28) && c.rings_taken?.qty === 28 && c.rings_taken?.pocket === 1,
       `${r.status} ${JSON.stringify(r.body).slice(0, 120)} ${s8}→${await stock(B8)} ${JSON.stringify(c.rings_taken)}`);
     const note = await q1(`SELECT notes FROM inventory_transactions WHERE job_card_id=$1 AND item_id=$2 AND source='brazing' ORDER BY id DESC LIMIT 1`, [card, B8]);
-    ok('5d. the ledger line says how: 4 × (3 elements × 2 + 1 pocket)', /4 × \(3 elements × 2 \+ 1 pocket\)/.test(note?.notes || ''), note?.notes);
-    const nt = await q1(`SELECT description FROM activity_log WHERE job_card_id=$1 AND activity_type='sleeve_not_taken'`, [card]);
-    ok('5e. the sleeve is still counted in pcs: its weight is not taken (noted on the card), and the list\'s sleeve line is not taken either; the flange cap is',
-      !!nt && near(await stock(SLV), sSlv0) && near(await stock(CAP), sCap0 - 4), `${nt?.description} sleeve ${sSlv0}→${await stock(SLV)} cap ${sCap0}→${await stock(CAP)}`);
+    ok('5b. the ledger line says how: 4 × (3 elements × 2 + 1 pocket)', /4 × \(3 elements × 2 \+ 1 pocket\)/.test(note?.notes || ''), note?.notes);
+    ok('5c. the flange cap is taken as pieces at Brazing (4), the sleeve is left untouched',
+      near(await stock(CAP), sCap0 - 4) && near(await stock(SLV), sSlv0), `cap ${sCap0}→${await stock(CAP)} sleeve ${sSlv0}→${await stock(SLV)}`);
 
     // 6. A split after Brazing: the split heaters' rings (7 a heater) move with them.
     const { approveSplitRequest } = require(S + '/src/services/actions/splitRequests.js');
@@ -163,25 +159,31 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const card2 = (await q1(`INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, drawing_no) VALUES ('ZZT-FIT-P',$1,$2,2,'in_progress',CURRENT_DATE,'ZZTEST-FIT-2in1') RETURNING id`, [o, P])).id;
     const s8b = await stock(B8);
     r = await call('PUT', `/api/job-cards/${card2}/checklist/15`, { done: true, value1: brazing({}) }, floor);
-    ok('7b. a Pocket-only 2in1 (uploaded card): no sleeve weight asked, 10 rings taken (2 × (2 × 2 + 1))', r.status === 200 && near(await stock(B8), s8b - 10), `${r.status} ${r.body.error || ''} ${s8b}→${await stock(B8)}`);
+    ok('7b. a Pocket-only 2in1 (uploaded card): no sleeve asked, 10 rings taken (2 × (2 × 2 + 1))', r.status === 200 && near(await stock(B8), s8b - 10), `${r.status} ${r.body.error || ''} ${s8b}→${await stock(B8)}`);
 
-    // 8. The sleeve by weight, once it is kept in kg.
-    await client.query("UPDATE inventory_items SET unit='kgs' WHERE id=$1", [SLV]);
+    // 8. The sleeve by inch at Nut Washer (stage 26): inchPerPiece × the card's qty.
+    const sleeveNW = (inch) => JSON.stringify({ sleeveInchPerPiece: inch });
     const card3 = (await q1(`INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, drawing_no, generated_spec) VALUES ('ZZT-FIT-W',$1,$2,4,'in_progress',CURRENT_DATE,'ZZTEST-FIT-38U-3in1',$3) RETURNING id`, [o, A, spec3])).id;
     const sSlv = await stock(SLV);
-    r = await call('PUT', `/api/job-cards/${card3}/checklist/15`, { done: true, value1: brazing({ sleeveWeightG: 48 }) }, floor);
+    r = await call('PUT', `/api/job-cards/${card3}/checklist/26`, { done: true }, floor);
+    ok('8a. a Cap heater: Nut Washer refused without the sleeve length, nothing taken', r.status === 400 && r.body.code === 'SLEEVE_INCH_REQUIRED' && near(await stock(SLV), sSlv), `${r.status} ${r.body.error}`);
+    r = await call('PUT', `/api/job-cards/${card3}/checklist/26`, { done: true, value1: sleeveNW(0) }, floor);
+    ok('8b. a length of 0 is refused too', r.status === 400 && r.body.code === 'SLEEVE_INCH_REQUIRED', `${r.status}`);
+    r = await call('PUT', `/api/job-cards/${card3}/checklist/26`, { done: true, value1: sleeveNW(4) }, floor);
     let w = await q1('SELECT sleeve_taken FROM job_cards WHERE id=$1', [card3]);
-    ok('8a. Brazing with 48 g of sleeve: 0.048 kg FPS-PVC-FMP taken, recorded on the card', r.status === 200 && near(await stock(SLV), sSlv - 0.048) && near(w.sleeve_taken?.qty, 0.048), `${r.status} ${sSlv}→${await stock(SLV)} ${JSON.stringify(w.sleeve_taken)}`);
-    r = await call('PUT', `/api/job-cards/${card3}/checklist/15`, { done: false }, floor);
-    ok('8b. Brazing unticked: the 0.048 kg go back', r.status === 200 && near(await stock(SLV), sSlv) && !(await q1('SELECT sleeve_taken_at FROM job_cards WHERE id=$1', [card3])).sleeve_taken_at, `${await stock(SLV)}`);
-    r = await call('PUT', `/api/job-cards/${card3}/checklist/15`, { done: true, value1: brazing({ sleeveWeightG: 40 }) }, floor);
-    ok('8c. ticked again with 40 g: 0.04 kg taken, once', r.status === 200 && near(await stock(SLV), sSlv - 0.04), `${await stock(SLV)}`);
+    ok('8c. Nut Washer with 4" per piece × 4 pc: 16" FPS-PVC-FMP taken, recorded on the card',
+      r.status === 200 && near(await stock(SLV), sSlv - 16) && near(w.sleeve_taken?.qty, 16) && w.sleeve_taken?.inchPerPiece === 4 && w.sleeve_taken?.pieces === 4,
+      `${r.status} ${sSlv}→${await stock(SLV)} ${JSON.stringify(w.sleeve_taken)}`);
+    r = await call('PUT', `/api/job-cards/${card3}/checklist/26`, { done: false }, floor);
+    ok('8d. Nut Washer unticked: the 16" go back', r.status === 200 && near(await stock(SLV), sSlv) && !(await q1('SELECT sleeve_taken_at FROM job_cards WHERE id=$1', [card3])).sleeve_taken_at, `${await stock(SLV)}`);
+    r = await call('PUT', `/api/job-cards/${card3}/checklist/26`, { done: true, value1: sleeveNW(5) }, floor);
+    ok('8e. ticked again with 5" per piece: 20" taken, once', r.status === 200 && near(await stock(SLV), sSlv - 20), `${await stock(SLV)}`);
     const srw = (await q1(`INSERT INTO job_card_split_requests (job_card_id, qty, reason, status) VALUES ($1,1,'test','pending') RETURNING id`, [card3])).id;
     const sw = await approveSplitRequest(txDb, { requestId: srw, actor: owner });
     const cw = await q1('SELECT sleeve_taken FROM job_cards WHERE id=$1', [sw.data.childJobCardId]);
     w = await q1('SELECT sleeve_taken FROM job_cards WHERE id=$1', [card3]);
-    ok('8d. 1 of the 4 split off: the split card holds 0.01 kg of the sleeve, the main card 0.03 kg; stock unchanged',
-      near(cw.sleeve_taken?.qty, 0.01) && near(w.sleeve_taken?.qty, 0.03) && near(await stock(SLV), sSlv - 0.04), JSON.stringify({ cw: cw.sleeve_taken, w: w.sleeve_taken }));
+    ok('8f. 1 of the 4 split off: the split card holds 5" of the sleeve, the main card 15"; stock unchanged',
+      near(cw.sleeve_taken?.qty, 5) && near(w.sleeve_taken?.qty, 15) && near(await stock(SLV), sSlv - 20), JSON.stringify({ cw: cw.sleeve_taken, w: w.sleeve_taken }));
 
     // 9. Heater Plates leave stock at Brazing, as Flange Spare did.
     const FFB = await id('FFB-3H');
