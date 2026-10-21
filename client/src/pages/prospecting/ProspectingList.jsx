@@ -656,7 +656,7 @@ export default function ProspectingList() {
                     )}
                   </div>
                   {seqEmail.whatsapp && (
-                    <div className="mt-2 text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap leading-relaxed">{waPreview(seqEmail.whatsapp)}</div>
+                    <div className="mt-2 text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(seqEmail.whatsapp)}</div>
                   )}
                 </div>
                 {/* Call schedule */}
@@ -714,7 +714,7 @@ export default function ProspectingList() {
                   <MessageSquare size={15} className="text-emerald-600" />
                   <h4 className="text-sm font-semibold">WhatsApp message</h4>
                 </div>
-                <div className="text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap leading-relaxed">{waPreview(campaignRow.whatsapp_msg)}</div>
+                <div className="text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(campaignRow.whatsapp_msg)}</div>
                 <div className="flex flex-wrap items-center gap-2 mt-2">
                   {waLink(campaignRow) && (
                     <a className="btn-primary flex items-center gap-1.5" style={{ backgroundColor: '#25D366', borderColor: '#25D366' }}
