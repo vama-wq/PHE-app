@@ -220,8 +220,12 @@ export default function ProspectingList() {
 
   const selectedVisible = useMemo(() => visible.filter(p => selected.has(p.id)), [visible, selected]);
   // "skip" rows never export (and so never get re-marked "exported").
-  const emailableSel = useMemo(() => selectedVisible.filter(p => hasEmail(p) && p.status !== 'skip').map(p => p.id), [selectedVisible]);
-  const smsableSel  = useMemo(() => selectedVisible.filter(p => hasPhone(p) && p.status !== 'skip').map(p => p.id), [selectedVisible]);
+  // One Zoho list carries both channels: Zoho imports a contact only with an email, and its
+  // SMS goes to the same contact's Mobile field — so rows with just a mobile are WhatsApp-only.
+  const zohoSel = useMemo(() => selectedVisible.filter(p => hasEmail(p) && p.status !== 'skip'), [selectedVisible]);
+  const zohoIds = useMemo(() => zohoSel.map(p => p.id), [zohoSel]);
+  const zohoWithMobile = useMemo(() => zohoSel.filter(hasPhone).length, [zohoSel]);
+  const mobileOnlySel = useMemo(() => selectedVisible.filter(p => !hasEmail(p) && hasPhone(p) && p.status !== 'skip').length, [selectedVisible]);
 
   const stats = useMemo(() => ({
     total: prospects.length,
@@ -238,13 +242,13 @@ export default function ProspectingList() {
   const selectAll = () => setSelected(new Set(visible.map(p => p.id)));
   const selectNone = () => setSelected(new Set());
 
-  const download = async (type, ids) => {
+  const download = async ids => {
     if (!ids.length) return;
     setBusy(true);
     try {
       // Pass the active filters so the CSV honours exactly what's on screen and the
-      // filename identifies the slice (e.g. PHE-pharma-autoclaves-sterilizers-gujarat-email.csv).
-      const params = { segment, type, ids: ids.join(',') };
+      // filename identifies the slice (e.g. PHE-pharma-autoclaves-sterilizers-gujarat-zoho.csv).
+      const params = { segment, ids: ids.join(',') };
       if (appFilter) params.application = appFilter;
       if (regionFilter) params.state = regionFilter;
       const res = await api.get('/prospects/export.csv', { params, responseType: 'blob' });
@@ -255,7 +259,7 @@ export default function ProspectingList() {
       if (appFilter) parts.push(slug(appFilter));
       if (regionFilter) parts.push(slug(regionFilter));
       a.href = url;
-      a.download = `${parts.join('-')}-${type}.csv`;
+      a.download = `${parts.join('-')}-zoho.csv`;
       a.click();
       URL.revokeObjectURL(url);
       await api.post('/prospects/bulk-status', { ids, status: 'exported' });
@@ -523,7 +527,7 @@ export default function ProspectingList() {
                   </p>
                 </div>
                 <div className="mt-3 border border-emerald-200 bg-emerald-50 rounded-lg p-3 text-xs text-emerald-900">
-                  <strong>Zoho, per touch:</strong> ① <strong>Export Email list</strong> below — it uses these same filters, so it's the same slice.
+                  <strong>Zoho, per touch:</strong> ① <strong>Export Zoho list</strong> below — it uses these same filters, so it's the same slice.
                   {' '}② Download this touch's HTML and, in Zoho's Content step, choose <strong>Import/Upload HTML → Upload from Computer</strong>.
                   {' '}③ Paste the subject. Each company's name merges via $[FNAME|…]$ — the CSV puts the company in First Name.
                 </div>
@@ -552,19 +556,15 @@ export default function ProspectingList() {
               </button>
             </div>
             <p className="text-xs text-gray-400 mt-2">
-              GSM-7 safe and kept under 2 SMS segments. Paste into your Zoho SMS campaign; send to the <strong>Export SMS list</strong> below. {'$[FNAME|team]$'} merges the company name.
+              GSM-7 safe and kept under 2 SMS segments. Paste into your Zoho SMS campaign and send it to the same <strong>Zoho list</strong> as the emails — its Mobile column carries each contact&apos;s SMS number. {'$[FNAME|team]$'} merges the company name.
             </p>
           </div>
 
           {/* Actions */}
           <div className="flex flex-wrap items-center gap-3">
-            <button className="btn-primary flex items-center gap-1.5" disabled={!emailableSel.length || busy}
-              onClick={() => download('email', emailableSel)}>
-              <Mail size={16} /> Export Email list ({emailableSel.length})
-            </button>
-            <button className="btn-secondary flex items-center gap-1.5" disabled={!smsableSel.length || busy}
-              onClick={() => download('sms', smsableSel)}>
-              <MessageSquare size={16} /> Export SMS list ({smsableSel.length})
+            <button className="btn-primary flex items-center gap-1.5" disabled={!zohoIds.length || busy}
+              onClick={() => download(zohoIds)}>
+              <Mail size={16} /> Export Zoho list — email + SMS ({zohoIds.length})
             </button>
             <button className="btn-secondary flex items-center gap-1.5" disabled={!selected.size || busy} onClick={() => markStatus('contacted')}>
               <CheckCircle2 size={16} /> Mark contacted
@@ -574,7 +574,10 @@ export default function ProspectingList() {
             </button>
           </div>
           <p className="text-xs text-gray-400 mt-2">
-            Exports include only the selected rows that match the active application/region filters — the CSV filename records the slice. Email list = rows with an email (Zoho email campaign); SMS list = rows with a phone (Zoho SMS campaign). Both mark the rows “exported”.
+            One list for both Zoho campaigns: every selected contact with an email, and their mobile (with country code) in the <strong>Mobile</strong> column for SMS
+            {zohoIds.length > 0 && <> — {zohoWithMobile} of {zohoIds.length} have a mobile</>}.
+            {mobileOnlySel > 0 && <> {mobileOnlySel} selected {mobileOnlySel === 1 ? 'row has' : 'rows have'} a mobile but no email — Zoho can&apos;t import a contact without an email, so reach {mobileOnlySel === 1 ? 'it' : 'them'} on WhatsApp from the row.</>}
+            {' '}Only the rows matching the active application/region filters export (the filename records the slice), and they're marked “exported”.
           </p>
         </>
       )}
