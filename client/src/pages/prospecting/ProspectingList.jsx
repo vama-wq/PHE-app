@@ -414,7 +414,10 @@ export default function ProspectingList() {
                             : <span className="text-gray-300">—</span>}
                         </td>
                         <td className="px-3 py-2 text-gray-500 font-mono text-xs">{p.email || <span className="text-gray-300">—</span>}</td>
-                        <td className="px-3 py-2 text-gray-500 font-mono text-xs">{p.phone || <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 text-gray-500 font-mono text-xs">
+                          {p.phone || (!p.office_phone && <span className="text-gray-300">—</span>)}
+                          {p.office_phone && <div className="text-gray-400" title="Office / sales line to call">☎ {p.office_phone}</div>}
+                        </td>
                         <td className="px-3 py-2">
                           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${sb.cls}`}>{sb.label}</span>
                         </td>
@@ -425,12 +428,11 @@ export default function ProspectingList() {
                           </span>
                         </td>
                         <td className="px-3 py-2">
-                          {hasCampaign(p)
-                            ? <button className="text-xs font-medium px-2 py-1 rounded-md border border-brand-200 text-brand-700 hover:bg-brand-50 flex items-center gap-1"
-                                onClick={() => setCampaignRow(p)}>
-                                <Mail size={12} /> View
-                              </button>
-                            : <span className="text-gray-300">—</span>}
+                          {/* Every row opens: campaign touches when it has one, otherwise its numbers + notes */}
+                          <button className={`text-xs font-medium px-2 py-1 rounded-md border flex items-center gap-1 ${hasCampaign(p) ? 'border-brand-200 text-brand-700 hover:bg-brand-50' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                            onClick={() => setCampaignRow(p)}>
+                            <Mail size={12} /> {hasCampaign(p) ? 'View' : 'Details'}
+                          </button>
                         </td>
                       </tr>
                     );
@@ -621,8 +623,15 @@ export default function ProspectingList() {
               {campaignRow.contact_role && <span>{campaignRow.contact_role} · </span>}
               {campaignRow.email && <span className="font-mono">{campaignRow.email}</span>}
               {campaignRow.phone && <span className="font-mono"> · {campaignRow.phone}</span>}
+              {campaignRow.office_phone && <span className="font-mono"> · ☎ {campaignRow.office_phone}</span>}
               {campaignRow.application && <span> · {campaignRow.application}</span>}
             </div>
+            {campaignRow.notes && (
+              <details open className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded p-2">
+                <summary className="cursor-pointer font-medium text-gray-700">Notes</summary>
+                <div className="mt-1 whitespace-pre-wrap break-words">{campaignRow.notes}</div>
+              </details>
+            )}
 
             {rowCampaign && rowTouch && hasCampaign(campaignRow) ? (
               <>

@@ -133,7 +133,7 @@ router.get('/export.csv', authenticate, authorize(...SALES), async (req, res) =>
     lines = [header.join(',')];
     // First Name deliberately carries the company: Zoho's only dependable merge
     // tag is $[FNAME|...]$, and the tailored emails use it to merge the company.
-    for (const p of rows) lines.push([p.email, p.company, '', p.company, p.phone, p.city, p.state, p.application, p.priority].map(esc).join(','));
+    for (const p of rows) lines.push([p.email, p.company, '', p.company, p.phone || p.office_phone, p.city, p.state, p.application, p.priority].map(esc).join(','));
   }
   // Filename reflects the active filters so downloaded files are self-describing
   const slug = s => String(s).replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();

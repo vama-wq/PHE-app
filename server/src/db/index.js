@@ -123,6 +123,8 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS call_script TEXT`);
       // Multi-touch campaign sequence (JSON): several dated emails + calls per prospect (e.g. Gulf nurture)
       await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS campaign_sequence TEXT`);
+      // Office / board / sales landline to CALL — kept apart from `phone`, which drives WhatsApp links
+      await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS office_phone TEXT`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS backup_log (
           id SERIAL PRIMARY KEY,
