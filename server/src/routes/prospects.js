@@ -113,6 +113,8 @@ router.get('/export.csv', authenticate, authorize(...SALES), async (req, res) =>
   }
   // Only export rows that actually have the channel's contact field.
   where.push(type === 'sms' ? `coalesce(phone,'') <> ''` : `coalesce(email,'') <> ''`);
+  // "skip" rows (no fit / existing customers on an outreach list) never go to Zoho.
+  if (status !== 'skip') where.push(`coalesce(status,'') <> 'skip'`);
 
   const rows = await getDB().all(
     `SELECT * FROM prospects ${where.length ? 'WHERE ' + where.join(' AND ') : ''}

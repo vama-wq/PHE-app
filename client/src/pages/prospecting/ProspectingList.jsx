@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
-import { renderEmail, copyFor, bodyToHtml, bodyToPlain, renderSms } from './applicationEmails';
+import { bodyToHtml, bodyToPlain, renderSms } from './applicationEmails';
+import { campaignFor, renderTouch, renderCalls, tailoredTo } from './listCampaigns';
 import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye, Phone } from 'lucide-react';
 
 // Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
@@ -93,8 +94,7 @@ export default function ProspectingList() {
   const [prospects, setProspects] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [loading, setLoading] = useState(true);
-  const [emailEdits, setEmailEdits] = useState({});           // per-email manual tweaks, reset when application changes
-  const [activeEmail, setActiveEmail] = useState('e1');
+  const [touchTab, setTouchTab] = useState(0);                // active touch in the list campaign
   const [busy, setBusy] = useState(false);
   // Manual import
   const [showImport, setShowImport] = useState(false);
@@ -154,32 +154,22 @@ export default function ProspectingList() {
     return uniq.length === 1 ? uniq[0] : '';
   }, [appFilter, visible]);
 
-  // Re-tailored copy whenever the application in view changes; manual tweaks are dropped
-  // so you never send last application's edits to a different audience.
-  const tailored = useMemo(() => ({
-    e1: renderEmail('intro', activeApplication),
-    e2: renderEmail('follow', activeApplication),
-  }), [activeApplication]);
-  useEffect(() => { setEmailEdits({}); }, [activeApplication]);
-  const shownEmail = { ...tailored[activeEmail], ...(emailEdits[activeEmail] || {}) };
-  const editEmail = (field, value) =>
-    setEmailEdits(e => ({ ...e, [activeEmail]: { ...(e[activeEmail] || {}), [field]: value } }));
+  // List campaign: one email + one WhatsApp per touch, tailored to the application (and the
+  // region, when one is picked) on screen — one Zoho upload covers the matching CSV slice.
+  const campaign = useMemo(() => campaignFor(segment), [segment]);
+  useEffect(() => { setTouchTab(0); }, [segment]);
+  const listTouch = campaign ? renderTouch(campaign, touchTab, { app: activeApplication, region: regionFilter, company: null }) : null;
+  const listHtml = listTouch ? bodyToHtml(listTouch.body, activeApplication) : '';
+  // On screen, show where Zoho drops each company's name (the download keeps the merge tag).
+  const previewHtml = listHtml.replace(/\$\[FNAME\|[^\]]*\]\$/g,
+    '<span style="background:#fef3c7;border:1px dashed #f59e0b;border-radius:4px;padding:0 4px;">Company name</span>');
+  const listTailoredTo = campaign ? tailoredTo(campaign, activeApplication) : '';
 
-  // Copy for Zoho: HTML turns the catalogue link into a clickable button.
   const [copied, setCopied] = useState('');
-  const [showHtmlPreview, setShowHtmlPreview] = useState(false);
-  const emailHtml = useMemo(
-    () => bodyToHtml(shownEmail.body, activeApplication),
-    [shownEmail.body, activeApplication]);
-  const doCopy = async kind => {
-    const text = kind === 'html' ? emailHtml
-      : kind === 'sms' ? smsText
-      : `${shownEmail.subject}\n\n${shownEmail.body}`;
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(kind);
-      setTimeout(() => setCopied(''), 2000);
-    } catch { /* clipboard unavailable — user can select the text manually */ }
+  const [showPreview, setShowPreview] = useState(true);
+  const copyRaw = async (text, key) => {
+    try { await navigator.clipboard.writeText(text || ''); setCopied(key); setTimeout(() => setCopied(''), 2000); }
+    catch { /* clipboard unavailable — user can select the text manually */ }
   };
   // Application-tailored SMS message (short, GSM-7-safe). Follows the email's application.
   const smsText = useMemo(() => renderSms(activeApplication), [activeApplication]);
@@ -193,13 +183,15 @@ export default function ProspectingList() {
   const slug = s => String(s || 'all-applications').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   // One-click Zoho flow: download a complete .html file, then in Zoho use
   // "Import/Upload HTML → Upload from Computer" and drop the file in.
-  const downloadHtml = () => {
-    const fullHtml =
-      '<!DOCTYPE html>\n<html><head><meta charset="utf-8">' +
-      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-      `<title>${shownEmail.subject.replace(/</g, '&lt;')}</title></head>\n` +
-      '<body style="margin:0;padding:24px;background:#ffffff;">' + emailHtml + '</body></html>';
-    downloadTxt2Html(fullHtml, `PHE-${activeEmail === 'e1' ? 'intro' : 'followup'}-${slug(activeApplication)}.html`);
+  const fullHtml = (subject, inner) =>
+    '<!DOCTYPE html>\n<html><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+    `<title>${String(subject).replace(/</g, '&lt;')}</title></head>\n` +
+    '<body style="margin:0;padding:24px;background:#ffffff;">' + inner + '</body></html>';
+  // Filename records the slice + touch, e.g. PHE-oman-boilers-steam-muscat-1-discovery.html
+  const downloadListHtml = () => {
+    const parts = ['PHE', segment, activeApplication, regionFilter, `${touchTab + 1}-${listTouch.key}`].filter(Boolean).map(slug);
+    downloadTxt2Html(fullHtml(listTouch.subject, listHtml), `${parts.join('-')}.html`);
   };
   const downloadTxt2Html = (content, name) => {
     const blob = new Blob([content], { type: 'text/html' });
@@ -209,37 +201,27 @@ export default function ProspectingList() {
     URL.revokeObjectURL(url);
   };
 
-  // --- Per-company tailored campaign (expo cards / multi-touch sequence) ---
-  const hasCampaign = p => !!((p.email_body && p.email_body.trim()) || (p.whatsapp_msg && p.whatsapp_msg.trim()) || (p.campaign_sequence && p.campaign_sequence.trim()));
+  // --- Per contact: the same list touch, rendered with the row's own application, region and company ---
+  const hasCampaign = p => !!campaignFor(p.segment) && p.status !== 'skip';
+  const rowCtx = p => ({ app: p.application || '', region: p.state || '', company: p.company });
   // wa.me click-to-send: digits-only number + URL-encoded prefilled message
   const waLinkFor = (phone, text) => {
     const num = String(phone || '').replace(/[^0-9]/g, '');
     if (!num) return null;
     return `https://wa.me/${num}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
   };
-  const waLink = p => waLinkFor(p.phone, p.whatsapp_msg);
-  // Parse the multi-touch sequence JSON on the open prospect (null for single-email campaigns)
-  const campaignSeq = (() => {
-    if (!campaignRow || !campaignRow.campaign_sequence) return null;
-    try { return JSON.parse(campaignRow.campaign_sequence); } catch { return null; }
-  })();
-  const seqEmail = campaignSeq && campaignSeq.emails ? campaignSeq.emails[Math.min(seqTab, campaignSeq.emails.length - 1)] : null;
-  const copyRaw = async (text, key) => {
-    try { await navigator.clipboard.writeText(text || ''); setCopied(key); setTimeout(() => setCopied(''), 2000); }
-    catch { /* clipboard unavailable */ }
-  };
-  const downloadCampaignHtml = p => {
-    const html = bodyToHtml(p.email_body || '', p.application);
-    const full = '<!DOCTYPE html>\n<html><head><meta charset="utf-8">' +
-      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-      `<title>${String(p.email_subject || p.company).replace(/</g, '&lt;')}</title></head>\n` +
-      '<body style="margin:0;padding:24px;background:#ffffff;">' + html + '</body></html>';
-    downloadTxt2Html(full, `PHE-${slug(p.company)}.html`);
-  };
+  const rowCampaign = campaignRow ? campaignFor(campaignRow.segment) : null;
+  const rowTouch = rowCampaign ? renderTouch(rowCampaign, seqTab, rowCtx(campaignRow)) : null;
+  const rowCalls = rowCampaign ? renderCalls(rowCampaign, rowCtx(campaignRow)) : [];
+  const downloadRowHtml = () => downloadTxt2Html(
+    fullHtml(rowTouch.subject, bodyToHtml(rowTouch.body, campaignRow.application)),
+    `PHE-${slug(campaignRow.company)}-${seqTab + 1}-${rowTouch.key}.html`);
+  const dayLabel = d => (d == null ? '' : typeof d === 'number' ? 'Day ' + d : d);
 
   const selectedVisible = useMemo(() => visible.filter(p => selected.has(p.id)), [visible, selected]);
-  const emailableSel = useMemo(() => selectedVisible.filter(hasEmail).map(p => p.id), [selectedVisible]);
-  const smsableSel  = useMemo(() => selectedVisible.filter(hasPhone).map(p => p.id), [selectedVisible]);
+  // "skip" rows never export (and so never get re-marked "exported").
+  const emailableSel = useMemo(() => selectedVisible.filter(p => hasEmail(p) && p.status !== 'skip').map(p => p.id), [selectedVisible]);
+  const smsableSel  = useMemo(() => selectedVisible.filter(p => hasPhone(p) && p.status !== 'skip').map(p => p.id), [selectedVisible]);
 
   const stats = useMemo(() => ({
     total: prospects.length,
@@ -282,7 +264,9 @@ export default function ProspectingList() {
   };
 
   const markStatus = async status => {
-    const ids = [...selected];
+    // "Reset to new" is the deliberate way to un-skip; other bulk marks leave skip rows alone.
+    const skip = new Set(prospects.filter(p => p.status === 'skip').map(p => p.id));
+    const ids = [...selected].filter(id => status === 'new' || !skip.has(id));
     if (!ids.length) return;
     setBusy(true);
     try {
@@ -368,6 +352,7 @@ export default function ProspectingList() {
           <option value="new">New</option>
           <option value="exported">Exported</option>
           <option value="contacted">Contacted</option>
+          <option value="skip">Skip (no campaign)</option>
         </select>
       </div>
 
@@ -458,61 +443,90 @@ export default function ProspectingList() {
             </div>
           </div>
 
-          {/* Email preview */}
+          {/* List campaign — one email + one WhatsApp per touch, tailored to the slice on screen */}
           <div className="card p-4 mb-6">
-            <div className="flex items-center gap-2 mb-3">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
               <Mail size={16} className="text-brand-700" />
-              <h3 className="text-sm font-semibold">Email sequence — intro + follow-up (5 days)</h3>
-              {activeApplication ? (
-                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
-                  Tailored: {activeApplication} — {copyFor(activeApplication).product}
-                </span>
-              ) : (
-                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
-                  Generic copy — pick an application filter to tailor
+              <h3 className="text-sm font-semibold">{campaign ? `${campaign.name} — campaign` : 'Campaign'}</h3>
+              {campaign && (
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${listTailoredTo ? 'bg-sky-100 text-sky-800' : 'bg-gray-100 text-gray-500'}`}>
+                  {listTailoredTo ? `Tailored: ${listTailoredTo}` : 'All applications — pick an application to tailor'}
                 </span>
               )}
+              {campaign && regionFilter && (
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-violet-100 text-violet-800">Region: {regionFilter}</span>
+              )}
             </div>
-            <div className="flex gap-2 mb-3">
-              {['e1', 'e2'].map(e => (
-                <button key={e}
-                  className={`text-xs px-3 py-1.5 rounded-md border ${activeEmail === e ? 'bg-brand-700 text-white border-brand-700' : 'bg-white text-gray-500'}`}
-                  onClick={() => setActiveEmail(e)}>
-                  {e === 'e1' ? 'Email 1 — Intro' : 'Email 2 — Follow-up'}
-                </button>
-              ))}
-            </div>
-            <input className="input w-full mb-2 font-medium"
-              value={shownEmail.subject}
-              onChange={e => editEmail('subject', e.target.value)} />
-            <textarea className="input w-full font-sans leading-relaxed" rows={14}
-              value={shownEmail.body}
-              onChange={e => editEmail('body', e.target.value)} />
-            <div className="flex flex-wrap items-center gap-2 mt-3">
-              <button className="btn-primary flex items-center gap-1.5" onClick={downloadHtml}>
-                <Download size={15} /> Download email for Zoho (.html)
-              </button>
-              <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => setShowHtmlPreview(v => !v)}>
-                <Eye size={13} /> {showHtmlPreview ? 'Hide preview' : 'Preview as recipient sees it'}
-              </button>
-              <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => doCopy('text')}>
-                <Copy size={13} /> {copied === 'text' ? 'Copied ✓' : 'Copy plain text'}
-              </button>
-            </div>
-            {showHtmlPreview && (
-              <div className="mt-3 border border-gray-200 rounded-lg p-5 bg-white overflow-x-auto"
-                dangerouslySetInnerHTML={{ __html: emailHtml }} />
+            {!campaign ? (
+              <p className="text-sm text-gray-400">No campaign for this list yet — ask Claude to build one.</p>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {campaign.touches.map((t, i) => (
+                    <button key={t.key}
+                      className={`text-xs px-2.5 py-1.5 rounded-md border ${touchTab === i ? 'bg-brand-700 text-white border-brand-700' : 'bg-white text-gray-600'}`}
+                      onClick={() => setTouchTab(i)}>
+                      {i + 1}. {t.label}{t.day != null ? ` · ${dayLabel(t.day)}` : ''}
+                    </button>
+                  ))}
+                </div>
+                {listTouch.attach && (
+                  listTouch.flyer ? (
+                    <a href={listTouch.flyer} target="_blank" rel="noopener noreferrer"
+                      className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-900 hover:bg-amber-100">
+                      📎 {listTouch.attach} — embedded in this email · open ↗
+                    </a>
+                  ) : (
+                    <div className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-900">
+                      📎 Send with this: {listTouch.attach}
+                    </div>
+                  )
+                )}
+                <div className="flex gap-2 mb-2">
+                  <input className="input w-full font-medium" readOnly value={listTouch.subject} />
+                  <button className="btn-secondary text-xs whitespace-nowrap flex items-center gap-1.5" onClick={() => copyRaw(listTouch.subject, 'subj')}>
+                    <Copy size={13} /> {copied === 'subj' ? 'Copied ✓' : 'Copy subject'}
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                  <button className="btn-primary flex items-center gap-1.5" onClick={downloadListHtml}>
+                    <Download size={15} /> Download for Zoho (.html)
+                  </button>
+                  <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => setShowPreview(v => !v)}>
+                    <Eye size={13} /> {showPreview ? 'Hide preview' : 'Preview as recipient sees it'}
+                  </button>
+                </div>
+                {showPreview && (
+                  <div className="border border-gray-200 rounded-lg p-5 bg-white overflow-x-auto mb-3"
+                    dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                )}
+                <div className="border-t border-gray-100 pt-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <MessageSquare size={15} className="text-emerald-600" />
+                    <h4 className="text-sm font-semibold">WhatsApp for this touch</h4>
+                  </div>
+                  <div className="text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(listTouch.whatsapp)}</div>
+                  <div className="flex flex-wrap items-center gap-2 mt-2">
+                    <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(listTouch.whatsapp, 'list-wa')}>
+                      <Copy size={13} /> {copied === 'list-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
+                    </button>
+                    {listTouch.waImage && (
+                      <a className="btn-secondary text-xs flex items-center gap-1.5" href={listTouch.waImage} target="_blank" rel="noopener noreferrer">
+                        🖼️ Image to send with it ↗
+                      </a>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-2">
+                    To send it to one contact with their company name filled in, open <strong>View</strong> on their row → <strong>WhatsApp this</strong>.
+                  </p>
+                </div>
+                <div className="mt-3 border border-emerald-200 bg-emerald-50 rounded-lg p-3 text-xs text-emerald-900">
+                  <strong>Zoho, per touch:</strong> ① <strong>Export Email list</strong> below — it uses these same filters, so it's the same slice.
+                  {' '}② Download this touch's HTML and, in Zoho's Content step, choose <strong>Import/Upload HTML → Upload from Computer</strong>.
+                  {' '}③ Paste the subject. Each company's name merges via $[FNAME|…]$ — the CSV puts the company in First Name.
+                </div>
+              </>
             )}
-            <div className="mt-3 border border-emerald-200 bg-emerald-50 rounded-lg p-3 text-xs text-emerald-900">
-              <strong>Zoho — 2 steps:</strong> ① Download the file above. ② In your campaign’s Content step choose
-              {' '}<strong>Import/Upload HTML → Upload from Computer</strong> and drop the file in.
-              The catalogue button and website link are already inside — nothing to paste or build.
-              Copy the subject line above into Zoho’s subject field.
-            </div>
-            <p className="text-xs text-gray-400 mt-2">
-              The copy re-tailors automatically to the application in view ({activeApplication || 'none selected'}); switching application resets manual edits.
-              Company names merge via Zoho’s $[FNAME|…]$ tag — the CSV export puts the company in First Name, and the fallback text keeps the email natural if it’s empty (test emails don’t merge; real sends do).
-            </p>
           </div>
 
           {/* SMS template — matches the email's application */}
@@ -531,7 +545,7 @@ export default function ProspectingList() {
                 onClick={() => downloadTxt(smsText, `PHE-sms-${slug(activeApplication)}.txt`)}>
                 <Download size={15} /> Download SMS (.txt)
               </button>
-              <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => doCopy('sms')}>
+              <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(smsText, 'sms')}>
                 <Copy size={13} /> {copied === 'sms' ? 'Copied ✓' : 'Copy SMS text'}
               </button>
             </div>
@@ -600,7 +614,7 @@ export default function ProspectingList() {
 
       {/* Per-company tailored campaign (expo cards): bespoke email + WhatsApp */}
       <Modal open={!!campaignRow} onClose={() => setCampaignRow(null)}
-        title={campaignRow ? `Tailored campaign — ${campaignRow.company}` : ''} size="lg">
+        title={campaignRow ? `Campaign — ${campaignRow.company}` : ''} size="lg">
         {campaignRow && (
           <div className="space-y-5">
             <div className="text-xs text-gray-500">
@@ -610,81 +624,73 @@ export default function ProspectingList() {
               {campaignRow.application && <span> · {campaignRow.application}</span>}
             </div>
 
-            {campaignSeq && seqEmail ? (
+            {rowCampaign && rowTouch && hasCampaign(campaignRow) ? (
               <>
-                {/* Sequence email tabs */}
                 <div className="flex flex-wrap gap-1.5">
-                  {campaignSeq.emails.map((e, i) => (
-                    <button key={i}
+                  {rowCampaign.touches.map((t, i) => (
+                    <button key={t.key}
                       className={`text-xs px-2.5 py-1.5 rounded-md border ${seqTab === i ? 'bg-brand-700 text-white border-brand-700' : 'bg-white text-gray-600'}`}
                       onClick={() => setSeqTab(i)}>
-                      {e.label}{e.day != null ? ` · ${typeof e.day === 'number' ? 'D' + e.day : e.day}` : ''}
+                      {i + 1}. {t.label}{t.day != null ? ` · ${dayLabel(t.day)}` : ''}
                     </button>
                   ))}
                 </div>
-                {/* Active email in the sequence */}
                 <div>
                   <div className="flex items-center gap-2 mb-2">
                     <Mail size={15} className="text-brand-700" />
-                    <h4 className="text-sm font-semibold">{seqEmail.label} email</h4>
-                    {seqEmail.day != null && <span className="text-xs text-gray-400">send {typeof seqEmail.day === 'number' ? 'Day ' + seqEmail.day : seqEmail.day}</span>}
+                    <h4 className="text-sm font-semibold">{rowTouch.label} email</h4>
+                    {rowTouch.day != null && <span className="text-xs text-gray-400">send {dayLabel(rowTouch.day)}</span>}
                   </div>
-                  {seqEmail.attach && (
-                    seqEmail.flyer ? (
-                      <a href={seqEmail.flyer} target="_blank" rel="noopener noreferrer"
+                  {rowTouch.attach && (
+                    rowTouch.flyer ? (
+                      <a href={rowTouch.flyer} target="_blank" rel="noopener noreferrer"
                         className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-900 hover:bg-amber-100">
-                        📎 Send with this: {seqEmail.attach} — open / download flyer ↗
+                        📎 {rowTouch.attach} — embedded in this email · open ↗
                       </a>
                     ) : (
                       <div className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-900">
-                        📎 Send with this: {seqEmail.attach}
+                        📎 Send with this: {rowTouch.attach}
                       </div>
                     )
                   )}
-                  <input className="input w-full mb-2 font-medium text-sm" readOnly value={seqEmail.subject || ''} />
-                  <textarea className="input w-full font-sans text-sm leading-relaxed" rows={13} readOnly value={bodyToPlain(seqEmail.body)} />
+                  <input className="input w-full mb-2 font-medium text-sm" readOnly value={rowTouch.subject} />
+                  <textarea className="input w-full font-sans text-sm leading-relaxed" rows={13} readOnly value={bodyToPlain(rowTouch.body)} />
                   <div className="flex flex-wrap items-center gap-2 mt-2">
-                    <button className="btn-primary flex items-center gap-1.5"
-                      onClick={() => downloadCampaignHtml({ email_subject: seqEmail.subject, email_body: seqEmail.body, application: campaignRow.application, company: `${campaignRow.company}-${seqEmail.key || seqTab + 1}` })}>
+                    <button className="btn-primary flex items-center gap-1.5" onClick={downloadRowHtml}>
                       <Download size={15} /> Download email (.html)
                     </button>
                     <button className="btn-secondary text-xs flex items-center gap-1.5"
-                      onClick={() => copyRaw(`${seqEmail.subject}\n\n${bodyToPlain(seqEmail.body)}`, 'seq-email')}>
+                      onClick={() => copyRaw(`${rowTouch.subject}\n\n${bodyToPlain(rowTouch.body)}`, 'seq-email')}>
                       <Copy size={13} /> {copied === 'seq-email' ? 'Copied ✓' : 'Copy email'}
                     </button>
-                    {seqEmail.whatsapp && waLinkFor(campaignRow.phone, seqEmail.whatsapp) && (
+                    {waLinkFor(campaignRow.phone, rowTouch.whatsapp) && (
                       <a className="btn-secondary text-xs flex items-center gap-1.5" style={{ color: '#128C7E' }}
-                        href={waLinkFor(campaignRow.phone, seqEmail.whatsapp)} target="_blank" rel="noopener noreferrer">
+                        href={waLinkFor(campaignRow.phone, rowTouch.whatsapp)} target="_blank" rel="noopener noreferrer">
                         <MessageSquare size={13} /> WhatsApp this
                       </a>
                     )}
-                    {seqEmail.whatsapp && (
-                      <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(seqEmail.whatsapp, 'seq-wa')}>
-                        <Copy size={13} /> {copied === 'seq-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
-                      </button>
-                    )}
-                    {seqEmail.waImage && (
-                      <a className="btn-secondary text-xs flex items-center gap-1.5" href={seqEmail.waImage} target="_blank" rel="noopener noreferrer">
+                    <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(rowTouch.whatsapp, 'seq-wa')}>
+                      <Copy size={13} /> {copied === 'seq-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
+                    </button>
+                    {rowTouch.waImage && (
+                      <a className="btn-secondary text-xs flex items-center gap-1.5" href={rowTouch.waImage} target="_blank" rel="noopener noreferrer">
                         🖼️ Send this image ↗
                       </a>
                     )}
                   </div>
-                  {seqEmail.whatsapp && (
-                    <div className="mt-2 text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(seqEmail.whatsapp)}</div>
-                  )}
+                  <div className="mt-2 text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(rowTouch.whatsapp)}</div>
                 </div>
-                {/* Call schedule */}
-                {campaignSeq.calls && campaignSeq.calls.length > 0 && (
+                {rowCalls.length > 0 && (
                   <div className="pt-2 border-t border-gray-100">
                     <div className="flex items-center gap-2 mb-2">
                       <Phone size={15} className="text-brand-700" />
                       <h4 className="text-sm font-semibold">Call schedule</h4>
                     </div>
                     <div className="space-y-2">
-                      {campaignSeq.calls.map((c, i) => (
+                      {rowCalls.map((c, i) => (
                         <details key={i} className="border border-gray-200 rounded-md">
                           <summary className="cursor-pointer px-3 py-2 text-sm font-medium flex items-center justify-between">
-                            <span>{c.label}{c.day != null ? ` — ${typeof c.day === 'number' ? 'Day ' + c.day : c.day}` : ''}</span>
+                            <span>{c.label}{c.day != null ? ` — ${dayLabel(c.day)}` : ''}</span>
                             <span role="button" tabIndex={0} className="text-xs text-brand-700"
                               onClick={(e) => { e.preventDefault(); copyRaw(c.script, 'call-' + i); }}>
                               {copied === 'call-' + i ? 'Copied ✓' : 'Copy'}
@@ -698,75 +704,9 @@ export default function ProspectingList() {
                 )}
               </>
             ) : (
-            <>
-
-            {/* Tailored email */}
-            {campaignRow.email_body ? (
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <Mail size={15} className="text-brand-700" />
-                  <h4 className="text-sm font-semibold">Tailored email</h4>
-                </div>
-                <input className="input w-full mb-2 font-medium text-sm" readOnly value={campaignRow.email_subject || ''} />
-                <textarea className="input w-full font-sans text-sm leading-relaxed" rows={14} readOnly value={bodyToPlain(campaignRow.email_body)} />
-                <div className="flex flex-wrap items-center gap-2 mt-2">
-                  <button className="btn-primary flex items-center gap-1.5" onClick={() => downloadCampaignHtml(campaignRow)}>
-                    <Download size={15} /> Download email (.html)
-                  </button>
-                  <button className="btn-secondary text-xs flex items-center gap-1.5"
-                    onClick={() => copyRaw(`${campaignRow.email_subject}\n\n${bodyToPlain(campaignRow.email_body)}`, 'c-email')}>
-                    <Copy size={13} /> {copied === 'c-email' ? 'Copied ✓' : 'Copy email'}
-                  </button>
-                </div>
-              </div>
-            ) : <p className="text-sm text-gray-400">No tailored email for this contact.</p>}
-
-            {/* Tailored WhatsApp */}
-            {campaignRow.whatsapp_msg ? (
-              <div className="pt-2 border-t border-gray-100">
-                <div className="flex items-center gap-2 mb-2">
-                  <MessageSquare size={15} className="text-emerald-600" />
-                  <h4 className="text-sm font-semibold">WhatsApp message</h4>
-                </div>
-                <div className="text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(campaignRow.whatsapp_msg)}</div>
-                <div className="flex flex-wrap items-center gap-2 mt-2">
-                  {waLink(campaignRow) && (
-                    <a className="btn-primary flex items-center gap-1.5" style={{ backgroundColor: '#25D366', borderColor: '#25D366' }}
-                      href={waLink(campaignRow)} target="_blank" rel="noopener noreferrer">
-                      <MessageSquare size={15} /> Send on WhatsApp
-                    </a>
-                  )}
-                  <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(campaignRow.whatsapp_msg, 'c-wa')}>
-                    <Copy size={13} /> {copied === 'c-wa' ? 'Copied ✓' : 'Copy message'}
-                  </button>
-                  <button className="btn-secondary text-xs flex items-center gap-1.5"
-                    onClick={() => downloadTxt(campaignRow.whatsapp_msg, `PHE-whatsapp-${slug(campaignRow.company)}.txt`)}>
-                    <Download size={13} /> Download (.txt)
-                  </button>
-                </div>
-                <p className="text-xs text-gray-400 mt-2">
-                  “Send on WhatsApp” opens a chat to {campaignRow.phone || 'this contact'} with the message pre-filled — review, then hit send.
-                </p>
-              </div>
-            ) : <p className="text-sm text-gray-400">No WhatsApp message for this contact.</p>}
-
-            {/* Call talking points / pitch */}
-            {campaignRow.call_script && (
-              <div className="pt-2 border-t border-gray-100">
-                <div className="flex items-center gap-2 mb-2">
-                  <Phone size={15} className="text-brand-700" />
-                  <h4 className="text-sm font-semibold">Call talking points</h4>
-                  <span className="text-xs text-gray-400">for when you phone them</span>
-                </div>
-                <textarea className="input w-full font-sans text-sm leading-relaxed bg-amber-50" rows={14} readOnly value={campaignRow.call_script} />
-                <div className="flex flex-wrap items-center gap-2 mt-2">
-                  <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(campaignRow.call_script, 'c-call')}>
-                    <Copy size={13} /> {copied === 'c-call' ? 'Copied ✓' : 'Copy script'}
-                  </button>
-                </div>
-              </div>
-            )}
-            </>
+              <p className="text-sm text-gray-400">
+                No campaign for this contact{campaignRow.status === 'skip' ? ' — marked skip' : ''}.
+              </p>
             )}
           </div>
         )}
