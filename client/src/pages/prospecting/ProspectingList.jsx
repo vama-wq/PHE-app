@@ -65,6 +65,20 @@ const SOURCE_BADGE = {
 };
 const sourceBadge = s => SOURCE_BADGE[s] || { cls: 'bg-gray-100 text-gray-500', label: 'Unverified' };
 
+// Friendly names for the list dropdown — the slug stays the key in the data.
+const SEGMENT_LABEL = {
+  'khadya-khurak-exhibitors': 'Khadya Khurak 2026 · Exhibitors',
+  'pharma-tech-expo': 'Khadya Khurak 2026 · PharmaTech contacts',
+  'existing-customers': 'Existing customers · reorder',
+  'vietnam': 'Vietnam',
+  'oman': 'Oman (Gulf)',
+  'qatar': 'Qatar (Gulf)',
+  'pharma': 'Pharma OEMs',
+  'defence': 'Defence',
+  'sa-heating-partners': 'South Africa · heating partners',
+};
+const segmentLabel = s => SEGMENT_LABEL[s] || String(s).replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase());
+
 // WhatsApp preview: show *bold* the way WhatsApp renders it (the raw text is what gets sent).
 const waPreview = text => String(text || '').split(/(\*[^*\n]+\*)/g).map((part, i) =>
   /^\*[^*\n]+\*$/.test(part) ? <strong key={i}>{part.slice(1, -1)}</strong> : part);
@@ -330,8 +344,8 @@ export default function ProspectingList() {
           <Filter size={15} className="text-gray-400" />
           <select className="input" value={segment} onChange={e => setSegment(e.target.value)}>
             {segments.length === 0 && <option value="">No segments yet</option>}
-            {segments.map(s => (
-              <option key={s.segment} value={s.segment}>{s.segment} ({s.total})</option>
+            {[...segments].sort((a, b) => segmentLabel(a.segment).localeCompare(segmentLabel(b.segment))).map(s => (
+              <option key={s.segment} value={s.segment}>{segmentLabel(s.segment)} ({s.total})</option>
             ))}
           </select>
         </div>
