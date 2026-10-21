@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
-import { renderEmail, copyFor, bodyToHtml, renderSms } from './applicationEmails';
+import { renderEmail, copyFor, bodyToHtml, bodyToPlain, renderSms } from './applicationEmails';
 import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye, Phone } from 'lucide-react';
 
 // Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
@@ -624,14 +624,14 @@ export default function ProspectingList() {
                     )
                   )}
                   <input className="input w-full mb-2 font-medium text-sm" readOnly value={seqEmail.subject || ''} />
-                  <textarea className="input w-full font-sans text-sm leading-relaxed" rows={13} readOnly value={seqEmail.body || ''} />
+                  <textarea className="input w-full font-sans text-sm leading-relaxed" rows={13} readOnly value={bodyToPlain(seqEmail.body)} />
                   <div className="flex flex-wrap items-center gap-2 mt-2">
                     <button className="btn-primary flex items-center gap-1.5"
                       onClick={() => downloadCampaignHtml({ email_subject: seqEmail.subject, email_body: seqEmail.body, application: campaignRow.application, company: `${campaignRow.company}-${seqEmail.key || seqTab + 1}` })}>
                       <Download size={15} /> Download email (.html)
                     </button>
                     <button className="btn-secondary text-xs flex items-center gap-1.5"
-                      onClick={() => copyRaw(`${seqEmail.subject}\n\n${seqEmail.body}`, 'seq-email')}>
+                      onClick={() => copyRaw(`${seqEmail.subject}\n\n${bodyToPlain(seqEmail.body)}`, 'seq-email')}>
                       <Copy size={13} /> {copied === 'seq-email' ? 'Copied ✓' : 'Copy email'}
                     </button>
                     {seqEmail.whatsapp && waLinkFor(campaignRow.phone, seqEmail.whatsapp) && (
@@ -690,13 +690,13 @@ export default function ProspectingList() {
                   <h4 className="text-sm font-semibold">Tailored email</h4>
                 </div>
                 <input className="input w-full mb-2 font-medium text-sm" readOnly value={campaignRow.email_subject || ''} />
-                <textarea className="input w-full font-sans text-sm leading-relaxed" rows={14} readOnly value={campaignRow.email_body} />
+                <textarea className="input w-full font-sans text-sm leading-relaxed" rows={14} readOnly value={bodyToPlain(campaignRow.email_body)} />
                 <div className="flex flex-wrap items-center gap-2 mt-2">
                   <button className="btn-primary flex items-center gap-1.5" onClick={() => downloadCampaignHtml(campaignRow)}>
                     <Download size={15} /> Download email (.html)
                   </button>
                   <button className="btn-secondary text-xs flex items-center gap-1.5"
-                    onClick={() => copyRaw(`${campaignRow.email_subject}\n\n${campaignRow.email_body}`, 'c-email')}>
+                    onClick={() => copyRaw(`${campaignRow.email_subject}\n\n${bodyToPlain(campaignRow.email_body)}`, 'c-email')}>
                     <Copy size={13} /> {copied === 'c-email' ? 'Copied ✓' : 'Copy email'}
                   </button>
                 </div>

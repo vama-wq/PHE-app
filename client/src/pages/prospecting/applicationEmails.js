@@ -226,7 +226,11 @@ export function bodyToHtml(bodyText, application) {
   const out = [];
   let para = [], bullets = [];
   const flushPara = () => {
-    if (para.length) { out.push(`<p style="margin:0 0 14px;">${para.join('<br>')}</p>`); para = []; }
+    if (!para.length) return;
+    // a lone bold line is a section label — keep it tight to the bullets below
+    const label = para.length === 1 && /^<strong>[^<]*<\/strong>$/.test(para[0]);
+    out.push(`<p style="margin:0 0 ${label ? 6 : 14}px;">${para.join('<br>')}</p>`);
+    para = [];
   };
   const flushBullets = () => {
     if (bullets.length) {
@@ -236,10 +240,18 @@ export function bodyToHtml(bodyText, application) {
   };
   const linkify = t => esc(t)
     .replace(/vama@peenaheatelements\.com/g, '<a href="mailto:vama@peenaheatelements.com" style="color:#b91c1c;">vama@peenaheatelements.com</a>')
-    .replace(/https:\/\/phe\.co\.in/g, '<a href="https://phe.co.in" target="_blank" style="color:#b91c1c;">phe.co.in</a>');
+    .replace(/https:\/\/phe\.co\.in/g, '<a href="https://phe.co.in" target="_blank" style="color:#b91c1c;">phe.co.in</a>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
   for (const raw of String(bodyText).split('\n')) {
     const line = raw.replace(/\s+$/, '');
+    // [[IMG:https://…]] on its own line → the flyer shown inline (the flyer email is just this)
+    const img = line.match(/^\[\[IMG:(https:\/\/[^\s\]"'<>]+)\]\]$/);
+    if (img) {
+      flushBullets(); flushPara();
+      out.push(`<img src="${img[1]}" alt="Peena Heat Elements flyer" width="560" style="display:block;width:100%;max-width:560px;height:auto;border:1px solid #e5e7eb;border-radius:10px;margin:0 0 16px;">`);
+      continue;
+    }
     // the plain-text catalogue line renders as the clickable button instead
     if (line.includes(cat.url) || /^Catalogue:\s*https?:\/\//i.test(line) || /\(PDF\):\s*https?:\/\/\S+\.pdf/i.test(line)) {
       flushBullets(); flushPara();
@@ -259,6 +271,14 @@ export function bodyToHtml(bodyText, application) {
     whatsappQrHtml() +
     '</div>'
   );
+}
+
+// Plain-text view of a campaign body (textarea + copy): drop the **bold** markers and
+// show the inline flyer as a link line instead of the raw image marker.
+export function bodyToPlain(bodyText) {
+  return String(bodyText || '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/^\[\[IMG:(\S+?)\]\]$/gm, '📎 Flyer: $1');
 }
 
 // WhatsApp click-to-chat QR footer appended to every campaign email (scans to wa.me/Vama).
