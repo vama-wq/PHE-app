@@ -234,7 +234,8 @@ export function bodyToHtml(bodyText, application) {
   };
   const flushBullets = () => {
     if (bullets.length) {
-      out.push(`<ul style="margin:0 0 14px;padding-left:20px;">${bullets.map(b => `<li style="margin:4px 0;">${b}</li>`).join('')}</ul>`);
+      // list-style inline: some clients (and the app's own CSS reset) drop default bullets
+      out.push(`<ul style="margin:0 0 14px;padding-left:20px;list-style:disc;">${bullets.map(b => `<li style="margin:4px 0;">${b}</li>`).join('')}</ul>`);
       bullets = [];
     }
   };
