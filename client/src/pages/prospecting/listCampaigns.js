@@ -9,7 +9,9 @@ const CAT = 'https://drive.google.com/file/d/11BAdVPcRV1NW3kz5E7EO55EeDu_veXU9/v
 const VIDEO = 'https://www.youtube.com/shorts/jnzHnPTTHXE';
 const KK_FLYER = `${SITE}/phe-khadya-khurak-flyer.jpg`;
 const KK_CARD = `${SITE}/phe-khadya-wa-invite.jpg`;
-const GEN_FLYER = `${SITE}/phe-flyer.jpg`;
+// One flyer per campaign: Khadya (exhibition), Gulf (UAE stock), Vietnam.
+const GULF_FLYER = `${SITE}/phe-gulf-flyer.jpg`;
+const VN_FLYER = `${SITE}/phe-vietnam-flyer.jpg`;
 
 const WHAT = 'Tubular, finned, immersion & cartridge heating elements — made to your drawing';
 const WHY = ['Tested before dispatch · 6-month guarantee', '5–7 day dispatch · exported worldwide'];
@@ -284,10 +286,10 @@ const gulf = country => ({
           cta: 'Want a sample or a quote on any of these?' }),
         whatsapp: wa(helloWa(ctx), `*New from Peena Heat Elements* for your ${m.short}:`, '', `• Longer-life ${m.elem}`, '• Incoloy 800 for high temperature', '• Custom flanges & terminals — drops straight in', '', 'Want a sample or a quote?', '', LINK_CAT),
       }) },
-    { key: 'usp', label: 'USP + flyer', day: 12, attach: '📄 Flyer', flyer: GEN_FLYER, waImage: GEN_FLYER,
+    { key: 'usp', label: 'USP + flyer', day: 12, attach: '📄 Flyer', flyer: GULF_FLYER, waImage: GULF_FLYER,
       render: (m, ctx) => ({
         subject: `Why builders across the Gulf choose Peena Heat Elements`,
-        body: flyerBody({ greet: greetEmail(ctx), intro: "Here's our one-page flyer — everything we make, in brief:", flyer: GEN_FLYER,
+        body: flyerBody({ greet: greetEmail(ctx), intro: "Here's our one-page flyer — everything we make, in brief:", flyer: GULF_FLYER,
           cta: `UAE stock via Peena Trading LLC, Sharjah — fast delivery${ctx.region ? ` to ${ctx.region}` : ''} (Nilesh Shah: +971 55 667 4956). Reply or WhatsApp if anything fits.` }),
         whatsapp: wa(helloWa(ctx), '*Why builders across the Gulf choose Peena Heat Elements*', '', '• Made to your drawing', '• Every element tested before dispatch · 6-month guarantee', '• Competitive pricing', uaeWa(ctx), '', `Sharing our one-page flyer — happy to quote a trial for your ${m.short}.`, '', '📞 Peena Trading (Nilesh Shah): +971 55 667 4956'),
       }) },
@@ -343,6 +345,13 @@ const vietnam = {
           supply: [`For ${m.their}: ${m.elem}`, 'Materials: SS304 · SS316 · Incoloy 800', 'New parts — just send a drawing and we make it'],
           cta: `Who looks after heating-element sourcing at ${coEmail(ctx)}? I'd be glad to send our catalogue and a quote.` }),
         whatsapp: wa(helloWa(ctx), 'Vama from *Peena Heat Elements*, Ahmedabad, India.', '', '*What we make for you*', `• For ${m.their}: ${m.elem}`, `• ${DRAWING}`, '• Tested before dispatch · 6-month guarantee · 5–7 day dispatch', '', 'Who looks after heating-element sourcing on your side? Happy to send a quote.', '', LINK_CAT, LINK_VIDEO),
+      }) },
+    { key: 'flyer', label: 'Product flyer', day: 5, attach: '📄 Flyer', flyer: VN_FLYER, waImage: VN_FLYER,
+      render: (m, ctx) => ({
+        subject: 'Our range at a glance — Peena Heat Elements',
+        body: flyerBody({ greet: greetEmail(ctx), intro: `Here's our one-page flyer — the elements we make for builders in ${ctx.region || 'Vietnam'}:`, flyer: VN_FLYER,
+          cta: "Reply or WhatsApp if anything fits — or send us a drawing and we'll quote." }),
+        whatsapp: wa(helloWa(ctx), 'Sharing our one-page flyer from *Peena Heat Elements* 👆', '', `• For ${m.their}: ${m.elem}`, `• ${DRAWING}`, '• Tested before dispatch · 6-month guarantee', '', "Send us a drawing and we'll quote.", '', LINK_CAT),
       }) },
   ],
   calls: (m, ctx) => [{ label: 'Call — intro', day: '3–5', script:
