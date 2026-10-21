@@ -9,8 +9,10 @@ const CAT = 'https://drive.google.com/file/d/11BAdVPcRV1NW3kz5E7EO55EeDu_veXU9/v
 const VIDEO = 'https://www.youtube.com/shorts/jnzHnPTTHXE';
 const KK_FLYER = `${SITE}/phe-khadya-khurak-flyer.jpg`;
 const KK_CARD = `${SITE}/phe-khadya-wa-invite.jpg`;
-// One flyer per campaign: Khadya (exhibition), Gulf (UAE stock), Vietnam.
-const GULF_FLYER = `${SITE}/phe-gulf-flyer.jpg`;
+// One flyer per campaign: Khadya exhibitors, Khadya PharmaTech, Oman, Qatar, Vietnam.
+const OMAN_FLYER = `${SITE}/phe-oman-flyer.jpg`;
+const QATAR_FLYER = `${SITE}/phe-qatar-flyer.jpg`;
+const PT_FLYER = `${SITE}/phe-pharmatech-khadya-flyer.jpg`;
 const VN_FLYER = `${SITE}/phe-vietnam-flyer.jpg`;
 
 const WHAT = 'Tubular, finned, immersion & cartridge heating elements — made to your drawing';
@@ -83,19 +85,19 @@ const EXHIBITOR_ALL = { mode: 'pitch', eq: 'machines', supply: ['Tubular element
 const where = hall => (hall ? `you in ${hall}, us at ${KK_STALL}` : `us at ${KK_STALL}`);
 const visit = hall => (hall === 'Hall 8' ? "We're in the same hall — I'll drop by your stall." : hall ? `I'll drop by your stall in ${hall}.` : "I'll drop by your stall during the show.");
 
-const kkInvite = (intro, ctaEmail, waTail) => ({
-  key: 'invite', label: 'Invite + flyer', day: '26 Nov', attach: '📄 Flyer', flyer: KK_FLYER, waImage: KK_CARD,
+const kkInvite = (intro, ctaEmail, waTail, flyer = KK_FLYER) => ({
+  key: 'invite', label: 'Invite + flyer', day: '26 Nov', attach: '📄 Flyer', flyer, waImage: KK_CARD,
   render: (p, ctx) => ({
     subject: `Your invite to ${KK} — ${KK_STALL}`,
-    body: flyerBody({ greet: greetEmail(ctx), intro, flyer: KK_FLYER, cta: ctaEmail(ctx) }),
+    body: flyerBody({ greet: greetEmail(ctx), intro, flyer, cta: ctaEmail(ctx) }),
     whatsapp: wa(hiWa(ctx), `*${KK}* is almost here — you're invited!`, '', KK_BLOCK, '', '*Want a sample before the show?*', SAMPLE_WA, "— we'll make it to match.", '', waTail(ctx)),
   }),
 });
-const kkFinal = (ctaEmail, waTail) => ({
-  key: 'final', label: 'See you there', day: '11 Dec', attach: '📄 Flyer (stall details)', flyer: KK_FLYER, waImage: KK_CARD,
+const kkFinal = (ctaEmail, waTail, flyer = KK_FLYER) => ({
+  key: 'final', label: 'See you there', day: '11 Dec', attach: '📄 Flyer (stall details)', flyer, waImage: KK_CARD,
   render: (p, ctx) => ({
     subject: `See you at ${KK} this week — ${KK_STALL}`,
-    body: flyerBody({ greet: greetEmail(ctx), intro: `${KK} opens this week — ${KK_WHEN}, ${KK_VENUE} (${KK_HOURS}). Our stall details are on the flyer:`, flyer: KK_FLYER, cta: ctaEmail(ctx) }),
+    body: flyerBody({ greet: greetEmail(ctx), intro: `${KK} opens this week — ${KK_WHEN}, ${KK_VENUE} (${KK_HOURS}). Our stall details are on the flyer:`, flyer, cta: ctaEmail(ctx) }),
     whatsapp: wa(hiWa(ctx), `We're at *${KK}* this week!`, '', KK_BLOCK, '', waTail(ctx), '— Vama, Peena Heat Elements'),
   }),
 });
@@ -209,8 +211,8 @@ const pharmaTech = {
         whatsapp: wa(hiWa(ctx), `Here's where *Peena Heat Elements* fits you:`, '', `• ${cap(m.elem)}`, `• ${DRAWING}`, '• Tested before dispatch · 6-month guarantee · 5–7 day dispatch', '', `See them live at *${KK}* — ${KK_STALL}, ${KK_WHEN}.`, '', LINK_VIDEO, LINK_CAT),
       }) },
     kkInvite(`We're three weeks from ${KK} (${KK_WHEN}, ${KK_VENUE}). Here's our flyer — everything in brief:`,
-      () => 'Shall I pencil you in for a stall visit?', () => 'Shall I pencil you in for a visit?'),
-    kkFinal(() => 'Looking forward to seeing you at the stall.', () => 'Come see our elements. See you there!'),
+      () => 'Shall I pencil you in for a stall visit?', () => 'Shall I pencil you in for a visit?', PT_FLYER),
+    kkFinal(() => 'Looking forward to seeing you at the stall.', () => 'Come see our elements. See you there!', PT_FLYER),
     { key: 'atexpo', label: "We're here", day: '16 Dec', attach: '🖼️ Product image / stall photo', waImage: KK_CARD,
       render: (m, ctx) => ({
         subject: `We're at ${KK} now — ${KK_STALL}`,
@@ -257,7 +259,7 @@ const GULF_ALL = { their: 'your equipment', elem: 'tubular, finned, immersion an
 const uae = ctx => `UAE stock at our Sharjah distributor, Peena Trading LLC — fast delivery${ctx.region ? ` to ${ctx.region}` : ''}, low freight (Nilesh Shah: +971 55 667 4956 / +971 50 450 9956)`;
 const uaeWa = ctx => `• UAE stock at Peena Trading LLC, Sharjah — fast delivery${ctx.region ? ` to ${ctx.region}` : ''}, low freight`;
 
-const gulf = country => ({
+const gulf = country => { const FLYER = country === 'Oman' ? OMAN_FLYER : QATAR_FLYER; return {
   name: country === 'Oman' ? 'Oman (Gulf)' : 'Qatar (Gulf)',
   regionLabel: 'city',
   apps: GULF_APPS, all: GULF_ALL,
@@ -286,10 +288,10 @@ const gulf = country => ({
           cta: 'Want a sample or a quote on any of these?' }),
         whatsapp: wa(helloWa(ctx), `*New from Peena Heat Elements* for your ${m.short}:`, '', `• Longer-life ${m.elem}`, '• Incoloy 800 for high temperature', '• Custom flanges & terminals — drops straight in', '', 'Want a sample or a quote?', '', LINK_CAT),
       }) },
-    { key: 'usp', label: 'USP + flyer', day: 12, attach: '📄 Flyer', flyer: GULF_FLYER, waImage: GULF_FLYER,
+    { key: 'usp', label: 'USP + flyer', day: 12, attach: '📄 Flyer', flyer: FLYER, waImage: FLYER,
       render: (m, ctx) => ({
         subject: `Why builders across the Gulf choose Peena Heat Elements`,
-        body: flyerBody({ greet: greetEmail(ctx), intro: "Here's our one-page flyer — everything we make, in brief:", flyer: GULF_FLYER,
+        body: flyerBody({ greet: greetEmail(ctx), intro: "Here's our one-page flyer — everything we make, in brief:", flyer: FLYER,
           cta: `UAE stock via Peena Trading LLC, Sharjah — fast delivery${ctx.region ? ` to ${ctx.region}` : ''} (Nilesh Shah: +971 55 667 4956). Reply or WhatsApp if anything fits.` }),
         whatsapp: wa(helloWa(ctx), '*Why builders across the Gulf choose Peena Heat Elements*', '', '• Made to your drawing', '• Every element tested before dispatch · 6-month guarantee', '• Competitive pricing', uaeWa(ctx), '', `Sharing our one-page flyer — happy to quote a trial for your ${m.short}.`, '', '📞 Peena Trading (Nilesh Shah): +971 55 667 4956'),
       }) },
@@ -313,7 +315,7 @@ const gulf = country => ({
 `CALL #3 — ${co} (after Become-our-client email)\n\n1) "Vama from Peena Heat Elements — I'll keep this short."\n2) The ask: "Send one drawing, we make a trial element to it, your team tests it in your ${m.short}. If it performs, we become your supplier."\n3) Make it easy: "We hold stock at our Sharjah distributor, Peena Trading LLC — so once we start, your lead times get shorter and your freight lower."\n4) Get commitment: "Shall we do the trial? Who should I coordinate the drawing and delivery with?"\n5) Lock: confirm contact + email/WhatsApp + expected drawing.` },
     ];
   },
-});
+}; };
 
 // ───────────────────────── Vietnam ─────────────────────────
 // Wording per application kept from the original researched copy.
