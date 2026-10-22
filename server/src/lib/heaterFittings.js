@@ -184,7 +184,7 @@ async function takeSleeveAtNutWasher(db, jobCardId, userId) {
     const card = await tx.get(
       `SELECT jc.*, o.order_code FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1 FOR UPDATE OF jc`, [jobCardId]);
     if (!card || card.is_fg || card.sleeve_taken_at || card.inventory_qc_at) return null;
-    if (require('./inventoryFreeze').isFrozenCode(card.order_code)) return null;   // frozen order: take nothing (owner, 19 Oct 2026)
+    if (await require('./inventoryFreeze').frozenSkipsStage(tx, card, 26)) return null;   // frozen order: skip only if Nut Washer (26) was done on/before the count (owner, 22 Oct 2026)
     if (!(await forCard(tx, card)).includes('cap')) return null;
     const st = await tx.get('SELECT value1 FROM production_checklist WHERE job_card_id=$1 AND stage_no=26', [card.id]);
     let b = st?.value1;

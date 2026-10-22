@@ -678,8 +678,8 @@ async function takePinsAtSpot(db, jobCardId, userId) {
   return db.withTransaction(async (client) => {
     const tx = txDb(client);
     const { card, item, tpLines, orderCode } = await spotContext(tx, jobCardId);
-    if (require('./inventoryFreeze').isFrozenCode(orderCode)) return null;   // frozen order: take nothing (owner, 19 Oct 2026)
     if (!card || !newRule(card) || noTerminals(card) || pastPins(card) || !item || item.inventory_deducted) return null;
+    if (await require('./inventoryFreeze').frozenSkipsStage(tx, card, 4)) return null;   // frozen order: skip only if Spot (4) was done on/before the count (owner, 22 Oct 2026)
     const r = await takeTerminalRows(tx, card, item, tpLines, orderCode, userId, { at: 'Spot' });
     if (!r || !r.taken.length) return null;
     await tx.run('UPDATE job_cards SET pins_taken_at = NOW(), pins_taken = $2 WHERE id=$1', [card.id, JSON.stringify(r.record)]);

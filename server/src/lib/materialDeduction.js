@@ -194,7 +194,7 @@ async function applyMaterialDeductions(db, jobCardId, stageNo, isDone, userId) {
     [jobCardId]
   );
   if (!jc || !jc.material_deduction) return;
-  if (require('./inventoryFreeze').isFrozenCode(jc.order_code)) return;   // frozen order: take/return nothing (owner, 19 Oct 2026)
+  if (await require('./inventoryFreeze').frozenSkipsStage(db, jc, stageNo)) return;   // frozen order: skip only if this stage was done on/before the count (owner, 22 Oct 2026)
   // A finished-goods card takes only its list, at its last stage — no coil,
   // tube or filling by stage (owner, 8 Oct 2026). Its stage 4 is "Ready", not
   // the coil stage of a production card.

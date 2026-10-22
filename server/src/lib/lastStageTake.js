@@ -36,9 +36,11 @@ async function runTake(tx, jobCardId, userId) {
   if (!card || card.last_stage_taken_at) return { taken: [] };
   const stamp = () => tx.run('UPDATE job_cards SET last_stage_taken_at = NOW() WHERE id=$1', [card.id]);
 
-  // Frozen order (owner, 19 Oct 2026): an old order dispatched long ago and only
-  // now pushed through the app — it takes nothing. Stamp so it still progresses.
-  if (require('./inventoryFreeze').isFrozenCode(card.order_code)) { await stamp(); return { taken: [] }; }
+  // Frozen order (owner, 19 Oct; refined 22 Oct 2026): an old order whose whole
+  // production finished on/before the count takes nothing here — its list was
+  // used before the count. But if the card is still being built after the count
+  // (any production stage after the cutoff), its list items are swept normally.
+  if (await require('./inventoryFreeze').frozenSkipsLastStage(tx, card)) { await stamp(); return { taken: [] }; }
 
   // Closed at Inventory QC: nothing ever moves again.
   if (card.inventory_qc_at) { await stamp(); return { taken: [] }; }

@@ -128,7 +128,7 @@ async function lineRef(db, sel) {
 async function deductStageCategories(db, jc, stageNo, userId) {
   const cats = STAGE_CATEGORY_MAP[stageNo];
   if (!cats || !jc) return;
-  if (await require('./inventoryFreeze').isFrozenCard(db, jc)) return;   // frozen order: take nothing (owner, 19 Oct 2026)
+  if (await require('./inventoryFreeze').frozenSkipsStage(db, jc, stageNo)) return;   // frozen order: skip only if this stage was done on/before the count (owner, 22 Oct 2026)
   // A finished-goods card takes only its list, at its last stage — nothing by
   // stage (owner, 8 Oct 2026).
   if (jc.is_fg) return;
@@ -177,7 +177,7 @@ async function deductStageCategories(db, jc, stageNo, userId) {
 // remainder (e.g. skipped optional stage) is swept up by the final settle.
 async function deductPartialAtQC(db, jc, userId) {
   if (!jc) return;
-  if (await require('./inventoryFreeze').isFrozenCard(db, jc)) return;   // frozen order: take nothing (owner, 19 Oct 2026)
+  if (await require('./inventoryFreeze').frozenSkipsLastStage(db, jc)) return;   // frozen order: skip only if the whole card was built on/before the count (owner, 22 Oct 2026)
   const itemId = await resolveJobCardItemId(db, jc);
   if (!itemId) return;
   const item = await db.get(
