@@ -59,6 +59,7 @@ function renderFgCard(c) {
   <table>
     <tr class="title"><td colspan="4">INVENTORY ORDERS</td></tr>
     ${row('Client code', esc(c.client_code))}
+    ${row('Order no', esc(c.order_code))}
     <tr class="dates"><th>Order date · Dispatch</th><td>${esc(fmtDate(c.order_date))}</td><td colspan="2">${esc(fmtDate(c.dispatch_date))}</td></tr>
     ${row('Product code', esc(c.product_code))}
     ${row('Drawing no', `${esc(c.drawing_no)}${c.cut_from && c.cut_from !== c.drawing_no ? `<div style="font-size:13px;color:#444;margin-top:4px">Cut from store stock of <b>${esc(c.cut_from)}</b></div>` : ''}`, { cls: 'big' })}
