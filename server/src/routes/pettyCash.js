@@ -812,19 +812,27 @@ router.put('/:id/mark-paid', authenticate, authorize('owner'), async (req, res) 
     }
     // This is the moment the money actually leaves a bank, so it is where the
     // account gets pinned down.
-    const bankAccountId = parseInt(req.body?.bank_account_id, 10);
-    if (!Number.isInteger(bankAccountId)) {
-      return res.status(400).json({ error: 'Select which bank account paid this' });
-    }
-    const acct = await db.get('SELECT id, name FROM bank_accounts WHERE id=$1 AND active', [bankAccountId]);
-    if (!acct) return res.status(400).json({ error: 'Select a valid bank account' });
-    // The day the money actually left the bank — today unless said otherwise.
+    // Paid — External: settled by someone outside the business (e.g. the owner's
+    // father) — no bank account, touches no balance (owner, 22 Oct 2026).
+    const external = req.body?.paid_external === true || req.body?.paid_external === 'true';
+    // The day the money actually left — today unless said otherwise.
     const paidOn = req.body?.paid_on ? parsePaidOn(req.body.paid_on) : istToday();
     if (!paidOn) return res.status(400).json({ error: 'Paid On must be a real date, not in the future' });
+    let bankAccountId = null, acct = { name: 'External (outside the business)' };
+    if (!external) {
+      bankAccountId = parseInt(req.body?.bank_account_id, 10);
+      if (!Number.isInteger(bankAccountId)) {
+        return res.status(400).json({ error: 'Select which bank account paid this' });
+      }
+      acct = await db.get('SELECT id, name FROM bank_accounts WHERE id=$1 AND active', [bankAccountId]);
+      if (!acct) return res.status(400).json({ error: 'Select a valid bank account' });
+    }
     await db.withTransaction(async (client) => {
       await client.query(
-        "UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE, bank_account_id=$2, paid_on=$3 WHERE id=$1",
-        [id, bankAccountId, paidOn]);
+        external
+          ? "UPDATE petty_cash_entries SET payment_method='paid_external', affects_cash=FALSE, bank_account_id=NULL, paid_on=$2 WHERE id=$1"
+          : "UPDATE petty_cash_entries SET payment_method='paid_bank', affects_cash=TRUE, bank_account_id=$2, paid_on=$3 WHERE id=$1",
+        external ? [id, paidOn] : [id, bankAccountId, paidOn]);
       if (e.payroll_line_id) {
         await client.query('UPDATE payroll_lines SET paid=TRUE WHERE id=$1', [e.payroll_line_id]);
         const { rows: r } = await client.query('SELECT run_id FROM payroll_lines WHERE id=$1', [e.payroll_line_id]);

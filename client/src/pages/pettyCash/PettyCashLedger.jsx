@@ -103,9 +103,9 @@ export default function PettyCashLedger() {
   // Marking paid is the moment the money leaves a real bank, so it has to say
   // WHICH bank — otherwise neither account can be reconciled afterwards.
   const handleMarkPaid = (e) => { setPayingOn(istTodayInput()); setPayingEntry(e); };
-  const confirmMarkPaid = async (entry, bankAccountId) => {
+  const confirmMarkPaid = async (entry, opts) => {
     try {
-      await api.put(`/petty-cash/${entry.id}/mark-paid`, { bank_account_id: bankAccountId, paid_on: payingOn });
+      await api.put(`/petty-cash/${entry.id}/mark-paid`, { ...opts, paid_on: payingOn });
       setPayingEntry(null); load(); loadLedgers();
     } catch (err) { alert(err.response?.data?.error || 'Failed'); }
   };
@@ -735,7 +735,7 @@ export default function PettyCashLedger() {
       {/* Mark-paid asks which bank the money left, so the entry lands in the
           right account's statement instead of a combined blob. */}
       {payingEntry && (
-        <Modal open title="Mark as paid — from which bank?" onClose={() => setPayingEntry(null)}>
+        <Modal open title="Mark as paid — how?" onClose={() => setPayingEntry(null)}>
           <div className="space-y-3">
             <p className="text-sm text-gray-600">
               {inr(payingEntry.amount)} — {payingEntry.paid_to || payingEntry.category}
@@ -745,19 +745,19 @@ export default function PettyCashLedger() {
               <input type="date" className="input mt-1" value={payingOn} max={istTodayInput()}
                 onChange={ev => setPayingOn(ev.target.value)} required />
             </label>
-            {banks.length === 0 ? (
-              <p className="text-sm text-red-600">No bank accounts set up yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {banks.map(b => (
-                  <button key={b.id} type="button" className="btn-secondary w-full justify-center"
-                    onClick={() => confirmMarkPaid(payingEntry, b.id)}>
-                    Paid from {b.name}
-                  </button>
-                ))}
-              </div>
-            )}
-            <p className="text-[11px] text-gray-400">This reduces that account's balance from the day it was paid. The entry keeps its own date.</p>
+            <div className="space-y-2">
+              {banks.map(b => (
+                <button key={b.id} type="button" className="btn-secondary w-full justify-center"
+                  onClick={() => confirmMarkPaid(payingEntry, { bank_account_id: b.id })}>
+                  Paid from {b.name}
+                </button>
+              ))}
+              <button type="button" className="btn-secondary w-full justify-center border-violet-300 text-violet-700"
+                onClick={() => confirmMarkPaid(payingEntry, { paid_external: true })}>
+                Paid — External (outside the business)
+              </button>
+            </div>
+            <p className="text-[11px] text-gray-400">A bank reduces that account's balance from the day it was paid. "External" settles it without touching any balance (paid from outside — e.g. the owner's family). The entry keeps its own date.</p>
           </div>
         </Modal>
       )}
