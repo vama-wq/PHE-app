@@ -24,9 +24,10 @@ const BANK_TRANSFER = 'Bank Transfer';     // one bank account down → another 
 const EMP_TYPES = ['Advance Paid', 'Employee Welfare', 'Employee Care', 'Miscellaneous'];
 const EMP_TYPES_WORKER = ['Advance Paid', 'Employee Care']; // pick a worker from payroll
 const METHOD_BADGES = {
-  cash:        { label: 'Cash',        cls: 'bg-emerald-100 text-emerald-700' },
-  paid_bank:   { label: 'Paid Bank',   cls: 'bg-blue-100 text-blue-700' },
-  unpaid_bank: { label: 'Unpaid Bank', cls: 'bg-amber-100 text-amber-700' },
+  cash:          { label: 'Cash',           cls: 'bg-emerald-100 text-emerald-700' },
+  paid_bank:     { label: 'Paid Bank',      cls: 'bg-blue-100 text-blue-700' },
+  unpaid_bank:   { label: 'Unpaid Bank',    cls: 'bg-amber-100 text-amber-700' },
+  paid_external: { label: 'Paid — External', cls: 'bg-violet-100 text-violet-700' },
 };
 
 export default function PettyCashLedger() {
@@ -152,7 +153,7 @@ export default function PettyCashLedger() {
     : null;
   const ledgerTitle = filter?.company ? `Machinery — ${filter.company}`
     : bankName ? `${bankName} bank`
-    : filter?.method ? ({ paid_bank: 'Bank', unpaid_bank: 'Unpaid Bank', cash: 'Cash' }[filter.method])
+    : filter?.method ? ({ paid_bank: 'Bank', unpaid_bank: 'Unpaid Bank', cash: 'Cash', paid_external: 'Paid — External' }[filter.method])
     : filter?.category;
   const cols = isOwner ? 11 : 9; // accounts has no Bank Bal. column or actions column
 
@@ -1276,6 +1277,7 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
             <option value="cash">Cash{isTopUp ? ' in Hand' : ''}</option>
             <option value="paid_bank">{isTopUp ? 'Bank' : 'Paid Bank'}</option>
             {!isTopUp && <option value="unpaid_bank">Unpaid Bank (pending — no deduction yet)</option>}
+            {!isTopUp && <option value="paid_external">Paid — External (by owner/family — not from bank or cash)</option>}
           </select>
           {isPlating && (
             <p className="text-[11px] text-amber-700 mt-1">Plating always goes to Unpaid Bank first — the owner marks it Paid to deduct the Bank.</p>
@@ -1288,6 +1290,9 @@ function EntryModal({ type, isOwner, receiptLimit, banks = [], existingSamples =
           )}
           {!isPlating && f.payment_method === 'unpaid_bank' && (
             <p className="text-[11px] text-amber-700 mt-1">Recorded but not deducted — the owner can mark it Paid later, which then reduces the Bank balance (you'll pick the account then).</p>
+          )}
+          {f.payment_method === 'paid_external' && (
+            <p className="text-[11px] text-violet-700 mt-1">Paid by someone outside the business (e.g. the owner's family) — recorded as settled, but it does NOT reduce the Bank or Cash balance.</p>
           )}
         </div>
 

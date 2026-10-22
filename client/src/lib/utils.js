@@ -7,7 +7,7 @@ export const WORKER_NAME_STAGES = new Set([1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,1
 // vendor goes in the same field, so every place that shows who did a stage
 // shows the vendor. Kept in sync with server/src/lib/plating.js.
 export const PLATING_STAGE = 16;
-export const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Akshar Enterprise', 'Palsto Coat', 'Peena Traders'];
+export const PLATING_COMPANIES = ['A S Plating', 'Aesha Plating', 'Accurate Plater', 'Akshar Enterprise', 'Palsto Coat', 'Peena Traders'];
 // Stages that have an optional scrap value
 export const SCRAP_VALUE_STAGES = new Set([1, 3, 4, 5, 11, 21, 26]);
 

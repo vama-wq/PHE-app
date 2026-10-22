@@ -41,7 +41,7 @@ router.get('/', authenticate, authorize('accounts', 'owner'), async (req, res) =
   const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : null;
   const category = (req.query.category || '').trim() || null;
   const company = (req.query.company || '').trim() || null;
-  const method = ['cash', 'paid_bank', 'unpaid_bank'].includes(req.query.method) ? req.query.method : null;
+  const method = ['cash', 'paid_bank', 'unpaid_bank', 'paid_external'].includes(req.query.method) ? req.query.method : null;
   // ?bank_account=<id> for one account, or 'none' to see what is still untagged
   // (so an untagged entry can always be found and fixed, not just counted).
   const bankRaw = String(req.query.bank_account || '').trim();
@@ -365,9 +365,11 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
 
     let method = String(req.body.payment_method || '').trim();
     // Top-ups can only land in cash or paid_bank; expenses may also be unpaid_bank
-    const validMethods = entry_type === 'top_up' ? ['cash', 'paid_bank'] : ['cash', 'paid_bank', 'unpaid_bank'];
+    // or paid_external (paid by someone outside the business — e.g. the owner's
+    // father — so it is settled but touches neither the bank nor cash balance).
+    const validMethods = entry_type === 'top_up' ? ['cash', 'paid_bank'] : ['cash', 'paid_bank', 'unpaid_bank', 'paid_external'];
     if (!validMethods.includes(method)) {
-      return fail(400, entry_type === 'top_up' ? 'Select Cash or Bank' : 'Select a payment method (Cash / Paid Bank / Unpaid Bank)');
+      return fail(400, entry_type === 'top_up' ? 'Select Cash or Bank' : 'Select a payment method (Cash / Paid Bank / Unpaid Bank / Paid — External)');
     }
 
     // Sampling expenses carry full draft details for the future supplier + item
@@ -496,7 +498,7 @@ router.post('/', authenticate, authorize('accounts', 'owner'), ...uploadPettyCas
         `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount, payment_method, affects_cash, receipt_file, receipt_original_name, employee_id, advance_id, bank_account_id, created_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
         [entry_date, entry_type, cat, finalDescription, finalPaidTo || null, amt,
-         method, method !== 'unpaid_bank',
+         method, method !== 'unpaid_bank' && method !== 'paid_external',
          req.file?.storagePath || null, req.file?.originalname || null,
          empExpense?.employee_id || null, advanceId, bankAccountId, req.user.id]);
       if (sample) {
