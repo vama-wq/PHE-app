@@ -255,101 +255,197 @@ const visitorsKK = {
   },
 };
 
-// Existing customers (owner, 21–23 Oct 2026): thank-you + reorder, Diwali update, the new fitted
-// 2-in-1 / 3-in-1 heaters + heater plates, new sizes by drawing, Khadya Khurak, year-end reorder.
-// The list's application = how often they've ordered in the app, which sets the tone of the ask.
+// Existing customers (owner, 21–23 Oct 2026): restock check, Diwali update, the new fitted 2-in-1 / 3-in-1
+// heaters + heater plates, new sizes by drawing, Khadya Khurak, January restock. Owner, 23 Oct: keep it casual
+// ("we talk to them every day"), and customers who've ordered don't send drawings or photos — we tell them
+// what they ordered and ask if they need to restock. Per-contact renders name their items (ctx.items, ctx.lastOrder).
+// The list's application = how often they've ordered in the app.
 const EC_APPS = {
-  'Ordered 3+ times':         { kind: 'regular', thanks: 'Thank you for ordering with us regularly — it means a lot to our team.',
-    ask: "Share your requirement for the next 2–3 months and we'll plan your batches in advance." },
-  'Ordered 1–2 times':        { kind: 'recent', thanks: 'Thank you for your recent order with us.',
-    ask: 'Time to restock? Send the quantity — same drawing as your last order.' },
-  'No orders in the app yet': { kind: 'lapsed', thanks: "It's been a while since we last worked together — thank you for choosing us before.",
-    ask: "We'd love to supply you again — send your current requirement or a drawing." },
+  'Ordered 3+ times':         { kind: 'regular' },
+  'Ordered 1–2 times':        { kind: 'recent' },
+  'No orders in the app yet': { kind: 'lapsed' },
 };
-const EC_ALL = { kind: 'all', thanks: 'Thank you for building with Peena Heat Elements.', ask: 'Need your regular elements again? Send the quantity — same drawing as last time.' };
-const EC_REORDER = ['WhatsApp us the drawing number — or a photo of the element — and the quantity', 'We confirm the price and dispatch date', 'Dispatch in 5–7 days · every element tested before dispatch'];
+const EC_ALL = { kind: 'all' };
 const EC_NEW = ['2-in-1 and 3-in-1 heaters, now supplied fully fitted — thermostat pocket, cap & sleeve, gasket and thermostat',
   'Heater plates: round, oval & square plates, 4-hole dishwasher flanges, SS plates', 'Made to your drawing — tested before dispatch'];
-const ecBody = (ctx, ...blocks) => [`${greetEmail(ctx)},`, '', ...blocks.flat(), SIGN].join('\n');
+const EC_SIGN = '— Vama\nPeena Heat Elements · phe.co.in · WhatsApp +91 84520 55836';
+const ecName = ctx => (ctx.company ? shortCompany(ctx.company) : '$[FNAME|there]$');
+const ecMail = (ctx, ...lines) => [`Hi ${ecName(ctx)},`, '', ...lines.flat().filter(l => l !== null && l !== false), '', EC_SIGN].join('\n').replace(/\n{3,}/g, '\n\n');
+const ecHi = ctx => (ctx.company ? `Hi ${shortCompany(ctx.company)} team 👋` : 'Hi 👋');
 const bullets = (label, lines) => [`**${label}**`, ...lines.map(l => '→ ' + l), ''];
+// What they ordered (per-contact renders only — Zoho can't merge it, so the list version stays general).
+const ecItems = (ctx, bold) => (ctx.items && ctx.items.length ? ctx.items.map(i => (bold ? `*${i}*` : i)).join(', ') : null);
+const ecLast = ctx => (ctx.lastOrder ? ` — last order on ${ctx.lastOrder}` : '');
+const ecOrdered = (p, ctx, bold) => {
+  const it = ecItems(ctx, bold);
+  if (p.kind === 'lapsed') return "It's been a while — hope all's well!";
+  if (p.kind === 'regular') return it ? `You've been taking ${it} from us regularly${ecLast(ctx)}.` : 'Thanks for ordering with us regularly!';
+  return it ? `You took ${it} from us${ecLast(ctx)}.` : 'Thanks for your recent order!';
+};
+const ecRestock = p => (p.kind === 'lapsed'
+  ? "Need anything? Just send us the requirement — or a drawing for anything new — and we'll quote."
+  : 'Need to restock? Just let us know the quantity — we have your drawings on file.');
 
 const existingCustomers = {
   name: 'Existing customers · reorder',
-  regionLabel: 'area',
+  regionLabel: 'country',
   apps: EC_APPS, all: EC_ALL,
   touches: [
-    { key: 'thanks', label: 'Thank you + reorder', day: '28 Oct', attach: '',
+    { key: 'thanks', label: 'Restock check', day: '28 Oct', attach: '',
       render: (p, ctx) => ({
-        subject: 'Thank you from Peena Heat Elements — reorder in one message',
-        body: ecBody(ctx, p.thanks, '', bullets('Reorder in one message', EC_REORDER), p.ask, ''),
-        whatsapp: wa(hiWa(ctx), `Vama from *Peena Heat Elements* here. ${p.thanks}`, '', '*Reorder in one message:*', '• Drawing no. (or a photo of the element) + quantity',
-          '• We confirm price & dispatch date', '• Dispatch in 5–7 days, tested', '', p.ask, '', 'Just reply here 🙏'),
+        subject: p.kind === 'lapsed' ? "It's been a while — need anything?" : 'Need to restock?',
+        body: ecMail(ctx, ecOrdered(p, ctx, false), '', ecRestock(p),
+          p.kind === 'regular' ? "If you share your plan for the next 2–3 months, we'll line up your batches in advance." : null,
+          '', 'Dispatch in 5–7 days, every element tested before it leaves.'),
+        whatsapp: wa(ecHi(ctx), ecOrdered(p, ctx, true), '', ecRestock(p), '', '— Vama'),
       }) },
-    { key: 'diwali', label: 'Diwali + update', day: '5 Nov', attach: '',
+    { key: 'diwali', label: 'Diwali + news', day: '5 Nov', attach: '',
       render: (p, ctx) => ({
-        subject: 'Happy Diwali from Peena Heat Elements — a quick update',
-        body: ecBody(ctx, 'Wishing you and your team a very Happy Diwali and a prosperous New Year.', '',
-          bullets('A quick update from us', [`We're exhibiting at ${KK} 2026 for the first time — ${KK_STALL}, ${KK_WHEN}, Gandhinagar`,
-            'New: 2-in-1 and 3-in-1 heaters, now supplied fully fitted', 'Every element tested before dispatch, with a 6-month guarantee', 'Custom shapes bent in-house on our CNC benders']),
-          'Thank you for being part of our journey.', ''),
-        whatsapp: wa(hiWa(ctx), `🪔 *Happy Diwali* from all of us at Peena Heat Elements!`, 'Wishing you and your team a prosperous New Year.', '', '*A quick update:*',
-          `• We're at *${KK} 2026* — ${KK_STALL}, ${KK_WHEN}`, '• New: 2-in-1 & 3-in-1 heaters, supplied fully fitted', '• Every element tested before dispatch · 6-month guarantee', '', '— Vama'),
+        subject: 'Happy Diwali from all of us at Peena Heat Elements',
+        body: ecMail(ctx, 'Happy Diwali to you and the team — wishing you a great year ahead! 🪔', '', 'A bit of news from our side:',
+          `→ We're at ${KK} 2026 for the first time — ${KK_STALL}, ${KK_WHEN}, Gandhinagar`, '→ New: 2-in-1 and 3-in-1 heaters, now supplied fully fitted',
+          '→ Every element tested before dispatch · 6-month guarantee'),
+        whatsapp: wa(ecHi(ctx), '🪔 *Happy Diwali* to you and the team!', '', 'A bit of news from us:', `• We're at *${KK} 2026* — ${KK_STALL}, ${KK_WHEN}`,
+          '• New: 2-in-1 & 3-in-1 heaters, now supplied fully fitted', '', '— Vama'),
       }) },
     { key: 'newproduct', label: 'New: fitted 2-in-1 / 3-in-1', day: '18 Nov', attach: '🖼️ Product image (fitted heater)',
       render: (p, ctx) => ({
-        subject: 'New: 2-in-1 & 3-in-1 heaters, now supplied fully fitted',
-        body: ecBody(ctx, 'Something new for your next order:', '', bullets('New from Peena Heat Elements', EC_NEW),
-          "Want them on your next order? Reply with your drawing and we'll quote the fitted version.", ''),
-        whatsapp: wa(hiWa(ctx), '*New from Peena Heat Elements* 🆕', '', '• 2-in-1 & 3-in-1 heaters, now supplied *fully fitted* — thermostat pocket, cap & sleeve, gasket and thermostat',
-          '• Heater plates — round, oval & square, 4-hole dishwasher flanges, SS plates', '• Made to your drawing · tested before dispatch', '', "Reply with your drawing and we'll quote the fitted version."),
+        subject: 'New: fully fitted 2-in-1 & 3-in-1 heaters',
+        body: ecMail(ctx, 'Something new you might like for your next order:', '', bullets('New from us', EC_NEW),
+          "Want them fitted on your next order? Just reply and we'll quote."),
+        whatsapp: wa(ecHi(ctx), 'Something new from us 🆕', '', '• 2-in-1 & 3-in-1 heaters, now supplied *fully fitted* — thermostat pocket, cap & sleeve, gasket and thermostat',
+          '• Heater plates — round, oval & square, 4-hole dishwasher flanges, SS plates', '', "Want them fitted on your next order? Just reply and we'll quote."),
       }) },
     { key: 'flyer', label: "What's new — flyer", day: '26 Nov', attach: '📄 Flyer', flyer: EC_FLYER, waImage: EC_FLYER,
       render: (p, ctx) => ({
-        subject: "What's new at Peena Heat Elements — on one page",
-        body: flyerBody({ greet: greetEmail(ctx), intro: `Everything new at Peena Heat Elements on one page — reorder in one message, new sizes, our fitted 2-in-1 & 3-in-1 heaters and ${KK}:`, flyer: EC_FLYER,
-          cta: `Reply or WhatsApp to reorder — or scan the QR on it for free entry to ${KK}.` }),
-        whatsapp: wa(hiWa(ctx), "Here's what's new at *Peena Heat Elements* 👆", '', 'Reorder in one message — just reply with the drawing no. + quantity.'),
+        subject: "What's new at Peena Heat Elements",
+        body: flyerBody({ greet: `Hi ${ecName(ctx)}`, intro: 'Everything new from us, on one page:', flyer: EC_FLYER,
+          cta: 'Need to restock? Just reply with the quantity.' }),
+        whatsapp: wa(ecHi(ctx), "Here's what's new with us 👆", '', 'Need to restock? Just send the quantity.'),
       }) },
     { key: 'newsku', label: 'New sizes by drawing', day: '3 Dec', attach: '🖼️ Photo-beside-tape example',
       render: (p, ctx) => ({
-        subject: 'Need a new size? Send a drawing — we make it to match',
-        body: ecBody(ctx, "Adding a new model, or need a size you haven't ordered from us before? It's easy:", '',
-          bullets('A new size in three steps', ['Send the drawing — or a photo of the element beside a measuring tape', 'We confirm the price and make it to match — SS304 · SS316 · Incoloy 800', 'Tested before dispatch · 6-month guarantee']),
-          "Can't share a drawing? Courier us one element and we'll match it.", ''),
-        whatsapp: wa(hiWa(ctx), '*Need a new size?* 📐', '• Send the drawing — or a photo of the element beside a measuring tape', '• We confirm the price and make it to match',
-          '• Tested before dispatch · 6-month guarantee', '', "Can't share a drawing? Courier us one element and we'll match it."),
+        subject: "Need a new size? Send us a drawing",
+        body: ecMail(ctx, "Got a new model coming, or need a size you haven't ordered from us before?", '',
+          "Just send the drawing — or a photo of the element next to a measuring tape — and we'll make it to match. SS304 · SS316 · Incoloy 800, tested before dispatch, 6-month guarantee.", '',
+          "No drawing? Courier us one element and we'll match it."),
+        whatsapp: wa(ecHi(ctx), "Need a size you haven't ordered before? 📐", '', "Send the drawing — or a photo of the element next to a measuring tape — and we'll make it to match.",
+          '', "No drawing? Courier us one element and we'll match it."),
       }) },
     { key: 'show', label: `${KK} invite`, day: '10 Dec', attach: '🎟️ Free-entry link',
       render: (p, ctx) => ({
-        subject: `Meet us at ${KK} — ${KK_STALL} (free entry)`,
-        body: ecBody(ctx, `We're exhibiting at ${KK} 2026 — our first time at the show — and we'd love to see our customers there.`, '',
+        subject: `Come see us at ${KK} — ${KK_STALL}`,
+        body: ecMail(ctx, `We're at ${KK} this year — our first time! Do drop by if you're around:`, '',
           '**Where**', `→ ${KK_STALL} · ${KK_VENUE}`, '**When**', `→ ${KK_WHEN} · ${KK_HOURS}`, '**Entry**', `→ Free as our guest: ${KK_PASS}`, '',
-          "Come see the new fitted 2-in-1 & 3-in-1 heaters, and bring any drawing you'd like to discuss. Not in Gujarat that week? WhatsApp us anytime.", ''),
-        whatsapp: wa(hiWa(ctx), `We're exhibiting at *${KK} 2026* — come and see us!`, '', KK_BLOCK, '', PASS_LINE, '', 'Come see our new fitted 2-in-1 & 3-in-1 heaters. — Vama'),
+          "You'll see the new fitted heaters there too."),
+        whatsapp: wa(ecHi(ctx), `We're at *${KK} 2026* — do drop by! 🙂`, '', KK_BLOCK, '', PASS_LINE, '', '— Vama'),
       }) },
-    { key: 'yearend', label: 'Year-end reorder', day: '22 Dec', attach: '',
-      render: (p, ctx) => ({
-        subject: 'Planning for January? Reorder in one message',
-        body: ecBody(ctx, `Thank you for a wonderful 2026. Planning for January? ${p.ask}`, '', bullets('Reorder in one message', EC_REORDER), 'Wishing you a very happy New Year!', ''),
-        whatsapp: wa(hiWa(ctx), 'Thank you for a wonderful 2026! 🙏', '', `*Planning for January?* ${p.ask}`, '', '• Drawing no. (or photo) + quantity', '• Dispatch in 5–7 days, tested',
-          '', 'Happy New Year! — Vama, Peena Heat Elements'),
-      }) },
+    { key: 'yearend', label: 'January restock', day: '22 Dec', attach: '',
+      render: (p, ctx) => {
+        const it = ecItems(ctx, false), itb = ecItems(ctx, true);
+        const ask = p.kind === 'lapsed' ? "Planning for January? Send us your requirement and we'll quote."
+          : `Planning for January? Just send the quantities${it ? ` for ${it}` : ''} — we'll line them up.`;
+        const askWa = p.kind === 'lapsed' ? ask : `Planning for January? Just send the quantities${itb ? ` for ${itb}` : ''} — we'll line them up.`;
+        return {
+          subject: 'Planning for January?',
+          body: ecMail(ctx, 'Thanks for a great 2026!', '', ask, '', 'Happy New Year! 🎉'),
+          whatsapp: wa(ecHi(ctx), 'Thanks for a great 2026! 🙏', '', askWa, '', 'Happy New Year! 🎉 — Vama'),
+        };
+      } },
   ],
   calls: (p, ctx) => {
     const co = ctx.company || 'the customer';
-    const open = p.kind === 'regular' ? '"Any requirement coming up for November–December? Same drawings as before?"'
-      : p.kind === 'recent' ? '"How did the last batch perform for you? Time to restock?"'
+    const items = ecItems(ctx, false);
+    const open = p.kind === 'regular' ? `"Any requirement coming up for November–December?${items ? ` Same ${items}?` : ''}"`
+      : p.kind === 'recent' ? `"How did the last batch work out?${items ? ` Need more ${items}?` : ' Need to restock?'}"`
       : '"It\'s been a while — what are you using now, and can we quote your next requirement?"';
     return [
-      { label: 'Call #1 — thank you + reorder', day: '30 Oct', script:
-`CALL #1 — ${co} (existing customer · thank you + reorder)\n\n1) "Vama from Peena Heat Elements — calling to say thank you for working with us."\n2) REORDER: ${open}\n3) EASY WAY: "Just WhatsApp the drawing number — or a photo of the element — and the quantity; we confirm price and dispatch date."\n4) Close: right person for orders + best WhatsApp.` },
+      { label: 'Call #1 — restock check', day: '30 Oct', script:
+`CALL #1 — ${co} (existing customer · restock check)\n\n1) Friendly hello — "Vama from Peena Heat Elements."\n2) RESTOCK: ${open}\n3) EASY: "Just tell me the quantity — we have your drawings on file."\n4) Close: confirm the order or a date to check back.` },
       { label: 'Call #2 — new fitted heaters + show', day: '20 Nov', script:
-`CALL #2 — ${co} (new product + ${KK})\n\n1) "Vama from Peena Heat Elements — two quick things."\n2) NEW: "We now supply 2-in-1 and 3-in-1 heaters fully fitted — thermostat pocket, cap & sleeve, gasket and thermostat — plus heater plates. Want a quote on your next order?"\n3) SHOW: "We're at ${KK}, ${KK_STALL}, ${KK_WHEN}. Entry is free as our guest — I'll WhatsApp you the link: ${KK_PASS}"\n4) Close: confirm interest + the day they might visit.` },
+`CALL #2 — ${co} (new product + ${KK})\n\n1) "Vama here — two quick things."\n2) NEW: "We now supply 2-in-1 and 3-in-1 heaters fully fitted — thermostat pocket, cap & sleeve, gasket and thermostat — plus heater plates. Want them on your next order?"\n3) SHOW: "We're at ${KK}, ${KK_STALL}, ${KK_WHEN}. Entry is free as our guest — I'll WhatsApp you the link: ${KK_PASS}"\n4) Close: interest + the day they might visit.` },
       { label: 'Call #3 — January requirement', day: '21 Dec', script:
-`CALL #3 — ${co} (year-end · January requirement)\n\n1) "Vama from Peena Heat Elements — thank you for this year."\n2) PLAN: "What will you need in January? Share the quantities and we'll plan your batches."\n3) NEW SIZES: "Any new size coming up? Send a drawing, or a photo beside a measuring tape."\n4) Close: confirm the order or a follow-up date.` },
+`CALL #3 — ${co} (January requirement)\n\n1) "Vama here — thanks for this year!"\n2) PLAN: "What will you need in January?${items ? ` Same ${items}?` : ''} Tell me the quantities and we'll line them up."\n3) NEW SIZES: "Any new size coming? Send a drawing, or a photo beside a measuring tape."\n4) Close: confirm the order or a follow-up date.` },
     ];
   },
 };
+
+// Saudi customers get the campaign in Arabic (owner, 23 Oct 2026). On this list the region is the
+// country, so picking "Saudi Arabia" shows the Arabic edition and its Zoho export is the Saudi slice.
+// Not a word-for-word copy: no Diwali greeting, and the show touch is framed for visitors to India.
+const EC_FLYER_AR = `${SITE}/phe-existing-customers-flyer-ar.jpg`;
+const isArabicRegion = ctx => ctx.region === 'Saudi Arabia';
+const AR_PROFILE = {
+  regular: { thanks: 'شكرًا لثقتكم وطلباتكم المنتظمة معنا — وهذا يعني لنا الكثير.', ask: 'شاركونا احتياجاتكم للشهرين أو الثلاثة القادمة، وسنخطط دفعات الإنتاج مسبقًا.' },
+  recent:  { thanks: 'شكرًا على طلبكم الأخير معنا.', ask: 'هل حان وقت تجديد المخزون؟ أخبرونا بالكمية فقط — رسوماتكم محفوظة لدينا.' },
+  lapsed:  { thanks: 'مضى بعض الوقت منذ آخر تعامل بيننا — شكرًا لاختياركم لنا من قبل.', ask: 'يسعدنا أن نخدمكم مجددًا — أرسلوا احتياجاتكم الحالية أو رسمًا فنيًا.' },
+  all:     { thanks: 'شكرًا لتعاملكم مع Peena Heat Elements.', ask: 'هل تحتاجون عناصركم المعتادة مجددًا؟ أرسلوا الكمية — بنفس الرسم الفني السابق.' },
+};
+const coAr = ctx => ctx.company || '$[FNAME|شركتكم]$';
+const hiAr = ctx => (ctx.company ? `مرحبًا فريق ${shortCompany(ctx.company)} 🙏` : 'مرحبًا 🙏');
+const SIGN_AR = `مع أطيب التحيات،\nفاما · Peena Heat Elements\nphe.co.in · vama@peenaheatelements.com\nالكتالوج: ${CAT}`;
+const arBody = (ctx, ...blocks) => [`السادة / ${coAr(ctx)} المحترمين،`, 'تحية طيبة وبعد،', '', ...blocks.flat(), SIGN_AR].join('\n');
+const AR_REORDER = ['أخبرونا بالصنف والكمية عبر واتساب — رسوماتكم محفوظة لدينا', 'نؤكد لكم السعر وموعد الشحن', 'الشحن خلال 5 إلى 7 أيام · كل عنصر يُختبر قبل الشحن'];
+const AR_NEW = ['سخانات 2 في 1 و3 في 1، تُورَّد الآن مجهزة بالكامل — جيب الثرموستات، الغطاء والجلبة، الحشية والثرموستات',
+  'ألواح تثبيت السخانات: ألواح دائرية وبيضاوية ومربعة، فلنجات غسالات الصحون بأربع فتحات، وألواح من الستانلس ستيل', 'مصنوعة حسب رسوماتكم الفنية — ومختبرة قبل الشحن'];
+const EC_AR = {
+  thanks: (a, ctx) => ({
+    subject: 'شكرًا من Peena Heat Elements — أعيدوا الطلب برسالة واحدة',
+    body: arBody(ctx, a.thanks, '', bullets('أعيدوا الطلب برسالة واحدة', AR_REORDER), a.ask, ''),
+    whatsapp: wa(hiAr(ctx), `معكم فاما من *Peena Heat Elements*. ${a.thanks}`, '', '*أعيدوا الطلب برسالة واحدة:*', '• الصنف + الكمية — رسوماتكم محفوظة لدينا',
+      '• نؤكد السعر وموعد الشحن', '• الشحن خلال 5 إلى 7 أيام، بعد الاختبار', '', a.ask, '', 'يكفي الرد هنا 🙏'),
+  }),
+  diwali: (a, ctx) => ({
+    subject: 'تحديث سريع من Peena Heat Elements',
+    body: arBody(ctx, 'يسعدنا أن نشارككم آخر المستجدات لدينا:', '',
+      bullets('ما الجديد لدينا', ['سخانات 2 في 1 و3 في 1 تُورَّد الآن مجهزة بالكامل', 'كل عنصر يُختبر قبل الشحن، مع ضمان لمدة ستة أشهر', 'نُشكّل الأشكال الخاصة داخل مصنعنا بآلات ثني CNC', 'نُصدّر إلى عملائنا في جميع أنحاء العالم']),
+      'شكرًا لكونكم جزءًا من مسيرتنا.', ''),
+    whatsapp: wa(hiAr(ctx), '*تحديث سريع من Peena Heat Elements:*', '• سخانات 2 في 1 و3 في 1 تُورَّد الآن مجهزة بالكامل',
+      '• كل عنصر يُختبر قبل الشحن · ضمان ستة أشهر', '• تشكيل الأشكال الخاصة بآلات CNC داخل مصنعنا', '', '— فاما'),
+  }),
+  newproduct: (a, ctx) => ({
+    subject: 'جديد: سخانات 2 في 1 و3 في 1 مجهزة بالكامل',
+    body: arBody(ctx, 'منتج جديد لطلبكم القادم:', '', bullets('جديد من Peena Heat Elements', AR_NEW),
+      'هل ترغبون بإضافتها إلى طلبكم القادم؟ أرسلوا الرسم الفني وسنرسل لكم عرض سعر للنسخة المجهزة بالكامل.', ''),
+    whatsapp: wa(hiAr(ctx), '*جديد من Peena Heat Elements* 🆕', '', '• سخانات 2 في 1 و3 في 1 تُورَّد الآن *مجهزة بالكامل* — جيب الثرموستات، الغطاء والجلبة، الحشية والثرموستات',
+      '• ألواح تثبيت السخانات — دائرية وبيضاوية ومربعة، فلنجات غسالات الصحون بأربع فتحات، وألواح ستانلس ستيل', '• حسب رسوماتكم الفنية · مختبرة قبل الشحن', '',
+      'أرسلوا الرسم الفني وسنرسل عرض سعر للنسخة المجهزة بالكامل.'),
+  }),
+  flyer: (a, ctx) => ({
+    flyer: EC_FLYER_AR, waImage: EC_FLYER_AR,
+    subject: 'كل جديد Peena Heat Elements في صفحة واحدة',
+    body: [`السادة / ${coAr(ctx)} المحترمين،`, 'تحية طيبة وبعد،', '', 'كل جديدنا في صفحة واحدة — إعادة الطلب برسالة واحدة، المقاسات الجديدة، وسخانات 2 في 1 و3 في 1 المجهزة بالكامل:', '',
+      `[[IMG:${EC_FLYER_AR}]]`, '', 'للطلب، يكفي الرد على هذه الرسالة أو مراسلتنا عبر واتساب.', '', 'فاما · Peena Heat Elements\nphe.co.in · vama@peenaheatelements.com'].join('\n'),
+    whatsapp: wa(hiAr(ctx), 'إليكم كل جديد *Peena Heat Elements* في صفحة واحدة 👆', '', 'أعيدوا الطلب برسالة واحدة — يكفي الرد بالصنف والكمية.'),
+  }),
+  newsku: (a, ctx) => ({
+    subject: 'تحتاجون مقاسًا جديدًا؟ أرسلوا الرسم الفني ونصنعه مطابقًا',
+    body: arBody(ctx, 'هل تضيفون طرازًا جديدًا، أو تحتاجون مقاسًا لم تطلبوه منا من قبل؟ الأمر سهل:', '',
+      bullets('مقاس جديد في ثلاث خطوات', ['أرسلوا الرسم الفني — أو صورة للعنصر بجانب شريط قياس', 'نؤكد السعر ونصنعه مطابقًا — SS304 · SS316 · Incoloy 800', 'مختبر قبل الشحن · ضمان لمدة ستة أشهر']),
+      'لا يتوفر رسم فني؟ أرسلوا لنا عنصرًا واحدًا بالبريد السريع وسنصنع مثله.', ''),
+    whatsapp: wa(hiAr(ctx), '*تحتاجون مقاسًا جديدًا؟* 📐', '• أرسلوا الرسم الفني — أو صورة للعنصر بجانب شريط قياس', '• نؤكد السعر ونصنعه مطابقًا',
+      '• مختبر قبل الشحن · ضمان ستة أشهر', '', 'لا يتوفر رسم فني؟ أرسلوا لنا عنصرًا واحدًا وسنصنع مثله.'),
+  }),
+  show: (a, ctx) => ({
+    subject: 'نشارك في معرض خاديا خوراك 2026 في الهند',
+    body: arBody(ctx, 'نشارك لأول مرة في معرض خاديا خوراك 2026 للصناعات الغذائية في غانديناغار، الهند.', '',
+      '**المكان**', '→ الجناح 254، القاعة 8 · Helipad Exhibition Centre, Sector 17, Gandhinagar', '**الموعد**', '→ من 16 إلى 19 ديسمبر · من 10 صباحًا حتى 6 مساءً',
+      '**الدخول**', `→ مجاني كضيوف لدينا: ${KK_PASS}`, '', 'إن كنتم في الهند خلال تلك الفترة يسعدنا لقاؤكم — وإلا فنحن متاحون دائمًا عبر واتساب.', ''),
+    whatsapp: wa(hiAr(ctx), 'نشارك في *معرض خاديا خوراك 2026* في الهند 🇮🇳', '', '📍 الجناح 254، القاعة 8 · غانديناغار', '📅 من 16 إلى 19 ديسمبر · من 10 صباحًا حتى 6 مساءً', '',
+      `🎟️ الدخول مجاني كضيوف لدينا: ${KK_PASS}`, '', 'إن كنتم في الهند يسعدنا لقاؤكم — وإلا فنحن على واتساب دائمًا. — فاما'),
+  }),
+  yearend: (a, ctx) => ({
+    subject: 'تخططون لشهر يناير؟ أعيدوا الطلب برسالة واحدة',
+    body: arBody(ctx, `شكرًا لكم على عام 2026. تخططون لشهر يناير؟ ${a.ask}`, '', bullets('أعيدوا الطلب برسالة واحدة', AR_REORDER), 'نتمنى لكم عامًا جديدًا سعيدًا!', ''),
+    whatsapp: wa(hiAr(ctx), 'شكرًا لكم على عام 2026! 🙏', '', `*تخططون لشهر يناير؟* ${a.ask}`, '', '• الصنف + الكمية', '• الشحن خلال 5 إلى 7 أيام، بعد الاختبار',
+      '', 'كل عام وأنتم بخير — فاما، Peena Heat Elements'),
+  }),
+};
+existingCustomers.touches = existingCustomers.touches.map(t => ({
+  ...t,
+  render: (p, ctx) => (isArabicRegion(ctx) && EC_AR[t.key] ? EC_AR[t.key](AR_PROFILE[p.kind] || AR_PROFILE.all, ctx) : t.render(p, ctx)),
+}));
+existingCustomers.regionLabel = 'country';
 
 // PharmaTech Expo contacts → Khadya Khurak invite.
 const PT_APPS = {

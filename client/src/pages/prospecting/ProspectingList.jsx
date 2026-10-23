@@ -204,7 +204,16 @@ export default function ProspectingList() {
 
   // --- Per contact: the same list touch, rendered with the row's own application, region and company ---
   const hasCampaign = p => !!campaignFor(p.segment) && p.status !== 'skip';
-  const rowCtx = p => ({ app: p.application || '', region: p.state || '', company: p.company });
+  // Existing customers: the row's notes carry what they order ("Most-ordered items: …") and the order span
+  // ("Orders in the app: N (first – last)") — the restock messages name both.
+  const rowCtx = p => {
+    const notes = p.notes || '';
+    const items = (notes.match(/Most-ordered items: (.+?)\.(?:\s|$)/) || [])[1];
+    const lastOrder = (notes.match(/Orders in the app: \d+ \([^–)]*– ([^)]+)\)/) || [])[1];
+    return { app: p.application || '', region: p.state || '', company: p.company,
+      items: items ? items.split(' · ').map(s => s.replace(/\s*×\d+$/, '').trim()).filter(Boolean).slice(0, 2) : null,
+      lastOrder: lastOrder || null };
+  };
   // wa.me click-to-send: digits-only number + URL-encoded prefilled message
   const waLinkFor = (phone, text) => {
     const num = String(phone || '').replace(/[^0-9]/g, '');

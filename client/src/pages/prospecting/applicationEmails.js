@@ -202,7 +202,7 @@ function footer(application) {
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 // Email-client-safe CTA button (table + styled anchor — works in Outlook/Gmail).
-export function catalogueButtonHtml(application) {
+export function catalogueButtonHtml(application, ar = false) {
   const cat = catalogueFor(application);
   return (
     '<table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin:18px 0;">' +
@@ -210,10 +210,12 @@ export function catalogueButtonHtml(application) {
     `<a href="${cat.url}" target="_blank" ` +
     'style="display:inline-block;padding:12px 26px;font-family:Arial,Helvetica,sans-serif;' +
     'font-size:15px;font-weight:bold;line-height:1;color:#ffffff;text-decoration:none;border-radius:6px;">' +
-    `View our ${esc(cat.label.toLowerCase())} (PDF) &nbsp;&rarr;</a>` +
+    (ar ? 'تصفّح كتالوج منتجاتنا الكامل (PDF) &nbsp;&larr;' : `View our ${esc(cat.label.toLowerCase())} (PDF) &nbsp;&rarr;`) + '</a>' +
     '</td></tr></table>'
   );
 }
+// Arabic emails (Saudi customers) render right-to-left.
+const isArabic = s => /[؀-ۿ]/.test(String(s || ''));
 
 /**
  * Convert the (possibly hand-edited) plain-text body into Zoho-ready HTML:
@@ -223,6 +225,7 @@ export function catalogueButtonHtml(application) {
  */
 export function bodyToHtml(bodyText, application) {
   const cat = catalogueFor(application);
+  const ar = isArabic(bodyText);
   const out = [];
   let para = [], bullets = [];
   const flushPara = () => {
@@ -235,7 +238,7 @@ export function bodyToHtml(bodyText, application) {
   const flushBullets = () => {
     if (bullets.length) {
       // list-style inline: some clients (and the app's own CSS reset) drop default bullets
-      out.push(`<ul style="margin:0 0 14px;padding-left:20px;list-style:disc;">${bullets.map(b => `<li style="margin:4px 0;">${b}</li>`).join('')}</ul>`);
+      out.push(`<ul style="margin:0 0 14px;${ar ? 'padding-right:20px;padding-left:0' : 'padding-left:20px'};list-style:disc;">${bullets.map(b => `<li style="margin:4px 0;">${b}</li>`).join('')}</ul>`);
       bullets = [];
     }
   };
@@ -244,7 +247,9 @@ export function bodyToHtml(bodyText, application) {
     .replace(/https:\/\/phe\.co\.in/g, '<a href="https://phe.co.in" target="_blank" style="color:#b91c1c;">phe.co.in</a>')
     // Khadya Khurak free-entry invite page (visitors campaign) → a real link, shown without https://
     .replace(/https:\/\/khadhyakhurak\.com\/registration\/[A-Za-z0-9_-]+/g, m => `<a href="${m}" target="_blank" style="color:#b91c1c;font-weight:600;">${m.replace('https://', '')}</a>`)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    // inside Arabic text, keep phone numbers left-to-right so "+91 84520 55836" doesn't scramble
+    .replace(/\+\d[\d ]{6,}\d/g, m => (ar ? `<span dir="ltr">${m}</span>` : m));
 
   for (const raw of String(bodyText).split('\n')) {
     const line = raw.replace(/\s+$/, '');
@@ -258,7 +263,7 @@ export function bodyToHtml(bodyText, application) {
     // the plain-text catalogue line renders as the clickable button instead
     if (line.includes(cat.url) || /^Catalogue:\s*https?:\/\//i.test(line) || /\(PDF\):\s*https?:\/\/\S+\.pdf/i.test(line)) {
       flushBullets(); flushPara();
-      out.push(catalogueButtonHtml(application));
+      out.push(catalogueButtonHtml(application, ar));
       continue;
     }
     if (line.startsWith('→')) { flushPara(); bullets.push(linkify(line.replace(/^→\s*/, ''))); continue; }
@@ -269,9 +274,10 @@ export function bodyToHtml(bodyText, application) {
   flushBullets(); flushPara();
 
   return (
-    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1f2937;max-width:620px;">' +
+    (ar ? '<div dir="rtl" style="font-family:Tahoma,Arial,Helvetica,sans-serif;font-size:15px;line-height:1.8;color:#1f2937;max-width:620px;text-align:right;">'
+      : '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1f2937;max-width:620px;">') +
     out.join('\n') +
-    whatsappQrHtml() +
+    whatsappQrHtml(ar) +
     '</div>'
   );
 }
@@ -285,7 +291,17 @@ export function bodyToPlain(bodyText) {
 }
 
 // WhatsApp click-to-chat QR footer appended to every campaign email (scans to wa.me/Vama).
-export function whatsappQrHtml() {
+export function whatsappQrHtml(ar = false) {
+  if (ar) return (
+    '<table role="presentation" dir="rtl" cellpadding="0" cellspacing="0" style="margin:20px 0 0;border-top:1px solid #e5e7eb;padding-top:14px;"><tr>' +
+    '<td style="vertical-align:middle;padding-left:12px;">' +
+    '<img src="https://www.peenaheatelements.com/phe-whatsapp-qr.png" width="92" height="92" alt="WhatsApp QR" style="display:block;width:92px;height:92px;border:1px solid #e5e7eb;border-radius:6px;">' +
+    '</td>' +
+    '<td style="vertical-align:middle;font-family:Tahoma,Arial,Helvetica,sans-serif;font-size:13px;color:#374151;line-height:1.7;text-align:right;">' +
+    '<strong style="color:#128C7E;">امسحوا الرمز للتواصل معنا عبر واتساب</strong><br>' +
+    'أو راسلوا فاما مباشرة: <a href="https://wa.me/918452055836" style="color:#b91c1c;text-decoration:none;"><span dir="ltr">+91 84520 55836</span></a>' +
+    '</td></tr></table>'
+  );
   return (
     '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0 0;border-top:1px solid #e5e7eb;padding-top:14px;"><tr>' +
     '<td style="vertical-align:middle;padding-right:12px;">' +
