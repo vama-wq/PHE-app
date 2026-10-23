@@ -11,6 +11,7 @@ const KK_FLYER = `${SITE}/phe-khadya-khurak-flyer.jpg`;
 const KK_CARD = `${SITE}/phe-khadya-wa-invite.jpg`;
 // One flyer per campaign: Khadya exhibitors, Khadya visitors, Khadya PharmaTech, Oman, Qatar, Vietnam.
 const KKV_FLYER = `${SITE}/phe-khadya-visitors-flyer.jpg`;
+const EC_FLYER = `${SITE}/phe-existing-customers-flyer.jpg`;
 const OMAN_FLYER = `${SITE}/phe-oman-flyer.jpg`;
 const QATAR_FLYER = `${SITE}/phe-qatar-flyer.jpg`;
 const PT_FLYER = `${SITE}/phe-pharmatech-khadya-flyer.jpg`;
@@ -254,6 +255,102 @@ const visitorsKK = {
   },
 };
 
+// Existing customers (owner, 21–23 Oct 2026): thank-you + reorder, Diwali update, the new fitted
+// 2-in-1 / 3-in-1 heaters + heater plates, new sizes by drawing, Khadya Khurak, year-end reorder.
+// The list's application = how often they've ordered in the app, which sets the tone of the ask.
+const EC_APPS = {
+  'Ordered 3+ times':         { kind: 'regular', thanks: 'Thank you for ordering with us regularly — it means a lot to our team.',
+    ask: "Share your requirement for the next 2–3 months and we'll plan your batches in advance." },
+  'Ordered 1–2 times':        { kind: 'recent', thanks: 'Thank you for your recent order with us.',
+    ask: 'Time to restock? Send the quantity — same drawing as your last order.' },
+  'No orders in the app yet': { kind: 'lapsed', thanks: "It's been a while since we last worked together — thank you for choosing us before.",
+    ask: "We'd love to supply you again — send your current requirement or a drawing." },
+};
+const EC_ALL = { kind: 'all', thanks: 'Thank you for building with Peena Heat Elements.', ask: 'Need your regular elements again? Send the quantity — same drawing as last time.' };
+const EC_REORDER = ['WhatsApp us the drawing number — or a photo of the element — and the quantity', 'We confirm the price and dispatch date', 'Dispatch in 5–7 days · every element tested before dispatch'];
+const EC_NEW = ['2-in-1 and 3-in-1 heaters, now supplied fully fitted — thermostat pocket, cap & sleeve, gasket and thermostat',
+  'Heater plates: round, oval & square plates, 4-hole dishwasher flanges, SS plates', 'Made to your drawing — tested before dispatch'];
+const ecBody = (ctx, ...blocks) => [`${greetEmail(ctx)},`, '', ...blocks.flat(), SIGN].join('\n');
+const bullets = (label, lines) => [`**${label}**`, ...lines.map(l => '→ ' + l), ''];
+
+const existingCustomers = {
+  name: 'Existing customers · reorder',
+  regionLabel: 'area',
+  apps: EC_APPS, all: EC_ALL,
+  touches: [
+    { key: 'thanks', label: 'Thank you + reorder', day: '28 Oct', attach: '',
+      render: (p, ctx) => ({
+        subject: 'Thank you from Peena Heat Elements — reorder in one message',
+        body: ecBody(ctx, p.thanks, '', bullets('Reorder in one message', EC_REORDER), p.ask, ''),
+        whatsapp: wa(hiWa(ctx), `Vama from *Peena Heat Elements* here. ${p.thanks}`, '', '*Reorder in one message:*', '• Drawing no. (or a photo of the element) + quantity',
+          '• We confirm price & dispatch date', '• Dispatch in 5–7 days, tested', '', p.ask, '', 'Just reply here 🙏'),
+      }) },
+    { key: 'diwali', label: 'Diwali + update', day: '5 Nov', attach: '',
+      render: (p, ctx) => ({
+        subject: 'Happy Diwali from Peena Heat Elements — a quick update',
+        body: ecBody(ctx, 'Wishing you and your team a very Happy Diwali and a prosperous New Year.', '',
+          bullets('A quick update from us', [`We're exhibiting at ${KK} 2026 for the first time — ${KK_STALL}, ${KK_WHEN}, Gandhinagar`,
+            'New: 2-in-1 and 3-in-1 heaters, now supplied fully fitted', 'Every element tested before dispatch, with a 6-month guarantee', 'Custom shapes bent in-house on our CNC benders']),
+          'Thank you for being part of our journey.', ''),
+        whatsapp: wa(hiWa(ctx), `🪔 *Happy Diwali* from all of us at Peena Heat Elements!`, 'Wishing you and your team a prosperous New Year.', '', '*A quick update:*',
+          `• We're at *${KK} 2026* — ${KK_STALL}, ${KK_WHEN}`, '• New: 2-in-1 & 3-in-1 heaters, supplied fully fitted', '• Every element tested before dispatch · 6-month guarantee', '', '— Vama'),
+      }) },
+    { key: 'newproduct', label: 'New: fitted 2-in-1 / 3-in-1', day: '18 Nov', attach: '🖼️ Product image (fitted heater)',
+      render: (p, ctx) => ({
+        subject: 'New: 2-in-1 & 3-in-1 heaters, now supplied fully fitted',
+        body: ecBody(ctx, 'Something new for your next order:', '', bullets('New from Peena Heat Elements', EC_NEW),
+          "Want them on your next order? Reply with your drawing and we'll quote the fitted version.", ''),
+        whatsapp: wa(hiWa(ctx), '*New from Peena Heat Elements* 🆕', '', '• 2-in-1 & 3-in-1 heaters, now supplied *fully fitted* — thermostat pocket, cap & sleeve, gasket and thermostat',
+          '• Heater plates — round, oval & square, 4-hole dishwasher flanges, SS plates', '• Made to your drawing · tested before dispatch', '', "Reply with your drawing and we'll quote the fitted version."),
+      }) },
+    { key: 'flyer', label: "What's new — flyer", day: '26 Nov', attach: '📄 Flyer', flyer: EC_FLYER, waImage: EC_FLYER,
+      render: (p, ctx) => ({
+        subject: "What's new at Peena Heat Elements — on one page",
+        body: flyerBody({ greet: greetEmail(ctx), intro: `Everything new at Peena Heat Elements on one page — reorder in one message, new sizes, our fitted 2-in-1 & 3-in-1 heaters and ${KK}:`, flyer: EC_FLYER,
+          cta: `Reply or WhatsApp to reorder — or scan the QR on it for free entry to ${KK}.` }),
+        whatsapp: wa(hiWa(ctx), "Here's what's new at *Peena Heat Elements* 👆", '', 'Reorder in one message — just reply with the drawing no. + quantity.'),
+      }) },
+    { key: 'newsku', label: 'New sizes by drawing', day: '3 Dec', attach: '🖼️ Photo-beside-tape example',
+      render: (p, ctx) => ({
+        subject: 'Need a new size? Send a drawing — we make it to match',
+        body: ecBody(ctx, "Adding a new model, or need a size you haven't ordered from us before? It's easy:", '',
+          bullets('A new size in three steps', ['Send the drawing — or a photo of the element beside a measuring tape', 'We confirm the price and make it to match — SS304 · SS316 · Incoloy 800', 'Tested before dispatch · 6-month guarantee']),
+          "Can't share a drawing? Courier us one element and we'll match it.", ''),
+        whatsapp: wa(hiWa(ctx), '*Need a new size?* 📐', '• Send the drawing — or a photo of the element beside a measuring tape', '• We confirm the price and make it to match',
+          '• Tested before dispatch · 6-month guarantee', '', "Can't share a drawing? Courier us one element and we'll match it."),
+      }) },
+    { key: 'show', label: `${KK} invite`, day: '10 Dec', attach: '🎟️ Free-entry link',
+      render: (p, ctx) => ({
+        subject: `Meet us at ${KK} — ${KK_STALL} (free entry)`,
+        body: ecBody(ctx, `We're exhibiting at ${KK} 2026 — our first time at the show — and we'd love to see our customers there.`, '',
+          '**Where**', `→ ${KK_STALL} · ${KK_VENUE}`, '**When**', `→ ${KK_WHEN} · ${KK_HOURS}`, '**Entry**', `→ Free as our guest: ${KK_PASS}`, '',
+          "Come see the new fitted 2-in-1 & 3-in-1 heaters, and bring any drawing you'd like to discuss. Not in Gujarat that week? WhatsApp us anytime.", ''),
+        whatsapp: wa(hiWa(ctx), `We're exhibiting at *${KK} 2026* — come and see us!`, '', KK_BLOCK, '', PASS_LINE, '', 'Come see our new fitted 2-in-1 & 3-in-1 heaters. — Vama'),
+      }) },
+    { key: 'yearend', label: 'Year-end reorder', day: '22 Dec', attach: '',
+      render: (p, ctx) => ({
+        subject: 'Planning for January? Reorder in one message',
+        body: ecBody(ctx, `Thank you for a wonderful 2026. Planning for January? ${p.ask}`, '', bullets('Reorder in one message', EC_REORDER), 'Wishing you a very happy New Year!', ''),
+        whatsapp: wa(hiWa(ctx), 'Thank you for a wonderful 2026! 🙏', '', `*Planning for January?* ${p.ask}`, '', '• Drawing no. (or photo) + quantity', '• Dispatch in 5–7 days, tested',
+          '', 'Happy New Year! — Vama, Peena Heat Elements'),
+      }) },
+  ],
+  calls: (p, ctx) => {
+    const co = ctx.company || 'the customer';
+    const open = p.kind === 'regular' ? '"Any requirement coming up for November–December? Same drawings as before?"'
+      : p.kind === 'recent' ? '"How did the last batch perform for you? Time to restock?"'
+      : '"It\'s been a while — what are you using now, and can we quote your next requirement?"';
+    return [
+      { label: 'Call #1 — thank you + reorder', day: '30 Oct', script:
+`CALL #1 — ${co} (existing customer · thank you + reorder)\n\n1) "Vama from Peena Heat Elements — calling to say thank you for working with us."\n2) REORDER: ${open}\n3) EASY WAY: "Just WhatsApp the drawing number — or a photo of the element — and the quantity; we confirm price and dispatch date."\n4) Close: right person for orders + best WhatsApp.` },
+      { label: 'Call #2 — new fitted heaters + show', day: '20 Nov', script:
+`CALL #2 — ${co} (new product + ${KK})\n\n1) "Vama from Peena Heat Elements — two quick things."\n2) NEW: "We now supply 2-in-1 and 3-in-1 heaters fully fitted — thermostat pocket, cap & sleeve, gasket and thermostat — plus heater plates. Want a quote on your next order?"\n3) SHOW: "We're at ${KK}, ${KK_STALL}, ${KK_WHEN}. Entry is free as our guest — I'll WhatsApp you the link: ${KK_PASS}"\n4) Close: confirm interest + the day they might visit.` },
+      { label: 'Call #3 — January requirement', day: '21 Dec', script:
+`CALL #3 — ${co} (year-end · January requirement)\n\n1) "Vama from Peena Heat Elements — thank you for this year."\n2) PLAN: "What will you need in January? Share the quantities and we'll plan your batches."\n3) NEW SIZES: "Any new size coming up? Send a drawing, or a photo beside a measuring tape."\n4) Close: confirm the order or a follow-up date.` },
+    ];
+  },
+};
+
 // PharmaTech Expo contacts → Khadya Khurak invite.
 const PT_APPS = {
   'Fluid bed dryers & granulation': { their: 'your fluid bed dryers, granulators and process machines', elem: 'finned tubular air heaters and jacketed immersion heaters', short: 'dryer' },
@@ -438,6 +535,7 @@ const vietnam = {
 const CAMPAIGNS = {
   'khadya-khurak-exhibitors': exhibitors,
   'khadya-khurak-visitors': visitorsKK,
+  'existing-customers': existingCustomers,
   'pharma-tech-expo': pharmaTech,
   'oman': gulf('Oman'),
   'qatar': gulf('Qatar'),
