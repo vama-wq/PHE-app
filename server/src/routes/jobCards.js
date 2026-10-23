@@ -1976,6 +1976,10 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
     const order = await db.get('SELECT * FROM orders WHERE id=$1', [order_id]);
     if (!order) return res.status(404).json({ error: 'Order not found' });
     if (order.order_type !== 'finished_goods') return res.status(400).json({ error: 'Not a Finished Goods order' });
+    // Blanket no-deduct order (owner, 23 Oct 2026): the card is still made, but it
+    // draws NO Finished Goods stock and logs no outward — the owner manages this
+    // order's stock by hand (its later stages also deduct nothing, via the freeze).
+    const noDeduct = require('../lib/inventoryFreeze').isBlanketNoDeduct(order.order_code);
     const item = await db.get('SELECT * FROM order_items WHERE id=$1 AND order_id=$2', [order_item_id, order_id]);
     if (!item) return res.status(400).json({ error: 'Order item not found' });
     const parsedQty = parseInt(qty, 10);
@@ -1995,13 +1999,13 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
 
     const pickedStore = parseInt(req.body.fg_store_id, 10) || null;
     const fg = pickedStore ? await db.get('SELECT * FROM finished_goods WHERE id=$1', [pickedStore]) : await fgFifo.storeRowFor(db, item);
-    if (!fg) return res.status(400).json({ error: pickedStore ? 'That Finished Goods stock was not found' : `No Finished Goods stock found for ${item.drawing_number || 'this item'} — the store has no row for that drawing.` });
+    if (!fg && !noDeduct) return res.status(400).json({ error: pickedStore ? 'That Finished Goods stock was not found' : `No Finished Goods stock found for ${item.drawing_number || 'this item'} — the store has no row for that drawing.` });
     // A multi-element heater (3in1, 2in1) is assembled from single heaters in the
     // store: QTY is the finished heaters, the store draw is QTY × elements (owner,
     // 16 Oct 2026). A single-element item has elements 1 — nothing changes for it.
     const elements = require('../lib/brazingRings').elementsFromName(item.drawing_number, item.product_code) || 1;
     const storeDraw = parsedQty * elements;
-    if (Number(fg.qty_available) < storeDraw) {
+    if (!noDeduct && Number(fg.qty_available) < storeDraw) {
       return res.status(400).json({ error: `Insufficient Finished Goods stock: need ${storeDraw}${elements > 1 ? ` (${parsedQty} × ${elements} elements)` : ''}, only ${fg.qty_available} available` });
     }
 
@@ -2040,37 +2044,40 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
     created = await db.withTransaction(async (client) => {
       // The store row locked, so two cards made at once never take the same pieces.
       const cdb = { get: async (q, p = []) => (await client.query(q, p)).rows[0] || null, all: async (q, p = []) => (await client.query(q, p)).rows };
-      const row = await cdb.get('SELECT * FROM finished_goods WHERE id=$1 FOR UPDATE', [fg.id]);
-      if (Number(row.qty_available) < storeDraw) {
+      const row = fg ? await cdb.get('SELECT * FROM finished_goods WHERE id=$1 FOR UPDATE', [fg.id]) : null;
+      if (!noDeduct && Number(row.qty_available) < storeDraw) {
         throw Object.assign(new Error(`Insufficient Finished Goods stock: need ${storeDraw}, only ${row.qty_available} available`), { status: 400 });
       }
-      const batches = await fgFifo.batchesLeft(cdb, fg.id);
+      const batches = fg ? await fgFifo.batchesLeft(cdb, fg.id) : [];
       const out = [];
       for (let i = 0; i < numbers.length; i++) {
         // The card is parts[i] finished heaters; it draws parts[i] × elements singles.
         const drawI = parts[i] * elements;
-        const { parts: took } = fgFifo.allocate(batches, drawI);
+        const took = noDeduct ? [] : fgFifo.allocate(batches, drawI).parts;
         const { rows: ins } = await client.query(
           `INSERT INTO job_cards (job_card_no, order_id, file_path, file_name, original_name, qty, dispatch_date, notes, drawing_no, product_name, uploaded_by, order_item_id, is_fg, fg_source_id, fg_batches)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,TRUE,$13,$14) RETURNING id`,
           [numbers[i], order_id, req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null,
            parts[i], dispatch_date, notes || null, item.drawing_number || null, item.product_code || null,
-           req.user.id, order_item_id, fg.id, JSON.stringify(took)]
+           req.user.id, order_item_id, fg?.id || null, JSON.stringify(took)]
         );
         out.push({ id: ins[0].id, job_card_no: numbers[i], qty: parts[i], store_qty: drawI, took });
       }
 
       // Stock is issued once for the whole item; the ledger records it per card
-      // so each line ties back to the card that consumed it.
-      await client.query('UPDATE finished_goods SET qty_available = qty_available - $1 WHERE id=$2', [storeDraw, fg.id]);
-      for (const c of out) {
-        await client.query(
-          `INSERT INTO finished_goods_log
-             (finished_good_id, movement_type, qty, outward_type, notes, location, order_code, job_card_no, created_by)
-           VALUES ($1,'outward',$2,'production',$3,$4,$5,$6,$7)`,
-          [fg.id, c.store_qty, `Issued to production for FG order ${order.order_code}${elements > 1 ? ` — ${c.store_qty} singles for ${c.qty} × ${elements}in1` : ''}`, fg.location || null,
-           order.order_code, c.job_card_no, req.user.id]
-        );
+      // so each line ties back to the card that consumed it. A blanket no-deduct
+      // order (owner, 23 Oct 2026) draws nothing and logs no outward.
+      if (!noDeduct) {
+        await client.query('UPDATE finished_goods SET qty_available = qty_available - $1 WHERE id=$2', [storeDraw, fg.id]);
+        for (const c of out) {
+          await client.query(
+            `INSERT INTO finished_goods_log
+               (finished_good_id, movement_type, qty, outward_type, notes, location, order_code, job_card_no, created_by)
+             VALUES ($1,'outward',$2,'production',$3,$4,$5,$6,$7)`,
+            [fg.id, c.store_qty, `Issued to production for FG order ${order.order_code}${elements > 1 ? ` — ${c.store_qty} singles for ${c.qty} × ${elements}in1` : ''}`, fg.location || null,
+             order.order_code, c.job_card_no, req.user.id]
+          );
+        }
       }
       return out;
     });
@@ -2081,7 +2088,7 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
 
     // The app-made card: one printable sheet per card, stored as the card's file
     // so View and Print open it like any other job card.
-    const cutFrom = fg.base_drawing_no || fg.drawing_no;
+    const cutFrom = fg ? (fg.base_drawing_no || fg.drawing_no) : (item.drawing_number || null);
     let renderWarning = null;
     if (generate) {
       const { renderFgCard } = require('../lib/fgCardRender');
@@ -2097,11 +2104,11 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
         try {
           const path = await uploadToStorage('job-cards', fname, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
           await db.run('UPDATE job_cards SET file_path=$1, file_name=$2, original_name=$3, fg_card=$4 WHERE id=$5',
-            [path, fname, `${c.job_card_no}.html`, JSON.stringify({ generated: true, stamping, fixture, store_id: fg.id, cut_from: cutFrom }), c.id]);
+            [path, fname, `${c.job_card_no}.html`, JSON.stringify({ generated: true, stamping, fixture, store_id: fg?.id || null, cut_from: cutFrom }), c.id]);
         } catch (e) {
           renderWarning = `The card${created.length > 1 ? 's were' : ' was'} made, but the printable sheet could not be saved: ${e.message}`;
           await db.run('UPDATE job_cards SET fg_card=$1 WHERE id=$2',
-            [JSON.stringify({ generated: true, stamping, fixture, store_id: fg.id, cut_from: cutFrom, render_failed: true }), c.id]);
+            [JSON.stringify({ generated: true, stamping, fixture, store_id: fg?.id || null, cut_from: cutFrom, render_failed: true }), c.id]);
         }
       }
     }

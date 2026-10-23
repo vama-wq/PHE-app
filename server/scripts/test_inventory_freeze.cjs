@@ -79,6 +79,10 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       (await fz.frozenSkipsLastStage(txDb, { id: FB.jc.id, order_code: 'ORD-7-26' })) === true
       && (await fz.frozenSkipsLastStage(txDb, { id: FA.jc.id, order_code: 'ORD-8-26' })) === false
       && (await fz.frozenSkipsLastStage(txDb, { id: L.jc.id, order_code: 'ORD-600-26' })) === false);
+    ok('unit blanket no-deduct: ORD-178-26 skips every deduction regardless of stage date',
+      fz.isBlanketNoDeduct('ORD-178-26') === true && fz.isBlanketNoDeduct('ORD-200-26') === false
+      && (await fz.frozenSkipsStage(txDb, { id: FA.jc.id, order_code: 'ORD-178-26' }, 15)) === true
+      && (await fz.frozenSkipsLastStage(txDb, { id: FA.jc.id, order_code: 'ORD-178-26' })) === true);
 
     // 1. Frozen, Brazing BEFORE the count → nothing moves (already in the count).
     const b0 = await stock(B8.id), n0 = await stock(NUT.id);

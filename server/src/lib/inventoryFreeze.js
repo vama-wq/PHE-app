@@ -23,11 +23,25 @@ function isFrozenCode(code) {
   return n != null && (n < FROZEN_BELOW || ALSO_FROZEN.has(n));
 }
 // jc may already carry order_code; otherwise look it up by order_id.
-async function isFrozenCard(db, jc) {
-  if (!jc) return false;
+async function orderCodeOf(db, jc) {
+  if (!jc) return null;
   let code = jc.order_code;
   if (!code && jc.order_id) code = (await db.get('SELECT order_code FROM orders WHERE id=$1', [jc.order_id]))?.order_code;
-  return isFrozenCode(code);
+  return code || null;
+}
+async function isFrozenCard(db, jc) {
+  return isFrozenCode(await orderCodeOf(db, jc));
+}
+
+// Specific orders that take NO inventory at all — regardless of stage date. The
+// owner manages their stock by hand (the BOM is added for record only / the
+// material is set aside and already counted), so every deduction path skips
+// them unconditionally. Unlike the ≤127 stage-date freeze above. (owner, 23 Oct
+// 2026 — ORD-178-26). Add more by number here.
+const BLANKET_NO_DEDUCT = new Set([178]);
+function isBlanketNoDeduct(code) {
+  const n = orderNum(code);
+  return n != null && BLANKET_NO_DEDUCT.has(n);
 }
 
 const cardId = (jc) => jc?.id || jc?.job_card_id || null;
@@ -46,7 +60,9 @@ async function stageDoneDate(db, jobCardId, stageNo) {
 // stage completed after the cutoff — current work — deducts. A stage not yet
 // marked done (no date) is treated as current work → deduct.
 async function frozenSkipsStage(db, jc, stageNo) {
-  if (!(await isFrozenCard(db, jc))) return false;
+  const code = await orderCodeOf(db, jc);
+  if (isBlanketNoDeduct(code)) return true;               // never deducts (owner, 23 Oct 2026)
+  if (!isFrozenCode(code)) return false;
   const d = await stageDoneDate(db, cardId(jc), stageNo);
   return d != null && d <= CUTOFF;
 }
@@ -58,7 +74,9 @@ async function frozenSkipsStage(db, jc, stageNo) {
 // stage ran after the cutoff, the card is still being built now, so its list
 // items are deducted. No production recorded at all → treat as already counted.
 async function frozenSkipsLastStage(db, jc) {
-  if (!(await isFrozenCard(db, jc))) return false;
+  const code = await orderCodeOf(db, jc);
+  if (isBlanketNoDeduct(code)) return true;               // never deducts (owner, 23 Oct 2026)
+  if (!isFrozenCode(code)) return false;
   const r = await db.get(
     `SELECT to_char(MAX(done_at) AT TIME ZONE 'Asia/Kolkata','YYYY-MM-DD') d
        FROM production_checklist WHERE job_card_id=$1 AND done=1 AND stage_no NOT IN (29,30)`, [cardId(jc)]);
@@ -67,6 +85,7 @@ async function frozenSkipsLastStage(db, jc) {
 }
 
 module.exports = {
-  isFrozenCode, isFrozenCard, orderNum, stageDoneDate,
+  isFrozenCode, isFrozenCard, orderCodeOf, orderNum, stageDoneDate,
+  isBlanketNoDeduct, BLANKET_NO_DEDUCT,
   frozenSkipsStage, frozenSkipsLastStage, FROZEN_BELOW, ALSO_FROZEN, CUTOFF,
 };
