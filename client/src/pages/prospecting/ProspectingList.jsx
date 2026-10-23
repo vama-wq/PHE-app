@@ -69,6 +69,7 @@ const sourceBadge = s => SOURCE_BADGE[s] || { cls: 'bg-gray-100 text-gray-500', 
 // Friendly names for the list dropdown — the slug stays the key in the data.
 const SEGMENT_LABEL = {
   'khadya-khurak-exhibitors': 'Khadya Khurak 2026 · Exhibitors',
+  'khadya-khurak-visitors': 'Khadya Khurak 2026 · Visitors to invite',
   'pharma-tech-expo': 'Khadya Khurak 2026 · PharmaTech contacts',
   'existing-customers': 'Existing customers · reorder',
   'vietnam': 'Vietnam',
