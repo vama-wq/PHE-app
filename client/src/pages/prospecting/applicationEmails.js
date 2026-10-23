@@ -242,6 +242,8 @@ export function bodyToHtml(bodyText, application) {
   const linkify = t => esc(t)
     .replace(/vama@peenaheatelements\.com/g, '<a href="mailto:vama@peenaheatelements.com" style="color:#b91c1c;">vama@peenaheatelements.com</a>')
     .replace(/https:\/\/phe\.co\.in/g, '<a href="https://phe.co.in" target="_blank" style="color:#b91c1c;">phe.co.in</a>')
+    // Khadya Khurak free-entry invite page (visitors campaign) → a real link, shown without https://
+    .replace(/https:\/\/khadhyakhurak\.com\/registration\/[A-Za-z0-9_-]+/g, m => `<a href="${m}" target="_blank" style="color:#b91c1c;font-weight:600;">${m.replace('https://', '')}</a>`)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
   for (const raw of String(bodyText).split('\n')) {

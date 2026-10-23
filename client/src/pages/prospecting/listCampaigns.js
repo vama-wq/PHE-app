@@ -9,7 +9,8 @@ const CAT = 'https://drive.google.com/file/d/11BAdVPcRV1NW3kz5E7EO55EeDu_veXU9/v
 const VIDEO = 'https://www.youtube.com/shorts/jnzHnPTTHXE';
 const KK_FLYER = `${SITE}/phe-khadya-khurak-flyer.jpg`;
 const KK_CARD = `${SITE}/phe-khadya-wa-invite.jpg`;
-// One flyer per campaign: Khadya exhibitors, Khadya PharmaTech, Oman, Qatar, Vietnam.
+// One flyer per campaign: Khadya exhibitors, Khadya visitors, Khadya PharmaTech, Oman, Qatar, Vietnam.
+const KKV_FLYER = `${SITE}/phe-khadya-visitors-flyer.jpg`;
 const OMAN_FLYER = `${SITE}/phe-oman-flyer.jpg`;
 const QATAR_FLYER = `${SITE}/phe-qatar-flyer.jpg`;
 const PT_FLYER = `${SITE}/phe-pharmatech-khadya-flyer.jpg`;
@@ -175,6 +176,80 @@ const exhibitors = {
 `CALL #2 — ${co} (sample + a time at the show)\n\n1) "Vama from Peena Heat Elements — ${KK} is two weeks away."\n2) THE OFFER: "Courier us one element you use, or email me a photo of it beside a measuring tape — we'll make a sample to match for your team to test."\n3) BOOK IT: "Which day can I come by your stall in ${hall} — 16, 17, 18 or 19 December?"\n4) Close: confirm the sample is in motion + the day.` },
       { label: 'Call #3 — confirm', day: '15 Dec', script:
 `CALL #3 — ${co} (confirm before the show)\n\n1) "Vama from Peena Heat Elements — we open tomorrow."\n2) CONFIRM the time I'll come by ${hall}; invite them to ${KK_STALL} (${KK_HOURS}).\n3) Close: "See you on the floor."` },
+    ];
+  },
+};
+
+// Khadya Khurak visitors (owner, 23 Oct 2026): equipment makers WITHOUT a stall — invite them to ours.
+// Entry is free through our own invite page on the organiser's site (it credits PHE as the host).
+const KK_PASS = 'https://khadhyakhurak.com/registration/peena_heat_elements_llp';
+const PASS_LINE = `🎟️ Free entry — register as our guest: ${KK_PASS}`;
+const KK_DAYS = 'Wednesday 16, Thursday 17, Friday 18 or Saturday 19 December';
+
+const visitorsKK = {
+  name: 'Khadya Khurak 2026 · Visitors to invite',
+  regionLabel: 'area',
+  apps: EXHIBITOR_APPS, all: EXHIBITOR_ALL,
+  touches: [
+    { key: 'invite', label: 'Invite', day: '27 Oct', attach: '🎟️ Free-entry link', waImage: KK_CARD,
+      render: (p, ctx) => ({
+        subject: `You're invited — Peena Heat Elements at ${KK} 2026, ${KK_STALL}`,
+        body: bulletBody({ greet: greetEmail(ctx),
+          intro: `We're exhibiting at ${KK} 2026 (${KK_WHEN}, ${KK_VENUE}, ${KK_HOURS}) and we'd love the team behind your ${p.eq} to visit us at ${KK_STALL}. Entry is free when you register as our guest: ${KK_PASS}`,
+          supplyLabel: "What we'll show you", supply: [...p.supply, DRAWING],
+          cta: `Which day suits you — ${KK_DAYS}? Reply and we'll keep time for you at the stall.` }),
+        whatsapp: wa(helloWa(ctx), `Vama from *Peena Heat Elements*, Ahmedabad — you're invited to visit us at *${KK} 2026*!`, '', KK_BLOCK, '',
+          "*What we'll show you*", p.supply.map(s => '• ' + s), `• ${DRAWING}`, '', PASS_LINE, '', "Which day suits you? Reply and we'll keep time for you.", '', LINK_CAT),
+      }) },
+    { key: 'flyer', label: 'Invitation flyer', day: '18 Nov', attach: '📄 Flyer', flyer: KKV_FLYER, waImage: KKV_FLYER,
+      render: (p, ctx) => ({
+        subject: `Your invitation — ${KK} 2026, ${KK_STALL}`,
+        body: flyerBody({ greet: greetEmail(ctx), intro: `Four weeks to ${KK}. Here's your invitation — scan the QR on it for free entry:`, flyer: KKV_FLYER,
+          cta: `Or register here: ${KK_PASS} — and tell us the day you'll come.` }),
+        whatsapp: wa(helloWa(ctx), `Here's your invitation to *${KK} 2026* 👆`, '', KK_BLOCK, '', PASS_LINE, '', "Tell us the day you'll come and we'll keep time for you."),
+      }) },
+    { key: 'bring', label: 'Bring a drawing', day: '2 Dec', attach: '🖼️ Product image (their equipment)', waImage: KK_CARD,
+      render: (p, ctx) => ({
+        subject: `Bring a drawing to ${KK} — we'll go through it with you`,
+        body: [`${greetEmail(ctx)},`, '', `Two weeks to ${KK}. To make your visit worth it, bring along:`, '',
+          '→ Your drawing — or a photo of the element beside a measuring tape', `→ The element you use today in your ${p.eq}`, '→ Your rough yearly quantity, so we can price it properly', '',
+          `We'll go through it with you at ${KK_STALL}. Can't make it? Courier us one element you use, or email a photo of it beside a measuring tape — we make it to match.`, '',
+          `Free entry as our guest: ${KK_PASS}`, '', SIGN].join('\n'),
+        whatsapp: wa(hiWa(ctx), `Two weeks to *${KK}*! To make your visit worth it, bring:`, '• Your drawing (or a photo of the element beside a measuring tape)',
+          '• The element you use today', '• Your rough yearly quantity', '', `We'll go through it with you at *${KK_STALL}*.`, '', PASS_LINE),
+      }) },
+    { key: 'final', label: 'See you this week', day: '14 Dec', attach: '🎟️ Free-entry link', waImage: KK_CARD,
+      render: (p, ctx) => ({
+        subject: `See you at ${KK} this week — ${KK_STALL}`,
+        body: [`${greetEmail(ctx)},`, '', `${KK} opens on Wednesday — we'd love to see you there.`, '',
+          '**Where**', `→ ${KK_STALL} · ${KK_VENUE}`, '**When**', `→ ${KK_WHEN} · ${KK_HOURS}`, '**Entry**', `→ Free as our guest: ${KK_PASS}`, '',
+          "Tell us your day and time, and we'll make sure the right person is at the stall.", '', SIGN_SHORT].join('\n'),
+        whatsapp: wa(hiWa(ctx), `*${KK}* opens on Wednesday — see you there?`, '', KK_BLOCK, '', PASS_LINE, '', "Tell us your day and time and we'll be ready for you. — Vama"),
+      }) },
+    { key: 'atexpo', label: "We're open", day: '16 Dec', attach: '🖼️ Stall photo', waImage: KK_CARD,
+      render: (p, ctx) => ({
+        subject: `We're open at ${KK} — ${KK_STALL}`,
+        body: [`${greetEmail(ctx)},`, '', `${KK} is on and we're at ${KK_STALL} (${KK_HOURS}, till Saturday 19 December).`, '',
+          "Drop by whenever suits you — bring a drawing and we'll go through it together.", '', `Free entry as our guest: ${KK_PASS}`, '', SIGN_SHORT].join('\n'),
+        whatsapp: wa(hiWa(ctx).replace('🙏', '🎉'), `We're live at *${KK}*!`, '', `📍 ${KK_STALL} — ${KK_HOURS}, till Sat 19 Dec`, '',
+          "Drop by whenever suits you — bring a drawing and we'll go through it together.", '', PASS_LINE),
+      }) },
+    { key: 'after', label: 'After the show', day: '21 Dec', attach: '🖼️ Product image',
+      render: (p, ctx) => ({
+        subject: `Thank you from ${KK} — let's keep going`,
+        body: bulletBody({ greet: greetEmail(ctx), intro: `Thank you if you came by our stall at ${KK} — and if we missed you, no problem.`,
+          supply: [...p.supply.slice(0, 2), SAMPLE], cta: "Send one drawing and we'll quote." }),
+        whatsapp: wa(hiWa(ctx), `Thank you from *${KK}*!`, '', '*Missed us? No problem:*', SAMPLE_WA, "— we'll make it to match.", '',
+          "Or just send a drawing and we'll quote. — Vama, Peena Heat Elements"),
+      }) },
+  ],
+  calls: (p, ctx) => {
+    const co = ctx.company || 'the company';
+    return [
+      { label: 'Call #1 — invite', day: '5 Nov', script:
+`CALL #1 — ${co} (invite to our stall)\n\n1) "Vama from Peena Heat Elements, Ahmedabad — we make the heating elements that go inside ${p.eq}. Have I caught you at an okay moment?"\n2) INVITE: "We're exhibiting at ${KK} — ${KK_STALL}, ${KK_WHEN}, ${KK_VENUE}. We'd love you to visit; entry is free as our guest — I'll WhatsApp you the link."\n3) ASK: "Which heating elements go into your ${p.eq} today, and who supplies them?"\n4) BOOK IT: "Which day suits you — 16, 17, 18 or 19 December? Bring a drawing and we'll go through it together."\n5) Close: WhatsApp the free-entry link and the invitation flyer: ${KK_PASS}` },
+      { label: 'Call #2 — confirm', day: '15 Dec', script:
+`CALL #2 — ${co} (confirm the visit)\n\n1) "Vama from Peena Heat Elements — ${KK} opens tomorrow."\n2) CONFIRM their day and time; remind them: ${KK_STALL}, ${KK_HOURS} — bring a drawing or the element they use.\n3) Re-send the free-entry link if needed: ${KK_PASS}` },
     ];
   },
 };
@@ -362,6 +437,7 @@ const vietnam = {
 
 const CAMPAIGNS = {
   'khadya-khurak-exhibitors': exhibitors,
+  'khadya-khurak-visitors': visitorsKK,
   'pharma-tech-expo': pharmaTech,
   'oman': gulf('Oman'),
   'qatar': gulf('Qatar'),
