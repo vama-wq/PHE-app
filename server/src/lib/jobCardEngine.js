@@ -39,14 +39,16 @@ const PI = 3.14;
 // Since 2 Oct 2026 the tube draw goes by the tube's GRADE (owner's figures);
 // a grade with no row of its own uses its material's row ('steel' / 'copper').
 const TUBE_DRAW = {
-  // 8 mm, flat at every length (owner, 2 Oct 2026): copper 23.7 → 26.2%,
-  // Incoloy 20.7 → 21%, SS316 20.7 → 22% → 23% (owner, 3 Oct 2026); SS304
-  // (and SS310, any other steel) stays 20.7%. The old 43" and 50" breaks
-  // (20 / 19.7 / 19) are retired.
+  // 8 mm (owner, 2 Oct 2026): copper 23.7 → 26.2%, SS316 20.7 → 22% → 23%
+  // (owner, 3 Oct 2026); SS304 (and SS310, any other steel) stays 20.7%, flat at
+  // every length. The old 43" and 50" breaks (20 / 19.7 / 19) are retired.
+  // Incoloy 3/8" (owner, 24 Oct 2026 — what the tube is actually drawing at):
+  // total length below 65" → 22%, 65" and above → 19% (was a flat 21%). The
+  // total length is rounded to 4 decimals, so 64.9999 is the last length below 65".
   8: {
     steel:   [ { maxTL: Infinity, pct: 0.207 } ],
     ss316:   [ { maxTL: Infinity, pct: 0.23 } ],
-    incoloy: [ { maxTL: Infinity, pct: 0.21 } ],
+    incoloy: [ { maxTL: 64.9999, pct: 0.22 }, { maxTL: Infinity, pct: 0.19 } ],
     copper:  [ { maxTL: Infinity, pct: 0.262 } ],
   },
   // 11 mm (owner, 2 Oct 2026): above 51" SS304 15 → 14.5% and Incoloy 15 → 16%;
@@ -180,11 +182,11 @@ function tubeGrade(tubeMaterial) {
 }
 
 // A tube draw set for ONE order, overriding the policy band — for when a batch
-// of tube is actually drawing differently from the policy (owner, 24 Oct 2026:
-// "the incoloy 3/8 tubes are drawing currently at 22% so for just ORD-181
-// change the % to 22%"). Keyed by order number; a fraction (0.22 = 22%). The
-// policy table itself is untouched, so every other order keeps its band.
-const TUBE_DRAW_ORDER_OVERRIDE = { 181: 0.22 };
+// of tube is actually drawing differently from the policy. Keyed by order
+// number; a fraction (0.22 = 22%). Empty for now: ORD-181 was set to 22% here
+// on 24 Oct 2026, then the owner made it the Incoloy 3/8" policy the same day
+// (below 65" → 22%, 65"+ → 19%), so the order follows the table instead.
+const TUBE_DRAW_ORDER_OVERRIDE = {};
 function tubeDrawOverrideForOrder(orderCode) {
   const m = String(orderCode || '').match(/^ORD-0*(\d+)-/i);
   if (!m) return null;
