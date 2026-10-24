@@ -179,6 +179,19 @@ function tubeGrade(tubeMaterial) {
   return null;
 }
 
+// A tube draw set for ONE order, overriding the policy band — for when a batch
+// of tube is actually drawing differently from the policy (owner, 24 Oct 2026:
+// "the incoloy 3/8 tubes are drawing currently at 22% so for just ORD-181
+// change the % to 22%"). Keyed by order number; a fraction (0.22 = 22%). The
+// policy table itself is untouched, so every other order keeps its band.
+const TUBE_DRAW_ORDER_OVERRIDE = { 181: 0.22 };
+function tubeDrawOverrideForOrder(orderCode) {
+  const m = String(orderCode || '').match(/^ORD-0*(\d+)-/i);
+  if (!m) return null;
+  const v = TUBE_DRAW_ORDER_OVERRIDE[parseInt(m[1], 10)];
+  return v != null ? v : null;
+}
+
 // ── Policy lookups ──────────────────────────────────────────────────────────
 function tubeDrawPct(material, totalLengthIn, dia = 8, grade = null) {
   const table = TUBE_DRAW[dia];
@@ -384,6 +397,7 @@ function buildJobCard(input) {
     coldZoneBigIn, coldZoneSmallIn,  // optional overrides
     terminalPinBigIn, terminalPinSmallIn, // optional: forced independently of the cold zone
     wireDrawPctOverride,             // optional: planner overrides the policy band
+    tubeDrawPctOverride,             // optional: this order's tube draws differently (fraction)
     elementsPerAssembly,             // optional: beats reading "3in1" off the name
     tubeDiameterMm = 8,
   } = input;
@@ -411,6 +425,10 @@ function buildJobCard(input) {
   if (drawOverride != null && !(drawOverride > 0 && drawOverride < 1)) {
     errors.push(`Wire draw override must be a fraction between 0 and 1 — pass 0.31 for 31% (got ${drawOverride}).`);
   }
+  const tubeOverride = optionalNumber(tubeDrawPctOverride, 'Tube draw override', errors);
+  if (tubeOverride != null && !(tubeOverride > 0 && tubeOverride < 1)) {
+    errors.push(`Tube draw override must be a fraction between 0 and 1 — pass 0.22 for 22% (got ${tubeOverride}).`);
+  }
   if (czBigIn != null && czBigIn <= 0) errors.push(`Cold zone (big) must be greater than zero (got ${czBigIn}).`);
   if (czSmallIn != null && czSmallIn <= 0) errors.push(`Cold zone (small) must be greater than zero (got ${czSmallIn}).`);
   if (pinBigIn != null && pinBigIn <= 0) errors.push(`Terminal pin (big) must be greater than zero (got ${pinBigIn}).`);
@@ -429,12 +447,15 @@ function buildJobCard(input) {
   // Step 5 — the card's length is the drawing's plus the standard allowance.
   const totalLengthIn = round(drawingLen + TOTAL_LENGTH_ALLOWANCE_IN, 4);
   const grade = tubeGrade(tubeMaterial);
-  const tubeDraw = tubeDrawPct(material, totalLengthIn, D, grade);
+  const tubeDraw = tubeOverride != null ? tubeOverride : tubeDrawPct(material, totalLengthIn, D, grade);
+  if (tubeOverride != null) {
+    warnings.push(`Tube draw ${(tubeOverride * 100).toFixed(1)}% set for this order, overriding the policy band (${((tubeDrawPct(material, totalLengthIn, D, grade) || 0) * 100).toFixed(1)}%).`);
+  }
   // The policy's steel bands read "below 43", "between 44 and 50", "above 51",
   // so 43-44 and 50-51 are simply unwritten. The engine has to resolve them to
   // something; it says which way it went rather than letting a hundredth of an
   // inch move the cutting length by 6 mm in silence.
-  if (D === 8 && material === 'steel' && ((totalLengthIn > 43 && totalLengthIn < 44) || (totalLengthIn > 50 && totalLengthIn < 51))) {
+  if (tubeOverride == null && D === 8 && material === 'steel' && ((totalLengthIn > 43 && totalLengthIn < 44) || (totalLengthIn > 50 && totalLengthIn < 51))) {
     warnings.push(`Total length ${totalLengthIn}" falls in a range the policy does not cover; ${(tubeDraw * 100).toFixed(1)}% tube draw was used. Confirm before cutting.`);
   }
 
@@ -639,6 +660,7 @@ function round(n, dp) { const f = 10 ** dp; return Math.round(n * f) / f; }
 module.exports = {
   buildJobCard, chooseWire, springLengthIn,
   materialClass, tubeGrade, tubeDrawPct, wireDrawPct, standardColdZone, perElementWattage, terminalPin, pinFor,
+  tubeDrawOverrideForOrder, TUBE_DRAW_ORDER_OVERRIDE,
   TUBE_DRAW, WIRE_DRAW, SPRING_DIVISORS, TOTAL_LENGTH_ALLOWANCE_IN, ROW19_STEP_DOWN_MM, TIE_BREAK,
   WIRE_TABLES, SUPPORTED_DIAMETERS, PIN_DIVISOR, STUD, COLD_ZONE_STANDARD,
   DOUBLE_COIL_THIN_SPOOLS, DOUBLE_COIL_WIDE_DIVISOR,

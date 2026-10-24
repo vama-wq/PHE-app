@@ -126,6 +126,10 @@ async function buildDraft(db, orderItemId, answers = {}) {
     ? await db.get('SELECT customer_code, name FROM customers WHERE id=$1', [order.customer_id])
     : null;
 
+  // A tube draw set for this one order (owner, 24 Oct 2026) — null for every
+  // order not in the engine's per-order list, so they keep the policy band.
+  const tubeDrawOverride = E.tubeDrawOverrideForOrder(order.order_code);
+
   const card = E.buildJobCard({
     tubeMaterial: item.tube_material,
     tubeDiameterMm: item.tube_diameter,
@@ -138,6 +142,7 @@ async function buildDraft(db, orderItemId, answers = {}) {
     coldZoneBigIn: answers.cold_zone_big_in,
     coldZoneSmallIn: answers.cold_zone_small_in,
     wireDrawPctOverride: answers.wire_draw_pct_override,
+    tubeDrawPctOverride: tubeDrawOverride,
     elementsPerAssembly: answers.elements_per_assembly,
     terminalPinBigIn: answers.terminal_pin_big_in,
     terminalPinSmallIn: answers.terminal_pin_small_in,
@@ -224,6 +229,7 @@ async function buildDraft(db, orderItemId, answers = {}) {
   return {
     ok: true,
     orderItemId: item.id,
+    tubeDrawPctOverride: tubeDrawOverride,
     notes,
     provenance,
     card: { ...card, wire: chosenSpool },
