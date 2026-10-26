@@ -508,8 +508,8 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     r = await call('PUT', `${CQ}/${Q3}/resolve`, { resolution_summary: 'ZZTEST replace without waiting', resolution_type: 'replaced' });
     ok('G1. the old clone-a-card replacement is closed — a replacement starts as a new order', r.status === 400 && r.body.code === 'REPLACEMENT_IS_AN_ORDER', JSON.stringify(r.body));
     r = await call('GET', `${CQ}/${Q3}/replacement-draft`);
-    ok('G1. the replacement order draft carries 3 pcs (the -Q3 card\'s qty, not the parent\'s 41) of the same drawing, as a reuse of the line',
-      r.status === 200 && r.body.items?.[0]?.quantity === 3 && r.body.items[0].drawing_number === 'ZZTEST-DWG-QA' && r.body.items[0].copy_from_item_id === oiA,
+    ok('G1. the replacement order draft carries 3 pcs (the -Q3 card\'s qty, not the parent\'s 41) of the same drawing, pre-filled with every field open (26 Oct 2026: not a reuse)',
+      r.status === 200 && r.body.items?.[0]?.quantity === 3 && r.body.items[0].drawing_number === 'ZZTEST-DWG-QA' && r.body.items[0].copy_from_item_id === undefined,
       JSON.stringify(r.body).slice(0, 300));
 
     // ════ H. qty typed in = all the pieces that are out → no split (the parent itself) ════

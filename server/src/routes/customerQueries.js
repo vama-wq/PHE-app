@@ -475,6 +475,10 @@ router.put('/:id', authenticate, authorize('accounts', 'owner', 'admin'), async 
 // order, just the job card has RPL with it. The invoice is not compulsory."
 // This returns the new order pre-filled from the returned card; saving it
 // (POST /orders with replacement_query_id) closes the query.
+// Every field open (owner, 26 Oct 2026: "open every field like the made
+// wrongly ones"): the item is pre-filled, not reused, so nothing is locked —
+// wattage, drawing, product, tube — and design adds the drawing and inventory
+// as for any new order, the same as a made-wrongly replacement (orders.js).
 router.get('/:id/replacement-draft', authenticate, authorize('owner', 'admin'), async (req, res) => {
   const db = getDB();
   const q = await db.get('SELECT * FROM customer_queries WHERE id=$1', [req.params.id]);
@@ -487,7 +491,6 @@ router.get('/:id/replacement-draft', authenticate, authorize('owner', 'admin'), 
   const oi = jc.order_item_id ? await db.get('SELECT * FROM order_items WHERE id=$1', [jc.order_item_id]) : null;
   const qty = Number(q.qty) > 0 ? Number(q.qty) : (Number(jc.qc_dispatch_qty) > 0 ? Number(jc.qc_dispatch_qty) : Number(jc.qty) || 1);
   const later = (d) => d && new Date(d) > new Date() ? String(d).slice(0, 10) : new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
-  const hasList = oi ? !!(await db.get('SELECT 1 AS x FROM order_item_inventory WHERE order_item_id=$1 LIMIT 1', [oi.id])) : false;
   res.json({
     replacement: { query_id: q.id, query_no: q.query_no, job_card_no: jc.job_card_no, order_code: jc.order_code, qty },
     form: { customer_id: jc.customer_id, order_type: jc.order_type, dispatch_date: later(jc.dispatch_date),
@@ -496,9 +499,7 @@ router.get('/:id/replacement-draft', authenticate, authorize('owner', 'admin'), 
       product_code: oi.product_code || '', drawing_number: oi.drawing_number || '', tube_material: oi.tube_material || '',
       tube_diameter: oi.tube_diameter || '', wattage: oi.wattage ?? '', voltage: oi.voltage ?? '',
       plating_instructions: oi.plating_instructions || '', quantity: qty, remark: oi.remark || '',
-      // added as a reuse of the returned item: its drawing and list come along
-      copy_from_item_id: oi.id,
-      copy_src: { order_code: jc.order_code, order_type: jc.order_type, has_list: hasList },
+      fittings: require('../lib/heaterFittings').normalize(oi.fittings),
     }] : [],
   });
 });

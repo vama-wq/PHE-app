@@ -715,7 +715,8 @@ function NewOrderModal({ onClose, onSave, prefill = null }) {
           {prefill?.replacement && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
               Replacement for query <b>{prefill.replacement?.query_no}</b> — {prefill.replacement?.qty} pcs of <b>{prefill.replacement?.job_card_no}</b> ({prefill.replacement?.order_code}).
-              Pre-filled from that card; change anything you need. Its job cards will end in <b>-RPL</b> and need no invoice to dispatch. Saving closes the query.
+              Pre-filled from that card — change anything you need (drawing, product, tube, wattage, quantity…); design adds the
+              drawing and inventory as for any new order. Its job cards will end in <b>-RPL</b> and need no invoice to dispatch. Saving closes the query.
             </div>
           )}
 

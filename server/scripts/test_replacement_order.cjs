@@ -57,9 +57,14 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const q = (await q1(`INSERT INTO customer_queries (query_no, order_id, job_card_id, subject, assigned_department, status, created_by, qty) VALUES ('ZZT-CQ-RPL',$1,$2,'ZZTEST leak','production','open',$3,3) RETURNING id`, [o, jc, owner.id])).id;
 
     let r = await call('GET', `/api/customer-queries/${q}/replacement-draft`, null, admin);
-    ok('1. the admin gets a pre-filled draft: same customer and type, the item with the 3 pieces that came back, as a reuse of the returned item',
+    // Every field open, like a made-wrongly replacement (owner, 26 Oct 2026):
+    // the item is pre-filled, NOT a reuse of the returned one, so nothing locks.
+    ok('1. the admin gets a pre-filled draft: same customer and type, the item with the 3 pieces that came back — every field filled, none reused or locked',
       r.status === 200 && r.body.form.customer_id === cust && r.body.form.order_type === 'local_he' && r.body.items[0]?.quantity === 3
-      && r.body.items[0]?.drawing_number === 'ZZTEST-DWG-RPL' && r.body.items[0]?.copy_from_item_id === oi && r.body.replacement.query_no === 'ZZT-CQ-RPL', JSON.stringify(r.body).slice(0, 300));
+      && r.body.items[0]?.drawing_number === 'ZZTEST-DWG-RPL' && r.body.items[0]?.product_code === 'ZZTEST-PC'
+      && Number(r.body.items[0]?.wattage) === 500 && Number(r.body.items[0]?.voltage) === 230 && r.body.items[0]?.remark === 'ZZTEST remark'
+      && r.body.items[0]?.copy_from_item_id === undefined && r.body.items[0]?.copy_src === undefined && r.body.replacement.query_no === 'ZZT-CQ-RPL', JSON.stringify(r.body).slice(0, 300));
+    const draftItem = r.body.items[0];
     r = await call('PUT', `/api/customer-queries/${q}/resolve`, { resolution_type: 'replaced', resolution_summary: 'x' });
     ok('2. the old "clone a card" replacement is closed', r.status === 400 && r.body.code === 'REPLACEMENT_IS_AN_ORDER', JSON.stringify(r.body));
     r = await call('POST', '/api/orders', { order_code: 'ZZT-RPL-NEW', customer_id: cust, order_date: '2026-10-08', order_type: 'local_he', replacement_query_id: q, replacement_summary: 'Leaking — replace 3' }, admin);
@@ -70,6 +75,10 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       && (await q1('SELECT replacement_query_id r FROM orders WHERE id=$1', [newOrder])).r === q && (await q1('SELECT status FROM job_cards WHERE id=$1', [jc])).status === 'resolved_dispatched'
       && (await q1('SELECT status FROM orders WHERE id=$1', [o])).status === 'resolved_dispatched', JSON.stringify({ r: r.body, qq: { s: qq.status, rs: qq.return_status, ro: qq.replacement_order_id } }));
     ok('3. it goes for approval like any new order', (await q1('SELECT status FROM orders WHERE id=$1', [newOrder])).status === 'pending_approval');
+    r = await call('POST', `/api/orders/${newOrder}/items`, { ...draftItem, wattage: 750, plating_instructions: 'No Plating' }, admin);
+    const added = r.body?.id ? await q1('SELECT wattage::float w, voltage::float v, drawing_number, copied_from_item_id FROM order_items WHERE id=$1', [r.body.id]) : null;
+    ok('3b. the pre-filled item saves with its wattage changed (500 → 750 W) — not a reuse, nothing locked',
+      r.status === 201 && added?.w === 750 && added?.v === 230 && added?.drawing_number === 'ZZTEST-DWG-RPL' && added?.copied_from_item_id == null, JSON.stringify({ s: r.status, b: r.body, added }));
     r = await call('POST', '/api/orders', { order_code: 'ZZT-RPL-NEW2', customer_id: cust, order_date: '2026-10-08', replacement_query_id: q }, admin);
     ok('4. a second replacement order for the same (now resolved) query is refused', r.status === 400, JSON.stringify(r.body));
     // A job card on the replacement order (the upload route, as a PDF card).
