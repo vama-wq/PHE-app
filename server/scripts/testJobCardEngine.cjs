@@ -366,11 +366,23 @@ const REGRESSIONS = [
       () => [12, 21.2, 42.9, 43, 50.1, 56, 120].map(tl => E.tubeDrawPct(E.materialClass(m), tl, 8, E.tubeGrade(m))),
       pcts => pcts.every(p => p === want)]),
   // 8 mm Incoloy, both wall thicknesses (owner, 24 Oct 2026 — what the tube is
-  // actually drawing at): total length below 65" → 22%, 65" and above → 19%.
+  // actually drawing at): below 65" → 22%, 65" and above → 19%, on the DRAWING
+  // length (owner, 26 Oct 2026) — the card's total adds 0.7", which must not
+  // tip a 64.5" drawing (65.2" total) over. Lengths here are drawing lengths.
   ...[['TUB-INC-038-T06'], ['TUB-INC-038-T05'], ['Incoloy']].map(([m]) =>
-    [`8 mm ${m} tube draw is 22% below 65" and 19% from 65"`,
-      () => [12, 42.9, 50.1, 64.9, 64.9999, 65, 65.7, 120].map(tl => E.tubeDrawPct(E.materialClass(m), tl, 8, E.tubeGrade(m))),
-      p => JSON.stringify(p) === JSON.stringify([0.22, 0.22, 0.22, 0.22, 0.22, 0.19, 0.19, 0.19])]),
+    [`8 mm ${m} tube draw is 22% below a 65" drawing and 19% from 65" (drawing length, not the total)`,
+      () => [12, 42.9, 50.1, 64.3, 64.5, 64.9, 64.9999, 65, 65.3, 120].map(d =>
+        E.tubeDrawPct(E.materialClass(m), Math.round((d + E.TOTAL_LENGTH_ALLOWANCE_IN) * 1e4) / 1e4, 8, E.tubeGrade(m))),
+      p => JSON.stringify(p) === JSON.stringify([0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 0.19, 0.19, 0.19])]),
+  ['a whole 8 mm Incoloy card from a 64.5" drawing: 65.2" total, still 22%',
+    () => E.buildJobCard({ tubeMaterial: 'TUB-INC-038-T06', tubeDiameterMm: 8, wattage: 1750, voltage: 230, drawingTotalLengthIn: 64.5 }),
+    c => c.ok === true && c.totalLengthIn === 65.2 && c.tubeDrawPct === 0.22],
+  ['… and from a 65" drawing: 65.7" total, 19%',
+    () => E.buildJobCard({ tubeMaterial: 'TUB-INC-038-T06', tubeDiameterMm: 8, wattage: 1750, voltage: 230, drawingTotalLengthIn: 65 }),
+    c => c.ok === true && c.totalLengthIn === 65.7 && c.tubeDrawPct === 0.19],
+  ['the 8 mm Incoloy draw says it goes by the drawing; SS304 and 11 mm Incoloy still go by the total',
+    () => [E.tubeDrawByDrawing('steel', 8, 'incoloy_t06'), E.tubeDrawByDrawing('steel', 8, 'ss304'), E.tubeDrawByDrawing('steel', 11, 'incoloy')],
+    ([a, b, c]) => a === true && b === false && c === false],
   // Wire draw: 30 and above went 45.5% -> 46% on steel (24 Sep) and 29% -> 21%
   // on copper (28 Sep). Gauge 29 must not move with either.
   ['8 mm steel wire draw is 46% from gauge 30 up',

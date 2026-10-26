@@ -43,12 +43,15 @@ const TUBE_DRAW = {
   // (owner, 3 Oct 2026); SS304 (and SS310, any other steel) stays 20.7%, flat at
   // every length. The old 43" and 50" breaks (20 / 19.7 / 19) are retired.
   // Incoloy 3/8" (owner, 24 Oct 2026 — what the tube is actually drawing at):
-  // total length below 65" → 22%, 65" and above → 19% (was a flat 21%). The
-  // total length is rounded to 4 decimals, so 64.9999 is the last length below 65".
+  // below 65" → 22%, 65" and above → 19% (was a flat 21%), measured on the
+  // DRAWING length (owner, 26 Oct 2026: "drawing length") — not the card's
+  // total, which adds the 0.7" allowance: a 64.5" drawing (65.2" total) is 22%.
+  // maxDrawing marks a band read off the drawing length; lengths are to 4
+  // decimals, so 64.9999 is the last drawing below 65".
   8: {
     steel:   [ { maxTL: Infinity, pct: 0.207 } ],
     ss316:   [ { maxTL: Infinity, pct: 0.23 } ],
-    incoloy: [ { maxTL: 64.9999, pct: 0.22 }, { maxTL: Infinity, pct: 0.19 } ],
+    incoloy: [ { maxDrawing: 64.9999, pct: 0.22 }, { maxDrawing: Infinity, pct: 0.19 } ],
     copper:  [ { maxTL: Infinity, pct: 0.262 } ],
   },
   // 11 mm (owner, 2 Oct 2026): above 51" SS304 15 → 14.5% and Incoloy 15 → 16%;
@@ -195,13 +198,24 @@ function tubeDrawOverrideForOrder(orderCode) {
 }
 
 // ── Policy lookups ──────────────────────────────────────────────────────────
-function tubeDrawPct(material, totalLengthIn, dia = 8, grade = null) {
+function tubeDrawBands(material, dia = 8, grade = null) {
   const table = TUBE_DRAW[dia];
   // A thickness row (incoloy_t06) falls back to its grade (incoloy), then the material.
-  const bands = table && ((grade && table[grade]) || (grade && table[grade.split('_')[0]]) || table[material]);
-  if (!bands) return null;
-  return bands.find(b => totalLengthIn <= b.maxTL).pct;
+  return (table && ((grade && table[grade]) || (grade && table[grade.split('_')[0]]) || table[material])) || null;
 }
+
+function tubeDrawPct(material, totalLengthIn, dia = 8, grade = null) {
+  const bands = tubeDrawBands(material, dia, grade);
+  if (!bands) return null;
+  // A band read off the drawing length (maxDrawing) takes the total back to the
+  // drawing's — the total is always the drawing + the allowance, to 4 decimals.
+  const drawingIn = round(totalLengthIn - TOTAL_LENGTH_ALLOWANCE_IN, 4);
+  return bands.find(b => (b.maxDrawing != null ? drawingIn <= b.maxDrawing : totalLengthIn <= b.maxTL)).pct;
+}
+
+// Whether this tube's draw goes by the drawing length (true) or the total.
+const tubeDrawByDrawing = (material, dia = 8, grade = null) =>
+  (tubeDrawBands(material, dia, grade) || []).some(b => b.maxDrawing != null);
 
 function wireDrawPct(material, gauge, wattage, dia = 8) {
   const bands = WIRE_DRAW[dia] && WIRE_DRAW[dia][material];
@@ -661,7 +675,7 @@ function round(n, dp) { const f = 10 ** dp; return Math.round(n * f) / f; }
 
 module.exports = {
   buildJobCard, chooseWire, springLengthIn,
-  materialClass, tubeGrade, tubeDrawPct, wireDrawPct, standardColdZone, perElementWattage, terminalPin, pinFor,
+  materialClass, tubeGrade, tubeDrawPct, tubeDrawByDrawing, wireDrawPct, standardColdZone, perElementWattage, terminalPin, pinFor,
   tubeDrawOverrideForOrder, TUBE_DRAW_ORDER_OVERRIDE,
   TUBE_DRAW, WIRE_DRAW, SPRING_DIVISORS, TOTAL_LENGTH_ALLOWANCE_IN, ROW19_STEP_DOWN_MM, TIE_BREAK,
   WIRE_TABLES, SUPPORTED_DIAMETERS, PIN_DIVISOR, STUD, COLD_ZONE_STANDARD,
