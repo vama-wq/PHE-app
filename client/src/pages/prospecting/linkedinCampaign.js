@@ -30,9 +30,9 @@ ${WA}
     how: 'Image: post the card on Diwali morning (a Sunday).',
     caption: `Happy Diwali from all of us at Peena Heat Elements. 🪔
 
-Thank you to our customers, suppliers and our team for a bright year. Wishing you light, health and a prosperous new year. Saal Mubarak!
+Thank you to our customers, suppliers and our team for a bright year. Wishing you light, health and prosperity. Shubh Deepavali! शुभ दीपावली 🪔
 
-#HappyDiwali #SaalMubarak` },
+#HappyDiwali #ShubhDeepavali` },
   { key: 'w03', date: '2026-11-11', kind: 'video', topic: 'The full range', file: '/linkedin/w03.mp4', poster: '/linkedin/w03.jpg', dur: '0:17',
     how: 'Video: upload the file as it is (the still photo is at /linkedin/w03-photo.jpg if you prefer an image).',
     caption: `One partner, every shape.

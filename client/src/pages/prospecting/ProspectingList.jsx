@@ -3,7 +3,8 @@ import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
 import { bodyToHtml, bodyToPlain, renderSms } from './applicationEmails';
 import { campaignFor, renderTouch, renderCalls, tailoredTo } from './listCampaigns';
-import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye, Phone } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye, Phone, Linkedin } from 'lucide-react';
 
 // Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
 // header row; a "Company" column is mandatory, the rest are optional.
@@ -505,6 +506,9 @@ export default function ProspectingList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link to="/prospecting/linkedin" className="btn-secondary flex items-center gap-1.5 text-sm">
+            <Linkedin size={15} /> LinkedIn calendar
+          </Link>
           <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => { setImpResult(null); setShowImport(true); }}>
             <Upload size={15} /> Import
           </button>

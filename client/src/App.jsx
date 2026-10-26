@@ -34,6 +34,7 @@ import CustomerQueryList from './pages/customerQueries/CustomerQueryList';
 import CustomerQueryDetail from './pages/customerQueries/CustomerQueryDetail';
 import OrderTimeline from './pages/customerQueries/OrderTimeline';
 import ProspectingList from './pages/prospecting/ProspectingList';
+import LinkedInCalendar from './pages/prospecting/LinkedInCalendar';
 import PolicyGuide from './pages/PolicyGuide';
 
 const ManufacturingPlan = lazy(() => import('./pages/manufacturing/ManufacturingPlan'));
@@ -144,6 +145,11 @@ export default function App() {
           <Route path="prospecting" element={
             <ProtectedRoute roles={['owner','admin','accounts']} module="prospecting">
               <ProspectingList />
+            </ProtectedRoute>
+          } />
+          <Route path="prospecting/linkedin" element={
+            <ProtectedRoute roles={['owner','admin','accounts']} module="prospecting">
+              <LinkedInCalendar />
             </ProtectedRoute>
           } />
 

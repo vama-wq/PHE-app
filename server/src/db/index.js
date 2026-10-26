@@ -152,6 +152,15 @@ async function initDB(retries = 20, delayMs = 10000) {
           changed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )`);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_prospect_status_log_p ON prospect_status_log(prospect_id, changed_at DESC)`);
+      // LinkedIn calendar (26 Oct 2026): which planned posts went out; the posts themselves are defined in the client
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS linkedin_posts (
+          post_key  TEXT PRIMARY KEY,
+          posted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          posted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          url       TEXT,
+          note      TEXT
+        )`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS backup_log (
           id SERIAL PRIMARY KEY,
