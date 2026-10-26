@@ -5,8 +5,8 @@ const WA = 'WhatsApp: +91 84520 55836';
 const KK_LINK = 'https://khadhyakhurak.com/registration/peena_heat_elements_llp';
 
 export const LINKEDIN_POSTS = [
-  { key: 'w01', date: '2026-10-28', kind: 'video', topic: 'Hello from PHE', file: '/linkedin/w01.mp4', poster: '/linkedin/w01.jpg', dur: '0:18',
-    how: 'Video: upload the file as it is.',
+  { key: 'w01', date: '2026-10-28', kind: 'video', topic: 'Hello from PHE', file: '/linkedin/w01.mp4', poster: '/linkedin/w01.jpg', dur: '0:23',
+    how: 'Video: upload the file as it is. The full range, then spiral, hairpin, U-bend, formed and immersion elements, then the logo card.',
     caption: `Heat, made to your drawing. 🔥
 
 We're Peena Heat Elements, Ahmedabad: tubular, finned, immersion and cartridge heating elements for the machines you build.
