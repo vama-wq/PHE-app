@@ -170,6 +170,26 @@ router.get('/:id/history', authenticate, authorize(...SALES), async (req, res) =
   res.json({ status, touches });
 });
 
+/** LinkedIn calendar: which planned posts went out (the posts are defined in client linkedinCampaign.js). */
+router.get('/linkedin', authenticate, authorize(...SALES), async (req, res) => {
+  res.json(await getDB().all(`SELECT l.post_key, l.posted_at, l.url, l.note, u.name AS posted_by
+    FROM linkedin_posts l LEFT JOIN users u ON u.id = l.posted_by ORDER BY l.posted_at`));
+});
+router.post('/linkedin/:key', authenticate, authorize(...SALES), async (req, res) => {
+  const key = String(req.params.key);
+  if (!/^[a-z0-9_-]{1,40}$/i.test(key)) return res.status(400).json({ error: 'Bad post key' });
+  const url = req.body.url ? String(req.body.url).slice(0, 500) : null;
+  const note = req.body.note ? String(req.body.note).slice(0, 500) : null;
+  await getDB().run(`INSERT INTO linkedin_posts (post_key, posted_by, url, note) VALUES ($1, $2, $3, $4)
+    ON CONFLICT (post_key) DO UPDATE SET url = COALESCE(EXCLUDED.url, linkedin_posts.url), note = COALESCE(EXCLUDED.note, linkedin_posts.note)`,
+    [key, req.user.id, url, note]);
+  res.json({ message: 'Posted' });
+});
+router.delete('/linkedin/:key', authenticate, authorize(...SALES), async (req, res) => {
+  await getDB().run('DELETE FROM linkedin_posts WHERE post_key = $1', [String(req.params.key)]);
+  res.json({ message: 'Removed' });
+});
+
 router.delete('/:id', authenticate, authorize(...SALES), async (req, res) => {
   await getDB().run('DELETE FROM prospects WHERE id = $1', [req.params.id]);
   res.json({ message: 'Deleted' });
