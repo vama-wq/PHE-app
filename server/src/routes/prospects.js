@@ -5,6 +5,12 @@ const { authenticate, authorize } = require('../middleware/auth');
 // Sales prospecting is a sales/management function — gate to these roles.
 const SALES = ['owner', 'admin', 'accounts'];
 
+// Prospect statuses (owner, 26 Oct 2026): the sales pipeline plus the two that stop all campaign messages.
+const STATUSES = ['new', 'exported', 'contacted', 'replied', 'interested', 'quoted', 'won', 'not_interested', 'skip'];
+const NO_CAMPAIGN = ['skip', 'not_interested'];
+const CHANNELS = ['email', 'whatsapp', 'call'];
+const idList = v => (Array.isArray(v) ? v : String(v || '').split(',')).map(x => parseInt(x, 10)).filter(Number.isInteger);
+
 /** List prospects, optionally filtered by segment / priority / status. */
 router.get('/', authenticate, authorize(...SALES), async (req, res) => {
   const { segment, priority, status, source, state, application } = req.query;
@@ -60,27 +66,101 @@ router.post('/bulk', authenticate, authorize(...SALES), async (req, res) => {
   res.json({ inserted, skipped, total: prospects.length });
 });
 
-/** Update a single prospect's status or editable fields. */
+/**
+ * Move prospects to a status and log each change (from → to, who, note). 'exported' only ever moves
+ * rows that are still 'new' — exporting the next touch must never pull a 'replied' row back.
+ */
+async function setStatus(db, ids, status, note, userId) {
+  if (!ids.length) return [];
+  const onlyNew = status === 'exported';
+  return db.all(`
+    WITH old AS (SELECT id, status FROM prospects WHERE id = ANY($2::int[]) ${onlyNew ? `AND status = 'new'` : ''}),
+    upd AS (UPDATE prospects p SET status = $1 FROM old WHERE p.id = old.id AND old.status IS DISTINCT FROM $1 RETURNING p.id, old.status AS from_status)
+    INSERT INTO prospect_status_log (prospect_id, from_status, to_status, note, changed_by)
+    SELECT id, from_status, $1, $3, $4 FROM upd RETURNING prospect_id`, [status, ids, note || null, userId || null]);
+}
+
+/** Update a single prospect's status or editable fields (a status change is logged, with an optional status_note). */
 router.patch('/:id', authenticate, authorize(...SALES), async (req, res) => {
-  const allowed = ['status', 'priority', 'email', 'phone', 'contact_role', 'product_fit', 'notes'];
+  const db = getDB();
+  const id = parseInt(req.params.id, 10);
+  if (req.body.status !== undefined && !STATUSES.includes(req.body.status)) return res.status(400).json({ error: 'Unknown status' });
+  const allowed = ['priority', 'email', 'phone', 'contact_role', 'product_fit', 'notes'];
   const sets = [], params = [];
   for (const key of allowed) {
     if (req.body[key] !== undefined) { params.push(req.body[key]); sets.push(`${key} = $${params.length}`); }
   }
-  if (!sets.length) return res.status(400).json({ error: 'No updatable fields provided' });
-  params.push(req.params.id);
-  await getDB().run(`UPDATE prospects SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+  if (!sets.length && req.body.status === undefined) return res.status(400).json({ error: 'No updatable fields provided' });
+  if (sets.length) {
+    params.push(id);
+    await db.run(`UPDATE prospects SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+  }
+  if (req.body.status !== undefined) await setStatus(db, [id], req.body.status, req.body.status_note, req.user.id);
   res.json({ message: 'Updated' });
 });
 
-/** Mark many prospects with a status in one call (e.g. exported / contacted). */
+/** Move many prospects to a status in one call (logged per row). */
 router.post('/bulk-status', authenticate, authorize(...SALES), async (req, res) => {
-  const { ids, status } = req.body;
-  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' });
-  if (!status) return res.status(400).json({ error: 'status required' });
-  const ph = ids.map((_, i) => `$${i + 2}`).join(',');
-  await getDB().run(`UPDATE prospects SET status = $1 WHERE id IN (${ph})`, [status, ...ids]);
-  res.json({ message: 'Updated', count: ids.length });
+  const ids = idList(req.body.ids);
+  const { status, note } = req.body;
+  if (!ids.length) return res.status(400).json({ error: 'ids required' });
+  if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Unknown status' });
+  const changed = await setStatus(getDB(), ids, status, note, req.user.id);
+  res.json({ message: 'Updated', count: changed.length });
+});
+
+/** Campaign tracking: every touch done for a list, for the progress lines, ticks and filters. */
+router.get('/touches', authenticate, authorize(...SALES), async (req, res) => {
+  const { segment } = req.query;
+  if (!segment) return res.status(400).json({ error: 'segment required' });
+  res.json(await getDB().all(`
+    SELECT t.prospect_id, t.touch_key, t.channel, t.note, t.done_at, u.name AS done_by
+    FROM prospect_touches t LEFT JOIN users u ON u.id = t.done_by
+    WHERE t.segment = $1 ORDER BY t.done_at`, [segment]));
+});
+
+/**
+ * Mark a touch done on a channel for some prospects (e.g. the Zoho email went to these 106).
+ * Rows still 'new' or 'exported' move to 'contacted' — logged as automatic.
+ */
+router.post('/touches', authenticate, authorize(...SALES), async (req, res) => {
+  const db = getDB();
+  const ids = idList(req.body.ids);
+  const { segment, touch_key, channel } = req.body;
+  const note = req.body.note ? String(req.body.note).slice(0, 500) : null;
+  if (!segment || !ids.length) return res.status(400).json({ error: 'segment and ids required' });
+  if (!CHANNELS.includes(channel)) return res.status(400).json({ error: 'Unknown channel' });
+  if (!/^[a-z0-9_-]{1,40}$/i.test(String(touch_key || ''))) return res.status(400).json({ error: 'Bad touch' });
+  const marked = await db.all(`
+    INSERT INTO prospect_touches (prospect_id, segment, touch_key, channel, note, done_by)
+    SELECT id, segment, $3, $4, $5, $6 FROM prospects WHERE id = ANY($1::int[]) AND segment = $2
+    ON CONFLICT (prospect_id, touch_key, channel) DO UPDATE SET note = COALESCE(EXCLUDED.note, prospect_touches.note)
+    RETURNING prospect_id`, [ids, segment, touch_key, channel, note, req.user.id]);
+  const fresh = await db.all(`SELECT id FROM prospects WHERE id = ANY($1::int[]) AND status IN ('new','exported')`, [marked.map(m => m.prospect_id)]);
+  const advanced = await setStatus(db, fresh.map(r => r.id), 'contacted', `auto: ${channel} · ${touch_key}`, req.user.id);
+  res.json({ marked: marked.length, advanced: advanced.length });
+});
+
+/** Undo a touch mark (a mistaken click). The status stays as it is. */
+router.post('/touches/undo', authenticate, authorize(...SALES), async (req, res) => {
+  const ids = idList(req.body.ids);
+  const { touch_key, channel } = req.body;
+  if (!ids.length || !CHANNELS.includes(channel) || !touch_key) return res.status(400).json({ error: 'ids, touch_key and channel required' });
+  const r = await getDB().run(`DELETE FROM prospect_touches WHERE prospect_id = ANY($1::int[]) AND touch_key = $2 AND channel = $3`, [ids, touch_key, channel]);
+  res.json({ removed: r.rowCount });
+});
+
+/** One prospect's history: status changes and touches done, newest first. */
+router.get('/:id/history', authenticate, authorize(...SALES), async (req, res) => {
+  const db = getDB();
+  const id = parseInt(req.params.id, 10);
+  const [status, touches] = await Promise.all([
+    db.all(`SELECT l.from_status, l.to_status, l.note, l.changed_at, u.name AS changed_by FROM prospect_status_log l
+            LEFT JOIN users u ON u.id = l.changed_by WHERE l.prospect_id = $1 ORDER BY l.changed_at DESC`, [id]),
+    db.all(`SELECT t.touch_key, t.channel, t.note, t.done_at, u.name AS done_by FROM prospect_touches t
+            LEFT JOIN users u ON u.id = t.done_by WHERE t.prospect_id = $1 ORDER BY t.done_at DESC`, [id]),
+  ]);
+  res.json({ status, touches });
 });
 
 router.delete('/:id', authenticate, authorize(...SALES), async (req, res) => {
@@ -149,8 +229,9 @@ router.get('/export.csv', authenticate, authorize(...SALES), async (req, res) =>
   }
   // Zoho Campaigns imports a contact only with an email address.
   where.push(`coalesce(email,'') <> ''`);
-  // "skip" rows (no fit / existing customers on an outreach list) never go to Zoho.
-  if (status !== 'skip') where.push(`coalesce(status,'') <> 'skip'`);
+  // "skip" rows (no fit / existing customers on an outreach list) and "not interested" never go to Zoho
+  // (unless that status is what's being filtered on).
+  if (!NO_CAMPAIGN.includes(status)) where.push(`coalesce(status,'') NOT IN ('skip','not_interested')`);
 
   const rows = await getDB().all(
     `SELECT * FROM prospects ${where.length ? 'WHERE ' + where.join(' AND ') : ''}

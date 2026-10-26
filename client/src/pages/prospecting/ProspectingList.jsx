@@ -85,6 +85,40 @@ const segmentLabel = s => SEGMENT_LABEL[s] || String(s).replace(/-/g, ' ').repla
 const waPreview = text => String(text || '').split(/(\*[^*\n]+\*)/g).map((part, i) =>
   /^\*[^*\n]+\*$/.test(part) ? <strong key={i}>{part.slice(1, -1)}</strong> : part);
 
+// Sales pipeline (owner, 26 Oct 2026). "Not interested" and "Skip" stop all campaign messages.
+const STATUSES = [
+  { key: 'new', label: 'New', cls: 'bg-gray-100 text-gray-600' },
+  { key: 'exported', label: 'In Zoho list', cls: 'bg-sky-50 text-sky-700' },
+  { key: 'contacted', label: 'Contacted', cls: 'bg-indigo-50 text-indigo-700' },
+  { key: 'replied', label: 'Replied', cls: 'bg-violet-100 text-violet-800' },
+  { key: 'interested', label: 'Interested', cls: 'bg-amber-100 text-amber-800' },
+  { key: 'quoted', label: 'Quoted', cls: 'bg-orange-100 text-orange-800' },
+  { key: 'won', label: 'Won', cls: 'bg-emerald-100 text-emerald-800' },
+  { key: 'not_interested', label: 'Not interested', cls: 'bg-rose-50 text-rose-700' },
+  { key: 'skip', label: 'Skip', cls: 'bg-gray-50 text-gray-400' },
+];
+const STATUS = Object.fromEntries(STATUSES.map(s => [s.key, s]));
+const NO_CAMPAIGN = new Set(['skip', 'not_interested']);
+const CHANNEL_ICON = { email: '✉', whatsapp: '💬', call: '☎' };
+const fmtDay = d => (d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '');
+// Campaign images live in client/public — fetch them same-origin so they can be saved or shared as files.
+const imagePath = url => { try { return new URL(url).pathname; } catch { return url; } };
+async function imageFile(url) {
+  const res = await fetch(imagePath(url));
+  if (!res.ok) throw new Error('image not found');
+  const blob = await res.blob();
+  return new File([blob], imagePath(url).split('/').pop() || 'PHE-image.jpg', { type: blob.type || 'image/jpeg' });
+}
+async function saveImage(url) {
+  try {
+    const f = await imageFile(url);
+    const u = URL.createObjectURL(f);
+    const a = document.createElement('a');
+    a.href = u; a.download = f.name; a.click();
+    setTimeout(() => URL.revokeObjectURL(u), 3000);
+  } catch { window.open(url, '_blank', 'noopener'); }
+}
+
 export default function ProspectingList() {
   const [segments, setSegments] = useState([]);
   const [segment, setSegment] = useState('');
@@ -106,7 +140,20 @@ export default function ProspectingList() {
   // Per-company tailored campaign copy (e.g. expo cards) — opens in a modal
   const [campaignRow, setCampaignRow] = useState(null);
   const [seqTab, setSeqTab] = useState(0);              // active email in a multi-touch sequence
-  useEffect(() => { setSeqTab(0); }, [campaignRow]);
+  const rowId = campaignRow?.id;
+  useEffect(() => { setSeqTab(0); }, [rowId]);
+  // Finding things: search + priority + touch filters (client-side, instant)
+  const [search, setSearch] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState('');
+  const [touchFilter, setTouchFilter] = useState('');   // `${channel}|${touch_key}|done|not`
+  // Campaign tracking: touches done for this list, and the open row's history
+  const [touches, setTouches] = useState([]);
+  const [history, setHistory] = useState(null);
+  const [rowStatus, setRowStatus] = useState('');
+  const [rowNote, setRowNote] = useState('');
+  const [callNote, setCallNote] = useState('');
+  const [bulkStatus, setBulkStatus] = useState('');
+  const [shareFile, setShareFile] = useState(null);     // the touch's image, pre-fetched so Share works in one tap
 
   const loadSegments = () =>
     api.get('/prospects/segments').then(r => {
@@ -114,19 +161,63 @@ export default function ProspectingList() {
       if (r.data.length && !segment) setSegment(r.data[0].segment);
     }).catch(() => {});
 
-  const loadProspects = () => {
+  // keepSelection: after a tick or status change, don't reset what the user selected
+  const loadProspects = (keepSelection = false) => {
     setLoading(true);
     const params = {};
     if (segment) params.segment = segment;
-    if (statusFilter) params.status = statusFilter;
-    api.get('/prospects', { params })
-      .then(r => { setProspects(r.data); setSelected(new Set(r.data.map(p => p.id))); })
-      .catch(() => setProspects([]))
+    return api.get('/prospects', { params })
+      .then(r => {
+        setProspects(r.data);
+        if (!keepSelection) setSelected(new Set(r.data.map(p => p.id)));
+        setCampaignRow(cur => (cur ? r.data.find(p => p.id === cur.id) || cur : cur));
+        return r.data;
+      })
+      .catch(() => { setProspects([]); return []; })
       .finally(() => setLoading(false));
   };
+  const loadTouches = () => (segment
+    ? api.get('/prospects/touches', { params: { segment } }).then(r => setTouches(r.data)).catch(() => setTouches([]))
+    : Promise.resolve());
+  const loadHistory = id => api.get(`/prospects/${id}/history`).then(r => setHistory(r.data)).catch(() => setHistory(null));
 
   useEffect(() => { loadSegments(); }, []);
-  useEffect(() => { if (segment) loadProspects(); /* eslint-disable-line */ }, [segment, statusFilter]);
+  useEffect(() => { if (segment) { loadProspects(); loadTouches(); } /* eslint-disable-line */ }, [segment]);
+  useEffect(() => {
+    if (!rowId) { setHistory(null); return; }
+    setRowStatus(campaignRow.status); setRowNote(''); setCallNote('');
+    loadHistory(rowId);
+  }, [rowId]); // eslint-disable-line
+
+  // touch lookup: `${prospect}|${touch}|${channel}` → the tick (with date, who, note)
+  const touchIndex = useMemo(() => new Map(touches.map(t => [`${t.prospect_id}|${t.touch_key}|${t.channel}`, t])), [touches]);
+  const tickFor = (pid, key, channel) => touchIndex.get(`${pid}|${key}|${channel}`);
+  const reach = (p, channel) => !NO_CAMPAIGN.has(p.status) && (channel === 'email' ? !!(p.email && p.email.trim())
+    : channel === 'whatsapp' ? !!(p.phone && p.phone.trim()) : !!((p.phone && p.phone.trim()) || (p.office_phone && p.office_phone.trim())));
+
+  const markTouch = async (ids, touchKey, channel, note) => {
+    if (!ids.length) return;
+    setBusy(true);
+    try {
+      await api.post('/prospects/touches', { segment, ids, touch_key: touchKey, channel, note: note || undefined });
+      await Promise.all([loadTouches(), loadProspects(true)]);
+      if (rowId) loadHistory(rowId);
+    } finally { setBusy(false); }
+  };
+  const undoTouch = async (ids, touchKey, channel) => {
+    if (!ids.length) return;
+    setBusy(true);
+    try {
+      await api.post('/prospects/touches/undo', { ids, touch_key: touchKey, channel });
+      await loadTouches();
+      if (rowId) loadHistory(rowId);
+    } finally { setBusy(false); }
+  };
+  const changeStatus = async (id, status, note) => {
+    await api.patch(`/prospects/${id}`, { status, status_note: note || undefined });
+    await loadProspects(true);
+    if (rowId === id) loadHistory(id);
+  };
 
   const hasEmail = p => !!(p.email && p.email.trim());
   const hasPhone = p => !!(p.phone && p.phone.trim());
@@ -140,12 +231,25 @@ export default function ProspectingList() {
     () => [...new Set(prospects.map(p => p.application).filter(Boolean))].sort(),
     [prospects]);
 
-  // Source / region / application filters are applied client-side so they're instant.
-  const visible = useMemo(() => prospects.filter(p =>
-    (!sourceFilter || rowSource(p) === sourceFilter) &&
-    (!regionFilter || p.state === regionFilter) &&
-    (!appFilter || p.application === appFilter)
-  ), [prospects, sourceFilter, regionFilter, appFilter]);
+  // All filters are applied client-side so they're instant (the whole list is loaded once per segment).
+  const matchTouch = p => {
+    if (!touchFilter) return true;
+    const [channel, key, want] = touchFilter.split('|');
+    const done = !!tickFor(p.id, key, channel);
+    return want === 'done' ? done : (!done && reach(p, channel));
+  };
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return prospects.filter(p =>
+      (!statusFilter || p.status === statusFilter) &&
+      (!sourceFilter || rowSource(p) === sourceFilter) &&
+      (!regionFilter || p.state === regionFilter) &&
+      (!appFilter || p.application === appFilter) &&
+      (!priorityFilter || p.priority === priorityFilter) &&
+      (!q || [p.company, p.city, p.email, p.phone, p.office_phone, p.contact_role].some(v => String(v || '').toLowerCase().includes(q))) &&
+      matchTouch(p));
+  }, [prospects, statusFilter, sourceFilter, regionFilter, appFilter, priorityFilter, search, touchFilter, touchIndex]); // eslint-disable-line
+  const statusCounts = useMemo(() => prospects.reduce((m, p) => (m[p.status] = (m[p.status] || 0) + 1, m), {}), [prospects]);
 
   // The email copy follows the application in view: an explicit filter wins, otherwise
   // if everything visible shares one application we tailor to it, else stay generic.
@@ -165,6 +269,30 @@ export default function ProspectingList() {
   const previewHtml = listHtml.replace(/\$\[FNAME\|[^\]]*\]\$/g,
     '<span style="background:#fef3c7;border:1px dashed #f59e0b;border-radius:4px;padding:0 4px;">Company name</span>');
   const listTailoredTo = campaign ? tailoredTo(campaign, activeApplication) : '';
+  // Calls in this campaign (for the touch filter) — tracked as call1, call2, … per contact
+  const listCalls = campaign ? renderCalls(campaign, { app: activeApplication, region: regionFilter, company: null }) : [];
+
+  // Progress of the touch on screen, over the rows on screen: email sent / WhatsApp done, out of who can get it.
+  const progressOf = (rows, key) => ['email', 'whatsapp'].map(channel => {
+    const elig = rows.filter(p => reach(p, channel));
+    const ticks = elig.map(p => tickFor(p.id, key, channel)).filter(Boolean);
+    const last = ticks.reduce((m, t) => (!m || t.done_at > m ? t.done_at : m), null);
+    return { channel, done: ticks.length, total: elig.length, last };
+  });
+  const touchProgress = listTouch ? progressOf(visible, listTouch.key) : [];
+  // Next up: the first touch (in order) not finished on email or WhatsApp across the whole list
+  const nextUp = useMemo(() => {
+    if (!campaign) return null;
+    for (let i = 0; i < campaign.touches.length; i++) {
+      const t = campaign.touches[i];
+      const pr = progressOf(prospects, t.key);
+      if (pr.some(c => c.total && c.done < c.total)) return { i, t, pr };
+    }
+    return 'done';
+  }, [campaign, prospects, touchIndex]); // eslint-disable-line
+  // Pre-fetch the touch's WhatsApp image so "Share text + image" works in one tap on a phone
+  const shareSupported = typeof navigator !== 'undefined' && typeof navigator.canShare === 'function';
+  const activeImage = campaignRow ? null : listTouch?.waImage;
 
   const [copied, setCopied] = useState('');
   const [showPreview, setShowPreview] = useState(true);
@@ -203,7 +331,7 @@ export default function ProspectingList() {
   };
 
   // --- Per contact: the same list touch, rendered with the row's own application, region and company ---
-  const hasCampaign = p => !!campaignFor(p.segment) && p.status !== 'skip';
+  const hasCampaign = p => !!campaignFor(p.segment) && !NO_CAMPAIGN.has(p.status);
   // Existing customers: the row's notes carry what they order ("Most-ordered items: …") and the order span
   // ("Orders in the app: N (first – last)") — the restock messages name both.
   const rowCtx = p => {
@@ -223,6 +351,19 @@ export default function ProspectingList() {
   const rowCampaign = campaignRow ? campaignFor(campaignRow.segment) : null;
   const rowTouch = rowCampaign ? renderTouch(rowCampaign, seqTab, rowCtx(campaignRow)) : null;
   const rowCalls = rowCampaign ? renderCalls(rowCampaign, rowCtx(campaignRow)) : [];
+  // The image to share: the open row's touch image, else the list touch's — fetched ahead so Share is one tap
+  const imageToShare = rowTouch?.waImage || activeImage || null;
+  useEffect(() => {
+    let live = true;
+    setShareFile(null);
+    if (imageToShare && shareSupported) imageFile(imageToShare).then(f => { if (live) setShareFile(f); }).catch(() => {});
+    return () => { live = false; };
+  }, [imageToShare]); // eslint-disable-line
+  const canShareImage = !!(shareFile && shareSupported && navigator.canShare({ files: [shareFile] }));
+  const shareTextAndImage = async (text, onDone) => {
+    try { await navigator.share({ files: [shareFile], text }); if (onDone) onDone(); }
+    catch { /* user closed the share sheet */ }
+  };
   const downloadRowHtml = () => downloadTxt2Html(
     fullHtml(rowTouch.subject, bodyToHtml(rowTouch.body, campaignRow.application)),
     `PHE-${slug(campaignRow.company)}-${seqTab + 1}-${rowTouch.key}.html`);
@@ -232,10 +373,10 @@ export default function ProspectingList() {
   // "skip" rows never export (and so never get re-marked "exported").
   // One Zoho list carries both channels: Zoho imports a contact only with an email, and its
   // SMS goes to the same contact's Mobile field — so rows with just a mobile are WhatsApp-only.
-  const zohoSel = useMemo(() => selectedVisible.filter(p => hasEmail(p) && p.status !== 'skip'), [selectedVisible]);
+  const zohoSel = useMemo(() => selectedVisible.filter(p => hasEmail(p) && !NO_CAMPAIGN.has(p.status)), [selectedVisible]);
   const zohoIds = useMemo(() => zohoSel.map(p => p.id), [zohoSel]);
   const zohoWithMobile = useMemo(() => zohoSel.filter(hasPhone).length, [zohoSel]);
-  const mobileOnlySel = useMemo(() => selectedVisible.filter(p => !hasEmail(p) && hasPhone(p) && p.status !== 'skip').length, [selectedVisible]);
+  const mobileOnlySel = useMemo(() => selectedVisible.filter(p => !hasEmail(p) && hasPhone(p) && !NO_CAMPAIGN.has(p.status)).length, [selectedVisible]);
 
   const stats = useMemo(() => ({
     total: prospects.length,
@@ -272,20 +413,22 @@ export default function ProspectingList() {
       a.download = `${parts.join('-')}-zoho.csv`;
       a.click();
       URL.revokeObjectURL(url);
-      await api.post('/prospects/bulk-status', { ids, status: 'exported' });
-      loadProspects();
+      await api.post('/prospects/bulk-status', { ids, status: 'exported' });   // only 'new' rows move
+      loadProspects(true);
     } finally { setBusy(false); }
   };
 
   const markStatus = async status => {
-    // "Reset to new" is the deliberate way to un-skip; other bulk marks leave skip rows alone.
+    // "New" is the deliberate way to un-skip; other bulk changes leave skip rows alone (unless the
+    // target is skip itself). Only the selected rows on screen change.
     const skip = new Set(prospects.filter(p => p.status === 'skip').map(p => p.id));
-    const ids = [...selected].filter(id => status === 'new' || !skip.has(id));
-    if (!ids.length) return;
+    const ids = selectedVisible.map(p => p.id).filter(id => status === 'new' || status === 'skip' || !skip.has(id));
+    if (!ids.length || !status) return;
     setBusy(true);
     try {
       await api.post('/prospects/bulk-status', { ids, status });
-      loadProspects();
+      await loadProspects(true);
+      setBulkStatus('');
     } finally { setBusy(false); }
   };
 
@@ -312,8 +455,8 @@ export default function ProspectingList() {
     } finally { setImpBusy(false); }
   };
 
-  // Clear region/application filters when switching segment — options differ per list.
-  useEffect(() => { setRegionFilter(''); setAppFilter(''); }, [segment]);
+  // Clear the filters when switching segment — options differ per list.
+  useEffect(() => { setRegionFilter(''); setAppFilter(''); setTouchFilter(''); setSearch(''); setStatusFilter(''); }, [segment]);
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -363,11 +506,42 @@ export default function ProspectingList() {
         </select>
         <select className="input" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
           <option value="">All statuses</option>
-          <option value="new">New</option>
-          <option value="exported">Exported</option>
-          <option value="contacted">Contacted</option>
-          <option value="skip">Skip (no campaign)</option>
+          {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
         </select>
+        <select className="input" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}>
+          <option value="">All priorities</option>
+          <option value="H">High</option>
+          <option value="M">Medium</option>
+          <option value="L">Low</option>
+        </select>
+        {campaign && (
+          <select className="input" value={touchFilter} onChange={e => setTouchFilter(e.target.value)}>
+            <option value="">All campaign progress</option>
+            {campaign.touches.map((t, i) => (
+              <optgroup key={t.key} label={`${i + 1}. ${t.label}`}>
+                <option value={`email|${t.key}|not`}>✉ Email not sent yet</option>
+                <option value={`email|${t.key}|done`}>✉ Email sent</option>
+                <option value={`whatsapp|${t.key}|not`}>💬 WhatsApp not done yet</option>
+                <option value={`whatsapp|${t.key}|done`}>💬 WhatsApp done</option>
+              </optgroup>
+            ))}
+            {listCalls.length > 0 && (
+              <optgroup label="Calls">
+                {listCalls.map((c, i) => [
+                  <option key={`n${i}`} value={`call|call${i + 1}|not`}>☎ Not called yet — {c.label}</option>,
+                  <option key={`d${i}`} value={`call|call${i + 1}|done`}>☎ Called — {c.label}</option>,
+                ])}
+              </optgroup>
+            )}
+          </select>
+        )}
+        <input className="input" style={{ minWidth: 220 }} placeholder="Search company, city, email or phone…"
+          value={search} onChange={e => setSearch(e.target.value)} />
+        {(statusFilter || priorityFilter || touchFilter || search || appFilter || regionFilter || sourceFilter) && (
+          <button className="text-xs text-gray-500 underline" onClick={() => {
+            setStatusFilter(''); setPriorityFilter(''); setTouchFilter(''); setSearch(''); setAppFilter(''); setRegionFilter(''); setSourceFilter('');
+          }}>Clear filters</button>
+        )}
       </div>
 
       {segments.length === 0 && !loading ? (
@@ -383,6 +557,17 @@ export default function ProspectingList() {
             <Stat label="Emailable" value={stats.emailable} accent="text-emerald-600" />
             <Stat label="SMS-able" value={stats.smsable} accent="text-amber-600" />
             <Stat label="Selected" value={stats.selected} />
+          </div>
+
+          {/* Pipeline: how many contacts sit at each status — tap one to filter */}
+          <div className="flex flex-wrap items-center gap-1.5 mb-5">
+            <span className="text-xs text-gray-500 mr-1">Pipeline:</span>
+            {STATUSES.filter(s => statusCounts[s.key]).map(s => (
+              <button key={s.key} onClick={() => setStatusFilter(statusFilter === s.key ? '' : s.key)}
+                className={`text-xs font-medium px-2.5 py-1 rounded-full ${s.cls} ${statusFilter === s.key ? 'ring-2 ring-brand-500' : ''}`}>
+                {s.label} {statusCounts[s.key]}
+              </button>
+            ))}
           </div>
 
           {/* Table */}
@@ -408,6 +593,7 @@ export default function ProspectingList() {
                     <th className="px-3 py-2">Contact</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Priority</th>
+                    {campaign && <th className="px-3 py-2" title="This touch: email sent / WhatsApp done">Touch {touchTab + 1}</th>}
                     <th className="px-3 py-2">Campaign</th>
                   </tr>
                 </thead>
@@ -435,12 +621,33 @@ export default function ProspectingList() {
                         <td className="px-3 py-2">
                           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${sb.cls}`}>{sb.label}</span>
                         </td>
-                        <td className="px-3 py-2"><span className="text-xs text-gray-500 capitalize">{p.status}</span></td>
+                        <td className="px-3 py-2">
+                          <select value={p.status} title="Change status"
+                            className={`text-xs font-medium rounded-full border-0 py-0.5 pl-2 pr-6 ${(STATUS[p.status] || STATUS.new).cls}`}
+                            onChange={e => changeStatus(p.id, e.target.value)}>
+                            {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+                            {!STATUS[p.status] && <option value={p.status}>{p.status}</option>}
+                          </select>
+                        </td>
                         <td className="px-3 py-2">
                           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${PRIORITY_BADGE[p.priority] || PRIORITY_BADGE.L}`}>
                             {PRIORITY_LABEL[p.priority] || p.priority}
                           </span>
                         </td>
+                        {campaign && (
+                          <td className="px-3 py-2 whitespace-nowrap text-sm">
+                            {['email', 'whatsapp'].map(ch => {
+                              if (!reach(p, ch)) return <span key={ch} className="mr-1.5 text-gray-200" title={`No ${ch}`}>{CHANNEL_ICON[ch]}</span>;
+                              const t = listTouch && tickFor(p.id, listTouch.key, ch);
+                              return (
+                                <span key={ch} className={`mr-1.5 ${t ? '' : 'opacity-30'}`}
+                                  title={t ? `${ch === 'email' ? 'Email sent' : 'WhatsApp done'} ${fmtDay(t.done_at)}${t.done_by ? ` · ${t.done_by}` : ''}` : `${ch === 'email' ? 'Email' : 'WhatsApp'} not done`}>
+                                  {CHANNEL_ICON[ch]}{t ? '✓' : ''}
+                                </span>
+                              );
+                            })}
+                          </td>
+                        )}
                         <td className="px-3 py-2">
                           {/* Every row opens: campaign touches when it has one, otherwise its numbers + notes */}
                           <button className={`text-xs font-medium px-2 py-1 rounded-md border flex items-center gap-1 ${hasCampaign(p) ? 'border-brand-200 text-brand-700 hover:bg-brand-50' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
@@ -452,7 +659,7 @@ export default function ProspectingList() {
                     );
                   })}
                   {!loading && visible.length === 0 && (
-                    <tr><td colSpan={11} className="px-3 py-10 text-center text-gray-400">No prospects for this filter</td></tr>
+                    <tr><td colSpan={12} className="px-3 py-10 text-center text-gray-400">No prospects for this filter</td></tr>
                   )}
                 </tbody>
               </table>
@@ -486,6 +693,29 @@ export default function ProspectingList() {
                     </button>
                   ))}
                 </div>
+                {/* Progress of this touch over the rows on screen, and what's next for the whole list */}
+                <div className="flex flex-wrap items-center gap-2 mb-2 text-xs">
+                  {touchProgress.map(c => (
+                    <span key={c.channel} className={`px-2.5 py-1 rounded-md border font-medium ${c.total && c.done >= c.total ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : c.done ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-gray-50 border-gray-200 text-gray-600'}`}>
+                      {CHANNEL_ICON[c.channel]} {c.channel === 'email' ? 'Email' : 'WhatsApp'}: {c.done} of {c.total} {c.channel === 'email' ? 'sent' : 'done'}{c.last ? ` · last ${fmtDay(c.last)}` : ''}
+                    </span>
+                  ))}
+                  <button className="btn-secondary text-xs flex items-center gap-1.5" disabled={!zohoIds.length || busy}
+                    title="After you send this touch's email in Zoho: tick it for the same selected rows you exported"
+                    onClick={() => markTouch(zohoIds, listTouch.key, 'email')}>
+                    <CheckCircle2 size={13} /> Mark email sent ({zohoIds.length})
+                  </button>
+                  <button className="text-xs text-gray-400 underline" disabled={!zohoIds.length || busy}
+                    onClick={() => { if (window.confirm(`Remove the "email sent" tick for ${zohoIds.length} selected rows on this touch?`)) undoTouch(zohoIds, listTouch.key, 'email'); }}>
+                    undo
+                  </button>
+                </div>
+                {nextUp && (
+                  <p className="text-xs text-gray-500 mb-3">
+                    {nextUp === 'done' ? '✓ Every touch is done for this list.'
+                      : <>Next up: <strong>{nextUp.i + 1}. {nextUp.t.label}</strong>{nextUp.t.day != null ? ` (${dayLabel(nextUp.t.day)})` : ''} — {nextUp.pr.map(c => `${c.channel === 'email' ? 'email' : 'WhatsApp'} ${c.done}/${c.total}`).join(' · ')}</>}
+                  </p>
+                )}
                 {listTouch.attach && (
                   listTouch.flyer ? (
                     <a href={listTouch.flyer} target="_blank" rel="noopener noreferrer"
@@ -527,13 +757,23 @@ export default function ProspectingList() {
                       <Copy size={13} /> {copied === 'list-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
                     </button>
                     {listTouch.waImage && (
-                      <a className="btn-secondary text-xs flex items-center gap-1.5" href={listTouch.waImage} target="_blank" rel="noopener noreferrer">
-                        🖼️ Image to send with it ↗
-                      </a>
+                      <>
+                        <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => saveImage(listTouch.waImage)}>
+                          <Download size={13} /> Download image
+                        </button>
+                        {!campaignRow && canShareImage && (
+                          <button className="btn-secondary text-xs flex items-center gap-1.5" style={{ color: '#128C7E' }}
+                            onClick={() => shareTextAndImage(listTouch.whatsapp)}>
+                            <MessageSquare size={13} /> Share text + image
+                          </button>
+                        )}
+                        <a className="text-xs text-gray-400 underline" href={listTouch.waImage} target="_blank" rel="noopener noreferrer">view ↗</a>
+                      </>
                     )}
                   </div>
                   <p className="text-xs text-gray-400 mt-2">
-                    To send it to one contact with their company name filled in, open <strong>View</strong> on their row → <strong>WhatsApp this</strong>.
+                    To send it to one contact with their company name filled in, open <strong>View</strong> on their row → <strong>WhatsApp this</strong> (that ticks the row as done).
+                    {listTouch.waImage && <> WhatsApp links can&apos;t carry a picture: download the image and attach it in the chat — or on a phone use <strong>Share text + image</strong> and pick the contact in WhatsApp.</>}
                   </p>
                 </div>
                 <div className="mt-3 border border-emerald-200 bg-emerald-50 rounded-lg p-3 text-xs text-emerald-900">
@@ -576,18 +816,24 @@ export default function ProspectingList() {
               onClick={() => download(zohoIds)}>
               <Mail size={16} /> Export Zoho list — email + SMS ({zohoIds.length})
             </button>
-            <button className="btn-secondary flex items-center gap-1.5" disabled={!selected.size || busy} onClick={() => markStatus('contacted')}>
-              <CheckCircle2 size={16} /> Mark contacted
-            </button>
-            <button className="btn-secondary flex items-center gap-1.5" disabled={!selected.size || busy} onClick={() => markStatus('new')}>
-              <Star size={16} /> Reset to new
-            </button>
+            <div className="flex items-center gap-1.5">
+              <select className="input" value={bulkStatus} onChange={e => setBulkStatus(e.target.value)}>
+                <option value="">Set status…</option>
+                {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+              </select>
+              <button className="btn-secondary flex items-center gap-1.5" disabled={!bulkStatus || !selectedVisible.length || busy}
+                onClick={() => markStatus(bulkStatus)}>
+                <Star size={16} /> Apply to {selectedVisible.length} selected
+              </button>
+            </div>
           </div>
           <p className="text-xs text-gray-400 mt-2">
             One list for both Zoho campaigns: every selected contact with an email, and their mobile (with country code) in the <strong>Mobile</strong> column for SMS
             {zohoIds.length > 0 && <> — {zohoWithMobile} of {zohoIds.length} have a mobile</>}.
             {mobileOnlySel > 0 && <> {mobileOnlySel} selected {mobileOnlySel === 1 ? 'row has' : 'rows have'} a mobile but no email — Zoho can&apos;t import a contact without an email, so reach {mobileOnlySel === 1 ? 'it' : 'them'} on WhatsApp from the row.</>}
-            {' '}Only the rows matching the active application/region filters export (the filename records the slice), and they're marked “exported”.
+            {' '}Only the rows matching the active filters export (the filename records the slice); new rows move to “In Zoho list”.
+            {' '}After you send a touch in Zoho, keep the same rows selected and press <strong>Mark email sent</strong> on that touch.
+            {' '}“Not interested” and “Skip” never export.
           </p>
         </>
       )}

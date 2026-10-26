@@ -125,6 +125,33 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS campaign_sequence TEXT`);
       // Office / board / sales landline to CALL — kept apart from `phone`, which drives WhatsApp links
       await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS office_phone TEXT`);
+      // Campaign tracking (owner, 26 Oct 2026): which touch went out to whom, on which channel —
+      // touch_key = the campaign touch ('awareness', 'product', …) or 'call1'…'call3' for the call scripts.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS prospect_touches (
+          id          SERIAL PRIMARY KEY,
+          prospect_id INTEGER NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+          segment     TEXT NOT NULL,
+          touch_key   TEXT NOT NULL,
+          channel     TEXT NOT NULL CHECK (channel IN ('email','whatsapp','call')),
+          note        TEXT,
+          done_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          done_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (prospect_id, touch_key, channel)
+        )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_prospect_touches_segment ON prospect_touches(segment, touch_key, channel)`);
+      // Status history per prospect (who moved it, when, and why)
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS prospect_status_log (
+          id          SERIAL PRIMARY KEY,
+          prospect_id INTEGER NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+          from_status TEXT,
+          to_status   TEXT NOT NULL,
+          note        TEXT,
+          changed_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          changed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_prospect_status_log_p ON prospect_status_log(prospect_id, changed_at DESC)`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS backup_log (
           id SERIAL PRIMARY KEY,
