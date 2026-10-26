@@ -7,6 +7,7 @@ const { getDB } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadToStorage, deleteFromStorage } = require('../middleware/upload');
 const { gujaratiName } = require('../lib/gujarati');
+const { itemGroup } = require('../lib/terminalGroups');
 
 /**
  * Extract images embedded in an xlsx file, keyed by 0-based data-row index.
@@ -426,7 +427,7 @@ router.post('/products', authenticate, authorize('admin', 'owner'), upload.singl
 
 router.get('/inventory/template', authenticate, (req, res) => {
   sendTemplate(res,
-    ['item_code', 'name', 'category', 'unit', 'reorder_level', 'min_order_qty', 'unit_cost', 'notes', 'drawing'],
+    ['item_code', 'name', 'category', 'unit', 'reorder_level', 'min_order_qty', 'unit_cost', 'notes', 'drawing', 'terminal_group'],
     'inventory_template.xlsx');
 });
 
@@ -516,11 +517,31 @@ router.post('/inventory', authenticate, authorize('owner', 'admin'), upload.sing
         }
       }
 
+      // A Terminal Pin row names its group (owner, 26 Oct 2026) in a
+      // terminal_group column — Regular, One Side Threaded or No Thread. An
+      // item already in stock keeps its own group when the row leaves it blank.
+      const groupCell = pick(row, ['terminal_group', 'terminal_pin_group', 'pin_group']);
+      let tg = itemGroup(strOrNull(row.category), groupCell);
+      if (tg.error && !str(groupCell)) {
+        const known = await db.get('SELECT terminal_group FROM inventory_items WHERE item_code=$1', [str(row.item_code)]);
+        if (known?.terminal_group) tg = { group: known.terminal_group };
+      }
+      if (tg.error) {
+        errors.push(`Row ${rowNum}: ${str(row.item_code)} — ${tg.error} Put it in a terminal_group column and re-import.`);
+        skipped++;
+        if (storagePath) {
+          try { await deleteFromStorage(storagePath); } catch {}
+          drawingsImported--;
+        }
+        continue;
+      }
+
       try {
         await db.run(`
-          INSERT INTO inventory_items (item_code, name, name_gu, category, unit, reorder_level, min_order_qty, unit_cost, notes, drawing_file, drawing_original_name, created_by, approval_status)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          INSERT INTO inventory_items (item_code, name, name_gu, category, unit, reorder_level, min_order_qty, unit_cost, notes, drawing_file, drawing_original_name, created_by, approval_status, terminal_group)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
           ON CONFLICT(item_code) DO UPDATE SET
+            terminal_group        = EXCLUDED.terminal_group,
             name                  = EXCLUDED.name,
             name_gu               = COALESCE(NULLIF(EXCLUDED.name_gu, ''), inventory_items.name_gu),
             category              = EXCLUDED.category,
@@ -546,6 +567,7 @@ router.post('/inventory', authenticate, authorize('owner', 'admin'), upload.sing
           storagePath, drawingFilename,
           req.user.id,
           req.user.role === 'owner' ? 'approved' : 'pending_approval',
+          tg.group,
         ]);
         imported++;
       } catch (e) {

@@ -3,6 +3,7 @@ const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadItemDrawing, deleteFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
+const { itemGroup } = require('../lib/terminalGroups');
 const { gujaratiName } = require('../lib/gujarati');
 const rework = require('../lib/rework');
 const inventoryActions = require('../services/actions/inventory');
@@ -161,6 +162,13 @@ router.get('/:id', authenticate, async (req, res) => {
 // pending_approval and they have no Inventory section access
 router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), ...uploadItemDrawing, async (req, res) => {
   const { item_code, name, name_gu, category, unit, current_stock, reorder_level, unit_cost, min_order_qty, notes } = req.body;
+  // A Terminal Pin item is added with its group (owner, 26 Oct 2026) — job
+  // cards pick their pins from one group only, so it is asked, never guessed.
+  const tg = itemGroup(category, req.body.terminal_group);
+  if (tg.error) {
+    if (req.file?.storagePath) { try { await deleteFromStorage(req.file.storagePath); } catch (_) { /* best effort */ } }
+    return res.status(400).json({ error: tg.error, code: 'TERMINAL_GROUP_REQUIRED' });
+  }
   if (!item_code || !name || !unit) return res.status(400).json({ error: 'Code, name and unit required' });
   // Owner's rule (Sep 2026): an inventory item may not exist without its
   // drawing — no item can be bought, QC'd or built against a blank spec. This
@@ -196,12 +204,12 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), ...uploa
   try {
     const r = await db.insert(
       `INSERT INTO inventory_items
-         (item_code, name, name_gu, category, unit, current_stock, reorder_level, unit_cost, min_order_qty, notes, drawing_file, drawing_original_name, created_by, approval_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+         (item_code, name, name_gu, category, unit, current_stock, reorder_level, unit_cost, min_order_qty, notes, drawing_file, drawing_original_name, created_by, approval_status, terminal_group)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [
         item_code.toUpperCase(), name, guName||null, cat, unit,
         Number(current_stock)||0, Number(reorder_level)||0, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null,
-        drawingFile, drawingOriginalName, req.user.id, approvalStatus
+        drawingFile, drawingOriginalName, req.user.id, approvalStatus, tg.group
       ]
     );
     // Record the attached drawing as version 1 so the timeline starts here.
@@ -281,6 +289,16 @@ router.put('/:id', authenticate, authorize('owner', 'admin'), ...uploadItemDrawi
   const { item_code, name, name_gu, category, unit, reorder_level, unit_cost, min_order_qty, notes } = req.body;
   const db = getDB();
 
+  // A Terminal Pin item keeps a group (owner, 26 Oct 2026); a caller that sends
+  // none leaves the item's own. Moved out of the category, it has none.
+  const current = await db.get('SELECT terminal_group FROM inventory_items WHERE id=$1', [req.params.id]);
+  const tg = current ? itemGroup(category, req.body.terminal_group !== undefined ? req.body.terminal_group : current.terminal_group) : null;
+  if (!current || tg.error) {
+    if (req.file?.storagePath) { try { await deleteFromStorage(req.file.storagePath); } catch (_) { /* best effort */ } }
+    return !current ? res.status(404).json({ error: 'Item not found' })
+      : res.status(400).json({ error: tg.error, code: 'TERMINAL_GROUP_REQUIRED' });
+  }
+
   // Check if code is being changed to one that already exists (different item)
   const existing = await db.get('SELECT id FROM inventory_items WHERE item_code=$1 AND id!=$2', [item_code?.toUpperCase(), req.params.id]);
   if (existing) return res.status(409).json({ error: 'Item code already exists' });
@@ -292,8 +310,8 @@ router.put('/:id', authenticate, authorize('owner', 'admin'), ...uploadItemDrawi
 
   try {
     await db.run(
-      `UPDATE inventory_items SET item_code=$1, name=$2, name_gu=$3, category=$4, unit=$5, reorder_level=$6, unit_cost=$7, min_order_qty=$8, notes=$9 WHERE id=$10`,
-      [item_code?.toUpperCase(), name, guName||null, cat, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null, req.params.id]
+      `UPDATE inventory_items SET item_code=$1, name=$2, name_gu=$3, category=$4, unit=$5, reorder_level=$6, unit_cost=$7, min_order_qty=$8, notes=$9, terminal_group=$11 WHERE id=$10`,
+      [item_code?.toUpperCase(), name, guName||null, cat, unit, reorder_level, Number(unit_cost)||0, Number(min_order_qty)||0, notes||null, req.params.id, tg.group]
     );
     // A drawing on the edit form is a new version, not an overwrite — the
     // previous one stays in the timeline.

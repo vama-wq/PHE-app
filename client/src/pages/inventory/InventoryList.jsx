@@ -6,7 +6,7 @@ import Modal from '../../components/ui/Modal';
 import ImportModal from '../../components/ui/ImportModal';
 import CategorySelect from '../../components/CategorySelect';
 import InventoryItemModal from '../../components/InventoryItemModal';
-import { downloadExcel } from '../../lib/utils';
+import { downloadExcel, isTerminalPinCategory, terminalGroupLabel } from '../../lib/utils';
 import { Plus, Search, AlertTriangle, Download, Upload, X } from 'lucide-react';
 
 export default function InventoryList() {
@@ -156,7 +156,15 @@ export default function InventoryList() {
                       </button>
                     )}
                   </td>
-                  <td className="table-cell text-gray-500">{item.category || '—'}</td>
+                  <td className="table-cell text-gray-500">
+                    {item.category || '—'}
+                    {/* A terminal pin's group (owner, 26 Oct 2026) — job cards pick from one group only. */}
+                    {isTerminalPinCategory(item.category) && (
+                      <span className={`block text-[10px] font-semibold ${item.terminal_group ? 'text-gray-500' : 'text-red-600'}`}>
+                        {terminalGroupLabel(item.terminal_group) || 'group not set'}
+                      </span>
+                    )}
+                  </td>
                   <td className={`table-cell text-right font-semibold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
                     {item.current_stock} <span className="font-normal text-gray-400">{item.unit}</span>
                     {Number(item.rework_qty) > 0 && <span className="ml-1.5 text-[10px] font-semibold bg-sky-100 text-sky-800 rounded px-1.5 py-0.5" title={`${item.rework_free} free in the rework bin`}>+{item.rework_qty} rework</span>}

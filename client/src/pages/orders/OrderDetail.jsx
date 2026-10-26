@@ -10,7 +10,7 @@ import InventoryEditModal from '../../components/InventoryEditModal';
 import HeaterFittingsPicker, { FittingsText } from '../../components/HeaterFittings';
 import { isBrazedHeater, normalizeFittings, fittingsChosen } from '../../lib/heaterFittings';
 import TerminalPinsBox, { TERMINAL_ROLES } from '../../components/TerminalPinsBox';
-import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati, ORDER_TYPE_COLORS, orderTypeLabel, reuseListNote } from '../../lib/utils';
+import { fmtDate, fmtDateTime, ACTIVITY_ICONS, ROLE_COLORS, ROLE_LABELS, transliterateHindi, transliterateGujarati, ORDER_TYPE_COLORS, orderTypeLabel, reuseListNote, TERMINAL_GROUPS } from '../../lib/utils';
 import { printJobCardSlip } from '../../lib/printJobCardSlip';
 import { splitQuantity, MAX_CARD_QTY, SPLIT_MARKER } from '../../lib/jobCardSplit';
 import { compressImages } from '../../lib/compressImage';
@@ -2054,6 +2054,8 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
   const [mode, setMode] = useState('generate');
   const [gen, setGen] = useState({
     asmbly: '1', fixture: '', drawing_total_length_in: '',
+    // Which group the card's terminal pins come from (owner, 26 Oct 2026).
+    terminal_group: 'regular',
     // Derived unless set. Blank means "leave it to the policy".
     cold_zone_big_in: '', cold_zone_small_in: '',
     terminal_pin_big_in: '', terminal_pin_small_in: '',
@@ -2299,6 +2301,15 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
                 <input className="input" placeholder="as it should read on the card"
                   value={gen.fixture} onChange={setGenF('fixture')} />
               </div>
+              {/* The card's terminal pins come from this group only — what it
+                  names, what its slip prints and what Spot takes. */}
+              <div className="col-span-2">
+                <label className="label">Terminal pin type</label>
+                <select className="input" value={gen.terminal_group} onChange={setGenF('terminal_group')}>
+                  {TERMINAL_GROUPS.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
+                </select>
+                <p className="text-[11px] text-gray-400 mt-0.5">The card picks its pins from this group only. Regular unless the job needs another.</p>
+              </div>
             </div>
 
             <button type="button" className="btn-secondary w-full" disabled={previewing || !selectedItemId}
@@ -2354,6 +2365,9 @@ function UploadJobCardModal({ orderId, drawingBypassed = false, defaultDispatchD
                   ['Cold zone', `${preview.card.coldZoneBigIn}" / ${preview.card.coldZoneSmallIn}"`],
                   ['Terminal pin', `${preview.card.terminalPinBig?.studs}" / ${preview.card.terminalPinSmall?.studs}"`
                     + (preview.card.terminalPinBig?.overridden ? ` — set by hand, the cold zone gives ${preview.card.terminalPinBig.derivedStuds}"` : '')],
+                  ['Pins it takes', preview.pins
+                    ? `${preview.pins.groupLabel}: ${preview.pins.big || 'none in this group'} + ${preview.pins.small || 'none in this group'}`
+                    : '—'],
                   ['Punching', preview.head.punching],
                   ['Job card(s)', preview.split.names.map((nm, i) => `${nm} (${preview.split.quantities[i]})`).join(', ')],
                 ].map(([k, v]) => (

@@ -2456,6 +2456,11 @@ async function initDB(retries = 20, delayMs = 10000) {
     // 2026): what it was made with — stamping, fixture, the store stock it was
     // cut from — kept with the card (lib/fgCardRender.js).
     await pool.query(`ALTER TABLE job_cards ADD COLUMN IF NOT EXISTS fg_card JSONB`);
+    // Terminal pin groups (owner, 26 Oct 2026; lib/terminalGroups.js): every
+    // 'Terminal Pin' item names its group — 'regular', 'one_side_threaded' or
+    // 'no_thread' — chosen when the item is added; a job card picks its pins
+    // from its own group only. The existing pins were given theirs once.
+    await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS terminal_group TEXT`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');

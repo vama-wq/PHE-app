@@ -23,7 +23,7 @@ import { useEffect, useState } from 'react';
 import api from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import StockTag from './StockTag';
-import { fmtDateTime } from '../lib/utils';
+import { fmtDateTime, terminalGroupLabel } from '../lib/utils';
 import { Zap, Pencil, Plus, X, AlertTriangle, CheckCircle, ChevronDown, ChevronRight } from 'lucide-react';
 
 // Who may read the box at all (the server refuses everyone else).
@@ -189,6 +189,11 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
     <div className="flex items-center gap-2 flex-wrap">
       <Zap size={15} className={held ? 'text-red-600' : 'text-brand-600'} />
       <span className="font-semibold text-gray-900 text-sm">Terminal pins</span>
+      {/* The group the job card's pins come from (owner, 26 Oct 2026). */}
+      {data.pin_group_label && (
+        <span className="text-[10px] font-semibold bg-sky-50 text-sky-800 border border-sky-200 rounded px-1.5 py-0.5 whitespace-nowrap"
+          title="The job card's pins come from this terminal pin group only">{data.pin_group_label}</span>
+      )}
       {compact && !open && <span className="text-xs text-gray-500 truncate">{summary}</span>}
       {held && (
         <span className="text-[10px] font-semibold bg-red-100 text-red-700 rounded px-1.5 py-0.5 whitespace-nowrap flex items-center gap-1">
@@ -241,9 +246,9 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
           {held && unset && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
               <div className="font-medium">
-                {data.unset
-                  ? 'Slip held — no terminal pins are set. This is an uploaded job card, so the app cannot read its pins.'
-                  : `Slip held — the job card asks for ${(data.missing || []).join(', ')}, which has no inventory item.`}
+                {(data.missing || []).length
+                  ? `Slip held — the job card asks for ${data.missing.join(', ')}, which has no inventory item.`
+                  : 'Slip held — no terminal pins are set. This is an uploaded job card, so the app cannot read its pins.'}
               </div>
               <div className="text-xs mt-0.5">Design chooses the pins in <b>Change pins</b>; the slip prints once they are set.</div>
             </div>
@@ -329,6 +334,7 @@ export default function TerminalPinsBox({ jobCardId, compact = false, onChanged 
                           className="w-full text-left px-3 py-2 text-sm hover:bg-brand-50 flex items-center justify-between"
                           onMouseDown={() => { addPin(i); setSearch(''); }}>
                           <span><span className="font-mono">{i.item_code}</span> — {i.name}
+                            <span className={`ml-1.5 text-[10px] font-semibold rounded px-1.5 py-0.5 ${i.terminal_group ? 'bg-gray-100 text-gray-600' : 'bg-red-100 text-red-700'}`}>{terminalGroupLabel(i.terminal_group) || 'no group'}</span>
                             <StockTag item={i} />
                             {Number(i.rework_free) > 0 && <span className="ml-1.5 text-[10px] font-semibold bg-sky-100 text-sky-800 rounded px-1.5 py-0.5">REWORK {fmtQty(i.rework_qty)} · {fmtQty(i.rework_free)} free</span>}
                           </span>

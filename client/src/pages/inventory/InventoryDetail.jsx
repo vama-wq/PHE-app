@@ -4,7 +4,8 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import CategorySelect from '../../components/CategorySelect';
-import { fmtDateTime, fmtDate } from '../../lib/utils';
+import TerminalGroupSelect from '../../components/TerminalGroupSelect';
+import { fmtDateTime, fmtDate, isTerminalPinCategory, terminalGroupLabel } from '../../lib/utils';
 import { ArrowLeft, Plus, TrendingUp, TrendingDown, Upload, ExternalLink, FileText, Trash2, History, RotateCcw, CheckCircle } from 'lucide-react';
 
 export default function InventoryDetail() {
@@ -115,6 +116,13 @@ export default function InventoryDetail() {
               {showCost && item.unit_cost > 0 && <div className="text-xs text-gray-500 mt-1">Avg Landed Cost: <span className="font-medium text-gray-700">₹{Number(item.unit_cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/{item.unit}</span></div>}
               {showCost && item.unit_cost > 0 && <div className="text-xs text-gray-500 mt-1">Stock Value: <span className="font-semibold text-gray-800">₹{(Number(item.current_stock) * Number(item.unit_cost)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>}
               {item.category && <div className="text-xs text-gray-500 mt-1">Category: <span className="font-medium text-gray-700">{item.category}</span></div>}
+              {isTerminalPinCategory(item.category) && (
+                <div className="text-xs text-gray-500 mt-0.5">Terminal pin group:{' '}
+                  {item.terminal_group
+                    ? <span className="font-medium text-gray-700">{terminalGroupLabel(item.terminal_group)}</span>
+                    : <span className="font-semibold text-red-600">not set — Edit the item to choose it</span>}
+                </div>
+              )}
             </div>
           </div>
           {Number(item.rework?.qty) > 0 && (
@@ -406,7 +414,8 @@ function TransactionModal({ itemId, item, onClose, onSave }) {
 }
 
 function EditItemModal({ item, onClose, onSave }) {
-  const [f, setF] = useState({ item_code: item.item_code, name: item.name, name_gu: item.name_gu || '', category: item.category || '', unit: item.unit, reorder_level: item.reorder_level, min_order_qty: item.min_order_qty || 0, unit_cost: item.unit_cost || '', notes: item.notes || '' });
+  const [f, setF] = useState({ item_code: item.item_code, name: item.name, name_gu: item.name_gu || '', category: item.category || '', unit: item.unit, reorder_level: item.reorder_level, min_order_qty: item.min_order_qty || 0, unit_cost: item.unit_cost || '', notes: item.notes || '', terminal_group: item.terminal_group || '' });
+  const isPin = isTerminalPinCategory(f.category);
   const [drawing, setDrawing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -414,11 +423,12 @@ function EditItemModal({ item, onClose, onSave }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isPin && !f.terminal_group) return setError('Choose the terminal pin group — Regular, One Side Threaded or No Thread.');
     setSaving(true);
     setError('');
     try {
       const fd = new FormData();
-      Object.entries(f).forEach(([k, v]) => fd.append(k, v));
+      Object.entries({ ...f, terminal_group: isPin ? f.terminal_group : '' }).forEach(([k, v]) => fd.append(k, v));
       if (drawing) fd.append('drawing', drawing);
       await api.put(`/inventory/${item.id}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSave();
@@ -437,6 +447,7 @@ function EditItemModal({ item, onClose, onSave }) {
           <div className="col-span-2"><label className="label">Name</label><input className="input" value={f.name} onChange={set('name')} /></div>
           <div className="col-span-2"><label className="label">Name (ગુજરાતી) <span className="font-normal normal-case text-gray-400">(auto-generated if left blank)</span></label><input className="input" placeholder="ખાલી છોડો — આપમેળે બનશે" value={f.name_gu} onChange={set('name_gu')} /></div>
           <div><label className="label">Category</label><CategorySelect value={f.category} onChange={v => setF(p => ({ ...p, category: v }))} /></div>
+          {isPin && <TerminalGroupSelect value={f.terminal_group} onChange={v => setF(p => ({ ...p, terminal_group: v }))} />}
           <div><label className="label">Reorder Level</label><input className="input" type="number" step="any" value={f.reorder_level} onChange={set('reorder_level')} /></div>
           <div><label className="label">Min Order Qty</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 100" value={f.min_order_qty} onChange={set('min_order_qty')} /></div>
           <div><label className="label">Unit Price (₹)</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 12.50" value={f.unit_cost} onChange={set('unit_cost')} /></div>

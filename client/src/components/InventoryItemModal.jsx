@@ -3,6 +3,8 @@ import api from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import Modal from './ui/Modal';
 import CategorySelect from './CategorySelect';
+import TerminalGroupSelect from './TerminalGroupSelect';
+import { isTerminalPinCategory } from '../lib/utils';
 import { Upload, Boxes } from 'lucide-react';
 
 // Add Inventory Item — the single source of truth for item creation. Used by the
@@ -12,7 +14,8 @@ import { Upload, Boxes } from 'lucide-react';
 // the new item.
 export default function NewItemModal({ onClose, onSave, initial, note, submitLabel }) {
   const { user } = useAuthStore();
-  const [f, setF] = useState({ item_code: '', name: '', name_gu: '', category: '', unit: '', current_stock: 0, reorder_level: 0, min_order_qty: 0, unit_cost: '', notes: '', ...(initial || {}) });
+  const [f, setF] = useState({ item_code: '', name: '', name_gu: '', category: '', unit: '', current_stock: 0, reorder_level: 0, min_order_qty: 0, unit_cost: '', notes: '', terminal_group: '', ...(initial || {}) });
+  const isPin = isTerminalPinCategory(f.category);
   const [drawing, setDrawing] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -21,11 +24,12 @@ export default function NewItemModal({ onClose, onSave, initial, note, submitLab
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!drawing) return setError('Attach the item drawing (PDF or a photo of it) — it is required.');
+    if (isPin && !f.terminal_group) return setError('Choose the terminal pin group — Regular, One Side Threaded or No Thread.');
     setSaving(true);
     try {
       // Use FormData to support optional drawing upload
       const fd = new FormData();
-      Object.entries(f).forEach(([k, v]) => fd.append(k, v));
+      Object.entries({ ...f, terminal_group: isPin ? f.terminal_group : '' }).forEach(([k, v]) => fd.append(k, v));
       if (drawing) fd.append('drawing', drawing);
       const r = await api.post('/inventory', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSave(r.data);
@@ -49,6 +53,7 @@ export default function NewItemModal({ onClose, onSave, initial, note, submitLab
           <div className="col-span-2"><label className="label">Name *</label><input className="input" placeholder="e.g. Resistance Wire 26 SWG" value={f.name} onChange={set('name')} required /></div>
           <div className="col-span-2"><label className="label">Name (ગુજરાતી) <span className="font-normal normal-case text-gray-400">(auto-generated if left blank)</span></label><input className="input" placeholder="ખાલી છોડો — આપમેળે બનશે" value={f.name_gu} onChange={set('name_gu')} /></div>
           <div><label className="label">Category</label><CategorySelect value={f.category} onChange={v => setF(p => ({ ...p, category: v }))} /></div>
+          {isPin && <TerminalGroupSelect value={f.terminal_group} onChange={v => setF(p => ({ ...p, terminal_group: v }))} />}
           <div><label className="label">Opening Stock</label><input className="input" type="number" step="any" value={f.current_stock} onChange={set('current_stock')} /></div>
           <div><label className="label">Reorder Level</label><input className="input" type="number" step="any" value={f.reorder_level} onChange={set('reorder_level')} /></div>
           <div><label className="label">Min Order Qty</label><input className="input" type="number" step="any" min="0" placeholder="e.g. 100" value={f.min_order_qty} onChange={set('min_order_qty')} /></div>

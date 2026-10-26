@@ -70,9 +70,10 @@ const CONFIGS = {
       { name: 'unit_cost', required: false },
       { name: 'notes', required: false },
       { name: 'drawing', required: false },
+      { name: 'terminal_group', required: false },
     ],
     updateKey: 'item_code',
-    note: 'You can embed a drawing image in the "drawing" column for each row. Supported formats: JPG, PNG, PDF.',
+    note: 'You can embed a drawing image in the "drawing" column for each row. Supported formats: JPG, PNG, PDF. A Terminal Pin row needs its group in "terminal_group": Regular, One Side Threaded or No Thread.',
   },
   'finished-goods': {
     title: 'Import Finished Goods',

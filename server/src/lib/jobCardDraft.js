@@ -10,6 +10,7 @@
 // into real job cards through the normal creation path.
 
 const E = require('./jobCardEngine');
+const TG = require('./terminalGroups');
 const { toGujarati, toHindi, isTranslated } = require('./translit');
 const round = (n, dp) => Math.round(Number(n) * 10 ** dp) / 10 ** dp;
 const { splitQuantity, describeSplit, SPLIT_MARKER } = require('./jobCardSplit');
@@ -56,6 +57,9 @@ const OVERRIDES = [
   { key: 'wire_draw_pct_override', label: 'Wire draw (fraction, e.g. 0.31)', type: 'number', from: 'policy Step 7, by gauge' },
   { key: 'spool_row', label: 'Spool', type: 'select', from: 'the shortest coil of the chosen gauge' },
   { key: 'elements_per_assembly', label: 'Elements in the assembly', type: 'number', from: 'the drawing name' },
+  // Which group the card's terminal pins come from (owner, 26 Oct 2026).
+  { key: 'terminal_group', label: 'Terminal pin type', type: 'select', options: TG.TERMINAL_GROUPS.map(g => g.key),
+    from: `${TG.groupLabel(TG.DEFAULT_GROUP)} unless chosen` },
 ];
 
 // The questions with their derived starting values filled in for one item, so
@@ -100,6 +104,12 @@ async function buildDraft(db, orderItemId, answers = {}) {
 
   const missing = missingAnswers(answers);
   if (missing.length) return { ok: false, error: `Still needed: ${missing.join(', ')}.`, questions: QUESTIONS };
+
+  // The terminal pin group the card's pins come from (owner, 26 Oct 2026):
+  // Regular unless the planner chooses another. Frozen on the card when made.
+  const groupGiven = answers.terminal_group != null && String(answers.terminal_group).trim() !== '';
+  const terminalGroup = groupGiven ? TG.normaliseGroup(answers.terminal_group) : TG.DEFAULT_GROUP;
+  if (!terminalGroup) return { ok: false, error: `Terminal pin type must be ${TG.GROUP_CHOICES}.` };
 
   // The card has to name the tube production takes off the rack, not just its
   // code: order_items.tube_material holds the inventory ITEM CODE, so the row
@@ -163,6 +173,19 @@ async function buildDraft(db, orderItemId, answers = {}) {
   const notes = [];
   if (tubeSaysDia && Number(item.tube_diameter) && tubeSaysDia !== Number(item.tube_diameter)) {
     notes.push(`The item is set to ${item.tube_diameter} mm but its tube is ${tube.item_code} — "${tube.name}", which is ${tubeSaysDia} mm. One of the two is wrong, and the whole card follows the diameter.`);
+  }
+  // The two pins the card will name, from its group — the same pick the card
+  // makes once it exists (lib/terminals.js), so the planner sees it first.
+  const stud = String(card.studLabel || '').match(/M\d+/i)?.[0]?.toUpperCase();
+  const pinPick = stud ? await TG.groupPins(db, { stud, big: card.terminalPinBig?.studs, small: card.terminalPinSmall?.studs, group: terminalGroup }) : null;
+  const pins = {
+    group: terminalGroup, groupLabel: TG.groupLabel(terminalGroup),
+    big: pinPick?.found.find(f => f.end === 'big')?.item.item_code || null,
+    small: pinPick?.found.find(f => f.end === 'small')?.item.item_code || null,
+    missing: pinPick?.missing || [],
+  };
+  if (pins.missing.length) {
+    notes.push(`No terminal pin in inventory for ${pins.missing.join(' and ')} — the card's slip will be held until design chooses the pin in Change pins.`);
   }
   const derivedPunching = derivePunching(item.wattage, item.voltage);
   const punching = (answers.punching != null && String(answers.punching).trim())
@@ -230,6 +253,8 @@ async function buildDraft(db, orderItemId, answers = {}) {
     ok: true,
     orderItemId: item.id,
     tubeDrawPctOverride: tubeDrawOverride,
+    terminalGroup,
+    pins,
     notes,
     provenance,
     card: { ...card, wire: chosenSpool },

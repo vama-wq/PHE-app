@@ -137,8 +137,10 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const terminals = (card) => `/api/job-cards/${card}/terminals`;
     const slipOf = (card) => `/api/job-cards/${card}/slip`;
 
+    // Every Terminal Pin item names its group (26 Oct 2026); these are Regular pins.
     const mkItem = async (code, cat, s, unit) => (await q1(
-      `INSERT INTO inventory_items (item_code, name, unit, category, current_stock, unit_cost) VALUES ($1,$1,$2,$3,$4,1) RETURNING id`, [code, unit, cat, s])).id;
+      `INSERT INTO inventory_items (item_code, name, unit, category, current_stock, unit_cost, terminal_group)
+       VALUES ($1,$1,$2,$3,$4,1, CASE WHEN LOWER($3) = 'terminal pin' THEN 'regular' END) RETURNING id`, [code, unit, cat, s])).id;
     const mkOrder = async (code, type = 'local_he') => (await q1(
       `INSERT INTO orders (order_code, customer_id, order_date, order_type, status, material_deduction)
        VALUES ($1, (SELECT MIN(id) FROM customers), CURRENT_DATE, $2, 'in_progress', FALSE) RETURNING id`, [code, type])).id;
@@ -785,7 +787,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const K1 = await mkCard(oK, oiK, 'ZZT-TK1', 5, { dwg: 'ZZTEST-DWG-TK' });
     await client.query('UPDATE job_cards SET generated_spec=$2 WHERE id=$1', [K1, spec(7, 3)]);
     r = await call('GET', terminals(K1));
-    ok('J8. the card asks for TP-SS-M9-07-WH, which has no item: held, named as missing', r.status === 200 && r.body.held === true && (r.body.missing || []).includes('TP-SS-M9-07-WH'), JSON.stringify({ held: r.body.held, missing: r.body.missing }));
+    ok('J8. the card asks for an M9 7" With Head Regular pin, which has no item: held, named as missing', r.status === 200 && r.body.held === true && (r.body.missing || []).includes('M9 7" With Head (Regular)'), JSON.stringify({ held: r.body.held, missing: r.body.missing }));
     r = await call('PUT', terminals(K1), { rows: [{ inventory_item_id: P9X, qty: 5 }, { inventory_item_id: P9O, qty: 5 }] }, design);
     ok('J8. design picks another pin: released', r.status === 200 && r.body.held === false, JSON.stringify({ held: r.body.held, missing: r.body.missing }));
 

@@ -297,6 +297,17 @@ export function transliterateGujarati(text) {
 export const PINS_FROM_CARD_AFTER_ORDER_ID = 452;
 export const pinsFromCard = (orderId) => Number(orderId) > PINS_FROM_CARD_AFTER_ORDER_ID;
 
+// Terminal pin groups (owner, 26 Oct 2026) — the same list as the server's
+// lib/terminalGroups.js. Every 'Terminal Pin' item names its group, chosen when
+// it is added; a job card picks its pins from one group only.
+export const TERMINAL_GROUPS = [
+  { key: 'regular', label: 'Regular' },
+  { key: 'one_side_threaded', label: 'One Side Threaded' },
+  { key: 'no_thread', label: 'No Thread' },
+];
+export const terminalGroupLabel = (key) => TERMINAL_GROUPS.find(g => g.key === key)?.label || null;
+export const isTerminalPinCategory = (category) => String(category || '').trim().toLowerCase() === 'terminal pin';
+
 export async function downloadExcel(exportType, filename) {
   // Uses fetch directly to avoid circular import with api.js
   const r = await fetch(`/api/export/${exportType}`, { credentials: 'include' });

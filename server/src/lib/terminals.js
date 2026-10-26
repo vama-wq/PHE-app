@@ -55,6 +55,7 @@ const rework = require('./rework');
 const PINS_RULE = { afterOrderId: 452 };
 const newRule = (card) => Number(card?.order_id) > PINS_RULE.afterOrderId;
 const { recordMove, PLACEHOLDER, PASSED_QC, TERMINAL_CATEGORY, isTerminalCategory } = require('./stockLedger');
+const groups = require('./terminalGroups');
 const { logActivity } = require('../db');
 const EDIT_ROLES = ['design', 'admin', 'owner'];
 const OK_ROLES = ['owner', 'design'];
@@ -69,19 +70,14 @@ const noTerminals = (card) => !!card?.is_fg || card?.order_type === 'finished_go
 const pastPins = (card) => !!card?.pins_taken_at || !!card?.last_stage_taken_at || !!card?.dispatched_at || !!card?.inventory_qc_at
   || PASSED_QC.has(card?.status) || card?.status === 'qc_pending';
 
-// A pin length as the stock codes write it: 3 → "03", 3.5 → "03.5", 10 → "10".
-const pinLen = (n) => {
-  const v = Number(n);
-  const [i, f] = String(v).split('.');
-  return `${i.padStart(2, '0')}${f ? `.${f}` : ''}`;
-};
-
 // The pins an app-made job card names (its own spec, or the card it came from):
 // per element one With-Head pin at the Big stud length and one Without-Head pin
 // at the Small stud length, on the card's stud — every list so far took exactly
-// one of each per element. null when the card has no spec (uploaded) or the
-// spec names no pin. missing: codes the card asks for that are not in stock's
-// item list at all (design picks another pin then).
+// one of each per element. From 26 Oct 2026 both come from the card's terminal
+// pin GROUP only (lib/terminalGroups.js — Regular for a card made before
+// groups). null when the card has no spec (uploaded) or the spec names no pin.
+// missing: pins the card asks for that its group has no item for (design
+// picks another pin then).
 async function cardSpecPins(db, card) {
   const { specForCard } = require('./cardSpec');
   let g = await specForCard(db, card);
@@ -92,16 +88,20 @@ async function cardSpecPins(db, card) {
   if (!c || !stud || !(big > 0) || !(small > 0)) return null;
   const elements = Math.max(1, parseInt(c.elements, 10) || 1);
   const pieces = (Number(card.qty) || 0) * elements;
-  const wanted = [{ code: `TP-SS-${stud}-${pinLen(big)}-WH`, end: 'big' }, { code: `TP-SS-${stud}-${pinLen(small)}-WO`, end: 'small' }];
-  const rows = [], missing = [];
-  for (const w of wanted) {
-    const inv = await db.get(
-      `SELECT id, item_code FROM inventory_items WHERE UPPER(TRIM(item_code)) = UPPER($1) AND LOWER(TRIM(category)) = LOWER($2) LIMIT 1`,
-      [w.code, TERMINAL_CATEGORY]);
-    if (!inv) { missing.push(w.code); continue; }
-    if (pieces > 0) rows.push({ inventory_item_id: inv.id, qty: pieces, item_code: inv.item_code });
-  }
-  return { rows, missing, label: `${stud} ${big}"${small !== big ? ` / ${small}"` : ''} × ${elements} element${elements === 1 ? '' : 's'}` };
+  const { group, found, missing } = await groups.groupPins(db, { stud, big, small, group: groups.specGroup(g) });
+  const rows = pieces > 0 ? found.map(f => ({ inventory_item_id: f.item.id, qty: pieces, item_code: f.item.item_code })) : [];
+  return { rows, missing, group,
+           label: `${stud} ${big}"${small !== big ? ` / ${small}"` : ''} × ${elements} element${elements === 1 ? '' : 's'} · ${groups.groupLabel(group)}` };
+}
+
+// The terminal pin group an app-made card names, for showing on the card's
+// pins — null for an uploaded card or one that has no pins of its own.
+async function cardPinGroup(db, card) {
+  if (!newRule(card) || noTerminals(card)) return null;
+  const { specForCard } = require('./cardSpec');
+  let g = await specForCard(db, card);
+  try { g = typeof g === 'string' ? JSON.parse(g) : g; } catch { g = null; }
+  return groups.specGroup(g);
 }
 
 // This card's share of a list line, in whole pieces.
@@ -304,6 +304,8 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
     `SELECT jc.*, o.order_type FROM job_cards jc JOIN orders o ON o.id = jc.order_id WHERE jc.id=$1`, [jc.id]);
   if (!card) return { rows: [], lines: [], short: [], held: false, ok: null };
   const { rows, lines, item, itemQty, from, missing } = await ensureTerminals(db, card);
+  // The group the job card's pins come from (26 Oct 2026), shown with them.
+  const pinGroup = await cardPinGroup(db, card);
   // Pins not set (owner, 8 Oct 2026): an uploaded job card names none, so
   // design picks them; the slip is held until they are set. Same when the job
   // card asks for a pin stock has no item for and design has not picked one.
@@ -380,6 +382,7 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
     // An OK releases a shortage only — pins that are not set are never released by it.
     held: (short.length > 0 && !ok) || unset || missingNow.length > 0,
     unset, missing: missingNow, from,
+    pin_group: pinGroup, pin_group_label: groups.groupLabel(pinGroup),
     // Pins are NOT edited on the card (owner, 8 Oct 2026: "non editable here,
     // the change can only happen at Inventory QC"). Only where there is nothing
     // to read — an uploaded job card, or a pin the card names that stock has
@@ -395,8 +398,10 @@ async function checkTerminals(db, jc, { notify = true } = {}) {
 // dashboard and through the WhatsApp follow-through (routes/notifications.js).
 async function notifyShort(db, card, short, { unset = false, missing = [] } = {}) {
   const { notifyRole } = require('../routes/notifications');
-  const what = unset ? 'no terminal pins are set — it is an uploaded job card, so design chooses them in Change pins'
-    : missing.length ? `the job card asks for ${missing.join(', ')}, which has no inventory item — design chooses the pin in Change pins`
+  // A pin the card names comes first: an app-made card whose group has neither
+  // pin has no rows either, but it is not an uploaded card.
+  const what = missing.length ? `the job card asks for ${missing.join(', ')}, which has no inventory item — design chooses the pin in Change pins`
+    : unset ? 'no terminal pins are set — it is an uploaded job card, so design chooses them in Change pins'
     : short.map(s => `terminal pin ${s.item_code} short — need ${s.need}, ${s.stock_for_card !== null && s.stock_for_card !== undefined && s.stock_for_card !== s.stock
         ? `stock left after the earlier cards ${s.stock_for_card}` : `stock ${s.stock}`}${s.bin_offer > 0 ? `; the rework bin can give ${s.bin_offer}` : ''}`).join('; ');
   const binAsk = !unset && !missing.length && short.some(s => s.bin_offer > 0);
@@ -779,5 +784,5 @@ function httpError(status, message, code) {
 module.exports = {
   TERMINAL_CATEGORY, isTerminalCategory, noTerminals, shareFor, EDIT_ROLES, OK_ROLES,
   readTerminals, listTerminalLines, ensureTerminals, checkTerminals, saveTerminals, okTerminals, useReworkBin,
-  itemCards, lastCardsShare, stockForCard, takeTerminalRows, rescaleAfterSplit, okState, pastPins, cardSpecPins, takePinsAtSpot, givePinsBackAtSpot, PINS_RULE, newRule,
+  itemCards, lastCardsShare, stockForCard, takeTerminalRows, rescaleAfterSplit, okState, pastPins, cardSpecPins, cardPinGroup, takePinsAtSpot, givePinsBackAtSpot, PINS_RULE, newRule,
 };
