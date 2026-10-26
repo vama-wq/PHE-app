@@ -77,7 +77,7 @@ async function setStatus(db, ids, status, note, userId) {
     WITH old AS (SELECT id, status FROM prospects WHERE id = ANY($2::int[]) ${onlyNew ? `AND status = 'new'` : ''}),
     upd AS (UPDATE prospects p SET status = $1 FROM old WHERE p.id = old.id AND old.status IS DISTINCT FROM $1 RETURNING p.id, old.status AS from_status)
     INSERT INTO prospect_status_log (prospect_id, from_status, to_status, note, changed_by)
-    SELECT id, from_status, $1, $3, $4 FROM upd RETURNING prospect_id`, [status, ids, note || null, userId || null]);
+    SELECT id, from_status, $1, $3, $4 FROM upd RETURNING prospect_id`, [status, ids, note ? String(note).slice(0, 500) : null, userId || null]);
 }
 
 /** Update a single prospect's status or editable fields (a status change is logged, with an optional status_note). */
@@ -95,7 +95,14 @@ router.patch('/:id', authenticate, authorize(...SALES), async (req, res) => {
     params.push(id);
     await db.run(`UPDATE prospects SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
   }
-  if (req.body.status !== undefined) await setStatus(db, [id], req.body.status, req.body.status_note, req.user.id);
+  if (req.body.status !== undefined) {
+    const changed = await setStatus(db, [id], req.body.status, req.body.status_note, req.user.id);
+    // Same status but a note to keep ("wants a quote for 2 kW, call Monday") — logged as a note
+    if (!changed.length && req.body.status_note) await db.run(
+      `INSERT INTO prospect_status_log (prospect_id, from_status, to_status, note, changed_by)
+       SELECT id, coalesce(status, 'new'), coalesce(status, 'new'), $2, $3 FROM prospects WHERE id = $1`,
+      [id, String(req.body.status_note).slice(0, 500), req.user.id]);
+  }
   res.json({ message: 'Updated' });
 });
 

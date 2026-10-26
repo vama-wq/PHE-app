@@ -151,9 +151,9 @@ export default function ProspectingList() {
   const [history, setHistory] = useState(null);
   const [rowStatus, setRowStatus] = useState('');
   const [rowNote, setRowNote] = useState('');
-  const [callNote, setCallNote] = useState('');
+  const [callNote, setCallNote] = useState({});         // per call: call1 → "how did it go"
   const [bulkStatus, setBulkStatus] = useState('');
-  const [shareFile, setShareFile] = useState(null);     // the touch's image, pre-fetched so Share works in one tap
+  const [shareFile, setShareFile] = useState(null);     // { url, file }: the touch's image, pre-fetched so Share works in one tap
 
   const loadSegments = () =>
     api.get('/prospects/segments').then(r => {
@@ -184,10 +184,14 @@ export default function ProspectingList() {
   useEffect(() => { loadSegments(); }, []);
   useEffect(() => { if (segment) { loadProspects(); loadTouches(); } /* eslint-disable-line */ }, [segment]);
   useEffect(() => {
-    if (!rowId) { setHistory(null); return; }
-    setRowStatus(campaignRow.status); setRowNote(''); setCallNote('');
+    setHistory(null);
+    if (!rowId) return;
+    setRowNote(''); setCallNote({});
     loadHistory(rowId);
   }, [rowId]); // eslint-disable-line
+  // Follow the row's status when it moves underneath (e.g. a tick auto-advances it to Contacted)
+  const rowStatusNow = campaignRow?.status;
+  useEffect(() => { if (rowId) setRowStatus(rowStatusNow || 'new'); }, [rowId, rowStatusNow]);
 
   // touch lookup: `${prospect}|${touch}|${channel}` → the tick (with date, who, note)
   const touchIndex = useMemo(() => new Map(touches.map(t => [`${t.prospect_id}|${t.touch_key}|${t.channel}`, t])), [touches]);
@@ -280,16 +284,14 @@ export default function ProspectingList() {
     return { channel, done: ticks.length, total: elig.length, last };
   });
   const touchProgress = listTouch ? progressOf(visible, listTouch.key) : [];
-  // Next up: the first touch (in order) not finished on email or WhatsApp across the whole list
+  // Every touch over the whole list (shown under each touch tab), and the first one with work left
+  const allProgress = useMemo(() => (campaign ? campaign.touches.map(t => progressOf(prospects, t.key)) : []),
+    [campaign, prospects, touchIndex]); // eslint-disable-line
   const nextUp = useMemo(() => {
     if (!campaign) return null;
-    for (let i = 0; i < campaign.touches.length; i++) {
-      const t = campaign.touches[i];
-      const pr = progressOf(prospects, t.key);
-      if (pr.some(c => c.total && c.done < c.total)) return { i, t, pr };
-    }
-    return 'done';
-  }, [campaign, prospects, touchIndex]); // eslint-disable-line
+    const i = allProgress.findIndex(pr => pr.some(c => c.total && c.done < c.total));
+    return i < 0 ? 'done' : { i, t: campaign.touches[i], pr: allProgress[i] };
+  }, [campaign, allProgress]);
   // Pre-fetch the touch's WhatsApp image so "Share text + image" works in one tap on a phone
   const shareSupported = typeof navigator !== 'undefined' && typeof navigator.canShare === 'function';
   const activeImage = campaignRow ? null : listTouch?.waImage;
@@ -355,15 +357,35 @@ export default function ProspectingList() {
   const imageToShare = rowTouch?.waImage || activeImage || null;
   useEffect(() => {
     let live = true;
-    setShareFile(null);
-    if (imageToShare && shareSupported) imageFile(imageToShare).then(f => { if (live) setShareFile(f); }).catch(() => {});
+    if (imageToShare && shareSupported) imageFile(imageToShare).then(file => { if (live) setShareFile({ url: imageToShare, file }); }).catch(() => {});
     return () => { live = false; };
   }, [imageToShare]); // eslint-disable-line
-  const canShareImage = !!(shareFile && shareSupported && navigator.canShare({ files: [shareFile] }));
+  const shareReady = shareFile && shareFile.url === imageToShare ? shareFile.file : null;
+  const canShareImage = !!(shareReady && navigator.canShare({ files: [shareReady] }));
+  // The text is copied too: some phones hand WhatsApp only the picture — then just paste.
   const shareTextAndImage = async (text, onDone) => {
-    try { await navigator.share({ files: [shareFile], text }); if (onDone) onDone(); }
+    if (navigator.clipboard) navigator.clipboard.writeText(text || '').catch(() => {});
+    try { await navigator.share({ files: [shareReady], text }); if (onDone) onDone(); }
     catch { /* user closed the share sheet */ }
   };
+  // The open contact's history (status changes + touches), newest first, in words
+  const touchName = (key, channel) => {
+    const i = rowCampaign ? rowCampaign.touches.findIndex(t => t.key === key) : -1;
+    if (i >= 0) return `${i + 1}. ${rowCampaign.touches[i].label} — ${channel === 'email' ? 'email sent' : 'WhatsApp done'}`;
+    const c = /^call(\d+)$/.exec(key);
+    if (c) return `${rowCalls[+c[1] - 1]?.label || `Call ${c[1]}`} — done`;
+    return `${key} (${channel})`;
+  };
+  const statusLabel = s => STATUS[s]?.label || s || '—';
+  // "auto: whatsapp · awareness" (logged by a tick) reads as "automatic: 1. Awareness — WhatsApp done"
+  const noteText = n => { const a = /^auto: (\w+) · (.+)$/.exec(n || ''); return a ? `automatic: ${touchName(a[2], a[1])}` : n; };
+  const historyItems = history ? [
+    ...history.status.map(h => ({ at: h.changed_at, by: h.changed_by,
+      text: h.from_status === h.to_status ? `Note: ${h.note}`
+        : `${statusLabel(h.from_status)} → ${statusLabel(h.to_status)}${h.note ? ` — ${noteText(h.note)}` : ''}` })),
+    ...history.touches.map(t => ({ at: t.done_at, by: t.done_by,
+      text: `${CHANNEL_ICON[t.channel]} ${touchName(t.touch_key, t.channel)}${t.note ? ` — ${t.note}` : ''}` })),
+  ].sort((a, b) => (a.at < b.at ? 1 : -1)) : [];
   const downloadRowHtml = () => downloadTxt2Html(
     fullHtml(rowTouch.subject, bodyToHtml(rowTouch.body, campaignRow.application)),
     `PHE-${slug(campaignRow.company)}-${seqTab + 1}-${rowTouch.key}.html`);
@@ -418,12 +440,25 @@ export default function ProspectingList() {
     } finally { setBusy(false); }
   };
 
+  // Bulk status: only the selected rows on screen. "New" is the deliberate way to bring back a
+  // Skip / Not-interested row; any other change leaves those rows alone (unless it's to one of them).
+  const bulkIds = bulkStatus
+    ? selectedVisible.filter(p => bulkStatus === 'new' || NO_CAMPAIGN.has(bulkStatus) || !NO_CAMPAIGN.has(p.status)).map(p => p.id)
+    : [];
+  const STAGE = ['new', 'exported', 'contacted', 'replied', 'interested', 'quoted', 'won'];
   const markStatus = async status => {
-    // "New" is the deliberate way to un-skip; other bulk changes leave skip rows alone (unless the
-    // target is skip itself). Only the selected rows on screen change.
-    const skip = new Set(prospects.filter(p => p.status === 'skip').map(p => p.id));
-    const ids = selectedVisible.map(p => p.id).filter(id => status === 'new' || status === 'skip' || !skip.has(id));
-    if (!ids.length || !status) return;
+    if (!bulkIds.length || !status) return;
+    let ids = bulkIds;
+    // Don't quietly pull a Replied / Interested / Quoted / Won contact back to an earlier stage
+    const ahead = STAGE.includes(status)
+      ? selectedVisible.filter(p => ids.includes(p.id) && STAGE.indexOf(p.status) > STAGE.indexOf(status)) : [];
+    if (ahead.length && !window.confirm(
+      `${ahead.length} of these ${ahead.length === 1 ? 'is' : 'are'} already further along (${[...new Set(ahead.map(p => STATUS[p.status]?.label))].join(', ')}).\n\n`
+      + `OK = change all ${ids.length} to “${STATUS[status].label}”.\nCancel = leave ${ahead.length === 1 ? 'that one' : 'those'} as ${ahead.length === 1 ? 'it is' : 'they are'} and change the other ${ids.length - ahead.length}.`)) {
+      const keep = new Set(ahead.map(p => p.id));
+      ids = ids.filter(id => !keep.has(id));
+    }
+    if (!ids.length) return;
     setBusy(true);
     try {
       await api.post('/prospects/bulk-status', { ids, status });
@@ -473,7 +508,7 @@ export default function ProspectingList() {
           <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => { setImpResult(null); setShowImport(true); }}>
             <Upload size={15} /> Import
           </button>
-          <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={loadProspects}>
+          <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => { loadProspects(); loadTouches(); }}>
             <RefreshCw size={15} /> Refresh
           </button>
         </div>
@@ -690,11 +725,17 @@ export default function ProspectingList() {
                       className={`text-xs px-2.5 py-1.5 rounded-md border ${touchTab === i ? 'bg-brand-700 text-white border-brand-700' : 'bg-white text-gray-600'}`}
                       onClick={() => setTouchTab(i)}>
                       {i + 1}. {t.label}{t.day != null ? ` · ${dayLabel(t.day)}` : ''}
+                      {allProgress[i] && (
+                        <span className="block opacity-75" style={{ fontSize: 10 }} title="Whole list: emails sent / WhatsApps done">
+                          {allProgress[i].map(c => `${CHANNEL_ICON[c.channel]} ${c.done}/${c.total}`).join('   ')}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>
                 {/* Progress of this touch over the rows on screen, and what's next for the whole list */}
                 <div className="flex flex-wrap items-center gap-2 mb-2 text-xs">
+                  {visible.length !== prospects.length && <span className="text-gray-500">On screen ({visible.length}):</span>}
                   {touchProgress.map(c => (
                     <span key={c.channel} className={`px-2.5 py-1 rounded-md border font-medium ${c.total && c.done >= c.total ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : c.done ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-gray-50 border-gray-200 text-gray-600'}`}>
                       {CHANNEL_ICON[c.channel]} {c.channel === 'email' ? 'Email' : 'WhatsApp'}: {c.done} of {c.total} {c.channel === 'email' ? 'sent' : 'done'}{c.last ? ` · last ${fmtDay(c.last)}` : ''}
@@ -821,9 +862,10 @@ export default function ProspectingList() {
                 <option value="">Set status…</option>
                 {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
               </select>
-              <button className="btn-secondary flex items-center gap-1.5" disabled={!bulkStatus || !selectedVisible.length || busy}
+              <button className="btn-secondary flex items-center gap-1.5" disabled={!bulkStatus || !bulkIds.length || busy}
+                title={bulkStatus && bulkIds.length < selectedVisible.length ? 'Skip / Not interested rows are left alone — set them one by one, or use “New” to bring them back' : ''}
                 onClick={() => markStatus(bulkStatus)}>
-                <Star size={16} /> Apply to {selectedVisible.length} selected
+                <Star size={16} /> Apply to {bulkStatus ? bulkIds.length : selectedVisible.length} selected
               </button>
             </div>
           </div>
@@ -892,6 +934,37 @@ export default function ProspectingList() {
               </details>
             )}
 
+            {/* Status (with a note) + everything done for this contact */}
+            <div className="border border-gray-200 rounded-md p-3 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-gray-600">Status</span>
+                <select className="input text-sm" value={rowStatus} onChange={e => setRowStatus(e.target.value)}>
+                  {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+                </select>
+                <input className="input text-sm flex-1 min-w-[12rem]" value={rowNote} onChange={e => setRowNote(e.target.value)}
+                  placeholder="Note (optional) — e.g. wants a quote for 2 kW, call Monday" />
+                <button className="btn-primary text-xs" disabled={busy || (rowStatus === campaignRow.status && !rowNote.trim())}
+                  onClick={async () => { await changeStatus(campaignRow.id, rowStatus, rowNote.trim()); setRowNote(''); }}>
+                  Save
+                </button>
+              </div>
+              {historyItems.length > 0 ? (
+                <details className="text-xs text-gray-600" open={historyItems.length <= 4}>
+                  <summary className="cursor-pointer font-medium text-gray-700">History · {historyItems.length}</summary>
+                  <ul className="mt-1 space-y-0.5">
+                    {historyItems.map((h, i) => (
+                      <li key={i}>
+                        <span className="text-gray-400">{fmtDay(h.at)}</span> · {h.text}
+                        {h.by && <span className="text-gray-400"> · {h.by}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : (
+                <p className="text-xs text-gray-400">{history ? 'Nothing logged yet for this contact.' : 'Loading history…'}</p>
+              )}
+            </div>
+
             {rowCampaign && rowTouch && hasCampaign(campaignRow) ? (
               <>
                 <div className="flex flex-wrap gap-1.5">
@@ -900,6 +973,8 @@ export default function ProspectingList() {
                       className={`text-xs px-2.5 py-1.5 rounded-md border ${seqTab === i ? 'bg-brand-700 text-white border-brand-700' : 'bg-white text-gray-600'}`}
                       onClick={() => setSeqTab(i)}>
                       {i + 1}. {t.label}{t.day != null ? ` · ${dayLabel(t.day)}` : ''}
+                      {tickFor(campaignRow.id, t.key, 'email') && ' ✉✓'}
+                      {tickFor(campaignRow.id, t.key, 'whatsapp') && ' 💬✓'}
                     </button>
                   ))}
                 </div>
@@ -908,6 +983,26 @@ export default function ProspectingList() {
                     <Mail size={15} className="text-brand-700" />
                     <h4 className="text-sm font-semibold">{rowTouch.label} email</h4>
                     {rowTouch.day != null && <span className="text-xs text-gray-400">send {dayLabel(rowTouch.day)}</span>}
+                  </div>
+                  {/* This touch for this contact: tick it per channel (or undo a wrong tick) */}
+                  <div className="flex flex-wrap items-center gap-2 mb-2 text-xs">
+                    {['email', 'whatsapp'].map(ch => {
+                      const t = tickFor(campaignRow.id, rowTouch.key, ch);
+                      const name = ch === 'email' ? 'Email sent' : 'WhatsApp done';
+                      if (t) return (
+                        <span key={ch} className="px-2 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800">
+                          {CHANNEL_ICON[ch]} {name} {fmtDay(t.done_at)}{t.done_by ? ` · ${t.done_by}` : ''}
+                          <button className="ml-1.5 text-gray-400 underline" disabled={busy}
+                            onClick={() => undoTouch([campaignRow.id], rowTouch.key, ch)}>undo</button>
+                        </span>
+                      );
+                      return reach(campaignRow, ch) ? (
+                        <button key={ch} className="px-2 py-1 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50" disabled={busy}
+                          onClick={() => markTouch([campaignRow.id], rowTouch.key, ch)}>
+                          {CHANNEL_ICON[ch]} Mark {ch === 'email' ? 'email sent' : 'WhatsApp done'}
+                        </button>
+                      ) : null;
+                    })}
                   </div>
                   {rowTouch.attach && (
                     rowTouch.flyer ? (
@@ -933,7 +1028,8 @@ export default function ProspectingList() {
                     </button>
                     {waLinkFor(campaignRow.phone, rowTouch.whatsapp) && (
                       <a className="btn-secondary text-xs flex items-center gap-1.5" style={{ color: '#128C7E' }}
-                        href={waLinkFor(campaignRow.phone, rowTouch.whatsapp)} target="_blank" rel="noopener noreferrer">
+                        href={waLinkFor(campaignRow.phone, rowTouch.whatsapp)} target="_blank" rel="noopener noreferrer"
+                        onClick={() => { if (!tickFor(campaignRow.id, rowTouch.key, 'whatsapp')) markTouch([campaignRow.id], rowTouch.key, 'whatsapp'); }}>
                         <MessageSquare size={13} /> WhatsApp this
                       </a>
                     )}
@@ -941,11 +1037,27 @@ export default function ProspectingList() {
                       <Copy size={13} /> {copied === 'seq-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
                     </button>
                     {rowTouch.waImage && (
-                      <a className="btn-secondary text-xs flex items-center gap-1.5" href={rowTouch.waImage} target="_blank" rel="noopener noreferrer">
-                        🖼️ Send this image ↗
-                      </a>
+                      <>
+                        <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => saveImage(rowTouch.waImage)}>
+                          <Download size={13} /> Download image
+                        </button>
+                        {canShareImage && (
+                          <button className="btn-secondary text-xs flex items-center gap-1.5" style={{ color: '#128C7E' }}
+                            onClick={() => shareTextAndImage(rowTouch.whatsapp, () => {
+                              if (!tickFor(campaignRow.id, rowTouch.key, 'whatsapp')) markTouch([campaignRow.id], rowTouch.key, 'whatsapp');
+                            })}>
+                            <MessageSquare size={13} /> Share text + image
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
+                  {rowTouch.waImage && (
+                    <p className="text-xs text-gray-400 mt-1.5">
+                      WhatsApp links carry only text: after <strong>WhatsApp this</strong> opens the chat, attach the downloaded image.
+                      {canShareImage ? <> Or use <strong>Share text + image</strong> and pick the contact in WhatsApp (the text is copied too, in case it only takes the picture).</> : ''}
+                    </p>
+                  )}
                   <div className="mt-2 text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(rowTouch.whatsapp)}</div>
                 </div>
                 {rowCalls.length > 0 && (
@@ -955,25 +1067,50 @@ export default function ProspectingList() {
                       <h4 className="text-sm font-semibold">Call schedule</h4>
                     </div>
                     <div className="space-y-2">
-                      {rowCalls.map((c, i) => (
-                        <details key={i} className="border border-gray-200 rounded-md">
-                          <summary className="cursor-pointer px-3 py-2 text-sm font-medium flex items-center justify-between">
-                            <span>{c.label}{c.day != null ? ` — ${dayLabel(c.day)}` : ''}</span>
-                            <span role="button" tabIndex={0} className="text-xs text-brand-700"
-                              onClick={(e) => { e.preventDefault(); copyRaw(c.script, 'call-' + i); }}>
-                              {copied === 'call-' + i ? 'Copied ✓' : 'Copy'}
-                            </span>
-                          </summary>
-                          <div className="px-3 pb-3 text-xs whitespace-pre-wrap text-gray-700 bg-amber-50">{c.script}</div>
-                        </details>
-                      ))}
+                      {rowCalls.map((c, i) => {
+                        const key = `call${i + 1}`;
+                        const done = tickFor(campaignRow.id, key, 'call');
+                        return (
+                          <details key={i} className="border border-gray-200 rounded-md">
+                            <summary className="cursor-pointer px-3 py-2 text-sm font-medium flex items-center justify-between">
+                              <span>
+                                {c.label}{c.day != null ? ` — ${dayLabel(c.day)}` : ''}
+                                {done && <span className="ml-2 text-xs font-normal text-emerald-700">☎✓ {fmtDay(done.done_at)}</span>}
+                              </span>
+                              <span role="button" tabIndex={0} className="text-xs text-brand-700"
+                                onClick={(e) => { e.preventDefault(); copyRaw(c.script, 'call-' + i); }}>
+                                {copied === 'call-' + i ? 'Copied ✓' : 'Copy'}
+                              </span>
+                            </summary>
+                            <div className="px-3 pb-3 text-xs whitespace-pre-wrap text-gray-700 bg-amber-50">{c.script}</div>
+                            <div className="px-3 py-2 flex flex-wrap items-center gap-2 text-xs border-t border-gray-100">
+                              {done ? (
+                                <>
+                                  <span className="text-emerald-700">☎ Done {fmtDay(done.done_at)}{done.done_by ? ` · ${done.done_by}` : ''}{done.note ? ` — ${done.note}` : ''}</span>
+                                  <button className="text-gray-400 underline" disabled={busy}
+                                    onClick={() => undoTouch([campaignRow.id], key, 'call')}>undo</button>
+                                </>
+                              ) : reach(campaignRow, 'call') ? (
+                                <>
+                                  <input className="input text-xs flex-1 min-w-[10rem]" placeholder="How did it go? (optional)"
+                                    value={callNote[key] || ''} onChange={e => setCallNote(n => ({ ...n, [key]: e.target.value }))} />
+                                  <button className="btn-secondary text-xs" disabled={busy}
+                                    onClick={async () => { await markTouch([campaignRow.id], key, 'call', (callNote[key] || '').trim()); setCallNote(n => ({ ...n, [key]: '' })); }}>
+                                    ☎ Mark call done
+                                  </button>
+                                </>
+                              ) : <span className="text-gray-400">No phone number on this contact.</span>}
+                            </div>
+                          </details>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
               </>
             ) : (
               <p className="text-sm text-gray-400">
-                No campaign for this contact{campaignRow.status === 'skip' ? ' — marked skip' : ''}.
+                No campaign for this contact{NO_CAMPAIGN.has(campaignRow.status) ? ` — marked “${statusLabel(campaignRow.status)}”` : ''}.
               </p>
             )}
           </div>
