@@ -226,6 +226,8 @@ const isArabic = s => /[؀-ۿ]/.test(String(s || ''));
 export function bodyToHtml(bodyText, application) {
   const cat = catalogueFor(application);
   const ar = isArabic(bodyText);
+  // An email that is just one image (the Diwali card) goes out as only that image: no footer.
+  const imageOnly = /^\s*\[\[IMG:[^\]]+\]\]\s*$/.test(String(bodyText));
   const out = [];
   let para = [], bullets = [];
   const flushPara = () => {
@@ -254,10 +256,11 @@ export function bodyToHtml(bodyText, application) {
   for (const raw of String(bodyText).split('\n')) {
     const line = raw.replace(/\s+$/, '');
     // [[IMG:https://…]] on its own line → the flyer shown inline (the flyer email is just this)
-    const img = line.match(/^\[\[IMG:(https:\/\/[^\s\]"'<>]+)\]\]$/);
+    // [[IMG:url|alt]] — the alt text is what shows when an inbox blocks images
+    const img = line.match(/^\[\[IMG:(https:\/\/[^\s\]"'<>|]+)(?:\|([^\]]*))?\]\]$/);
     if (img) {
       flushBullets(); flushPara();
-      out.push(`<img src="${img[1]}" alt="Peena Heat Elements flyer" width="560" style="display:block;width:100%;max-width:560px;height:auto;border:1px solid #e5e7eb;border-radius:10px;margin:0 0 16px;">`);
+      out.push(`<img src="${img[1]}" alt="${esc(img[2] || 'Peena Heat Elements flyer').replace(/"/g, '&quot;')}" width="560" style="display:block;width:100%;max-width:560px;height:auto;border:1px solid #e5e7eb;border-radius:10px;margin:0 0 16px;">`);
       continue;
     }
     // the plain-text catalogue line renders as the clickable button instead
@@ -277,7 +280,7 @@ export function bodyToHtml(bodyText, application) {
     (ar ? '<div dir="rtl" style="font-family:Tahoma,Arial,Helvetica,sans-serif;font-size:15px;line-height:1.8;color:#1f2937;max-width:620px;text-align:right;">'
       : '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1f2937;max-width:620px;">') +
     out.join('\n') +
-    whatsappQrHtml(ar) +
+    (imageOnly ? '' : whatsappQrHtml(ar)) +
     '</div>'
   );
 }
@@ -287,7 +290,7 @@ export function bodyToHtml(bodyText, application) {
 export function bodyToPlain(bodyText) {
   return String(bodyText || '')
     .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/^\[\[IMG:(\S+?)\]\]$/gm, '📎 Flyer: $1');
+    .replace(/^\[\[IMG:([^\s|\]]+)(?:\|[^\]]*)?\]\]$/gm, '📎 Flyer: $1');
 }
 
 // WhatsApp click-to-chat QR footer appended to every campaign email (scans to wa.me/Vama).

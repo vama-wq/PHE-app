@@ -58,6 +58,18 @@ const flyerBody = ({ greet, intro, flyer, cta }) =>
 // WhatsApp: same structure, sized for a phone — *bold* header, • bullets, links on their own lines.
 const wa = (...parts) => parts.flat().filter(p => p != null && p !== false).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
+// Diwali greeting (owner, 26 Oct 2026): the same card on every list, and the email and the WhatsApp carry
+// ONLY the card: no greeting text, no footer (bodyToHtml leaves the footer off an image-only email).
+const DIWALI_CARD = `${SITE}/phe-diwali-card.jpg`;
+const DIWALI = {
+  key: 'diwali', label: 'Diwali greeting', day: '5 Nov', attach: '🪔 Diwali card', flyer: DIWALI_CARD, waImage: DIWALI_CARD,
+  render: () => ({
+    subject: 'Happy Diwali from all of us at Peena Heat Elements',
+    body: `[[IMG:${DIWALI_CARD}|Happy Diwali and Saal Mubarak from all of us at Peena Heat Elements, Ahmedabad]]`,
+    whatsapp: '',
+  }),
+};
+
 // ───────────────────────── Khadya Khurak 2026 ─────────────────────────
 const KK = 'Khadya Khurak';
 const KK_WHEN = '16–19 December';
@@ -131,6 +143,7 @@ const exhibitors = {
           whatsapp: wa(helloWa(ctx), `Vama from *Peena Heat Elements*, Ahmedabad — we're fellow exhibitors at *${KK}*!`, '', '*What we make for you*', p.supply.map(s => '• ' + s), `• ${DRAWING}`, '• Tested before dispatch · 6-month guarantee', '', KK_BLOCK, '', visit(hall), '', LINK_CAT, LINK_VIDEO),
         };
       } },
+    DIWALI,
     { key: 'product', label: 'Product', day: '12 Nov', attach: '🖼️ Product image (their equipment)', waImage: KK_CARD,
       render: (p, ctx) => {
         const supply = p.mode === 'qualify' ? [QUAL[0], QUAL[1]] : p.supply;
@@ -202,6 +215,7 @@ const visitorsKK = {
         whatsapp: wa(helloWa(ctx), `Vama from *Peena Heat Elements*, Ahmedabad — you're invited to visit us at *${KK} 2026*!`, '', KK_BLOCK, '',
           "*What we'll show you*", p.supply.map(s => '• ' + s), `• ${DRAWING}`, '', PASS_LINE, '', "Which day suits you? Reply and we'll keep time for you.", '', LINK_CAT),
       }) },
+    DIWALI,
     { key: 'flyer', label: 'Invitation flyer', day: '18 Nov', attach: '📄 Flyer', flyer: KKV_FLYER, waImage: KKV_FLYER,
       render: (p, ctx) => ({
         subject: `Your invitation — ${KK} 2026, ${KK_STALL}`,
@@ -255,7 +269,7 @@ const visitorsKK = {
   },
 };
 
-// Existing customers (owner, 21–23 Oct 2026): restock check, Diwali update, the new fitted 2-in-1 / 3-in-1
+// Existing customers (owner, 21–23 Oct 2026): restock check, the Diwali card, the new fitted 2-in-1 / 3-in-1
 // heaters + heater plates, new sizes by drawing, Khadya Khurak, January restock. Owner, 23 Oct: keep it casual
 // ("we talk to them every day"), and customers who've ordered don't send drawings or photos — we tell them
 // what they ordered and ask if they need to restock. Per-contact renders name their items (ctx.items, ctx.lastOrder).
@@ -299,15 +313,7 @@ const existingCustomers = {
           '', 'Dispatch in 5–7 days, every element tested before it leaves.'),
         whatsapp: wa(ecHi(ctx), ecOrdered(p, ctx, true), '', ecRestock(p), '', '— Vama'),
       }) },
-    { key: 'diwali', label: 'Diwali + news', day: '5 Nov', attach: '',
-      render: (p, ctx) => ({
-        subject: 'Happy Diwali from all of us at Peena Heat Elements',
-        body: ecMail(ctx, 'Happy Diwali to you and the team — wishing you a great year ahead! 🪔', '', 'A bit of news from our side:',
-          `→ We're at ${KK} 2026 for the first time — ${KK_STALL}, ${KK_WHEN}, Gandhinagar`, '→ New: 2-in-1 and 3-in-1 heaters, now supplied fully fitted',
-          '→ Every element tested before dispatch · 6-month guarantee'),
-        whatsapp: wa(ecHi(ctx), '🪔 *Happy Diwali* to you and the team!', '', 'A bit of news from us:', `• We're at *${KK} 2026* — ${KK_STALL}, ${KK_WHEN}`,
-          '• New: 2-in-1 & 3-in-1 heaters, now supplied fully fitted', '', '— Vama'),
-      }) },
+    DIWALI,
     { key: 'newproduct', label: 'New: fitted 2-in-1 / 3-in-1', day: '18 Nov', attach: '🖼️ Product image (fitted heater)',
       render: (p, ctx) => ({
         subject: 'New: fully fitted 2-in-1 & 3-in-1 heaters',
@@ -372,7 +378,8 @@ const existingCustomers = {
 
 // Saudi customers get the campaign in Arabic (owner, 23 Oct 2026). On this list the region is the
 // country, so picking "Saudi Arabia" shows the Arabic edition and its Zoho export is the Saudi slice.
-// Not a word-for-word copy: no Diwali greeting, and the show touch is framed for visitors to India.
+// Not a word-for-word copy: the show touch is framed for visitors to India. The Diwali card (an image only)
+// goes to them as it does to everyone (owner, 26 Oct 2026: "all our campaigns").
 const EC_FLYER_AR = `${SITE}/phe-existing-customers-flyer-ar.jpg`;
 const isArabicRegion = ctx => ctx.region === 'Saudi Arabia';
 const AR_PROFILE = {
@@ -394,14 +401,6 @@ const EC_AR = {
     body: arBody(ctx, a.thanks, '', bullets('أعيدوا الطلب برسالة واحدة', AR_REORDER), a.ask, ''),
     whatsapp: wa(hiAr(ctx), `معكم فاما من *Peena Heat Elements*. ${a.thanks}`, '', '*أعيدوا الطلب برسالة واحدة:*', '• الصنف + الكمية — رسوماتكم محفوظة لدينا',
       '• نؤكد السعر وموعد الشحن', '• الشحن خلال 5 إلى 7 أيام، بعد الاختبار', '', a.ask, '', 'يكفي الرد هنا 🙏'),
-  }),
-  diwali: (a, ctx) => ({
-    subject: 'تحديث سريع من Peena Heat Elements',
-    body: arBody(ctx, 'يسعدنا أن نشارككم آخر المستجدات لدينا:', '',
-      bullets('ما الجديد لدينا', ['سخانات 2 في 1 و3 في 1 تُورَّد الآن مجهزة بالكامل', 'كل عنصر يُختبر قبل الشحن، مع ضمان لمدة ستة أشهر', 'نُشكّل الأشكال الخاصة داخل مصنعنا بآلات ثني CNC', 'نُصدّر إلى عملائنا في جميع أنحاء العالم']),
-      'شكرًا لكونكم جزءًا من مسيرتنا.', ''),
-    whatsapp: wa(hiAr(ctx), '*تحديث سريع من Peena Heat Elements:*', '• سخانات 2 في 1 و3 في 1 تُورَّد الآن مجهزة بالكامل',
-      '• كل عنصر يُختبر قبل الشحن · ضمان ستة أشهر', '• تشكيل الأشكال الخاصة بآلات CNC داخل مصنعنا', '', '— فاما'),
   }),
   newproduct: (a, ctx) => ({
     subject: 'جديد: سخانات 2 في 1 و3 في 1 مجهزة بالكامل',
@@ -471,6 +470,7 @@ const pharmaTech = {
           supply: [`For ${m.their}: ${m.elem}`, 'Materials: SS304 · SS316 · Incoloy 800', 'New parts — just send a drawing and we make it'], cta: "I'll share stall details closer to the date — do plan a visit." }),
         whatsapp: wa(helloWa(ctx), 'Vama from *Peena Heat Elements*, Ahmedabad — great meeting your team at PharmaTech!', '', '*What we make for you*', `• For ${m.their}: ${m.elem}`, `• ${DRAWING}`, '• Tested before dispatch · 6-month guarantee', '', "We're exhibiting — do visit us:", KK_BLOCK, '', LINK_CAT, LINK_VIDEO),
       }) },
+    DIWALI,
     { key: 'product', label: 'Product', day: '12 Nov', attach: '🖼️ Product image (their equipment)', waImage: KK_CARD,
       render: (m, ctx) => ({
         subject: `The elements we make for ${m.their}`,
@@ -563,6 +563,7 @@ const gulf = country => { const FLYER = country === 'Oman' ? OMAN_FLYER : QATAR_
           cta: `UAE stock via Peena Trading LLC, Sharjah — fast delivery${ctx.region ? ` to ${ctx.region}` : ''} (Nilesh Shah: +971 55 667 4956). Reply or WhatsApp if anything fits.` }),
         whatsapp: wa(helloWa(ctx), '*Why builders across the Gulf choose Peena Heat Elements*', '', '• Made to your drawing', '• Every element tested before dispatch · 6-month guarantee', '• Competitive pricing', uaeWa(ctx), '', `Sharing our one-page flyer — happy to quote a trial for your ${m.short}.`, '', '📞 Peena Trading (Nilesh Shah): +971 55 667 4956'),
       }) },
+    DIWALI,
     { key: 'client', label: 'Become our client', day: 18, attach: '🖼️ Product / sample image',
       render: (m, ctx) => ({
         subject: `A trial element for ${m.short} — no risk to you`,
@@ -623,6 +624,7 @@ const vietnam = {
           cta: "Reply or WhatsApp if anything fits — or send us a drawing and we'll quote." }),
         whatsapp: wa(helloWa(ctx), 'Sharing our one-page flyer from *Peena Heat Elements* 👆', '', `• For ${m.their}: ${m.elem}`, `• ${DRAWING}`, '• Tested before dispatch · 6-month guarantee', '', "Send us a drawing and we'll quote.", '', LINK_CAT),
       }) },
+    DIWALI,
   ],
   calls: (m, ctx) => [{ label: 'Call — intro', day: '3–5', script:
 `CALL TALKING POINTS — ${ctx.company || 'the company'}${ctx.region ? ` (${ctx.region})` : ''}\n\n1) Warm open\n"Hello, this is Vama from Peena Heat Elements in India — have I caught you at an okay moment?"\n\n2) Who we are\n"We manufacture heating elements — tubular, finned, immersion and cartridge — all made to our customers' drawings, tested before dispatch, with a 6-month guarantee. We supply equipment builders across India, the Gulf and Africa."\n\n3) The fit with what you build\n"For ${m.their}, our ${m.elem} usually fit really well — in SS304, SS316 or Incoloy 800 to suit your process."\n\n4) Ask\n"Who looks after heating-element sourcing on your side? I'd love to send our catalogue and quote against one of your drawings."\n\n5) Offer\n"If it helps, share one drawing — or courier us one element, or email a photo of it beside a measuring tape — and we'll make a sample to match."\n\n6) Close\n"May I take the best email or WhatsApp to send the catalogue?"` }],

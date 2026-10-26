@@ -364,8 +364,8 @@ export default function ProspectingList() {
   const canShareImage = !!(shareReady && navigator.canShare({ files: [shareReady] }));
   // The text is copied too: some phones hand WhatsApp only the picture — then just paste.
   const shareTextAndImage = async (text, onDone) => {
-    if (navigator.clipboard) navigator.clipboard.writeText(text || '').catch(() => {});
-    try { await navigator.share({ files: [shareReady], text }); if (onDone) onDone(); }
+    if (text && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+    try { await navigator.share(text ? { files: [shareReady], text } : { files: [shareReady] }); if (onDone) onDone(); }
     catch { /* user closed the share sheet */ }
   };
   // The open contact's history (status changes + touches), newest first, in words
@@ -792,11 +792,17 @@ export default function ProspectingList() {
                     <MessageSquare size={15} className="text-emerald-600" />
                     <h4 className="text-sm font-semibold">WhatsApp for this touch</h4>
                   </div>
-                  <div className="text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(listTouch.whatsapp)}</div>
+                  {listTouch.whatsapp ? (
+                    <div className="text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(listTouch.whatsapp)}</div>
+                  ) : (
+                    <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded p-3">Card only, no text: send just the image.</div>
+                  )}
                   <div className="flex flex-wrap items-center gap-2 mt-2">
-                    <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(listTouch.whatsapp, 'list-wa')}>
-                      <Copy size={13} /> {copied === 'list-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
-                    </button>
+                    {listTouch.whatsapp && (
+                      <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(listTouch.whatsapp, 'list-wa')}>
+                        <Copy size={13} /> {copied === 'list-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
+                      </button>
+                    )}
                     {listTouch.waImage && (
                       <>
                         <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => saveImage(listTouch.waImage)}>
@@ -1033,9 +1039,11 @@ export default function ProspectingList() {
                         <MessageSquare size={13} /> WhatsApp this
                       </a>
                     )}
-                    <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(rowTouch.whatsapp, 'seq-wa')}>
-                      <Copy size={13} /> {copied === 'seq-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
-                    </button>
+                    {rowTouch.whatsapp && (
+                      <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => copyRaw(rowTouch.whatsapp, 'seq-wa')}>
+                        <Copy size={13} /> {copied === 'seq-wa' ? 'Copied ✓' : 'Copy WhatsApp'}
+                      </button>
+                    )}
                     {rowTouch.waImage && (
                       <>
                         <button className="btn-secondary text-xs flex items-center gap-1.5" onClick={() => saveImage(rowTouch.waImage)}>
@@ -1058,7 +1066,11 @@ export default function ProspectingList() {
                       {canShareImage ? <> Or use <strong>Share text + image</strong> and pick the contact in WhatsApp (the text is copied too, in case it only takes the picture).</> : ''}
                     </p>
                   )}
-                  <div className="mt-2 text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(rowTouch.whatsapp)}</div>
+                  {rowTouch.whatsapp ? (
+                    <div className="mt-2 text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded p-3 whitespace-pre-wrap break-words leading-relaxed">{waPreview(rowTouch.whatsapp)}</div>
+                  ) : (
+                    <div className="mt-2 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded p-3">Card only, no text: WhatsApp this opens the chat, then attach the downloaded card.</div>
+                  )}
                 </div>
                 {rowCalls.length > 0 && (
                   <div className="pt-2 border-t border-gray-100">
