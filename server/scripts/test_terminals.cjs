@@ -819,7 +819,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     jr = await rowsOf(M2);
     ok('J10. list pins on an app-made card are replaced by the job card\'s (6 × M9-03-WH + 6 × -WO), and the timeline says so',
       jr.length === 2 && rowQ(jr, P9H)?.q === 6 && rowQ(jr, P9O)?.q === 6 && !rowQ(jr, WH) && jr.every(x => x.source === 'card')
-      && logs.some(l => /now come from the job card \(M9 3" × 1 element\)/.test(l.desc || '')), JSON.stringify(jr));
+      && logs.some(l => /now come from the job card \(M9 3" × 1 element · Regular\)/.test(l.desc || '')), JSON.stringify(jr));
 
     // ════ O. App-picked pins: new stock for the first cards; the bin only when stock runs out, on the last cards, with an approval (owner, 9 Oct 2026) ════
     const P7H = await mkItem('TP-SS-M7-03-WH', 'Terminal Pin', 25, 'pcs');
