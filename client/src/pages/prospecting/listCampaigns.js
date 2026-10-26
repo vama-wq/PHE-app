@@ -586,48 +586,124 @@ const gulf = country => { const FLYER = country === 'Oman' ? OMAN_FLYER : QATAR_
   },
 }; };
 
-// ───────────────────────── Vietnam ─────────────────────────
-// Wording per application kept from the original researched copy.
+// ───────────────────────── Vietnam — in Vietnamese ─────────────────────────
+// Owner, 26 Oct 2026: "revamp the vietnam campaign … in their local language, every flyer, written content, everything".
+// Copy by a Vietnamese B2B writer, then three independent reviews (native tone · industrial terms · fidelity to PHE's
+// facts) and a revision. Register: emails "Kính gửi … / Trân trọng"; WhatsApp/Zalo and calls "Anh/Chị". Most Vietnamese
+// buyers chat on Zalo: the same number is on Zalo and the row pop-up offers "Zalo this". English copy: git history before 26 Oct.
+const VN_FLYER_VI = `${SITE}/phe-vietnam-flyer-vi.jpg`;
+const DIWALI_CARD_VI = `${SITE}/phe-diwali-card-vi.jpg`;
+// The list stores provinces in English; the letters name them the Vietnamese way.
+const VN_PROVINCE = {"Ho Chi Minh City": "TP. Hồ Chí Minh", "Hanoi": "Hà Nội", "Binh Duong": "Bình Dương", "Da Nang": "Đà Nẵng", "Dong Nai": "Đồng Nai", "Tay Ninh": "Tây Ninh", "Hai Phong": "Hải Phòng", "Vinh Long": "Vĩnh Long", "Ninh Binh": "Ninh Bình", "Khanh Hoa": "Khánh Hòa", "Phu Tho": "Phú Thọ", "Ca Mau": "Cà Mau", "Hai Duong": "Hải Dương", "Bac Ninh": "Bắc Ninh", "Long An": "Long An", "Can Tho": "Cần Thơ", "Ba Ria - Vung Tau": "Bà Rịa – Vũng Tàu", "Bac Giang": "Bắc Giang", "Hung Yen": "Hưng Yên", "Vinh Phuc": "Vĩnh Phúc", "Quang Ninh": "Quảng Ninh"};
+const vnWhere = ctx => VN_PROVINCE[ctx.region] || ctx.region || 'Việt Nam';
+// Keys stay the list's English application names; their/elem/short are the Vietnamese phrases.
 const VN_APPS = {
-  'Autoclaves & sterilizers':        { their: 'your autoclaves and sterilizers', elem: 'SS316 / Incoloy immersion and tubular elements for the steam generator and chamber' },
-  'Boilers & steam':                 { their: 'your electric boilers and thermal systems', elem: 'flanged and screw-plug immersion heater bundles' },
-  'Catering & bakery ovens':         { their: 'your commercial kitchen and bakery equipment', elem: 'tubular oven, fryer and bain-marie elements' },
-  'Dissolution & water baths':       { their: 'your water-bath and process-heating systems', elem: 'SS316 immersion and water-bath elements' },
-  'Fluid bed dryers & granulation':  { their: 'your drying and granulation machines', elem: 'finned tubular air heaters for the inlet and immersion heaters for jacketed sections' },
-  'Furnaces & kilns':                { their: 'your furnaces and kilns', elem: 'coil and tubular resistance elements formed to your chamber' },
-  'Geysers & water heaters':         { their: 'your water heaters', elem: 'screw-plug and tubular immersion elements' },
-  'Heating elements & distribution': { their: 'your heating-element range', elem: 'made-to-drawing tubular, cartridge and band elements you can stock or resell' },
-  'Industrial & curing ovens':       { their: 'your ovens, dryers and curing lines', elem: 'finned tubular air heaters that drop straight into your duct or oven airflow' },
-  'Plastics machinery':              { their: 'your plastics and packaging machinery', elem: 'cartridge, band and hot-runner heaters for your barrels, sealing bars and moulds' },
-  'Incubators & lab ovens':          { their: 'your lab ovens and incubators', elem: 'low-watt-density finned and tubular elements' },
-  'Stability chambers & incubators': { their: 'your stability chambers and incubators', elem: 'low-watt-density tubular and finned elements' },
+  "Autoclaves & sterilizers": { their: "nồi hấp tiệt trùng và thiết bị tiệt trùng", elem: "điện trở nhúng và điện trở dạng ống Inox 316 / Incoloy cho bộ tạo hơi và buồng hấp", short: "nồi hấp" },
+  "Boilers & steam": { their: "nồi hơi điện và hệ thống nhiệt", elem: "cụm điện trở nhúng mặt bích và đầu ren (screw-plug)", short: "nồi hơi" },
+  "Catering & bakery ovens": { their: "thiết bị bếp công nghiệp và lò nướng bánh", elem: "điện trở dạng ống cho lò nướng, bếp chiên nhúng và tủ hâm nóng (bain-marie)", short: "lò và bếp" },
+  "Dissolution & water baths": { their: "hệ thống bể ổn nhiệt và gia nhiệt công nghiệp", elem: "điện trở nhúng và điện trở bể ổn nhiệt Inox 316", short: "bể ổn nhiệt" },
+  "Fluid bed dryers & granulation": { their: "máy sấy và máy tạo hạt", elem: "điện trở sấy khí cánh tản nhiệt cho gió cấp đầu vào và điện trở nhúng cho phần vỏ áo gia nhiệt (jacket)", short: "máy sấy" },
+  "Furnaces & kilns": { their: "lò nung và lò công nghiệp", elem: "dây điện trở xoắn lò xo và điện trở dạng ống uốn theo hình buồng lò", short: "lò nung" },
+  "Geysers & water heaters": { their: "máy nước nóng", elem: "điện trở nhúng đầu ren và điện trở dạng ống", short: "máy nước nóng" },
+  "Heating elements & distribution": { their: "danh mục điện trở nhiệt", elem: "điện trở dạng ống, điện trở đũa (cartridge) và điện trở vòng (band) làm theo bản vẽ, để nhập kho hoặc phân phối lại", short: "danh mục hàng" },
+  "Industrial & curing ovens": { their: "lò sấy, máy sấy và dây chuyền sấy sơn / sấy đóng rắn (curing)", elem: "điện trở sấy khí cánh tản nhiệt, lắp thẳng vào ống gió hoặc luồng khí trong lò", short: "lò sấy" },
+  "Plastics machinery": { their: "máy ngành nhựa và bao bì", elem: "điện trở đũa (cartridge), điện trở vòng (band) và điện trở hot runner cho xi lanh, thanh hàn nhiệt và khuôn", short: "máy" },
+  "Incubators & lab ovens": { their: "tủ sấy phòng thí nghiệm và tủ ấm", elem: "điện trở cánh tản nhiệt và điện trở dạng ống mật độ công suất thấp", short: "tủ sấy" },
+  "Stability chambers & incubators": { their: "tủ vi khí hậu (stability chamber) và tủ ấm", elem: "điện trở dạng ống và điện trở cánh tản nhiệt mật độ công suất thấp", short: "tủ" },
 };
-const VN_ALL = { their: 'the equipment you build', elem: 'tubular, finned, immersion and cartridge elements made to your drawing' };
+const VN_ALL = { their: "các thiết bị công nghiệp", elem: "điện trở dạng ống, điện trở cánh tản nhiệt, điện trở nhúng và điện trở đũa (cartridge) làm theo bản vẽ", short: "thiết bị" };
+const VN_LBL = {"what_we_make": "Chúng tôi sản xuất", "supply": "Chúng tôi có thể cung cấp cho Quý công ty", "why": "Vì sao chọn Peena Heat Elements", "where_we_fit": "Sản phẩm phù hợp với Quý công ty", "new_ranges": "Dòng sản phẩm mới", "how_trial": "Cách thử mẫu"};
+const VN_WHAT = "Điện trở nhiệt dạng ống, điện trở cánh tản nhiệt, điện trở nhúng và điện trở đũa (cartridge) — sản xuất theo bản vẽ của Quý công ty";
+const VN_WHY = ["Kiểm tra từng chiếc trước khi xuất xưởng · Bảo hành 6 tháng", "Xuất hàng trong 5–7 ngày · Xuất khẩu toàn cầu"];
+const VN_SIGN = `Trân trọng,\nVama · Peena Heat Elements\nphe.co.in · vama@peenaheatelements.com\nWhatsApp / Zalo: +91 84520 55836\nCatalogue (PDF): ${CAT}`;
+const VN_SIGN_SHORT = "Trân trọng,\nVama · Peena Heat Elements";
+const VN_IMG_ALT = "Tờ giới thiệu Peena Heat Elements";
+const vnCo = ctx => ctx.company || '$[FNAME|Quý công ty]$';
+// "Kính gửi <name>," reads right whether the name already starts with "Công ty …" or not; blank → "Quý công ty"
+const vnGreet = ctx => `Kính gửi ${vnCo(ctx)},`;
+const vnHi = ctx => (ctx.company ? `Chào Anh/Chị bên ${shortCompany(ctx.company)} 🙏` : 'Chào Anh/Chị 🙏');
+const vnFill = (s, m, ctx) => String(s).replace(/\{their\}/g, m.their).replace(/\{elem\}/g, m.elem).replace(/\{short\}/g, m.short)
+  .replace(/\{company\}/g, vnCo(ctx)).replace(/\{region\}/g, vnWhere(ctx)).replace(/\{greeting\}/g, vnHi(ctx))
+  .replace(/\{CAT\}/g, CAT).replace(/\{VIDEO\}/g, VIDEO);
+// Placeholders in the copy: {their} {elem} {short} {company} {region} {greeting} {CAT} {VIDEO}
+const VN_COPY = {
+  intro: {
+    subject: "Điện trở nhiệt cho {their} — Peena Heat Elements, Ấn Độ",
+    intro: "Tôi là Vama từ Peena Heat Elements (Ahmedabad, Ấn Độ). Chúng tôi đang cung cấp điện trở nhiệt cho các nhà sản xuất thiết bị tại Ấn Độ, các nước vùng Vịnh (Trung Đông), châu Phi, Úc và nhiều thị trường khác — và rất mong được đồng hành cùng các nhà sản xuất tại {region}.",
+    supplyLabel: "Chúng tôi có thể cung cấp cho Quý công ty",
+    supply: ["Dành cho {their} của Quý công ty: {elem}", "Vật liệu vỏ: Inox 304 (SS304) · Inox 316 (SS316) · Incoloy 800", "Mẫu mới — Quý công ty chỉ cần gửi bản vẽ, chúng tôi sẽ sản xuất đúng theo bản vẽ"],
+    cta: "Xin hỏi ai là người phụ trách mua điện trở nhiệt tại {company}? Tôi rất sẵn lòng gửi catalogue và báo giá.",
+    whatsapp: "{greeting}\nTôi là Vama từ *Peena Heat Elements*, Ahmedabad, Ấn Độ.\n\n*Sản phẩm phù hợp với bên Anh/Chị*\n• Dành cho {their}: {elem}\n• Làm theo bản vẽ — Inox 304 · Inox 316 · Incoloy 800\n• Kiểm tra từng chiếc trước khi xuất xưởng · Bảo hành 6 tháng · Xuất hàng trong 5–7 ngày\n\nBên Anh/Chị ai phụ trách mua điện trở nhiệt ạ? Tôi sẵn sàng gửi báo giá. Số này cũng dùng Zalo.\n\n📄 Catalogue: {CAT}\n🎬 Video quy trình sản xuất: {VIDEO}",
+  },
+  product: {
+    subject: "Điện trở nhiệt cho {their} — làm đúng theo bản vẽ",
+    intro: "Tiếp theo email trước, tôi xin nói cụ thể hơn về những sản phẩm chúng tôi có thể cung cấp cho {company}:",
+    supplyLabel: "Sản phẩm phù hợp với Quý công ty",
+    supply: ["Dành cho {their} của Quý công ty: {elem}", "Sản xuất chính xác theo bản vẽ — uốn CNC ngay tại xưởng, lắp sẵn đầu cực đấu điện", "Vật liệu vỏ: Inox 304 · Inox 316 · Incoloy 800"],
+    cta: "Quý công ty chỉ cần gửi một bản vẽ hoặc một mẫu điện trở đang dùng — chúng tôi sẽ báo giá sản phẩm tương đương.",
+    whatsapp: "{greeting}\nVama từ *Peena Heat Elements* đây ạ. Tôi xin nói rõ hơn những sản phẩm chúng tôi có thể làm cho bên Anh/Chị:\n\n• Dành cho {their}: {elem}\n• Làm chính xác theo bản vẽ — uốn CNC tại xưởng, lắp sẵn đầu cực đấu điện\n• Inox 304 · Inox 316 · Incoloy 800\n\nAnh/Chị gửi tôi 1 bản vẽ hoặc 1 mẫu điện trở đang dùng, tôi sẽ báo giá sản phẩm tương đương.\n\n📄 Catalogue: {CAT}\n🎬 Video quy trình sản xuất: {VIDEO}",
+  },
+  flyer: {
+    subject: "Tổng quan sản phẩm trong 1 trang — Peena Heat Elements",
+    intro: "Xin gửi Quý công ty tờ giới thiệu một trang — các loại điện trở nhiệt chúng tôi sản xuất cho các nhà sản xuất thiết bị tại {region}:",
+    supplyLabel: "Chúng tôi có thể cung cấp cho Quý công ty",
+    supply: [],
+    cta: "Nếu có sản phẩm nào phù hợp, Quý công ty vui lòng trả lời email hoặc nhắn WhatsApp/Zalo cho tôi — hoặc gửi bản vẽ để chúng tôi báo giá.",
+    whatsapp: "Xin gửi Anh/Chị tờ giới thiệu một trang của *Peena Heat Elements* 👆\n• Dành cho {their}: {elem}\n• Làm theo bản vẽ — Inox 304 · Inox 316 · Incoloy 800\n• Kiểm tra từng chiếc trước khi xuất xưởng · Bảo hành 6 tháng\n\nAnh/Chị gửi bản vẽ, chúng tôi sẽ báo giá ạ.\n📄 Catalogue: {CAT}",
+  },
+  newparts: {
+    subject: "Dòng sản phẩm mới phù hợp với {their} — Peena Heat Elements",
+    intro: "Chúng tôi vừa có thêm một vài dòng sản phẩm rất phù hợp với {their} của Quý công ty:",
+    supplyLabel: "Dòng sản phẩm mới",
+    supply: ["{elem} — phiên bản mật độ công suất thấp, tuổi thọ cao hơn", "Vỏ Incoloy 800 cho các ứng dụng nhiệt độ cao", "Mặt bích, phụ kiện và đầu cực đấu điện làm riêng — lắp thẳng vào {short} của Quý công ty"],
+    cta: "Quý công ty muốn nhận mẫu thử hay báo giá? Chỉ cần trả lời email này, tôi sẽ gửi.",
+    whatsapp: "{greeting}\nVama từ *Peena Heat Elements* đây ạ. Chúng tôi có vài dòng mới phù hợp với {their}:\n\n• {elem} — phiên bản mật độ công suất thấp, tuổi thọ cao hơn\n• Vỏ Incoloy 800 cho nhiệt độ cao\n• Mặt bích, phụ kiện và đầu cực đấu điện làm riêng — lắp thẳng vào {short}\n\nAnh/Chị muốn nhận mẫu hay báo giá ạ?\n📄 Catalogue: {CAT}",
+  },
+  client: {
+    subject: "Đề xuất thử mẫu không ràng buộc — một điện trở cho {their}",
+    intro: "Tôi xin đề xuất với {company} một cách thử mẫu hoàn toàn không ràng buộc:",
+    supplyLabel: "Cách thử mẫu",
+    supply: ["Quý công ty gửi một bản vẽ của điện trở đang mua cho {their}", "Chúng tôi sản xuất một mẫu thử", "Bộ phận kỹ thuật của Quý công ty thử nghiệm và so sánh với hàng đang dùng", "Nếu mẫu đạt — chúng tôi trở thành nhà cung cấp của Quý công ty; nếu không — Quý công ty không mất gì"],
+    cta: "Quý công ty vui lòng cho tôi xin email hoặc số WhatsApp/Zalo của bộ phận kỹ thuật hoặc thu mua để tôi trao đổi chi tiết về mẫu thử.",
+    whatsapp: "{greeting}\nVama từ *Peena Heat Elements* đây ạ. Xin đề xuất một cách *thử mẫu không ràng buộc*:\n\n• Anh/Chị gửi 1 bản vẽ điện trở đang mua cho {their}\n• Chúng tôi làm 1 mẫu thử\n• Bộ phận kỹ thuật bên Anh/Chị thử và so với hàng đang dùng\n• Đạt thì chúng tôi làm nhà cung cấp — không đạt thì Anh/Chị không mất gì\n\nAnh/Chị cho tôi xin email hoặc số WhatsApp/Zalo của bộ phận kỹ thuật/thu mua được không ạ?\n📄 Catalogue: {CAT}",
+  },
+};
+const vnBody = (m, ctx, t) => [vnGreet(ctx), '', vnFill(t.intro, m, ctx), '',
+  `**${VN_LBL.what_we_make}**`, '→ ' + VN_WHAT, '',
+  `**${t.supplyLabel}**`, ...t.supply.map(s => '→ ' + vnFill(s, m, ctx)), '',
+  `**${VN_LBL.why}**`, ...VN_WHY.map(w => '→ ' + w), '',
+  vnFill(t.cta, m, ctx), '', VN_SIGN].join('\n');
+const vnTouch = (key, label, day, extra = {}) => ({ key, label, day, attach: '', ...extra,
+  render: (m, ctx) => {
+    const t = VN_COPY[key];
+    return {
+      subject: vnFill(t.subject, m, ctx),
+      body: key === 'flyer'
+        ? [vnGreet(ctx), '', vnFill(t.intro, m, ctx), '', `[[IMG:${VN_FLYER_VI}|${VN_IMG_ALT}]]`, '', vnFill(t.cta, m, ctx), '', VN_SIGN_SHORT].join('\n')
+        : vnBody(m, ctx, t),
+      whatsapp: vnFill(t.whatsapp, m, ctx),
+    };
+  } });
+// Vama calls in English; each step carries the Vietnamese line to read or to send on WhatsApp/Zalo afterwards.
+const VN_CALL = "1. Warm open — Good morning, this is Vama calling from Peena Heat Elements in India. Is this a good time for two minutes?\n   Xin chào, tôi là Vama, gọi từ Peena Heat Elements, Ấn Độ. Anh/Chị có tiện nói chuyện hai phút không ạ?\n\n2. Who we are — We make tubular, finned, immersion and cartridge heating elements to the customer's drawing, in Ahmedabad, and we already supply equipment builders in India, the Gulf, Africa and Australia.\n   Chúng tôi sản xuất điện trở nhiệt dạng ống, điện trở cánh tản nhiệt, điện trở nhúng và điện trở đũa (cartridge) theo bản vẽ khách hàng tại Ahmedabad, và đang cung cấp cho các nhà sản xuất thiết bị ở Ấn Độ, các nước vùng Vịnh (Trung Đông), châu Phi và Úc.\n\n3. The fit — I understand you build {their}. For those we make {elem}, bent on CNC in-house, in SS304, SS316 or Incoloy 800, tested before dispatch with a 6-month guarantee.\n   Tôi được biết Anh/Chị chế tạo {their}. Cho các thiết bị này chúng tôi làm {elem}, uốn CNC tại xưởng, vỏ Inox 304, Inox 316 hoặc Incoloy 800, lắp sẵn đầu cực đấu điện, kiểm tra từng chiếc trước khi xuất xưởng và bảo hành 6 tháng.\n\n4. Who looks after sourcing — Who looks after heating-element sourcing on your side? May I send them our catalogue?\n   Bên Anh/Chị ai phụ trách mua điện trở nhiệt ạ? Tôi có thể gửi catalogue cho người đó được không?\n\n5. Sample offer — If you send us one drawing, or a photo of an element beside a measuring tape, we make a trial piece for your team to test against your current supply.\n   Nếu Anh/Chị gửi một bản vẽ, hoặc một tấm ảnh điện trở chụp cạnh thước dây, chúng tôi sẽ làm một mẫu thử để bộ phận kỹ thuật so sánh với hàng đang dùng.\n\n6. Close — What is the best email or WhatsApp/Zalo number to send the catalogue and the sample details to? Thank you for your time.\n   Tôi nên gửi catalogue và thông tin mẫu thử đến email hoặc số WhatsApp/Zalo nào thuận tiện nhất ạ? Cảm ơn Anh/Chị đã dành thời gian.";
 
 const vietnam = {
-  name: 'Vietnam',
+  name: 'Vietnam · Tiếng Việt',
   regionLabel: 'province',
   apps: VN_APPS, all: VN_ALL,
+  zalo: true,
   touches: [
-    { key: 'intro', label: 'Intro', day: 0, attach: '🎬 Manufacturing video',
-      render: (m, ctx) => ({
-        subject: `Heating elements for ${m.their} — hello from Peena Heat Elements, India`,
-        body: bulletBody({ greet: greetEmail(ctx), intro: `Greetings from Peena Heat Elements, Ahmedabad, India — we supply equipment builders across India, the Gulf, Africa, Australia and beyond, and we'd love to support builders in ${ctx.region || 'Vietnam'}.`,
-          supply: [`For ${m.their}: ${m.elem}`, 'Materials: SS304 · SS316 · Incoloy 800', 'New parts — just send a drawing and we make it'],
-          cta: `Who looks after heating-element sourcing at ${coEmail(ctx)}? I'd be glad to send our catalogue and a quote.` }),
-        whatsapp: wa(helloWa(ctx), 'Vama from *Peena Heat Elements*, Ahmedabad, India.', '', '*What we make for you*', `• For ${m.their}: ${m.elem}`, `• ${DRAWING}`, '• Tested before dispatch · 6-month guarantee · 5–7 day dispatch', '', 'Who looks after heating-element sourcing on your side? Happy to send a quote.', '', LINK_CAT, LINK_VIDEO),
-      }) },
-    { key: 'flyer', label: 'Product flyer', day: 5, attach: '📄 Flyer', flyer: VN_FLYER, waImage: VN_FLYER,
-      render: (m, ctx) => ({
-        subject: 'Our range at a glance — Peena Heat Elements',
-        body: flyerBody({ greet: greetEmail(ctx), intro: `Here's our one-page flyer — the elements we make for builders in ${ctx.region || 'Vietnam'}:`, flyer: VN_FLYER,
-          cta: "Reply or WhatsApp if anything fits — or send us a drawing and we'll quote." }),
-        whatsapp: wa(helloWa(ctx), 'Sharing our one-page flyer from *Peena Heat Elements* 👆', '', `• For ${m.their}: ${m.elem}`, `• ${DRAWING}`, '• Tested before dispatch · 6-month guarantee', '', "Send us a drawing and we'll quote.", '', LINK_CAT),
-      }) },
-    DIWALI,
+    vnTouch('intro', 'Intro', 0, { attach: '🎬 Manufacturing video' }),
+    vnTouch('product', 'Product', 3, { attach: '🖼️ Product image (their equipment)' }),
+    vnTouch('flyer', 'Product flyer', 5, { attach: '📄 Flyer (Vietnamese)', flyer: VN_FLYER_VI, waImage: VN_FLYER_VI }),
+    { ...DIWALI, flyer: DIWALI_CARD_VI, waImage: DIWALI_CARD_VI,
+      render: () => ({ subject: 'Chúc mừng Lễ hội Ánh sáng Diwali — Peena Heat Elements',
+        body: `[[IMG:${DIWALI_CARD_VI}|Chúc mừng Lễ hội Ánh sáng Diwali — Peena Heat Elements, Ahmedabad, Ấn Độ]]`, whatsapp: '' }) },
+    vnTouch('newparts', 'New parts', 10, { attach: '🖼️ Product image (new range)' }),
+    vnTouch('client', 'Become our client', 18, { attach: '🖼️ Product / sample image' }),
   ],
-  calls: (m, ctx) => [{ label: 'Call — intro', day: '3–5', script:
-`CALL TALKING POINTS — ${ctx.company || 'the company'}${ctx.region ? ` (${ctx.region})` : ''}\n\n1) Warm open\n"Hello, this is Vama from Peena Heat Elements in India — have I caught you at an okay moment?"\n\n2) Who we are\n"We manufacture heating elements — tubular, finned, immersion and cartridge — all made to our customers' drawings, tested before dispatch, with a 6-month guarantee. We supply equipment builders across India, the Gulf and Africa."\n\n3) The fit with what you build\n"For ${m.their}, our ${m.elem} usually fit really well — in SS304, SS316 or Incoloy 800 to suit your process."\n\n4) Ask\n"Who looks after heating-element sourcing on your side? I'd love to send our catalogue and quote against one of your drawings."\n\n5) Offer\n"If it helps, share one drawing — or courier us one element, or email a photo of it beside a measuring tape — and we'll make a sample to match."\n\n6) Close\n"May I take the best email or WhatsApp to send the catalogue?"` }],
+  calls: (m, ctx) => [{ label: 'Call — intro (EN + VI)', day: '3–5', script:
+    `GỌI ĐIỆN / CALL — ${ctx.company || 'the company'} (${vnWhere(ctx)})\n\n` + vnFill(VN_CALL, m, ctx) }],
 };
 
 const CAMPAIGNS = {

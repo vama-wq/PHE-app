@@ -304,7 +304,7 @@ export default function ProspectingList() {
     catch { /* clipboard unavailable — user can select the text manually */ }
   };
   // Application-tailored SMS message (short, GSM-7-safe). Follows the email's application.
-  const smsText = useMemo(() => renderSms(activeApplication), [activeApplication]);
+  const smsText = useMemo(() => renderSms(activeApplication, segment), [activeApplication, segment]);
   const downloadTxt = (text, name) => {
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -346,10 +346,31 @@ export default function ProspectingList() {
       lastOrder: lastOrder || null };
   };
   // wa.me click-to-send: digits-only number + URL-encoded prefilled message
-  const waLinkFor = (phone, text) => {
-    const num = String(phone || '').replace(/[^0-9]/g, '');
+  // wa.me needs the number with its country code. Many rows store it the local way (Vietnam "0912 345 678",
+  // India "98250 12345"), so add the code from the row's country; numbers written with + or 00 are kept as they are.
+  const CALLING = { india: ['91', 10], vietnam: ['84', 9], oman: ['968', 8], qatar: ['974', 8], 'united arab emirates': ['971', 9],
+    uae: ['971', 9], 'saudi arabia': ['966', 9], kuwait: ['965', 8], bahrain: ['973', 8], 'south africa': ['27', 9] };
+  const intlNumber = (phone, country) => {
+    const first = String(phone || '').split(/[/,;]/)[0].trim();
+    if (!first) return '';
+    if (/^(\+|00)/.test(first)) return first.replace(/^(\+|00)/, '').replace(/\D/g, '');
+    const d = first.replace(/\D/g, '');
+    const [cc, len] = CALLING[String(country || 'India').trim().toLowerCase()] || [];
+    if (!cc) return d;
+    const national = d.replace(/^0+/, '');
+    if (national.length === len) return cc + national;
+    if (d.startsWith(cc) && d.length - cc.length === len) return d;
+    return d;
+  };
+  const waLinkFor = (phone, text, country) => {
+    const num = intlNumber(phone, country);
     if (!num) return null;
     return `https://wa.me/${num}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
+  };
+  // Zalo (Vietnam): zalo.me/<local number> opens the chat; Zalo can't prefill text, so the message is copied first.
+  const zaloLinkFor = (phone, country) => {
+    const num = intlNumber(phone, country);
+    return num.startsWith('84') && num.length === 11 ? `https://zalo.me/0${num.slice(2)}` : null;
   };
   const rowCampaign = campaignRow ? campaignFor(campaignRow.segment) : null;
   const rowTouch = rowCampaign ? renderTouch(rowCampaign, seqTab, rowCtx(campaignRow)) : null;
@@ -1036,11 +1057,22 @@ export default function ProspectingList() {
                       onClick={() => copyRaw(`${rowTouch.subject}\n\n${bodyToPlain(rowTouch.body)}`, 'seq-email')}>
                       <Copy size={13} /> {copied === 'seq-email' ? 'Copied ✓' : 'Copy email'}
                     </button>
-                    {waLinkFor(campaignRow.phone, rowTouch.whatsapp) && (
+                    {waLinkFor(campaignRow.phone, rowTouch.whatsapp, campaignRow.country) && (
                       <a className="btn-secondary text-xs flex items-center gap-1.5" style={{ color: '#128C7E' }}
-                        href={waLinkFor(campaignRow.phone, rowTouch.whatsapp)} target="_blank" rel="noopener noreferrer"
+                        href={waLinkFor(campaignRow.phone, rowTouch.whatsapp, campaignRow.country)} target="_blank" rel="noopener noreferrer"
                         onClick={() => { if (!tickFor(campaignRow.id, rowTouch.key, 'whatsapp')) markTouch([campaignRow.id], rowTouch.key, 'whatsapp'); }}>
                         <MessageSquare size={13} /> WhatsApp this
+                      </a>
+                    )}
+                    {rowCampaign?.zalo && zaloLinkFor(campaignRow.phone, campaignRow.country) && (
+                      <a className="btn-secondary text-xs flex items-center gap-1.5" style={{ color: '#0068FF' }}
+                        href={zaloLinkFor(campaignRow.phone, campaignRow.country)} target="_blank" rel="noopener noreferrer"
+                        title="Copies the message, opens their Zalo chat — paste it there. Counts as this touch's chat message."
+                        onClick={() => {
+                          if (rowTouch.whatsapp) copyRaw(rowTouch.whatsapp, 'seq-zalo');
+                          if (!tickFor(campaignRow.id, rowTouch.key, 'whatsapp')) markTouch([campaignRow.id], rowTouch.key, 'whatsapp');
+                        }}>
+                        <MessageSquare size={13} /> {copied === 'seq-zalo' ? 'Copied — paste in Zalo' : 'Zalo this'}
                       </a>
                     )}
                     {rowTouch.whatsapp && (

@@ -202,20 +202,25 @@ function footer(application) {
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 // Email-client-safe CTA button (table + styled anchor — works in Outlook/Gmail).
-export function catalogueButtonHtml(application, ar = false) {
+export function catalogueButtonHtml(application, lang = 'en') {
   const cat = catalogueFor(application);
+  const ar = lang === true || lang === 'ar';
   return (
     '<table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin:18px 0;">' +
     '<tr><td align="center" bgcolor="#b91c1c" style="border-radius:6px;">' +
     `<a href="${cat.url}" target="_blank" ` +
     'style="display:inline-block;padding:12px 26px;font-family:Arial,Helvetica,sans-serif;' +
     'font-size:15px;font-weight:bold;line-height:1;color:#ffffff;text-decoration:none;border-radius:6px;">' +
-    (ar ? 'تصفّح كتالوج منتجاتنا الكامل (PDF) &nbsp;&larr;' : `View our ${esc(cat.label.toLowerCase())} (PDF) &nbsp;&rarr;`) + '</a>' +
+    (ar ? 'تصفّح كتالوج منتجاتنا الكامل (PDF) &nbsp;&larr;'
+      : lang === 'vi' ? 'Xem catalogue sản phẩm đầy đủ (PDF) &nbsp;&rarr;'
+      : `View our ${esc(cat.label.toLowerCase())} (PDF) &nbsp;&rarr;`) + '</a>' +
     '</td></tr></table>'
   );
 }
 // Arabic emails (Saudi customers) render right-to-left.
 const isArabic = s => /[؀-ۿ]/.test(String(s || ''));
+// Vietnamese emails (Vietnam list, 26 Oct 2026) get the Vietnamese footer and catalogue button.
+const isVietnamese = s => /[ăâđêôơưĂÂĐÊÔƠƯạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/.test(String(s || ''));
 
 /**
  * Convert the (possibly hand-edited) plain-text body into Zoho-ready HTML:
@@ -226,6 +231,7 @@ const isArabic = s => /[؀-ۿ]/.test(String(s || ''));
 export function bodyToHtml(bodyText, application) {
   const cat = catalogueFor(application);
   const ar = isArabic(bodyText);
+  const lang = ar ? 'ar' : isVietnamese(bodyText) ? 'vi' : 'en';
   // An email that is just one image (the Diwali card) goes out as only that image: no footer.
   const imageOnly = /^\s*\[\[IMG:[^\]]+\]\]\s*$/.test(String(bodyText));
   const out = [];
@@ -266,7 +272,7 @@ export function bodyToHtml(bodyText, application) {
     // the plain-text catalogue line renders as the clickable button instead
     if (line.includes(cat.url) || /^Catalogue:\s*https?:\/\//i.test(line) || /\(PDF\):\s*https?:\/\/\S+\.pdf/i.test(line)) {
       flushBullets(); flushPara();
-      out.push(catalogueButtonHtml(application, ar));
+      out.push(catalogueButtonHtml(application, lang));
       continue;
     }
     if (line.startsWith('→')) { flushPara(); bullets.push(linkify(line.replace(/^→\s*/, ''))); continue; }
@@ -280,7 +286,7 @@ export function bodyToHtml(bodyText, application) {
     (ar ? '<div dir="rtl" style="font-family:Tahoma,Arial,Helvetica,sans-serif;font-size:15px;line-height:1.8;color:#1f2937;max-width:620px;text-align:right;">'
       : '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1f2937;max-width:620px;">') +
     out.join('\n') +
-    (imageOnly ? '' : whatsappQrHtml(ar)) +
+    (imageOnly ? '' : whatsappQrHtml(lang)) +
     '</div>'
   );
 }
@@ -294,8 +300,18 @@ export function bodyToPlain(bodyText) {
 }
 
 // WhatsApp click-to-chat QR footer appended to every campaign email (scans to wa.me/Vama).
-export function whatsappQrHtml(ar = false) {
-  if (ar) return (
+export function whatsappQrHtml(lang = 'en') {
+  if (lang === 'vi') return (
+    '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0 0;border-top:1px solid #e5e7eb;padding-top:14px;"><tr>' +
+    '<td style="vertical-align:middle;padding-right:12px;">' +
+    '<img src="https://www.peenaheatelements.com/phe-whatsapp-qr.png" width="92" height="92" alt="WhatsApp QR" style="display:block;width:92px;height:92px;border:1px solid #e5e7eb;border-radius:6px;">' +
+    '</td>' +
+    '<td style="vertical-align:middle;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#374151;line-height:1.5;">' +
+    '<strong style="color:#128C7E;">Quét mã để chat với chúng tôi trên WhatsApp — số này cũng dùng Zalo</strong><br>' +
+    'hoặc nhắn trực tiếp cho Vama: <a href="https://wa.me/918452055836" style="color:#b91c1c;text-decoration:none;">+91 84520 55836</a> (WhatsApp / Zalo)' +
+    '</td></tr></table>'
+  );
+  if (lang === true || lang === 'ar') return (
     '<table role="presentation" dir="rtl" cellpadding="0" cellspacing="0" style="margin:20px 0 0;border-top:1px solid #e5e7eb;padding-top:14px;"><tr>' +
     '<td style="vertical-align:middle;padding-left:12px;">' +
     '<img src="https://www.peenaheatelements.com/phe-whatsapp-qr.png" width="92" height="92" alt="WhatsApp QR" style="display:block;width:92px;height:92px;border:1px solid #e5e7eb;border-radius:6px;">' +
@@ -390,6 +406,10 @@ export const SMS_COPY = {
 
 export const GENERIC_SMS = "Hi $[FNAME|team]$, Peena Heat Elements (Ahmedabad) makes tubular heating elements to your drawing - SS304, SS316 and Incoloy 800, tested before dispatch, 6-month guarantee. Reply for a quote or see phe.co.in. Vama, Peena Heat Elements. phe.co.in";
 
-export function renderSms(application) {
+// Vietnam list (26 Oct 2026): written without diacritics so it stays one plain SMS segment (156 characters).
+export const VN_SMS = 'Peena Heat Elements (An Do): dien tro nhiet theo ban ve - ong, canh, nhung nuoc, cartridge; inox 304/316. BH 6 thang. Bao gia: WhatsApp/Zalo +91 84520 55836';
+
+export function renderSms(application, segment) {
+  if (segment === 'vietnam') return VN_SMS;
   return (application && SMS_COPY[application]) || GENERIC_SMS;
 }
