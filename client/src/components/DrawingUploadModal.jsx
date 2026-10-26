@@ -10,7 +10,9 @@ import { Upload, Package, X, FileText } from 'lucide-react';
 // Design uploads a reference drawing for an order item AND selects the inventory
 // that item consumes. Inventory deducts when the owner approves the drawing.
 // fileOptional: finished-goods orders may record the inventory without a file.
-export default function DrawingUploadModal({ orderId, item, label = 'Upload Drawing', fileOptional = false, fgOrder = fileOptional, onClose, onDone }) {
+// inventoryOptional: a replacement made from a customer query may keep no list —
+// it can use the material sent back (owner, 26 Oct 2026; server lib/bom.js).
+export default function DrawingUploadModal({ orderId, item, label = 'Upload Drawing', fileOptional = false, fgOrder = fileOptional, inventoryOptional = false, onClose, onDone }) {
   const [file, setFile] = useState(null);
   const [inventoryItems, setInventoryItems] = useState([]);
   const [selected, setSelected] = useState({}); // { [id]: qty }
@@ -91,15 +93,15 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
   const handleUpload = async () => {
     if (!file && !fileOptional) return setError('Please choose a drawing file');
     const ids = Object.keys(selected);
-    if (ids.length === 0) return setError('Select at least one inventory item for this drawing');
+    if (ids.length === 0 && !inventoryOptional) return setError('Select at least one inventory item for this drawing');
     const missingQty = ids.filter(id => !finsIds.has(String(id)) && !weightIds.has(String(id)) && !(lineQty(id) > 0));
     if (missingQty.length) return setError('Enter a quantity for every selected inventory item');
-    if (!fileOptional && !hasTerminalPin) {
+    if (!fileOptional && !inventoryOptional && !hasTerminalPin) {
       return setError(needsHeavyPin
         ? 'This item\'s remark calls for a Heavy Terminal Pin — add one from the Heavy Terminal Pin category.'
         : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory.');
     }
-    const fitMissing = fileOptional ? [] : fittingParts(fittings, selectedList).filter(p => !p.ok);
+    const fitMissing = fileOptional || inventoryOptional ? [] : fittingParts(fittings, selectedList).filter(p => !p.ok);
     if (fitMissing.length) return setError(`This heater's fittings need these on the list: ${fitMissing.map(p => p.text).join(', ')} — add one of each.`);
 
     const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) || weightIds.has(String(id)) ? 0 : lineQty(id),
@@ -177,9 +179,16 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
         {/* Inventory selector */}
         <div>
           <label className="label flex items-center gap-1.5">
-            <Package size={13} /> Inventory consumed by this item <span className="text-red-500">*</span>
+            <Package size={13} /> Inventory consumed by this item {inventoryOptional
+              ? <span className="text-gray-400 font-normal">(optional)</span>
+              : <span className="text-red-500">*</span>}
           </label>
-          {!fileOptional && (requiredPinCat ? (
+          {inventoryOptional && (
+            <p className="text-[11px] mb-1.5 rounded-lg px-2 py-1 border text-sky-800 bg-sky-50 border-sky-200">
+              Replacement for a customer query — adding inventory is optional: it can use the material sent back. Add only what is taken from stock.
+            </p>
+          )}
+          {!fileOptional && !inventoryOptional && (requiredPinCat ? (
             <p className={`text-[11px] mb-1.5 rounded-lg px-2 py-1 border ${hasTerminalPin ? 'text-green-700 bg-green-50 border-green-200' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
               {hasTerminalPin ? `✓ ${needsHeavyPin ? 'Heavy Terminal Pin' : 'Terminal Pin'} included`
                 : needsHeavyPin ? 'This item\'s remark calls for a HEAVY Terminal Pin — one from the Heavy Terminal Pin category is compulsory.'
@@ -190,7 +199,7 @@ export default function DrawingUploadModal({ orderId, item, label = 'Upload Draw
               Terminal pins are not added here — each job card's pins come from the job card and leave stock at Spot (stage 4), like the tube.
             </p>
           ))}
-          {!fileOptional && <FittingsNeeded value={fittings} invRows={selectedList} />}
+          {!fileOptional && !inventoryOptional && <FittingsNeeded value={fittings} invRows={selectedList} />}
           <div className="relative">
             <input className="input" placeholder="Search inventory by code or name..."
               value={invSearch}

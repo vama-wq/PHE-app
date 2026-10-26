@@ -14,6 +14,7 @@ const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, descr
 const { buildDraft, draftQuestions } = require('../lib/jobCardDraft');
 const { render: renderJobCard, renderParts } = require('../lib/jobCardRender');
 const TG = require('../lib/terminalGroups');
+const { bomOptional } = require('../lib/bom');
 // The pin type a card names (owner, 26 Oct 2026), for the card to print beside
 // its stud. Only a card that stored one gets it — a card made before pin types
 // prints exactly as it always did.
@@ -375,7 +376,9 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
   // No BOM, no card — the same gate the upload path applies, checked here so a
   // generated card cannot slip past it.
   const bom = await db.get('SELECT COUNT(*)::int AS n FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
-  if (!bom.n && !(req.user.role === 'owner' && String(req.body.confirm_no_bom) === 'true')) {
+  // A replacement from a customer query may have no list (lib/bom.js bomOptional).
+  const noBomOk = bomOptional(await db.get('SELECT replacement_query_id FROM orders WHERE id=$1', [item.order_id]));
+  if (!bom.n && !noBomOk && !(req.user.role === 'owner' && String(req.body.confirm_no_bom) === 'true')) {
     return res.status(400).json({
       error: 'This item has no inventory BOM attached — no materials would ever be deducted for it. Ask design to attach the BOM on the order item first.',
       code: 'NO_BOM',
@@ -601,7 +604,7 @@ router.post('/:id/terminals/use-bin', authenticate, authorize(...terminals.OK_RO
 router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin', 'owner'), async (req, res) => {
   const db = getDB();
   const jc = await db.get(
-    `SELECT jc.*, o.order_code, o.order_type, c.customer_code
+    `SELECT jc.*, o.order_code, o.order_type, c.customer_code, o.replacement_query_id AS order_replacement_query_id
        FROM job_cards jc JOIN orders o ON o.id = jc.order_id
        LEFT JOIN customers c ON c.id = o.customer_id
       WHERE jc.id=$1`, [req.params.id]);
@@ -615,7 +618,12 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
     `SELECT ii.item_code, ii.name, ii.name_gu, ii.unit, TRIM(ii.category) AS category, oii.qty, COALESCE(oii.rework_qty,0) AS rework_qty
        FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
       WHERE oii.order_item_id=$1 ORDER BY ii.category, ii.item_code`, [itemId]);
-  if (!allLines.length) return res.status(400).json({ error: 'This item has no inventory BOM attached — nothing to issue' });
+  // A replacement from a customer query may have no list (lib/bom.js
+  // bomOptional): its slip still prints — the card and its terminal pins.
+  // (jc.replacement_query_id is the CARD's own, older column — the order's is read.)
+  if (!allLines.length && !bomOptional({ replacement_query_id: jc.order_replacement_query_id })) {
+    return res.status(400).json({ error: 'This item has no inventory BOM attached — nothing to issue' });
+  }
 
   // The card's own terminal pins; a finished-goods card has none (its pins
   // are inside the heater) and its slip is exactly as before.
@@ -778,7 +786,9 @@ router.post('/', authenticate, authorize('admin', 'owner'), ...uploadJobCard, as
   // items slipped through by Aug 2026). The owner can consciously bypass.
   if (orderItemId) {
     const bom = await db.get('SELECT COUNT(*)::int AS n FROM order_item_inventory WHERE order_item_id=$1', [orderItemId]);
-    if (!bom.n && !(req.user.role === 'owner' && String(req.body.confirm_no_bom) === 'true')) {
+    // A replacement from a customer query may have no list (lib/bom.js bomOptional).
+    const noBomOk = bomOptional(await db.get('SELECT replacement_query_id FROM orders WHERE id=$1', [parseInt(order_id, 10)]));
+    if (!bom.n && !noBomOk && !(req.user.role === 'owner' && String(req.body.confirm_no_bom) === 'true')) {
       return res.status(400).json({
         error: 'This item has no inventory BOM attached — no materials would ever be deducted for it. Ask design to attach the BOM on the order item first.',
         code: 'NO_BOM',
@@ -2029,7 +2039,8 @@ router.post('/fg', authenticate, authorize('admin', 'owner'), ...uploadJobCard, 
     // ever deducts. Owner can consciously bypass.
     {
       const bom = await db.get('SELECT COUNT(*)::int AS n FROM order_item_inventory WHERE order_item_id=$1', [order_item_id]);
-      if (!bom.n && !(req.user.role === 'owner' && String(req.body.confirm_no_bom) === 'true')) {
+      // A replacement from a customer query may have no list (lib/bom.js bomOptional).
+      if (!bom.n && !bomOptional(order) && !(req.user.role === 'owner' && String(req.body.confirm_no_bom) === 'true')) {
         return res.status(400).json({
           error: 'This item has no inventory BOM attached — the prep parts (nuts, washers, nipples…) would never be deducted. Ask design to attach the BOM first.',
           code: 'NO_BOM',

@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
-const { scaleBomQty, isSuspectLine, BOM_FAMILIES, BOM_FAMILY_LABEL, ORDER_TYPE_LABEL, bomFamily } = require('../lib/bom');
+const { scaleBomQty, isSuspectLine, BOM_FAMILIES, BOM_FAMILY_LABEL, ORDER_TYPE_LABEL, bomFamily, bomOptional } = require('../lib/bom');
 const { PLATING_INSTRUCTIONS, isValidPlating } = require('../lib/plating');
 const { authenticate, authorize, withCustomerVisibility } = require('../middleware/auth');
 const { uploadQuotation, uploadOrderDrawing, uploadOrderItemImage, uploadChatAttachments, uploadQC, deleteFromStorage, copyInStorage } = require('../middleware/upload');
@@ -162,7 +162,7 @@ router.get('/drawings/pending', authenticate, async (req, res) => {
   const rows = await db.all(`
     SELECT
       o.id, o.order_code, o.status, o.order_type, o.drawing_status, o.drawing_rejection_reason,
-      o.created_at, o.order_date,
+      o.created_at, o.order_date, o.replacement_query_id,
       c.customer_code, ${canSeeNames ? 'c.name AS customer_name,' : ''}
       u.name AS created_by_name,
       (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count,
@@ -966,11 +966,13 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
   const byWeight = await heaterFittings.sleeveByWeightIds(db, parseInt(req.params.itemId, 10), raw.map(s => s.id));
   const sels = (await dropTerminalPins(db, raw.filter(s => parseFloat(s.qty) > 0 || fins.has(parseInt(s.id)) || byWeight.has(parseInt(s.id))), req.params.id))
     .map(s => (byWeight.has(parseInt(s.id)) ? { ...s, qty: 0, rework_qty: 0 } : s));
-  if (!sels.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) — terminal pins are not added to the list, they come from the job card' });
+  const ord = await db.get('SELECT order_code, order_type, replacement_query_id FROM orders WHERE id=$1', [req.params.id]);
+  // A replacement from a customer query may keep no list (lib/bom.js bomOptional).
+  const optional = bomOptional(ord);
+  if (!sels.length && !optional) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) — terminal pins are not added to the list, they come from the job card' });
   const item = await db.get('SELECT id, inventory_deducted, remark FROM order_items WHERE id=$1 AND order_id=$2', [req.params.itemId, req.params.id]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
-  const ord = await db.get('SELECT order_code, order_type FROM orders WHERE id=$1', [req.params.id]);
-  if (ord?.order_type !== 'finished_goods') {
+  if (ord?.order_type !== 'finished_goods' && !optional) {
     const pinCat = requiredPinCategory(item.remark, req.params.id);
     if (pinCat && !(await hasPinCategory(db, sels.map(s => parseInt(s.id)), pinCat))) {
       return res.status(400).json({
@@ -1044,8 +1046,10 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     if (!item_id) return res.status(400).json({ error: 'Item is required for the drawing' });
 
     const db = getDB();
-    const ord = await db.get('SELECT order_type FROM orders WHERE id=$1', [req.params.id]);
+    const ord = await db.get('SELECT order_type, replacement_query_id FROM orders WHERE id=$1', [req.params.id]);
     const isFgOrder = ord?.order_type === 'finished_goods';
+    // A replacement from a customer query may keep no list (lib/bom.js bomOptional).
+    const optional = bomOptional(ord);
     // Finished-Goods orders may record the inventory selection without a drawing
     // file; every other order type still requires the file.
     if (!req.file && !isFgOrder) return res.status(400).json({ error: 'File required' });
@@ -1061,8 +1065,8 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     const byWeight = await heaterFittings.sleeveByWeightIds(db, parseInt(item_id, 10), invSelections.map(s => s.id));
     invSelections = (await dropTerminalPins(db, invSelections.filter(s => parseFloat(s.qty) > 0 || finsIds.has(parseInt(s.id)) || byWeight.has(parseInt(s.id))), req.params.id))
       .map(s => (byWeight.has(parseInt(s.id)) ? { ...s, qty: 0, rework_qty: 0 } : s));
-    if (!invSelections.length) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing — terminal pins are not added to the list, they come from the job card' });
-    if (!isFgOrder) {
+    if (!invSelections.length && !optional) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing — terminal pins are not added to the list, they come from the job card' });
+    if (!isFgOrder && !optional) {
       const itemRow = await db.get('SELECT remark FROM order_items WHERE id=$1 AND order_id=$2', [parseInt(item_id), req.params.id]);
       const pinCat = requiredPinCategory(itemRow?.remark, req.params.id);
       if (pinCat && !(await hasPinCategory(db, invSelections.map(s => parseInt(s.id)), pinCat))) {

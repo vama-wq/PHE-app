@@ -105,5 +105,15 @@ function bomFamily(orderType) {
   return Object.keys(BOM_FAMILIES).find(f => BOM_FAMILIES[f].includes(t)) || 'he';
 }
 
-module.exports = { scaleBomQty, isPieceLine, isSuspectLine, perPiece, normUnit, PIECE_UNITS,
+// A replacement made from a customer query (owner, 26 Oct 2026): "replacement
+// does not need the inventory added to compulsory as it can use the inventory
+// from the material sent back". Its list may stay empty: the drawing upload,
+// the inventory box, making its job card and printing its slip all go ahead
+// without one, and none of them asks for a heavy pin or a fitting's part.
+// Whatever design does add still deducts as on any order. A replacement for an
+// order made wrongly in production still needs its list. order: an orders row
+// (its replacement_query_id).
+const bomOptional = (order) => !!order?.replacement_query_id;
+
+module.exports = { bomOptional, scaleBomQty, isPieceLine, isSuspectLine, perPiece, normUnit, PIECE_UNITS,
   BOM_FAMILIES, BOM_FAMILY_LABEL, ORDER_TYPE_LABEL, bomFamily };

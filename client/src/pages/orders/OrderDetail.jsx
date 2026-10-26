@@ -559,7 +559,9 @@ export default function OrderDetail() {
                               })}
                             </div>
                           ) : (
-                            <span className="text-xs text-gray-400 italic">None selected yet — added with the drawing.</span>
+                            <span className="text-xs text-gray-400 italic">{order.replacement_query_id
+                              ? 'None — optional on a replacement for a customer query (it can use the material sent back).'
+                              : 'None selected yet — added with the drawing.'}</span>
                           )}
                           {/* Terminal pins (owner, 8 Oct 2026): not on the list — picked from
                               each job card, taken at Spot, changed only at Inventory QC. */}
@@ -1119,6 +1121,7 @@ export default function OrderDetail() {
         <InventoryEditModal orderId={id}
           item={invEditItem}
           fgOrder={isFG}
+          inventoryOptional={!!order.replacement_query_id}
           onClose={() => setInvEditItem(null)}
           onDone={() => { setInvEditItem(null); load(); }}
         />
@@ -1127,6 +1130,7 @@ export default function OrderDetail() {
         <DrawingUploadModal orderId={id}
           item={drawingUploadItem}
           fileOptional={isFG}
+          inventoryOptional={!!order.replacement_query_id}
           onClose={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); }}
           onDone={() => { setShowDrawingModal(false); setDrawingUploadItemId(null); setDrawingUploadItem(null); load(); }}
         />

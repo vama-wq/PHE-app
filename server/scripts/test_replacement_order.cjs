@@ -76,6 +76,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       && (await q1('SELECT status FROM orders WHERE id=$1', [o])).status === 'resolved_dispatched', JSON.stringify({ r: r.body, qq: { s: qq.status, rs: qq.return_status, ro: qq.replacement_order_id } }));
     ok('3. it goes for approval like any new order', (await q1('SELECT status FROM orders WHERE id=$1', [newOrder])).status === 'pending_approval');
     r = await call('POST', `/api/orders/${newOrder}/items`, { ...draftItem, wattage: 750, plating_instructions: 'No Plating' }, admin);
+    const rplItem = r.body?.id || null;
     const added = r.body?.id ? await q1('SELECT wattage::float w, voltage::float v, drawing_number, copied_from_item_id FROM order_items WHERE id=$1', [r.body.id]) : null;
     ok('3b. the pre-filled item saves with its wattage changed (500 → 750 W) — not a reuse, nothing locked',
       r.status === 201 && added?.w === 750 && added?.v === 230 && added?.drawing_number === 'ZZTEST-DWG-RPL' && added?.copied_from_item_id == null, JSON.stringify({ s: r.status, b: r.body, added }));
@@ -103,6 +104,44 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     const pc = (await q1(`INSERT INTO job_cards (job_card_no, order_id, order_item_id, qty, status, dispatch_date, product_qc_at, inventory_qc_at, qc_route, qc_dispatch_qty) VALUES ('ZZT-RPL-PLAIN-1',$1,$2,2,'qc_approved',CURRENT_DATE,NOW(),NOW(),'dispatch',2) RETURNING id`, [ord.id, poi])).id;
     r = await call('PUT', `/api/dispatch/${pc}/mark-dispatched`, {});
     ok('7. an ordinary order still needs its invoice', r.status === 400 && /invoice/i.test(r.body.error || ''), JSON.stringify(r.body));
+
+    // ════ 8. Inventory is optional on a replacement from a query (owner, 26 Oct
+    // 2026: "replacement does not need the inventory added to compulsory as it
+    // can use the inventory from the material sent back") ════
+    const multipart = async (url, fields, as) => {
+      const f = new FormData();
+      for (const [k, v] of Object.entries(fields)) f.append(k, String(v));
+      f.append('file', new Blob([Buffer.from('%PDF-1.4 test')], { type: 'application/pdf' }), 'x.pdf');
+      actor = as;
+      const res = await fetch(base + url, { method: 'POST', body: f, signal: AbortSignal.timeout(30000) });
+      actor = owner;
+      return { status: res.status, body: await res.json().catch(() => ({})) };
+    };
+    r = await multipart(`/api/orders/${newOrder}/drawings`, { item_id: rplItem, inventory_item_ids: '[]' }, admin);
+    ok('8a. its drawing uploads with no inventory chosen', r.status === 201, JSON.stringify(r.body));
+    r = await call('PUT', `/api/orders/${newOrder}/items/${rplItem}/inventory`, { inventory_item_ids: [] }, admin);
+    ok('8b. the inventory box saves an empty list', r.status === 200, JSON.stringify(r.body));
+    r = await multipart('/api/job-cards', { order_id: newOrder, order_item_id: rplItem, qty: 3, dispatch_date: '2026-10-30', job_card_no: 'ZZT-RPL-NOBOM', punching: 'ZZT-PUNCH' }, admin);
+    const nb = await q1(`SELECT * FROM job_cards WHERE order_item_id=$1 ORDER BY id DESC LIMIT 1`, [rplItem]);
+    ok('8c. its job card is made with no list and no owner override (admin), ending in -RPL', r.status === 201 && !!nb && /-RPL$/.test(nb.job_card_no), JSON.stringify(r.body));
+    if (nb) {
+      const pin = (await q1(`INSERT INTO inventory_items (item_code, name, unit, category, current_stock, unit_cost, terminal_group)
+        VALUES ('TP-SS-M9-05-WH','ZZTEST pin','pcs','Terminal Pin',100,1,'regular') RETURNING id`)).id;
+      await client.query(`INSERT INTO job_card_terminals (job_card_id, inventory_item_id, qty, source) VALUES ($1,$2,3,'design')`, [nb.id, pin]);
+      r = await call('POST', `/api/job-cards/${nb.id}/slip`, {}, admin);
+      ok('8d. its slip prints with no material lines — just the card and its terminal pins',
+        r.status === 200 && Array.isArray(r.body.lines) && r.body.lines.length === 0 && (r.body.terminals || []).some(t => t.item_code === 'TP-SS-M9-05-WH'), JSON.stringify(r.body).slice(0, 300));
+    }
+    const mwOrder = (await q1(`INSERT INTO orders (order_code, customer_id, order_date, order_type, status, replacement_of_order_id) VALUES ('ZZT-RPL-MW',$1,CURRENT_DATE,'local_he','approved',$2) RETURNING id`, [cust, o])).id;
+    const mwItem = (await q1(`INSERT INTO order_items (order_id, quantity, drawing_number) VALUES ($1,2,'ZZTEST-DWG-MW') RETURNING id`, [mwOrder])).id;
+    r = await call('PUT', `/api/orders/${mwOrder}/items/${mwItem}/inventory`, { inventory_item_ids: [] }, admin);
+    ok('8e. a replacement for an order made wrongly still needs its list', r.status === 400 && /at least one inventory item/.test(r.body.error || ''), JSON.stringify(r.body));
+    r = await multipart(`/api/orders/${mwOrder}/drawings`, { item_id: mwItem, inventory_item_ids: '[]' }, admin);
+    ok('8e. … at the drawing upload too', r.status === 400 && /at least one inventory item/.test(r.body.error || ''), JSON.stringify(r.body));
+    r = await call('PUT', `/api/orders/${ord.id}/items/${poi}/inventory`, { inventory_item_ids: [] }, admin);
+    ok('8f. an ordinary order still needs its list', r.status === 400 && /at least one inventory item/.test(r.body.error || ''), JSON.stringify(r.body));
+    r = await multipart('/api/job-cards', { order_id: ord.id, order_item_id: poi, qty: 2, dispatch_date: '2026-10-30', job_card_no: 'ZZT-RPL-PLAIN-2', punching: 'ZZT-PUNCH' }, admin);
+    ok('8f. … and its job card is still refused without one (NO_BOM)', r.status === 400 && r.body.code === 'NO_BOM', JSON.stringify(r.body));
   } catch (e) { failed = true; console.error('ERROR', e); }
   finally {
     await client.query('ROLLBACK'); client.release(); server.close(); await realPool.end();

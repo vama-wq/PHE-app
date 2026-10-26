@@ -264,7 +264,7 @@ function BomRequired({ items, loading, canEdit, onChanged }) {
 // ── Per-item upload button ─────────────────────────────────────────────────────
 // Opens a modal where design picks the drawing file AND the inventory the item
 // consumes (inventory deducts when the owner approves the drawing).
-function ItemUploadBtn({ orderId, item, onUploaded, label, fileOptional }) {
+function ItemUploadBtn({ orderId, item, onUploaded, label, fileOptional, inventoryOptional }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="flex items-center gap-1.5">
@@ -281,6 +281,7 @@ function ItemUploadBtn({ orderId, item, onUploaded, label, fileOptional }) {
           item={item}
           label={label === 'Re-upload' ? 'Re-upload Drawing' : 'Upload Drawing'}
           fileOptional={fileOptional}
+          inventoryOptional={inventoryOptional}
           onClose={() => setOpen(false)}
           onDone={() => { setOpen(false); onUploaded(); }}
         />
@@ -436,7 +437,7 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
                   </span>
                 ) : (
                   <ItemUploadBtn orderId={order.id} item={item} onUploaded={onUploaded}
-                    fileOptional={order.order_type === 'finished_goods'} />
+                    fileOptional={order.order_type === 'finished_goods'} inventoryOptional={!!order.replacement_query_id} />
                 )}
               </div>
             ))}
@@ -449,7 +450,7 @@ function OrderRow({ order, tab, canUpload, onUploaded }) {
                   {item.drawing_number || `Item ${idx + 1}`}
                 </span>
                 <ItemUploadBtn orderId={order.id} item={item} onUploaded={onUploaded} label="Re-upload"
-                  fileOptional={order.order_type === 'finished_goods'} />
+                  fileOptional={order.order_type === 'finished_goods'} inventoryOptional={!!order.replacement_query_id} />
               </div>
             ))}
           </div>

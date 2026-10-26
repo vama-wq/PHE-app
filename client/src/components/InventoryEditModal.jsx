@@ -10,7 +10,9 @@ import { Package, X } from 'lucide-react';
 // Edit the inventory selected for an order item. If the item's drawing is already
 // approved (stock deducted), saving reverses the old selection and re-deducts the
 // new one server-side so stock stays accurate.
-export default function InventoryEditModal({ orderId, item, fgOrder = false, onClose, onDone }) {
+// inventoryOptional: a replacement made from a customer query may keep no list —
+// it can use the material sent back (owner, 26 Oct 2026; server lib/bom.js).
+export default function InventoryEditModal({ orderId, item, fgOrder = false, inventoryOptional = false, onClose, onDone }) {
   const [inventoryItems, setInventoryItems] = useState([]);
   const [selected, setSelected] = useState(
     Object.fromEntries((item?.inventory_items || []).map(i => [i.id, i.qty ?? '']))
@@ -74,11 +76,11 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
   };
   const handleSave = async () => {
     const ids = Object.keys(selected);
-    if (!ids.length) return setError('Select at least one inventory item');
+    if (!ids.length && !inventoryOptional) return setError('Select at least one inventory item');
     const missingQty = ids.filter(id => !finsIds.has(String(id)) && !weightIds.has(String(id)) && !(lineQty(id) > 0));
     if (missingQty.length) return setError('Enter a quantity for every selected item');
     // The heater's fittings (owner, 12 Oct 2026): each needs its part on the list.
-    const fitMissing = fgOrder ? [] : fittingParts(item?.fittings, selectedList).filter(p => !p.ok);
+    const fitMissing = fgOrder || inventoryOptional ? [] : fittingParts(item?.fittings, selectedList).filter(p => !p.ok);
     if (fitMissing.length) return setError(`This heater's fittings need these on the list: ${fitMissing.map(p => p.text).join(', ')} — add one of each.`);
     const inventory_item_ids = ids.map(id => ({ id: parseInt(id), qty: finsIds.has(String(id)) || weightIds.has(String(id)) ? 0 : lineQty(id),
       rework_qty: parseInt(reworkOf[id], 10) || 0 }));
@@ -117,7 +119,12 @@ export default function InventoryEditModal({ orderId, item, fgOrder = false, onC
           Correct the inventory this item consumes. Stock only changes where real stock was already
           taken for this item, and then only by the difference; otherwise just the list is corrected.
         </p>
-        {!fgOrder && <FittingsNeeded value={item?.fittings} invRows={selectedList} />}
+        {inventoryOptional && (
+          <p className="text-[11px] rounded-lg px-2 py-1 border text-sky-800 bg-sky-50 border-sky-200">
+            Replacement for a customer query — inventory is optional: it can use the material sent back. Add only what is taken from stock.
+          </p>
+        )}
+        {!fgOrder && !inventoryOptional && <FittingsNeeded value={item?.fittings} invRows={selectedList} />}
 
         <div className="relative">
           <input className="input" placeholder="Search inventory by code or name..."
