@@ -42,16 +42,16 @@ const TUBE_DRAW = {
   // 8 mm (owner, 2 Oct 2026): copper 23.7 → 26.2%, SS316 20.7 → 22% → 23%
   // (owner, 3 Oct 2026); SS304 (and SS310, any other steel) stays 20.7%, flat at
   // every length. The old 43" and 50" breaks (20 / 19.7 / 19) are retired.
-  // Incoloy 3/8" (owner, 24 Oct 2026 — what the tube is actually drawing at):
-  // below 65" → 22%, 65" and above → 19% (was a flat 21%), measured on the
-  // DRAWING length (owner, 26 Oct 2026: "drawing length") — not the card's
-  // total, which adds the 0.7" allowance: a 64.5" drawing (65.2" total) is 22%.
-  // maxDrawing marks a band read off the drawing length; lengths are to 4
-  // decimals, so 64.9999 is the last drawing below 65".
+  // Incoloy 3/8", both walls (owner, 26 Oct 2026 — what the tube now draws
+  // at): a flat 22.5% at every length ("all lengths from 1" and above"). It was
+  // a flat 21%, then 22% below a 65" drawing and 19% from 65" (24–26 Oct).
+  // Should a length band come back, the owner's Incoloy lengths are DRAWING
+  // lengths (26 Oct 2026: "drawing length"), not the card's total, which adds
+  // the 0.7" allowance — write such a band with maxDrawing.
   8: {
     steel:   [ { maxTL: Infinity, pct: 0.207 } ],
     ss316:   [ { maxTL: Infinity, pct: 0.23 } ],
-    incoloy: [ { maxDrawing: 64.9999, pct: 0.22 }, { maxDrawing: Infinity, pct: 0.19 } ],
+    incoloy: [ { maxTL: Infinity, pct: 0.225 } ],
     copper:  [ { maxTL: Infinity, pct: 0.262 } ],
   },
   // 11 mm (owner, 2 Oct 2026): above 51" SS304 15 → 14.5% and Incoloy 15 → 16%;
