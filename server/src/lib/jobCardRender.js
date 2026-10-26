@@ -47,6 +47,15 @@ const GU_DIGIT = { 0: '૦', 1: '૧', 2: '૨', 3: '૩', 4: '૪', 5: '૫', 6
 const studGu = (label) => String(label || 'M4-SS')
   .replace(/^M(\d)-SS$/, (_, d) => `એમ ${GU_DIGIT[d] || d}-એસએસ`);
 
+// A terminal pin row: the stud, its length boxed, and — on a card that names
+// one (owner, 26 Oct 2026) — the pin type in bold beside it, its Gujarati and
+// Hindi on the note line under it. A card made before pin types has no
+// c.pinType and prints exactly as it always did.
+const pinValue = (c, studs) =>
+  `${esc(studGu(c.studLabel))} &nbsp;·&nbsp; ${esc(c.studLabel || 'M4-SS')} &nbsp;·&nbsp; ${box(`${studs}"`, 'pin')}`
+  + (c.pinType ? ` &nbsp;<span class="pintype">·&nbsp; <b>${esc(c.pinType.label)}</b></span>` : '');
+const pinNote = (c, also) => [c.pinType ? `${c.pinType.gu} · ${c.pinType.hi}` : '', also].filter(Boolean).join(' — ');
+
 // Numbered 1..N in the order they appear. The workbook's own numbering runs
 // 1,2,3,3,4,…,10,12,15,16 — two rows share a 3, and 11, 13 and 14 are missing
 // (13 and 14 were the bending rollers, now read off the drawing). Carrying
@@ -88,11 +97,11 @@ function specRows(c, head) {
     [['ઠંડા ઝોનની મોટી લંબાઈ', 'Cold Zone Big', 'बड़ा कोल्ड ज़ोन'], `${n(c.coldZoneBigIn, 0)}"`, ''],
     [['ઠંડા ઝોનની નાની લંબાઈ', 'Cold Zone Small', 'छोटा कोल्ड ज़ोन'], `${n(c.coldZoneSmallIn, 0)}"`, ''],
     [['ટર્મિનલ પિન મોટો સ્ટડ', 'Terminal Pin — Big Stud', 'टर्मिनल पिन बड़ा स्टड'],
-      `${esc(studGu(c.studLabel))} &nbsp;·&nbsp; ${esc(c.studLabel || 'M4-SS')} &nbsp;·&nbsp; ${box(`${c.terminalPinBig.studs}"`, 'pin')}`,
-      c.terminalPinBig.overridden ? `set by hand — a ${n(c.coldZoneBigIn, 0)}" cold zone gives ${c.terminalPinBig.derivedStuds}"` : ''],
+      pinValue(c, c.terminalPinBig.studs),
+      pinNote(c, c.terminalPinBig.overridden ? `set by hand — a ${n(c.coldZoneBigIn, 0)}" cold zone gives ${c.terminalPinBig.derivedStuds}"` : '')],
     [['ટર્મિનલ પિન નાનો સ્ટડ', 'Terminal Pin — Small Stud', 'टर्मिनल पिन छोटा स्टड'],
-      `${esc(studGu(c.studLabel))} &nbsp;·&nbsp; ${esc(c.studLabel || 'M4-SS')} &nbsp;·&nbsp; ${box(`${c.terminalPinSmall.studs}"`, 'pin')}`,
-      c.terminalPinSmall.overridden ? `set by hand — a ${n(c.coldZoneSmallIn, 0)}" cold zone gives ${c.terminalPinSmall.derivedStuds}"` : ''],
+      pinValue(c, c.terminalPinSmall.studs),
+      pinNote(c, c.terminalPinSmall.overridden ? `set by hand — a ${n(c.coldZoneSmallIn, 0)}" cold zone gives ${c.terminalPinSmall.derivedStuds}"` : '')],
     [['ડ્રોઇંગ પછી પ્રતિકાર', 'Ω Ohms After Draw', 'ड्रॉ के बाद प्रतिरोध'],
       `${n(c.ohmsAfterDrawMin, 3)} &nbsp;–&nbsp; <b>${n(c.ohmsAfterDraw, 3)}</b> &nbsp;–&nbsp; ${n(c.ohmsAfterDrawMax, 3)}`,
       '±5%'],
@@ -272,6 +281,8 @@ function renderParts(card, heads, provenance) {
   .sheet .box--mid  { background: #FFF2CC; }
   .sheet .box--pin  { background: #F9CB9C; }
   .sheet td.value b { font-weight: 600; }
+  /* The pin type never splits — it moves to the next line as one. */
+  .sheet td.value .pintype { white-space: nowrap; }
   .sheet td.value .to { font-family: var(--sans); font-size: 10px; letter-spacing: .1em; color: var(--ink-3); }
   /* Row 19 reads as four separate cells, the way it does on the sheet. */
   .sheet td.value .cells { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px 7px; }

@@ -20,10 +20,12 @@
 
 const { TERMINAL_CATEGORY, PLACEHOLDER, isTerminalCategory } = require('./stockLedger');
 
+// gu / hi: what the job card prints under the English (owner, 26 Oct 2026),
+// in the shop-floor words of lib/translit.js (one, side, thread, without).
 const TERMINAL_GROUPS = [
-  { key: 'regular', label: 'Regular' },
-  { key: 'one_side_threaded', label: 'One Side Threaded' },
-  { key: 'no_thread', label: 'No Thread' },
+  { key: 'regular', label: 'Regular', gu: 'રેગ્યુલર', hi: 'रेगुलर' },
+  { key: 'one_side_threaded', label: 'One Side Threaded', gu: 'એક બાજુ થ્રેડ', hi: 'एक तरफ थ्रेड' },
+  { key: 'no_thread', label: 'No Thread', gu: 'થ્રેડ વગર', hi: 'बिना थ्रेड' },
 ];
 const DEFAULT_GROUP = 'regular';
 const GROUP_CHOICES = 'Regular, One Side Threaded or No Thread';

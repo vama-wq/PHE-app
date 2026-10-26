@@ -13,6 +13,14 @@ const { cardLengths, specForCard } = require('../lib/cardSpec');
 const { MAX_CARD_QTY, splitQuantity, allocateCardNumbers, takenNumbersFor, describeSplit } = require('../lib/jobCardSplit');
 const { buildDraft, draftQuestions } = require('../lib/jobCardDraft');
 const { render: renderJobCard, renderParts } = require('../lib/jobCardRender');
+const TG = require('../lib/terminalGroups');
+// The pin type a card names (owner, 26 Oct 2026), for the card to print beside
+// its stud. Only a card that stored one gets it — a card made before pin types
+// prints exactly as it always did.
+const withPinType = (card, group) => {
+  const g = TG.TERMINAL_GROUPS.find(x => x.key === TG.normaliseGroup(group));
+  return g ? { ...card, pinType: { label: g.label, gu: g.gu, hi: g.hi } } : card;
+};
 const { approveSplitRequest, rejectSplitRequest, SPLIT_REQUESTABLE } = require('../services/actions/splitRequests');
 
 // Stages that must be done before Stage 29 (QC) can be triggered.
@@ -382,7 +390,7 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
     return res.status(409).json({ error: `This item is already covered by ${covered.n} job card(s) totalling ${covered.covered} of ${item.quantity} pcs` });
   }
 
-  const html = renderJobCard(draft.card, draft.sheets, draft.provenance || []);
+  const html = renderJobCard(withPinType(draft.card, draft.terminalGroup), draft.sheets, draft.provenance || []);
   const filename = `${Date.now()}-${String(item.drawing_number || item.product_code || `item-${item.id}`)
     .replace(/[^A-Za-z0-9._-]+/g, '-')}.html`;
   let storagePath;
@@ -678,7 +686,7 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
       const spec = typeof jc.generated_spec === 'string' ? JSON.parse(jc.generated_spec) : jc.generated_spec;
       const built = cardFromSpec(spec);
       if (built.ok) {
-        const parts_ = renderParts(built, [spec.sheet], spec.provenance || []);
+        const parts_ = renderParts(withPinType(built, spec.input?.terminalGroup), [spec.sheet], spec.provenance || []);
         card = { styles: parts_.styles, fontLink: parts_.fontLink, fitScript: parts_.fitScript, sheets: parts_.sheets, title: parts_.title };
       }
     } catch (e) { console.error('[slip] could not re-render card:', e.message); }
@@ -720,7 +728,7 @@ router.get('/:id/view', authenticate, async (req, res) => {
         res.set('Content-Type', 'text/html; charset=utf-8');
         // Never cached: this is rendered fresh so a layout fix shows up at once.
         res.set('Cache-Control', 'no-store');
-        return res.send(renderJobCard(built, [spec.sheet], spec.provenance || []));
+        return res.send(renderJobCard(withPinType(built, spec.input?.terminalGroup), [spec.sheet], spec.provenance || []));
       }
       console.error(`[view] ${jc.job_card_no} could not be rebuilt: ${built.error}`);
     } catch (e) { console.error('[view] re-render failed:', e.message); }
