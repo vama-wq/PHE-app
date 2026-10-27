@@ -1380,16 +1380,42 @@ function ItemQCRow({ poId, item, canQC, onDone, showCosts, isOwner, canShortClos
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  // Owner only (27 Oct 2026): a QC done wrongly goes back to be done again —
+  // what it put into stock comes back out and the line waits for QC.
+  const sendBackToQc = async () => {
+    const intoStock = item.qc_status === 'rejected' ? 0 : stockQtyIn;
+    const msg = `Send the QC of "${item.description}" back to be done again?\n\n`
+      + (intoStock > 0
+        ? `What this QC put into stock (${intoStock.toLocaleString('en-IN')}${converts ? ` ${stockUnit}` : ''}${(item.set_parts || []).length ? ', with the set\'s other parts' : ''}) comes back out. `
+        : 'Nothing from this QC is in stock. ')
+      + (item.qc_status !== 'approved' ? 'Its debit note is dropped if accounts has not raised it yet. ' : '')
+      + 'The line waits for QC again, and is off Payments Due until QC is redone.';
+    if (!window.confirm(msg)) return;
+    try {
+      const r = await api.put(`/purchase-orders/${poId}/items/${item.id}/qc-send-back`);
+      alert(r.data?.message || 'Sent back to QC');
+      onDone();
+    } catch (e) { alert(e.response?.data?.error || 'Could not send the QC back'); }
+  };
+
   // Resolved QC (approved / partial / rejected) — read-only summary.
   if (['approved', 'partial', 'rejected'].includes(item.qc_status)) {
     const cls = item.qc_status === 'approved' ? 'bg-green-50 border-green-200'
       : item.qc_status === 'partial' ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200';
     return (
       <div className={`rounded-lg px-3 py-2.5 border ${cls}`}>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <span className="text-sm font-medium text-gray-800">{item.description}</span>
-          <span className={`text-xs font-semibold ${item.qc_status === 'approved' ? 'text-green-700' : item.qc_status === 'partial' ? 'text-amber-700' : 'text-red-700'}`}>
-            {item.qc_status === 'approved' ? '✓ QC Approved' : item.qc_status === 'partial' ? '◐ Partial — debit note' : '✕ Rejected — debit note'}
+          <span className="flex items-center gap-2">
+            {isOwner && (
+              <button type="button" className="btn-ghost btn-sm text-xs text-brand-600" onClick={sendBackToQc}
+                title="The QC was done wrongly — undo it so it can be done again">
+                Send back to QC
+              </button>
+            )}
+            <span className={`text-xs font-semibold ${item.qc_status === 'approved' ? 'text-green-700' : item.qc_status === 'partial' ? 'text-amber-700' : 'text-red-700'}`}>
+              {item.qc_status === 'approved' ? '✓ QC Approved' : item.qc_status === 'partial' ? '◐ Partial — debit note' : '✕ Rejected — debit note'}
+            </span>
           </span>
         </div>
         <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap gap-x-2">

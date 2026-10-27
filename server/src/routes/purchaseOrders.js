@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { setParts, setPartsFor } = require('../lib/inventorySets');
+const { clientDb } = require('../lib/bomCorrection');
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { uploadPurchaseQC, uploadPurchaseInvoice, uploadPurchaseReceive, uploadPurchaseItemQC, uploadPurchaseItemQCFields, uploadDebitNote, uploadChatAttachments, parseInvoiceOnly } = require('../middleware/upload');
@@ -1532,6 +1533,91 @@ router.post('/:id/items/:itemId/qc', authenticate, authorize('design', 'owner', 
    }
   }
 );
+
+// ── Send a QC back to be done again (owner, 27 Oct 2026) ─────────────────────
+// "The qc is done wrong send it back to redo the same". The line goes back to
+// waiting for QC as it stood before: what its QC put into stock comes back out
+// (the lot it made — and, for a set, its other parts' lots), a debit note that
+// QC raised which accounts has not sent yet is dropped (the redo raises its
+// own), and a PO that had closed waits for QC again. The whole quantity comes
+// out even if production has drawn on it since — what production took stays
+// taken, and the redo puts in what really came. Refused once a debit note from
+// that QC has gone to the supplier. Until it is redone the line is off
+// Payments Due (which counts QC-passed lines).
+router.put('/:id/items/:itemId/qc-send-back', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const db = getDB();
+    const po = await db.get('SELECT * FROM purchase_orders WHERE id=$1', [req.params.id]);
+    if (!po) return res.status(404).json({ error: 'Not found' });
+    const moved = [];
+    let dropped = 0, item = null;
+    const refused = await db.withTransaction(async (client) => {
+      const tx = clientDb(client);
+      await client.query("SET LOCAL lock_timeout = '10s'");
+      item = await tx.get('SELECT * FROM purchase_order_items WHERE id=$1 AND po_id=$2 FOR UPDATE', [req.params.itemId, po.id]);
+      if (!item) return { status: 404, error: 'Item not found' };
+      if (!['approved', 'partial', 'rejected'].includes(item.qc_status)) return { status: 400, error: 'This item has no QC to send back' };
+      const raised = await tx.get("SELECT COUNT(*)::int AS n FROM purchase_debit_notes WHERE po_item_id=$1 AND status='raised'", [item.id]);
+      if (raised.n) return { status: 400, error: 'A debit note from this QC has already been raised to the supplier — the QC cannot be sent back.' };
+
+      // The lot this QC made: same PO and item, made the moment the QC was saved.
+      const lot = item.inventory_item_id ? await tx.get(
+        `SELECT * FROM inventory_fifo_lots
+          WHERE po_id=$1 AND item_id=$2 AND received_at BETWEEN $3::timestamptz - interval '5 seconds' AND $3::timestamptz + interval '2 minutes'
+          ORDER BY received_at LIMIT 1`, [po.id, item.inventory_item_id, item.qc_at]) : null;
+      // A set's other parts went in with it, on lots made at the same moment.
+      const parts = lot ? await setParts(tx, item.inventory_item_id) : [];
+      const partLots = parts.length ? await tx.all(
+        'SELECT * FROM inventory_fifo_lots WHERE po_id=$1 AND received_at=$2 AND item_id = ANY($3) AND id <> $4',
+        [po.id, lot.received_at, parts.map(p => p.component_item_id), lot.id]) : [];
+      for (const l of [lot, ...partLots].filter(Boolean)) {
+        const out = Number(l.qty_original) || 0;
+        const used = Math.max(0, out - (Number(l.qty_remaining) || 0));
+        await tx.run('DELETE FROM inventory_fifo_lots WHERE id=$1', [l.id]);
+        const inv = await tx.get('SELECT item_code, current_stock, unit_cost FROM inventory_items WHERE id=$1 FOR UPDATE', [l.item_id]);
+        const newStock = Math.round(((Number(inv.current_stock) || 0) - out) * 1e4) / 1e4;
+        const left = await tx.all('SELECT qty_remaining, unit_cost FROM inventory_fifo_lots WHERE item_id=$1 AND qty_remaining > 0', [l.item_id]);
+        const lq = left.reduce((a, x) => a + Number(x.qty_remaining), 0);
+        const lc = left.reduce((a, x) => a + Number(x.qty_remaining) * Number(x.unit_cost), 0);
+        await tx.run('UPDATE inventory_items SET current_stock=$1, unit_cost=$2 WHERE id=$3',
+          [newStock, lq > 0 ? Math.round((lc / lq) * 100) / 100 : inv.unit_cost, l.item_id]);
+        await tx.run(
+          `INSERT INTO inventory_transactions (item_id, transaction_type, quantity, balance_after, po_number, notes, created_by)
+           VALUES ($1,'adjustment',$2,$3,$4,$5,$6)`,
+          [l.item_id, out, newStock, po.po_number,
+           `${po.po_number} QC sent back to redo (owner) — the ${out} its QC put in taken back out`
+             + (used > 0 ? ` (${used} of them already used in production — that stays taken)` : ''), req.user.id]);
+        moved.push({ item_code: inv.item_code, qty: out, used, from: Number(inv.current_stock) || 0, to: newStock });
+      }
+      dropped = (await tx.run("DELETE FROM purchase_debit_notes WHERE po_item_id=$1 AND status='pending'", [item.id])).rowCount || 0;
+      await tx.run(
+        `UPDATE purchase_order_items SET qc_status=NULL, qc_weight_10=NULL, qc_received_qty=NULL, qc_rejected_qty=NULL,
+           qc_image_file=NULL, qc_image_name=NULL, qc_observations=NULL, qc_rejection_reason=NULL, qc_by=NULL, qc_at=NULL
+         WHERE id=$1`, [item.id]);
+      // A PO that had closed (received / material rejected) waits for QC again.
+      await settlePoStatus(tx, po.id);
+      return null;
+    });
+    if (refused) return res.status(refused.status).json({ error: refused.error });
+
+    const stockNote = moved.length
+      ? moved.map(m => `${m.qty} ${m.item_code} taken back out (${m.from} → ${m.to})${m.used > 0 ? `, ${m.used} of them already used in production` : ''}`).join('; ')
+      : 'nothing had gone into stock';
+    await logActivity(null, null, 'purchase_qc_sent_back',
+      `PO ${po.po_number}: QC of "${item.description}" sent back to be done again by ${req.user.name || 'the owner'} — ${stockNote}${dropped ? `; ${dropped} pending debit note${dropped > 1 ? 's' : ''} dropped` : ''}`, req.user.id);
+    // Design / QC does the QC: tell them it is waiting again.
+    try {
+      const qcUsers = await db.all("SELECT id FROM users WHERE role='design' AND id != $1", [req.user.id]);
+      for (const u of qcUsers) await createNotification(db, { userId: u.id, type: 'purchase_qc_redo',
+        title: `QC to do again — ${po.po_number}`, body: `${item.description}: the owner sent its QC back. Please do the QC again.`,
+        link: `/purchases/${po.id}`, sourceUserId: req.user.id });
+    } catch (e) { console.error('qc send-back notify failed:', e.message); }
+    res.json({ message: `QC sent back — ${item.description} is waiting for QC again. ${stockNote.charAt(0).toUpperCase() + stockNote.slice(1)}.`, moved, dropped });
+  } catch (err) {
+    console.error('[po/qc-send-back] error:', err);
+    res.status(500).json({ error: err.message || 'Could not send the QC back' });
+  }
+});
 
 // Accounts raises a pending debit note: note number required, amount defaults
 // to the suggestion but is editable, optional document upload of what was sent.
