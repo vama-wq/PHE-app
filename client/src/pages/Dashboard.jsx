@@ -131,8 +131,19 @@ function EmptyRow({ message }) {
 // Shared across all role dashboards. Shows a preview of rejections with a
 // "show more / show less" toggle, and each row links to its job card.
 const REJECTIONS_PREVIEW = 8;
-function RejectionsSection({ rejections }) {
+// Only rejections from ORD-127-26 on (owner, 27 Oct 2026: "remove the previous
+// rejections, only show me rejections from Order 127"); every later year shows.
+// The full list still feeds the hold details above — only this section is cut.
+const REJECTIONS_FROM = { num: 127, year: 26 };
+const fromRejectionsCutoff = (code) => {
+  const m = String(code || '').match(/^ORD-0*(\d+)-(\d+)$/i);
+  if (!m) return true;
+  const num = parseInt(m[1], 10), year = parseInt(m[2], 10);
+  return year > REJECTIONS_FROM.year || (year === REJECTIONS_FROM.year && num >= REJECTIONS_FROM.num);
+};
+function RejectionsSection({ rejections: all }) {
   const [expanded, setExpanded] = useState(false);
+  const rejections = all.filter(r => fromRejectionsCutoff(r.order_code));
   if (!rejections.length) return null;
   const critical = rejections.filter(r => r.rejection_qty > 2);
   const shown = expanded ? rejections : rejections.slice(0, REJECTIONS_PREVIEW);
