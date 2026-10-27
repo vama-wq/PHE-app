@@ -94,6 +94,10 @@ const EXHIBITOR_APPS = {
   'Printing & Graphics':               { mode: 'pitch', eq: 'printing & coding machines', supply: ['Cartridge heaters for coding, marking & drying units'] },
   'General Engineering / Machinery':   { mode: 'qualify', eq: 'machines', supply: QUAL },
   'Controls & Instrumentation':        { mode: 'partner', eq: 'controllers & instruments', supply: ['A bundled offer — your controllers with our heating elements', 'Exchange OEM and dealer references'] },
+  // Added with the Gujarat + Maharashtra visitor prospects (27 Oct 2026)
+  'Roti & Papad Machines':             { mode: 'pitch', eq: 'roti, chapati & papad machines', supply: ['Cast hotplates for roti & khakhra roasting — plate size and wattage to your drawing', 'Spiral and flat tubular elements for tawa, puffer and conveyor sections'] },
+  'Fryers & Snack Machines':           { mode: 'pitch', eq: 'fryers & snack machines', supply: ['Immersion and U-bend tubular elements for batch and continuous fryers', 'Flanged heater bundles for oil and water tanks'] },
+  'Kitchen Equipment Dealers':         { mode: 'pitch', eq: 'the kitchen equipment you supply', supply: ['Replacement elements to stock and resell: bain-marie, fryer, oven and griddle elements', 'Made to the sample or drawing your customer brings'] },
 };
 const EXHIBITOR_ALL = { mode: 'pitch', eq: 'machines', supply: ['Tubular elements for ovens, fryers, proofers, dairy & CIP lines', 'Cartridge heaters for sealing jaws, FFS & filling machines', 'New — ceramic spares for nozzle & band heaters', 'Spares: flanges, brackets, ESB, steatite bushes'] };
 const where = hall => (hall ? `you in ${hall}, us at ${KK_STALL}` : `us at ${KK_STALL}`);
@@ -454,6 +458,13 @@ const PT_APPS = {
   'Autoclaves & sterilizers':       { their: 'your autoclaves and sterilizers', elem: 'SS316 / Incoloy immersion and tubular elements for the steam generator and chamber', short: 'immersion' },
   'Stability chambers & incubators':{ their: 'your stability chambers and incubators', elem: 'low-watt-density tubular and finned elements', short: 'chamber' },
   'Boilers & steam':                { their: 'your electric boilers and thermal systems', elem: 'flanged and screw-plug immersion heater bundles', short: 'immersion' },
+  // Lab-equipment makers in Gujarat & Maharashtra (27 Oct 2026). Not met at PharmaTech: `cold` gives them a first-contact
+  // opening (touch 1 and call #1); every later touch is the same as the rest of the list.
+  'Lab equipment — Stability & test chambers':         { their: 'your stability, humidity and test chambers', elem: 'low-watt-density tubular and finned elements', short: 'chamber', cold: true },
+  'Lab equipment — Ovens, incubators & furnaces':      { their: 'your lab ovens, incubators and furnaces', elem: 'finned and tubular air heaters and formed elements for even chamber heat', short: 'oven', cold: true },
+  'Lab equipment — Autoclaves & sterilizers':          { their: 'your autoclaves, sterilizers and depyrogenation tunnels', elem: 'SS316 / Incoloy immersion elements for the steam generator and finned air heaters for dry-heat units', short: 'immersion', cold: true },
+  'Lab equipment — Pharma dryers & coaters':           { their: 'your fluid bed dryers, tray dryers and coaters', elem: 'finned tubular air heaters and jacketed immersion heaters', short: 'dryer', cold: true },
+  'Lab equipment — Baths & analytical instruments':    { their: 'your water baths, dissolution testers and heated instruments', elem: 'SS316 immersion and water-bath elements, and cartridge heaters', short: 'bath', cold: true },
 };
 const PT_ALL = { their: 'your pharma process equipment', elem: 'tubular, finned and immersion elements made to your drawing', short: 'heating' };
 const inRegion = ctx => (ctx.region ? ` in ${ctx.region}` : '');
@@ -464,7 +475,13 @@ const pharmaTech = {
   apps: PT_APPS, all: PT_ALL,
   touches: [
     { key: 'awareness', label: 'Awareness', day: '22 Oct', attach: '🎬 Manufacturing video', waImage: KK_CARD,
-      render: (m, ctx) => ({
+      render: (m, ctx) => (m.cold ? {
+        subject: `Heating elements for ${m.their} — and an invite to our ${KK} stall`,
+        body: bulletBody({ greet: greetEmail(ctx), intro: `I'm Vama from Peena Heat Elements, Ahmedabad — we make the heating elements that go inside lab and pharma equipment. We're also exhibiting at ${KK} (${KK_WHEN}, ${KK_VENUE} · ${KK_STALL}) and would be glad to meet your team.`,
+          supply: [`For ${m.their}: ${m.elem}`, 'Materials: SS304 · SS316 · Incoloy 800', 'New parts — just send a drawing and we make it'],
+          cta: `Who looks after heating-element sourcing at ${coEmail(ctx)}? I'd be glad to send our catalogue and a quote — and the stall details closer to the date.` }),
+        whatsapp: wa(helloWa(ctx), 'Vama from *Peena Heat Elements*, Ahmedabad — we make the heating elements that go inside lab & pharma equipment.', '', '*What we make for you*', `• For ${m.their}: ${m.elem}`, `• ${DRAWING}`, '• Tested before dispatch · 6-month guarantee', '', "We're exhibiting — do visit us:", KK_BLOCK, '', 'Who looks after heating-element sourcing on your side?', '', LINK_CAT, LINK_VIDEO),
+      } : {
         subject: `Great meeting you at PharmaTech — an invite to our ${KK} stall`,
         body: bulletBody({ greet: greetEmail(ctx), intro: `It was a pleasure meeting your team at PharmaTech Expo. A quick note on what we do — and we're exhibiting at ${KK} (${KK_WHEN}, ${KK_VENUE} · ${KK_STALL}).`,
           supply: [`For ${m.their}: ${m.elem}`, 'Materials: SS304 · SS316 · Incoloy 800', 'New parts — just send a drawing and we make it'], cta: "I'll share stall details closer to the date — do plan a visit." }),
@@ -500,7 +517,7 @@ const pharmaTech = {
     const co = ctx.company || 'the company';
     return [
       { label: 'Call #1 — invite', day: '14 Nov', script:
-`CALL #1 — ${co} (invite + gauge interest)\n\n1) "Vama from Peena Heat Elements — we met at PharmaTech. Have I caught you at an okay moment?"\n2) "I've shared a bit about the heating elements we make for ${m.their} — did the catalogue and video reach you?"\n3) THE INVITE: "We're exhibiting at ${KK} — ${KK_WHEN}, ${KK_VENUE}, ${KK_STALL}. I'd really like to have you, or your technical/purchase team, visit."\n4) GAUGE: "Would a visit work for you? And is there a current element or machine where we could be useful?"\n5) TEE UP SAMPLING: "If it helps, courier us one element you use, or email a photo of it next to a measuring tape — we'll make a sample to match before the expo."\n6) Close: confirm interest + the best contact to coordinate with.` },
+`CALL #1 — ${co} (invite + gauge interest)\n\n1) ${m.cold ? `"Vama from Peena Heat Elements, Ahmedabad — we make the heating elements that go inside lab and pharma equipment like ${m.their}. Have I caught you at an okay moment?"` : '"Vama from Peena Heat Elements — we met at PharmaTech. Have I caught you at an okay moment?"'}\n2) "I've shared a bit about the heating elements we make for ${m.their} — did the catalogue and video reach you?"\n3) THE INVITE: "We're exhibiting at ${KK} — ${KK_WHEN}, ${KK_VENUE}, ${KK_STALL}. I'd really like to have you, or your technical/purchase team, visit."\n4) GAUGE: "Would a visit work for you? And is there a current element or machine where we could be useful?"\n5) TEE UP SAMPLING: "If it helps, courier us one element you use, or email a photo of it next to a measuring tape — we'll make a sample to match before the expo."\n6) Close: confirm interest + the best contact to coordinate with.` },
       { label: 'Call #2 — sample + slot', day: '1 Dec', script:
 `CALL #2 — ${co} (arrange sample + book a stall slot)\n\n1) "Vama from Peena Heat Elements — ${KK} is in a couple of weeks."\n2) THE OFFER: "Courier us one ${m.short} element you use, or email me a photo of it beside a measuring tape — we'll make a sample to match for your team to test."\n3) BOOK IT: "Which day suits you to visit — 16, 17, 18 or 19 December? We're open ${KK_HOURS} at ${KK_STALL}."\n4) LOGISTICS: how they'll send it (courier / photo) / the right technical contact / the chosen day.\n5) Close: confirm the sample is in motion + the visit day.` },
       { label: 'Call #3 — confirm', day: '15 Dec', script:
