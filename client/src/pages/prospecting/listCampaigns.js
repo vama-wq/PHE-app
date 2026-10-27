@@ -65,7 +65,7 @@ const DIWALI = {
   key: 'diwali', label: 'Diwali greeting', day: '5 Nov', attach: '🪔 Diwali card', flyer: DIWALI_CARD, waImage: DIWALI_CARD,
   render: () => ({
     subject: 'Happy Diwali from all of us at Peena Heat Elements',
-    body: `[[IMG:${DIWALI_CARD}|Happy Diwali and Saal Mubarak from all of us at Peena Heat Elements, Ahmedabad]]`,
+    body: `[[IMG:${DIWALI_CARD}|Shubh Deepavali / शुभ दीपावली — from all of us at Peena Heat Elements, Ahmedabad]]`,
     whatsapp: '',
   }),
 };
