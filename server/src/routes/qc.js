@@ -413,6 +413,42 @@ router.put('/:id/approve', authenticate, authorize('design', 'owner', 'admin'), 
   });
 });
 
+// The owner rejecting an approved card (owner, 30 Oct 2026: "when i reject a QC
+// please also unlock the inventory as well for changes"): what its approval
+// put into Finished Goods comes back out — the card's own intake rows (never a
+// customer return), newest first, up to the approval's FG qty — so passing QC
+// again does not add the same pieces twice. Only what is still in the store
+// comes back; pieces already taken out of it stay out (reported). The intake
+// row itself shrinks (or goes, when all of it comes back), so first-in
+// first-out and the fins' tube lengths still follow the cards that are left.
+async function takeBackFinishedGoods(tx, jc) {
+  const want = Number(jc.qc_fg_qty) || 0;
+  const out = { taken: 0, gone: 0, rows: [] };
+  if (!(want > 0)) return out;
+  const { batchesLeft } = require('../lib/fgFifo');
+  const intakes = await tx.all(
+    `SELECT * FROM finished_goods_log WHERE movement_type='inward' AND job_card_no=$1
+        AND COALESCE(notes,'') NOT ILIKE 'Return from customer%'
+      ORDER BY created_at DESC, id DESC`, [jc.job_card_no]);
+  let need = want;
+  for (const row of intakes) {
+    if (!(need > 0)) break;
+    const part = Math.min(need, Number(row.qty) || 0);
+    need -= part;
+    const fg = await tx.get('SELECT id, qty_available FROM finished_goods WHERE id=$1 FOR UPDATE', [row.finished_good_id]);
+    const left = (await batchesLeft(tx, row.finished_good_id)).find(b => b.log_id === row.id)?.left || 0;
+    const take = Math.max(0, Math.min(part, left, Number(fg?.qty_available) || 0));
+    out.gone += part - take;
+    if (!(take > 0)) continue;
+    if (take >= Number(row.qty)) await tx.run('DELETE FROM finished_goods_log WHERE id=$1', [row.id]);
+    else await tx.run('UPDATE finished_goods_log SET qty = qty - $2 WHERE id=$1', [row.id, take]);
+    await tx.run('UPDATE finished_goods SET qty_in = qty_in - $2, qty_available = qty_available - $2 WHERE id=$1', [fg.id, take]);
+    out.taken += take;
+    out.rows.push({ fg_id: fg.id, qty: take });
+  }
+  return out;
+}
+
 router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), async (req, res) => {
   const { notes } = req.body;
   const db = getDB();
@@ -442,6 +478,14 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
   if (isReversal && !jc.inventory_qc_at) {
     try { await reverseReworkDeposit(db, jc, req.user.id); }
     catch (e) { return res.status(400).json({ error: e.message }); }
+  }
+
+  // A reversal also takes back what the approval put into Finished Goods, and
+  // re-opens Inventory QC (owner, 30 Oct 2026) — below, with the routing.
+  let fgBack = null;
+  if (isReversal) {
+    try { fgBack = await db.withTransaction(async (client) => takeBackFinishedGoods(clientDb(client), jc)); }
+    catch (e) { return res.status(500).json({ error: `Could not take its pieces back out of Finished Goods: ${e.message}` }); }
   }
 
   // Where the rejected card goes. 'production' (the default, and the only
@@ -487,13 +531,22 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
       await db.run(
         `UPDATE job_cards SET qc_route=NULL, qc_dispatch_qty=NULL, qc_fg_qty=NULL, qc_fg_location=NULL, qc_split_notes=NULL WHERE id=$1`,
         [req.params.id]);
+      // Unlock its inventory (owner, 30 Oct 2026): the card goes through
+      // Product QC and Inventory QC again, and Inventory QC is open for changes
+      // — it shows what the card has used so far, earlier corrections included.
+      await db.run(
+        `UPDATE job_cards SET product_qc_at=NULL, product_qc_by=NULL, inventory_qc_at=NULL, inventory_qc_by=NULL WHERE id=$1`,
+        [req.params.id]);
     }
   } catch (_) { /* column may not exist yet — ignore, core flow already done */ }
 
   const stageName = STAGE_NAMES[returnToStage] || `stage ${returnToStage}`;
   const where = sendTo === 'qc' ? 'sent back to QC for re-check' : `returned to production at ${stageName}`;
+  const fgNote = fgBack && (fgBack.taken > 0 || fgBack.gone > 0)
+    ? ` ${fgBack.taken > 0 ? `${fgBack.taken} taken back out of Finished Goods.` : ''}${fgBack.gone > 0 ? ` ${fgBack.gone} had already left the store — they stay out.` : ''}`
+    : '';
   await logActivity(jc.order_id, jc.id, 'status_changed',
-    `Job card ${jc.job_card_no} QC ${isReversal ? 'approval reversed' : 'Rejected'} — ${where}. ${notes || ''}`,
+    `Job card ${jc.job_card_no} QC ${isReversal ? 'approval reversed' : 'Rejected'} — ${where}.${isReversal && jc.inventory_qc_at ? ' Inventory QC re-opened for changes.' : ''}${fgNote} ${notes || ''}`.trim(),
     req.user.id);
   await syncOrderStatus(db, jc.order_id, req.user.id);
   // Only settle inventory when the goods are staying finished — a re-check,
@@ -504,7 +557,8 @@ router.put('/:id/reject', authenticate, authorize('design', 'owner', 'admin'), a
   // gives back nothing here: rejected and remade pieces need nothing extra, and
   // any real difference is corrected at Inventory QC.
   if (!jc.last_stage_taken_at && (sendTo === 'qc' || returnToStage === 29)) await settleAfterQC(db, jc, req.user.id);
-  res.json({ message: `QC rejected — ${where}` });
+  res.json({ message: `QC rejected — ${where}${fgNote ? ` —${fgNote}` : ''}`,
+             fg_taken_back: fgBack?.taken || 0, fg_already_gone: fgBack?.gone || 0 });
 });
 
 // Inventory (BOM) the job card's order item consumes — shown at QC approval so

@@ -356,6 +356,23 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('A19. the owner reverses the approval: no stock moves, the 5 reworked nuts stay in the bin, the recorded routing is cleared',
       r.status === 200 && c.status === 'qc_pending' && !(await moved(s0)) && (await bin(NUT)) === 5 && c.qc_route === null && c.qc_fg_location === null,
       `${r.status} ${JSON.stringify(r.body)} ${await moved(s0)}`);
+    // Rejecting a QC unlocks the inventory (owner, 30 Oct 2026).
+    ok('A19. …and its inventory is unlocked: the Product QC and Inventory QC stamps are cleared, and the timeline says so',
+      c.product_qc_at === null && c.inventory_qc_at === null && c.inventory_qc_by === null
+      && logs.some(l => l.jc === A1 && /approval reversed — sent back to QC for re-check\. Inventory QC re-opened for changes\./.test(l.desc || '')),
+      JSON.stringify({ p: c.product_qc_at, i: c.inventory_qc_at, log: logs.filter(l => l.jc === A1).slice(-1) }));
+    await report(A1);
+    r = await call('PUT', `/api/qc/${A1}/approve`, { heater_destination: 'dispatch' });
+    v = (await call('GET', `/api/qc/${A1}/inventory`)).body;
+    x = rowOf(v, NUT);
+    ok('A20. Product QC passed again: Inventory QC is open for changes and shows what the card has used so far (nuts net 27, 5 reworked)',
+      r.status === 200 && v.editable === true && x && near(x.net, 27) && near(x.reworked, 5), JSON.stringify({ s: r.status, b: r.body, editable: v.editable, x }));
+    s0 = await snap([NUT]);
+    r = await adjust([{ inventory_item_id: NUT, kind: 'take', qty: 1 }]);
+    ok('A20. a change is taken now: 1 more nut leaves stock', r.status === 200 && near(await stock(NUT), s0[NUT] - 1), `${r.status} ${JSON.stringify(r.body)}`);
+    r = await call('PUT', `/api/qc/${A1}/inventory-done`);
+    c = await cardRow(A1);
+    ok('A20. and Inventory QC can be finished again: QC-approved', r.status === 200 && c.status === 'qc_approved' && !!c.inventory_qc_at, JSON.stringify(r.body));
 
     // ════ B. Three cards of 1 on an item of 3: shares, rounding, the cap ════
     const oB = await mkOrder('ZZT-IQC-B');
@@ -591,6 +608,28 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('F2. same approval line as before, the order shows in Finished Goods, the item settled with no stock moved',
       logs.some(l => l.jc === H1 && l.desc === 'Job card ZZT-IQC-H1 QC Approved — 5 units added to Finished Goods')
       && (await q1('SELECT status FROM orders WHERE id=$1', [oH])).status === 'in_finished_goods' && (await settledFlag(oiH)) === true && !(await moved(s0)), await moved(s0));
+    // The owner reverses it (owner, 30 Oct 2026): what went into Finished Goods comes back out.
+    r = await call('PUT', `/api/qc/${H1}/reject`, { notes: 'test reversal', send_to: 'qc' });
+    c = await cardRow(H1);
+    let fgNow = await fgRows();
+    ok('F3. the owner reverses it: the 5 come back out of Finished Goods (its intake goes), the card waits for QC with Inventory QC unlocked',
+      r.status === 200 && r.body.fg_taken_back === 5 && r.body.fg_already_gone === 0 && fgNow.length === 1 && near(fgNow[0].q, 0)
+      && !(await q1(`SELECT 1 AS x FROM finished_goods_log WHERE job_card_no='ZZT-IQC-H1'`)) && c.status === 'qc_pending' && c.inventory_qc_at === null,
+      JSON.stringify({ body: r.body, fgNow }));
+    await report(H1);
+    r = await call('PUT', `/api/qc/${H1}/approve`, { io_qty: 5, fg_location: 'ZZ-TEST-RACK' });
+    r = await call('PUT', `/api/qc/${H1}/inventory-done`);
+    fgNow = await fgRows();
+    ok('F4. passed again: Finished Goods holds 5, not 10', r.status === 200 && near(fgNow[0].q, 5)
+      && Number((await q1(`SELECT COALESCE(SUM(qty),0)::float q FROM finished_goods_log WHERE job_card_no='ZZT-IQC-H1' AND movement_type='inward'`)).q) === 5,
+      JSON.stringify({ body: r.body, fgNow }));
+    await client.query('UPDATE finished_goods SET qty_available = qty_available - 3 WHERE id=$1', [fgNow[0].id]);
+    await client.query(`INSERT INTO finished_goods_log (finished_good_id, movement_type, qty, outward_type, client_name, created_by) VALUES ($1,'outward',3,'dispatch','ZZTEST client',$2)`, [fgNow[0].id, uid]);
+    r = await call('PUT', `/api/qc/${H1}/reject`, { notes: 'test reversal 2', send_to: 'qc' });
+    fgNow = await fgRows();
+    ok('F5. 3 of the 5 already sold from the store: the other 2 come back out, the 3 stay out, and the message says so',
+      r.status === 200 && r.body.fg_taken_back === 2 && r.body.fg_already_gone === 3 && near(fgNow[0].q, 0)
+      && /2 taken back out of Finished Goods\. 3 had already left the store/.test(r.body.message || ''), JSON.stringify({ body: r.body, fgNow }));
 
     // ════ G. Cards already at QC when this goes live ════
     const oI = await mkOrder('ZZT-IQC-I');

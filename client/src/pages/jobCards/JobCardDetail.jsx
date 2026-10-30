@@ -784,6 +784,7 @@ function RejectQCModal({ jc, onClose, onSave }) {
           <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
             This card is already <b>QC Approved</b>. Rejecting it undoes that approval
             {sendTo === 'qc' ? ' and puts the card back in the QC queue for a fresh check.' : ' and puts the work back into production.'}
+            {' '}Its Inventory QC opens again for changes, and any pieces it put into Finished Goods come back out of the store.
           </p>
         )}
         <div className="space-y-2">
