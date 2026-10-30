@@ -31,8 +31,15 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       for (const [id, qty] of lines) await c.query('INSERT INTO order_item_inventory (order_item_id, inventory_item_id, qty, qty_deducted, qty_waived) VALUES ($1,$2,$3,0,0)', [itemId, id, qty]);
       await c.query('UPDATE order_items SET inventory_deducted=FALSE WHERE id=$1', [itemId]);
     };
-    // A finished-goods order line (already dispatched in real life; its real lines are swapped for test parts here).
-    const fg = await q1(`SELECT oi.id FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.order_type='finished_goods' ORDER BY oi.id DESC LIMIT 1`);
+    // Its own order lines (30 Oct 2026): borrowing the newest real line made the
+    // test depend on that order's state — once its card passed Inventory QC, the
+    // correction rules rightly refused to move it and the check failed.
+    const cust = (await q1('SELECT MIN(id) AS id FROM customers')).id;
+    const mkLine = async (code, type) => {
+      const o = (await q1(`INSERT INTO orders (order_code, customer_id, order_date, order_type, status) VALUES ($1,$2,CURRENT_DATE,$3,'approved') RETURNING id`, [code, cust, type])).id;
+      return q1(`INSERT INTO order_items (order_id, quantity, drawing_number) VALUES ($1, 4, $2) RETURNING id`, [o, 'ZZTEST-DWG-' + code]);
+    };
+    const fg = await mkLine('ZZT-FGR-FG', 'finished_goods');
     await setLines(fg.id, [[P.nut, 10], [P.wsh, 10], [P.hvp, 5], [P.wire, 2], [P.lug, 4], [P.thm, 1], [P.brk, 2], [P.fin, 0.35], [P.pin, 5], [P.esb, 5], [P.nip, 5], [P.pkg, 1]]);
     await ded.deductItemInventory(tx, fg.id, 'TEST', 4, 'Consumed (QC/dispatch)');
     const want = { nut: 90, wsh: 90, hvp: 95, wire: 98, lug: 96, thm: 99, brk: 98, fin: 99.65, pin: 100, esb: 100, nip: 100, pkg: 100 };
@@ -48,7 +55,7 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
     ok('A correction on a finished-goods order moves only the prep parts (2 more nuts), never the pins inside the heater',
       Math.abs((await stock(P.nut)) - 88) < 1e-6 && (await stock(P.pin)) === 100 && (await stock(P.esb)) === 100, r.summary);
     // A normal order still takes everything as before.
-    const nl = await q1(`SELECT oi.id FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.order_type <> 'finished_goods' ORDER BY oi.id DESC LIMIT 1`);
+    const nl = await mkLine('ZZT-FGR-NL', 'local_he');
     await setLines(nl.id, [[P.pin, 6], [P.esb, 3], [P.nut, 4]]);
     const b = { pin: await stock(P.pin), esb: await stock(P.esb), nut: await stock(P.nut) };
     await ded.deductItemInventory(tx, nl.id, 'TEST', 4, 'Consumed (QC/dispatch)');
