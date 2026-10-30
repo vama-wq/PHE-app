@@ -449,6 +449,32 @@ export default function PurchaseOrderDetail() {
           </tbody>
         </table>
 
+        {/* Ship To (owner, 30 Oct 2026): we are billed, another company receives
+            the goods. A PO without one prints exactly as before. */}
+        {po.ship_to?.name && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', borderBottom: '1px solid #999', fontSize: '12px' }}>
+            <tbody>
+              <tr>
+                <td style={{ padding: '8px 10px', width: '50%', verticalAlign: 'top' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '2px' }}>Bill To:</div>
+                  <div style={{ fontWeight: 700, fontSize: '13px' }}>Peena Heat Elements LLP</div>
+                  <div style={{ marginTop: '2px', color: '#444', lineHeight: '1.4' }}>
+                    Shed no 2 to 5, Ravi Estate, near Kothari Char Rasta, Santej, Tal: Kalol, Dist.: Gandhinagar: 382721
+                  </div>
+                  <div style={{ marginTop: '2px' }}>GST: 24ABGFP7267B1ZA</div>
+                </td>
+                <td style={{ padding: '8px 10px', borderLeft: '1px solid #999', verticalAlign: 'top' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '2px' }}>Ship To:</div>
+                  <div style={{ fontWeight: 700, fontSize: '13px' }}>{po.ship_to.name}</div>
+                  <div style={{ marginTop: '2px', color: '#444', lineHeight: '1.4', whiteSpace: 'pre-line' }}>{po.ship_to.address}</div>
+                  {po.ship_to.gstin && <div style={{ marginTop: '2px' }}>GST: {po.ship_to.gstin}</div>}
+                  {po.ship_to.contact && <div>Contact: {po.ship_to.contact}</div>}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+
         {/* Items Table */}
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', border: '1px solid #999' }}>
           <thead>

@@ -28,6 +28,11 @@ export default function PurchaseOrderForm() {
   const [igstPercent, setIgstPercent] = useState('18');
   const [notes, setNotes] = useState('');
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
+  // Ship To (owner, 30 Oct 2026): billing stays with us, delivery to another company.
+  const BLANK_SHIP_TO = { name: '', address: '', gstin: '', contact: '' };
+  const [shipToOn, setShipToOn] = useState(false);
+  const [shipTo, setShipTo] = useState(BLANK_SHIP_TO);
+  const setShip = k => e => setShipTo(p => ({ ...p, [k]: e.target.value }));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [pickerSearch, setPickerSearch] = useState('');
@@ -51,6 +56,7 @@ export default function PurchaseOrderForm() {
         setIgstPercent(String(po.igst_percent || 18));
         setNotes(po.notes || '');
         setExpectedDeliveryDate(po.expected_delivery_date || '');
+        if (po.ship_to?.name) { setShipToOn(true); setShipTo({ ...BLANK_SHIP_TO, ...po.ship_to }); }
         setItems(po.items.map(i => ({
           id: i.id,
           inventory_item_id: i.inventory_item_id,
@@ -168,6 +174,7 @@ export default function PurchaseOrderForm() {
     if (items.some(i => !i.inventory_item_id && (i.description || '').trim()))
       return setError('Each item must be picked from the supplier’s list (use the dropdown).');
 
+    if (shipToOn && (!shipTo.name.trim() || !shipTo.address.trim())) return setError('Ship To needs the company name and its address');
     setSaving(true);
     setError('');
     const payload = {
@@ -184,6 +191,7 @@ export default function PurchaseOrderForm() {
       igst_percent: igst,
       notes,
       expected_delivery_date: expectedDeliveryDate || null,
+      ship_to: shipToOn ? shipTo : null,
     };
 
     try {
@@ -254,6 +262,35 @@ export default function PurchaseOrderForm() {
             <div className="col-span-2">
               <label className="label">Notes</label>
               <input className="input" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Any notes for this PO..." />
+            </div>
+            {/* Ship To: the supplier delivers to another company; we stay the billing party. */}
+            <div className="col-span-2">
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer w-fit">
+                <input type="checkbox" checked={shipToOn} onChange={e => setShipToOn(e.target.checked)} />
+                Ship to another company
+                <span className="text-xs text-gray-400">(billing stays Peena Heat Elements)</span>
+              </label>
+              {shipToOn && (
+                <div className="grid grid-cols-2 gap-3 mt-2 p-3 rounded-lg border border-gray-200 bg-gray-50">
+                  <div className="col-span-2">
+                    <label className="label">Ship To — company name *</label>
+                    <input className="input" value={shipTo.name} onChange={setShip('name')} placeholder="e.g. ABC Industries Pvt Ltd" />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="label">Shipping address *</label>
+                    <textarea className="input h-20 resize-none" value={shipTo.address} onChange={setShip('address')}
+                      placeholder="Full delivery address — street, city, state, PIN" />
+                  </div>
+                  <div>
+                    <label className="label">GSTIN <span className="font-normal normal-case text-gray-400">(optional)</span></label>
+                    <input className="input" value={shipTo.gstin} onChange={setShip('gstin')} placeholder="e.g. 24ABCDE1234F1Z5" />
+                  </div>
+                  <div>
+                    <label className="label">Contact person &amp; phone <span className="font-normal normal-case text-gray-400">(optional)</span></label>
+                    <input className="input" value={shipTo.contact} onChange={setShip('contact')} placeholder="e.g. Rakesh Bhai, 98250 00000" />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

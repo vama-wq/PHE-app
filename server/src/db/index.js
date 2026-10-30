@@ -2497,6 +2497,9 @@ async function initDB(retries = 20, delayMs = 10000) {
     // 'no_thread' — chosen when the item is added; a job card picks its pins
     // from its own group only. The existing pins were given theirs once.
     await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS terminal_group TEXT`);
+    // Ship To on a purchase order (owner, 30 Oct 2026): { name, address, gstin,
+    // contact } when the supplier delivers to another company; NULL = to us.
+    await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS ship_to JSONB`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');

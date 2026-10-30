@@ -525,10 +525,25 @@ router.get('/:id', authenticate, async (req, res) => {
     payments, paid_cleared: sumBy('paid_bank'), paid_pending: sumBy('unpaid_bank') });
 });
 
+// Ship To (owner, 30 Oct 2026): "billing is me but shipping address is another
+// company". null = deliver to us, as before; otherwise the company the supplier
+// ships to — its name and address required, GSTIN and contact optional. The PO
+// keeps us as the billing party; the printed PO shows both.
+function shipToFrom(raw) {
+  if (raw == null || raw === '' || raw === false) return { value: null };
+  const t = (v, max) => String(v ?? '').trim().slice(0, max);
+  const st = { name: t(raw.name, 200), address: t(raw.address, 1000), gstin: t(raw.gstin, 30).toUpperCase(), contact: t(raw.contact, 200) };
+  if (!st.name && !st.address && !st.gstin && !st.contact) return { value: null };
+  if (!st.name || !st.address) return { error: 'Ship To needs the company name and its address' };
+  return { value: st };
+}
+
 router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const { supplier_id, items, transport_charges, igst_percent, notes, expected_delivery_date } = req.body;
   if (!supplier_id) return res.status(400).json({ error: 'Supplier is required' });
   if (!items || items.length === 0) return res.status(400).json({ error: 'At least one item is required' });
+  const shipTo = shipToFrom(req.body.ship_to);
+  if (shipTo.error) return res.status(400).json({ error: shipTo.error });
 
   const db = getDB();
   const igst = igst_percent !== undefined ? Number(igst_percent) : 18;
@@ -540,10 +555,10 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (r
   const r = await db.insert(
     `INSERT INTO purchase_orders
        (po_number, supplier_id, transport_charges, igst_percent, subtotal, igst_amount, round_off, grand_total,
-        notes, expected_delivery_date, created_by, packaging_no_gst)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        notes, expected_delivery_date, created_by, packaging_no_gst, ship_to)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [poNumber, supplier_id, tc, igst, subtotal, igstAmount, roundOff, grandTotal,
-     notes||null, expected_delivery_date||null, req.user.id, pkgNoGst]
+     notes||null, expected_delivery_date||null, req.user.id, pkgNoGst, shipTo.value ? JSON.stringify(shipTo.value) : null]
   );
 
   const poId = r.lastInsertRowid;
@@ -572,6 +587,9 @@ router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async 
 
   const { supplier_id, items, transport_charges, igst_percent, notes, expected_delivery_date } = req.body;
   if (!items || items.length === 0) return res.status(400).json({ error: 'At least one item is required' });
+  // A caller that sends no ship_to keeps the PO's own.
+  const shipTo = req.body.ship_to === undefined ? { value: po.ship_to || null } : shipToFrom(req.body.ship_to);
+  if (shipTo.error) return res.status(400).json({ error: shipTo.error });
 
   const igst = igst_percent !== undefined ? Number(igst_percent) : po.igst_percent;
   const tc = Number(transport_charges !== undefined ? transport_charges : po.transport_charges);
@@ -581,10 +599,12 @@ router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async 
   await db.run(
     `UPDATE purchase_orders SET
        supplier_id=$1, transport_charges=$2, igst_percent=$3, subtotal=$4,
-       igst_amount=$5, round_off=$6, grand_total=$7, notes=$8, expected_delivery_date=$9, status='draft', packaging_no_gst=$11
+       igst_amount=$5, round_off=$6, grand_total=$7, notes=$8, expected_delivery_date=$9, status='draft', packaging_no_gst=$11,
+       ship_to=$12
      WHERE id=$10`,
     [supplier_id||po.supplier_id, tc, igst, subtotal, igstAmount, roundOff, grandTotal,
-     notes||null, expected_delivery_date||po.expected_delivery_date||null, po.id, pkgNoGst]
+     notes||null, expected_delivery_date||po.expected_delivery_date||null, po.id, pkgNoGst,
+     shipTo.value ? JSON.stringify(shipTo.value) : null]
   );
 
   await db.run('DELETE FROM purchase_order_items WHERE po_id=$1', [po.id]);
