@@ -43,7 +43,8 @@ async function heldByOrders(db) {
   if (ringIds.size) {
     // Every open multi-element item — with ring lines on its list or not.
     const ringLines = await db.all(
-      `SELECT oi.id AS order_item_id, oi.order_id, o.order_code, oi.drawing_number, oi.quantity, oi.tube_diameter, oi.fittings
+      `SELECT oi.id AS order_item_id, oi.order_id, o.order_code, oi.drawing_number, oi.quantity, oi.tube_diameter, oi.fittings,
+              (SELECT customer_code FROM customers WHERE id = o.customer_id) AS customer_code
          FROM order_items oi JOIN orders o ON o.id = oi.order_id
         WHERE COALESCE(oi.inventory_deducted, FALSE) = FALSE AND o.status <> ALL($2) AND o.order_type <> 'finished_goods'
           AND (oi.drawing_number ~* '[0-9]\\s*in\\s*1'
@@ -60,6 +61,7 @@ async function heldByOrders(db) {
       `SELECT id, UPPER(TRIM(item_code)) AS code FROM inventory_items WHERE UPPER(TRIM(item_code)) = ANY($1)`,
       [Object.values(br.RING_CODES)])).map(r => [r.code, r.id]));
     for (const it of ringLines) {
+      if (br.noRingsFor(it.customer_code)) continue;            // brazed with rod (DII): no rings held, the list stands
       const cards = cardsAll.filter(c => c.order_item_id === it.order_item_id);
       let el = null, dia = Number(String(it.tube_diameter || '').match(/\d+/)?.[0]) || null;
       for (const c of cards) { el = el || parseInt(c.el, 10) || null; dia = Number(c.dia) || dia; }

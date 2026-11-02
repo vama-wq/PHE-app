@@ -19,6 +19,12 @@
 const { recordMove } = require('./stockLedger');
 
 const RING_CODES = { 8: 'BRZ-08', 11: 'BRZ-11' };
+// Customers whose heaters are brazed with rod, not rings (owner, 2 Nov 2026:
+// "DII orders will not substract the Brazing rings when stage is ticked") —
+// DII is Doit Industries Limited. Their cards take no rings at Brazing and hold
+// none; the order's list (the brazing rod) is taken as before.
+const NO_RING_CUSTOMERS = new Set(['DII']);
+const noRingsFor = (customerCode) => NO_RING_CUSTOMERS.has(String(customerCode || '').trim().toUpperCase());
 const RINGS_PER_ELEMENT = 2;
 const POCKET_RINGS = 1;
 const isRingCode = (code) => Object.values(RING_CODES).includes(String(code || '').trim().toUpperCase());
@@ -40,6 +46,9 @@ function elementsFromName(...names) {
 // rings off its list at Stage 15 before this rule.
 async function ringPlan(db, card) {
   if (!card || card.is_fg) return null;
+  const cust = card.order_id ? await db.get(
+    'SELECT c.customer_code FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id=$1', [card.order_id]) : null;
+  if (noRingsFor(cust?.customer_code)) return null;
   const { specForCard } = require('./cardSpec');
   let spec = await specForCard(db, card);
   try { spec = typeof spec === 'string' ? JSON.parse(spec) : spec; } catch { spec = null; }
@@ -154,4 +163,4 @@ async function giveRingsBack(db, jobCardId, userId) {
   });
 }
 
-module.exports = { RING_CODES, RINGS_PER_ELEMENT, POCKET_RINGS, isRingCode, hasPocket, ringsPerPiece, elementsFromName, ringPlan, takeRingsAtBrazing, giveRingsBack };
+module.exports = { RING_CODES, NO_RING_CUSTOMERS, noRingsFor, RINGS_PER_ELEMENT, POCKET_RINGS, isRingCode, hasPocket, ringsPerPiece, elementsFromName, ringPlan, takeRingsAtBrazing, giveRingsBack };
