@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { getDB, logActivity } = require('../db');
 const { authenticate, authorize } = require('../middleware/auth');
-const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromStorage, uploadToStorage } = require('../middleware/upload');
+const { uploadJobCard, uploadChecklistPhoto, uploadRejectionPhoto, deleteFromStorage, uploadToStorage, downloadFromStorage } = require('../middleware/upload');
 const { createNotification } = require('./notifications');
 const { applyMaterialDeductions } = require('../lib/materialDeduction');
 const { deductStageCategories, resolveJobCardItemId } = require('../lib/inventoryDeduction');
@@ -698,6 +698,15 @@ router.post('/:id/slip', authenticate, authorize('production', 'design', 'admin'
         card = { styles: parts_.styles, fontLink: parts_.fontLink, fitScript: parts_.fitScript, sheets: parts_.sheets, title: parts_.title };
       }
     } catch (e) { console.error('[slip] could not re-render card:', e.message); }
+  }
+  // A Finished Goods card is the HTML sheet saved when it was made
+  // (lib/fgCardRender.js): read back as saved, it prints with the slip as one
+  // job too (owner, 2 Nov 2026). An older uploaded FG card falls through to
+  // opening in its own tab, as an uploaded production card does.
+  if (!card && jc.is_fg && /\.html?$/i.test(jc.file_path || '')) {
+    try {
+      card = require('../lib/fgCardRender').fgCardForPrint((await downloadFromStorage(jc.file_path)).toString('utf8'));
+    } catch (e) { console.error('[slip] could not read the Finished Goods card:', e.message); }
   }
 
   res.json({

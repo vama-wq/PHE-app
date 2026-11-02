@@ -76,4 +76,53 @@ function renderFgCard(c) {
 </body></html>`;
 }
 
-module.exports = { renderFgCard, fmtDate, trilingual };
+// ── Printed with its material slip (owner, 2 Nov 2026) ──────────────────────
+// "fg order should also have print slip when they are printed." The card goes
+// to the slip print as the HTML saved when it was made — read back exactly as
+// saved, never re-made from today's data — and prints with the slip as ONE job,
+// the way a generated production card does (client lib/printJobCardSlip.js).
+//
+// Its rules are scoped to .fg-sheet first. Left as they are they reach the
+// slip printed after it: `table { table-layout: fixed }` and `th { width: 30% }`
+// would squeeze the slip's nine columns. Its @page is dropped — the slip's sets
+// the paper for both.
+function scopeCss(css, scope) {
+  const src = String(css || '').replace(/\/\*[\s\S]*?\*\//g, '');
+  const sel = (s) => /^(html|body)$/i.test(s) ? scope
+    : /^(html|body)\s/i.test(s) ? s.replace(/^(html|body)\s+/i, `${scope} `)
+    : `${scope} ${s}`;
+  const out = [];
+  let i = 0;
+  while (i < src.length) {
+    const open = src.indexOf('{', i);
+    if (open < 0) break;
+    const head = src.slice(i, open).trim();
+    let depth = 1, j = open + 1;
+    while (j < src.length && depth > 0) { if (src[j] === '{') depth++; else if (src[j] === '}') depth--; j++; }
+    const inner = src.slice(open + 1, j - 1);
+    if (/^@page\b/i.test(head)) { /* the slip's @page sets the paper */ }
+    else if (/^@media\b/i.test(head)) out.push(`${head} {\n${scopeCss(inner, scope)}\n}`);
+    else if (head.startsWith('@')) out.push(`${head} {${inner}}`);
+    else if (head) out.push(`${head.split(',').map(s => s.trim()).filter(Boolean).map(sel).join(', ')} {${inner}}`);
+    i = j;
+  }
+  return out.join('\n');
+}
+
+// html: the card's saved file. Returns the parts printJobCardSlip merges (the
+// same shape as a generated card's), or null when the file is not a card sheet.
+function fgCardForPrint(html) {
+  const s = String(html || '');
+  const css = (s.match(/<style[^>]*>([\s\S]*?)<\/style>/i) || [])[1];
+  const body = (s.match(/<body[^>]*>([\s\S]*?)<\/body>/i) || [])[1];
+  if (css == null || !body || !body.trim()) return null;
+  return {
+    title: (s.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || 'Inventory Job Card',
+    fontLink: '',
+    fitScript: '',
+    styles: `<style>\n${scopeCss(css, '.fg-sheet')}\n</style>`,
+    sheets: `<div class="fg-sheet">${body}</div>`,
+  };
+}
+
+module.exports = { renderFgCard, fgCardForPrint, scopeCss, fmtDate, trilingual };

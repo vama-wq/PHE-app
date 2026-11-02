@@ -1036,6 +1036,16 @@ export default function OrderDetail() {
                           <ExternalLink size={12} /> View
                         </a>
                       )}
+                      {/* The card prints with its material slip, as a production
+                          card does (owner, 2 Nov 2026) — see printJobCardSlip. */}
+                      {['production', 'design', 'admin', 'owner'].includes(user.role) && (
+                        <button type="button"
+                          className="btn-secondary btn-sm py-1 px-2 text-xs flex items-center gap-1"
+                          title="Print this card and its material slip — the slip carries this card's share of the inventory list"
+                          onClick={() => printJobCardSlip(jc)}>
+                          <Printer size={12} /> Print
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
