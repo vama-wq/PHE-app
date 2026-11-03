@@ -20,10 +20,12 @@ const { recordMove } = require('./stockLedger');
 
 const RING_CODES = { 8: 'BRZ-08', 11: 'BRZ-11' };
 // Customers whose heaters are brazed with rod, not rings (owner, 2 Nov 2026:
-// "DII orders will not substract the Brazing rings when stage is ticked") —
-// DII is Doit Industries Limited. Their cards take no rings at Brazing and hold
-// none; the order's list (the brazing rod) is taken as before.
-const NO_RING_CUSTOMERS = new Set(['DII']);
+// "DII orders will not substract the Brazing rings when stage is ticked";
+// 3 Nov 2026: "tt orders will also use the same Brazing rod and not rings") —
+// DII is Doit Industries Limited, TT is Tirupati Tubes Pvt Ltd. Their cards
+// take no rings at Brazing and hold none; the order's list (the brazing rod)
+// is taken as before.
+const NO_RING_CUSTOMERS = new Set(['DII', 'TT']);
 const noRingsFor = (customerCode) => NO_RING_CUSTOMERS.has(String(customerCode || '').trim().toUpperCase());
 const RINGS_PER_ELEMENT = 2;
 const POCKET_RINGS = 1;

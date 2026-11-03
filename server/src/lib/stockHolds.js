@@ -61,7 +61,7 @@ async function heldByOrders(db) {
       `SELECT id, UPPER(TRIM(item_code)) AS code FROM inventory_items WHERE UPPER(TRIM(item_code)) = ANY($1)`,
       [Object.values(br.RING_CODES)])).map(r => [r.code, r.id]));
     for (const it of ringLines) {
-      if (br.noRingsFor(it.customer_code)) continue;            // brazed with rod (DII): no rings held, the list stands
+      if (br.noRingsFor(it.customer_code)) continue;            // brazed with rod (DII, TT): no rings held, the list stands
       const cards = cardsAll.filter(c => c.order_item_id === it.order_item_id);
       let el = null, dia = Number(String(it.tube_diameter || '').match(/\d+/)?.[0]) || null;
       for (const c of cards) { el = el || parseInt(c.el, 10) || null; dia = Number(c.dia) || dia; }
