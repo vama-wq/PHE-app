@@ -4,7 +4,8 @@ import Modal from '../../components/ui/Modal';
 import { bodyToHtml, bodyToPlain, renderSms } from './applicationEmails';
 import { campaignFor, renderTouch, renderCalls, tailoredTo } from './listCampaigns';
 import { Link } from 'react-router-dom';
-import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye, Phone, Linkedin } from 'lucide-react';
+import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye, Phone, Linkedin, FolderOpen } from 'lucide-react';
+import { FOLDERS, folderSaveSupported, folderNames, chooseFolder, forgetFolder, readyFolder, saveInto } from '../../lib/saveFolders';
 
 // Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
 // header row; a "Company" column is mandatory, the rest are optional.
@@ -132,6 +133,17 @@ export default function ProspectingList() {
   const [loading, setLoading] = useState(true);
   const [touchTab, setTouchTab] = useState(0);                // active touch in the list campaign
   const [busy, setBusy] = useState(false);
+  // Save folders: Zoho list CSVs and email/SMS files go straight into the Desktop folders she picks
+  const [showFolders, setShowFolders] = useState(false);
+  const [folders, setFolders] = useState({});
+  const [folderErr, setFolderErr] = useState('');
+  const [toast, setToast] = useState('');
+  useEffect(() => { folderNames().then(setFolders).catch(() => {}); }, []);
+  const savedNote = (where, name) => {
+    if (!where) return;
+    setToast(`Saved to ${where}: ${name}`);
+    setTimeout(() => setToast(''), 4000);
+  };
   // Manual import
   const [showImport, setShowImport] = useState(false);
   const [impSegment, setImpSegment] = useState('');
@@ -305,12 +317,9 @@ export default function ProspectingList() {
   };
   // Application-tailored SMS message (short, GSM-7-safe). Follows the email's application.
   const smsText = useMemo(() => renderSms(activeApplication, segment), [activeApplication, segment]);
-  const downloadTxt = (text, name) => {
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = name; a.click();
-    URL.revokeObjectURL(url);
+  const downloadTxt = async (text, name) => {
+    const folder = await readyFolder('zoho-html');      // first await: keeps Chrome's permission prompt tied to the click
+    savedNote(await saveInto(folder, name, new Blob([text], { type: 'text/plain' })), name);
   };
   const slug = s => String(s || 'all-applications').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   // One-click Zoho flow: download a complete .html file, then in Zoho use
@@ -325,12 +334,9 @@ export default function ProspectingList() {
     const parts = ['PHE', segment, activeApplication, regionFilter, `${touchTab + 1}-${listTouch.key}`].filter(Boolean).map(slug);
     downloadTxt2Html(fullHtml(listTouch.subject, listHtml), `${parts.join('-')}.html`);
   };
-  const downloadTxt2Html = (content, name) => {
-    const blob = new Blob([content], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = name; a.click();
-    URL.revokeObjectURL(url);
+  const downloadTxt2Html = async (content, name) => {
+    const folder = await readyFolder('zoho-html');
+    savedNote(await saveInto(folder, name, new Blob([content], { type: 'text/html' })), name);
   };
 
   // --- Per contact: the same list touch, rendered with the row's own application, region and company ---
@@ -441,22 +447,20 @@ export default function ProspectingList() {
     if (!ids.length) return;
     setBusy(true);
     try {
+      // Ask for the folder before the network call, while the click still counts for Chrome's prompt
+      const folder = await readyFolder('zoho-list');
       // Pass the active filters so the CSV honours exactly what's on screen and the
       // filename identifies the slice (e.g. PHE-pharma-autoclaves-sterilizers-gujarat-zoho.csv).
       const params = { segment, ids: ids.join(',') };
       if (appFilter) params.application = appFilter;
       if (regionFilter) params.state = regionFilter;
       const res = await api.get('/prospects/export.csv', { params, responseType: 'blob' });
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a');
       const slug = s => String(s).replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
       const parts = ['PHE', slug(segment || 'prospects')];
       if (appFilter) parts.push(slug(appFilter));
       if (regionFilter) parts.push(slug(regionFilter));
-      a.href = url;
-      a.download = `${parts.join('-')}-zoho.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const name = `${parts.join('-')}-zoho.csv`;
+      savedNote(await saveInto(folder, name, res.data), name);
       await api.post('/prospects/bulk-status', { ids, status: 'exported' });   // only 'new' rows move
       loadProspects(true);
     } finally { setBusy(false); }
@@ -530,6 +534,10 @@ export default function ProspectingList() {
           <Link to="/prospecting/linkedin" className="btn-secondary flex items-center gap-1.5 text-sm">
             <Linkedin size={15} /> LinkedIn calendar
           </Link>
+          <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => { setFolderErr(''); setShowFolders(true); }}
+            title="Choose the Desktop folders downloads are saved into">
+            <FolderOpen size={15} /> Save folders
+          </button>
           <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => { setImpResult(null); setShowImport(true); }}>
             <Upload size={15} /> Import
           </button>
@@ -909,6 +917,55 @@ export default function ProspectingList() {
             {' '}“Not interested” and “Skip” never export.
           </p>
         </>
+      )}
+
+      <Modal open={showFolders} onClose={() => setShowFolders(false)} title="Save folders">
+        {folderSaveSupported() ? (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              Pick a folder once and every download of that kind saves straight into it. Downloading the same list or email
+              again replaces the old file. When Chrome asks, choose <strong>Allow on every visit</strong>.
+            </p>
+            {Object.entries(FOLDERS).map(([kind, f]) => (
+              <div key={kind} className="flex flex-wrap items-center justify-between gap-2 border border-gray-200 rounded-lg p-3">
+                <div>
+                  <div className="text-sm font-semibold">{f.label}</div>
+                  <div className="text-xs text-gray-500">
+                    {folders[kind]
+                      ? <>Saving into <strong className="text-gray-800">{folders[kind]}</strong></>
+                      : <>Not set: these download to your Downloads folder. Suggested: Desktop › {f.suggest}</>}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button className="btn-primary text-xs flex items-center gap-1.5" onClick={async () => {
+                    setFolderErr('');
+                    try { const name = await chooseFolder(kind); if (name) setFolders(v => ({ ...v, [kind]: name })); }
+                    catch { setFolderErr('That folder can’t be used. Pick a folder inside your Desktop, such as Desktop › ' + f.suggest + '.'); }
+                  }}>
+                    <FolderOpen size={13} /> {folders[kind] ? 'Change' : 'Choose folder'}
+                  </button>
+                  {folders[kind] && (
+                    <button className="btn-secondary text-xs" onClick={async () => { await forgetFolder(kind); setFolders(v => ({ ...v, [kind]: null })); }}>
+                      Use Downloads
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {folderErr && <p className="text-xs text-red-600">{folderErr}</p>}
+            <p className="text-xs text-gray-400">Set once per browser. On a phone, or in Safari or Firefox, files download normally.</p>
+          </div>
+        ) : (
+          <p className="text-sm text-gray-600">
+            This browser can’t save into chosen folders, so files download normally. Open the app in Chrome on your computer to use this.
+          </p>
+        )}
+      </Modal>
+
+      {toast && (
+        <div role="status" className="fixed bottom-5 right-5 z-50 flex items-center gap-2 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-lg shadow-lg">
+          <CheckCircle2 size={16} className="text-emerald-400" /> {toast}
+        </div>
       )}
 
       <Modal open={showImport} onClose={() => setShowImport(false)} title="Import prospects" size="lg">
