@@ -2501,6 +2501,42 @@ async function initDB(retries = 20, delayMs = 10000) {
     // contact } when the supplier delivers to another company; NULL = to us.
     await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS ship_to JSONB`);
 
+    // Logged-in devices and new-device approval (owner, 11 Nov 2026) — see
+    // lib/sessions.js. A device is a browser's phe_device cookie, per account:
+    // new | pending (asked the owner) | approved | refused | removed. A session
+    // is one login; the pass names it, and the owner can end it.
+    await pool.query(`CREATE TABLE IF NOT EXISTS user_devices (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      device_id TEXT NOT NULL,
+      label TEXT,
+      user_agent TEXT,
+      last_ip TEXT,
+      status TEXT NOT NULL DEFAULT 'new',
+      request_token TEXT,
+      requested_at TIMESTAMPTZ,
+      decided_at TIMESTAMPTZ,
+      decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_login_at TIMESTAMPTZ,
+      UNIQUE (user_id, device_id)
+    )`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS user_sessions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      device_row_id INTEGER REFERENCES user_devices(id) ON DELETE SET NULL,
+      label TEXT,
+      ip TEXT,
+      last_ip TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      ended_at TIMESTAMPTZ,
+      ended_reason TEXT,
+      ended_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS user_sessions_device_idx ON user_sessions (device_row_id)`);
+
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
       if (parseInt(rows[0].c, 10) === 0) {

@@ -3,6 +3,7 @@ import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
 import Modal from '../../components/ui/Modal';
 import { ROLE_LABELS, ROLE_COLORS } from '../../lib/utils';
+import DevicesPanel from './DevicesPanel';
 import {
   UserCog, Plus, RotateCcw, Pencil, Trash2, ShieldAlert,
   LayoutDashboard, ClipboardList, FileText, Package, Users,
@@ -121,6 +122,9 @@ export default function UserManagement() {
           )}
         </div>
       </div>
+
+      {/* Logged-in devices and new-device approvals — the owner's alone. */}
+      {me.role === 'owner' && <DevicesPanel />}
 
       {loading ? (
         <div className="text-center text-gray-400 py-16">Loading users...</div>

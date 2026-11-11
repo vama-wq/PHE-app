@@ -14,11 +14,15 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
+  // A login from a new device comes back { pending, request } with no user:
+  // the login page waits for the owner's answer and then calls setUser.
   login: async (username, password) => {
     const res = await api.post('/auth/login', { username, password });
-    set({ user: res.data.user });
+    if (res.data?.user) set({ user: res.data.user });
     return res.data;
   },
+
+  setUser: (user) => set({ user }),
 
   logout: async () => {
     await api.post('/auth/logout');
