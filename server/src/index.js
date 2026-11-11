@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const { initDB } = require('./db');
+const { authenticate } = require('./middleware/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -35,7 +36,22 @@ app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now(), rev: (pro
 
 // ── Serve uploaded files via Supabase Storage proxy ──────────────────────────
 // Maintains backward compat: frontend still uses /uploads/folder/filename URLs
-app.get('/uploads/*', async (req, res) => {
+//
+// Login required, like every /api route (11 Nov 2026): drawings, invoices, QC
+// reports and photos used to open for anyone holding the link. The app's own
+// links, thumbnails and new tabs are same-origin, so the login cookie goes
+// with them. A file opened in a tab of its own after the login has ended
+// (8 hours, or the owner logged the device out) lands on the login page
+// rather than a bare JSON error; thumbnails and in-page downloads get the 401.
+function fileLogin(req, res, next) {
+  const dest = req.get('sec-fetch-dest');   // Safari before 16.4 sends none — go by Accept
+  const page = dest ? dest === 'document' : /^text\/html/i.test(req.get('accept') || '');
+  if (!page) return authenticate(req, res, next);
+  const json = res.json.bind(res);
+  res.json = (body) => (res.statusCode === 401 ? res.redirect('/login') : json(body));
+  return authenticate(req, res, (err) => { res.json = json; next(err); });
+}
+app.get('/uploads/*', fileLogin, async (req, res) => {
   const storagePath = req.params[0]; // e.g. 'product-photos/1234_img.jpg'
   try {
     const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -56,7 +72,9 @@ app.get('/uploads/*', async (req, res) => {
       xls: 'application/vnd.ms-excel',
     };
     res.set('Content-Type', BY_EXT[ext] || data.type || 'application/octet-stream');
-    res.set('Cache-Control', 'public, max-age=86400');
+    // private: the browser keeps its copy for the day, but no shared cache
+    // (Cloudflare, a proxy) may store a file that needs a login to see.
+    res.set('Cache-Control', 'private, max-age=86400');
     res.send(buf);
   } catch (err) {
     res.status(500).send('Error fetching file');

@@ -1266,6 +1266,9 @@ function DispatchDetailsInline({ jc, qcReports }) {
   const downloadFile = async (url, filename) => {
     try {
       const res = await fetch(url);
+      // Login ended or file gone: open it in a tab (the login page, or "File
+      // not found") instead of saving the error text as the document.
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1693,6 +1696,9 @@ function DispatchTab({ jc, userRole, onReload }) {
   const downloadFile = async (url, filename) => {
     try {
       const res = await fetch(url);
+      // Login ended or file gone: open it in a tab (the login page, or "File
+      // not found") instead of saving the error text as the document.
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
