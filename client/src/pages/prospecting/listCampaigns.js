@@ -723,6 +723,95 @@ const vietnam = {
     `GỌI ĐIỆN / CALL — ${ctx.company || 'the company'} (${vnWhere(ctx)})\n\n` + vnFill(VN_CALL, m, ctx) }],
 };
 
+// ───────────────────────── Zambia ─────────────────────────
+// Owner, 12 Nov 2026: a list "for heating elements for Zambia", modelled on our Kitwe engineering-services customer:
+// Copperbelt workshops and mining-spares houses, Lusaka distributors, geyser, catering, boiler and HVAC firms. Day-based
+// like the Gulf, but with no local stock, so no Sharjah line. Its own flyer: gen_campaign_flyers.py zambia.
+const ZM_FLYER = `${SITE}/phe-zambia-flyer.jpg`;
+const ZM_WA = '+91 84520 55836';
+const ZM_SIGN = `Warm regards,\nVama · Peena Heat Elements\nphe.co.in · vama@peenaheatelements.com\nWhatsApp: ${ZM_WA}\nCatalogue: ${CAT}`;
+// their = what they build/sell/service (body), subj = the same in a subject line, short = after "your".
+// dist = a reseller: the copy talks about elements they sell, not elements they use or fit.
+const ZM_APPS = {
+  'Mining & engineering services': { their: 'the equipment you build, repair and supply to the mines', subj: 'mining equipment and workshops',
+    elem: 'U-type and hairpin tubular elements, flanged and screw-plug immersion heaters for tanks and geysers, and cartridge heaters for heated platens', short: 'equipment' },
+  'Geysers & water heaters': { their: 'the geysers, water heaters and geyser spares you sell or install', subj: 'geysers and water heaters',
+    elem: 'screw-plug and flanged immersion elements, including solar-geyser backup elements', short: 'geysers' },
+  'Catering & bakery ovens': { their: 'the kitchen and bakery equipment you supply and service', subj: 'kitchen and bakery equipment',
+    elem: 'oven, fryer, grill and bain-marie elements', short: 'kitchen equipment' },
+  'Boilers & steam': { their: 'the boilers, HVAC and refrigeration systems you supply, install and service', subj: 'boilers, HVAC and refrigeration',
+    elem: 'flanged and screw-plug immersion heater bundles for boilers and tanks, finned air heaters for ducts and AHUs, and tubular defrost heaters for cold rooms', short: 'boilers and HVAC systems' },
+  'Heating elements & distribution': { their: 'the electrical and mining spares you stock and supply', subj: 'your spares range',
+    elem: 'tubular, immersion, finned, cartridge and band elements, at distributor pricing', short: 'spares range', dist: true },
+  'Industrial & curing ovens': { their: 'your curing ovens, autoclaves, vulcanising presses and dryers', subj: 'curing ovens, autoclaves and presses',
+    elem: 'finned tubular air heaters, oven elements and cartridge heaters for press platens', short: 'ovens and presses' },
+};
+const ZM_ALL = { their: 'your equipment', subj: 'your equipment',
+  elem: 'elements for geysers and tanks, kitchen and bakery ovens, boilers, HVAC, curing ovens and mining workshop equipment', short: 'equipment' };
+const zmIn = ctx => (ctx.region ? ` in ${ctx.region}` : '');
+const zmSample = m => `Samples: courier us one element you ${m.dist ? 'sell' : 'use'}, or email a photo of it beside a measuring tape — we make it to match`;
+const zmTrialAsk = m => `Send one drawing of an element you ${m.dist ? 'sell' : 'buy'} regularly — we make a trial piece to it`;
+
+const zambia = {
+  name: 'Zambia',
+  regionLabel: 'city',
+  apps: ZM_APPS, all: ZM_ALL,
+  touches: [
+    { key: 'discovery', label: 'Discovery', day: 0, attach: '🎬 Manufacturing video',
+      render: (m, ctx) => ({
+        subject: `Heating elements for ${m.subj} — hello from Peena Heat Elements, India`,
+        body: bulletBody({ greet: greetEmail(ctx), intro: 'Greetings from Peena Heat Elements, Ahmedabad, India — we make heating elements for equipment builders, service workshops and distributors.',
+          supply: [`For ${m.their}: ${m.elem}`, 'Materials: SS304 · SS316 · Incoloy 800', "Any new size or shape — send a drawing and we'll make it"],
+          cta: `Who looks after heating-element sourcing at ${coEmail(ctx)}? I'd be glad to send them a quote against one of your drawings.`, sign: ZM_SIGN }),
+        whatsapp: wa(helloWa(ctx), 'Vama from *Peena Heat Elements*, Ahmedabad, India — we make heating elements and export them worldwide.', '', '*What we make for you*', `• For ${m.their}: ${m.elem}`, `• ${DRAWING}`, '• Tested before dispatch · 6-month guarantee', '', `Who looks after heating-element sourcing for you${zmIn(ctx)}?`, '', LINK_CAT, LINK_VIDEO),
+      }) },
+    { key: 'product', label: 'Product', day: 3, attach: '🖼️ Product image (their equipment)',
+      render: (m, ctx) => ({
+        subject: `Made to your drawing: elements for ${m.subj}`,
+        body: bulletBody({ greet: greetEmail(ctx), intro: m.dist ? `Here's what we can add to ${m.their}:` : `Here's what we can make for ${m.their}:`,
+          supply: [cap(m.elem), 'CNC-bent in-house to your exact dimensions', zmSample(m)],
+          cta: "Share one drawing and we'll send you a like-for-like quote.", sign: ZM_SIGN }),
+        whatsapp: wa(helloWa(ctx), 'A quick follow-up from *Peena Heat Elements*.', '', `*What we make for your ${m.short}*`, `• ${cap(m.elem)}`, '• Made to your drawing — SS304 / SS316 / Incoloy 800', '• Tested before it leaves us · 6-month guarantee · 5–7 day dispatch', '', "Share one drawing, or a photo of the element beside a measuring tape, and we'll quote like-for-like.", '', LINK_CAT),
+      }) },
+    { key: 'replace', label: 'Replacements', day: 8, attach: '🖼️ Product image',
+      render: (m, ctx) => ({
+        subject: `Replacement elements for ${m.subj} — matched to the old part`,
+        body: bulletBody({ greet: greetEmail(ctx), supplyLabel: 'How we match a replacement',
+          intro: m.dist ? 'When your customers need a replacement for a failed element, we can make it to match the old part.' : `When an element fails in ${m.their}, we can make the replacement to match.`,
+          supply: ['Send the old element, a drawing, or a photo of it beside a measuring tape', 'We make it to the same size, wattage and fitting — CNC-bent in-house', 'Incoloy 800 sheaths for high-temperature or corrosive duty'],
+          cta: "Have an element you need matched? Send a photo and we'll quote.", sign: ZM_SIGN }),
+        whatsapp: wa(helloWa(ctx), '*Need a replacement element matched?*', '', '• Send the old element, a drawing, or a photo of it beside a measuring tape', '• We make it to the same size, wattage and fitting', '• Tested before dispatch · 6-month guarantee', '', "Send a photo and we'll quote.", '', LINK_CAT),
+      }) },
+    { key: 'flyer', label: 'Flyer', day: 12, attach: '📄 Flyer', flyer: ZM_FLYER, waImage: ZM_FLYER,
+      render: (m, ctx) => ({
+        subject: 'One page: which heating element for which equipment',
+        body: flyerBody({ greet: greetEmail(ctx), intro: "Here's our one-page guide — which element suits which equipment, and how to order:", flyer: ZM_FLYER,
+          cta: `Reply or WhatsApp ${ZM_WA} with a drawing or a photo, and we'll quote.` }),
+        whatsapp: wa(helloWa(ctx), '*Which heating element for which equipment* — our one-page guide 👇', '', `For your ${m.short}: ${m.elem}.`, '', "Send a drawing, or a photo of the element beside a measuring tape, and we'll quote.", '', LINK_CAT),
+      }) },
+    { key: 'client', label: 'Become our client', day: 18, attach: '🖼️ Product / sample image',
+      render: (m, ctx) => ({
+        subject: `A trial element for your ${m.short} — no risk to you`,
+        body: bulletBody({ greet: greetEmail(ctx), intro: 'A simple, no-risk way to try us.', supplyLabel: 'How the trial works',
+          supply: [zmTrialAsk(m), m.dist ? 'Your team checks it against your current supply' : 'Your team fits and tests it against your current supply', 'Once approved, repeat orders are made to the same drawing every time'],
+          cta: `If it performs, we become your supplier — if not, you've lost nothing. Best email or WhatsApp for your ${m.dist ? 'purchase' : 'technical or purchase'} team?`, sign: ZM_SIGN }),
+        whatsapp: wa(helloWa(ctx), '*A trial element from Peena Heat Elements*', '', `• ${zmTrialAsk(m).replace(' — we make a trial piece to it', '')}`, '• We make a trial piece to it', `• Your team ${m.dist ? 'checks' : 'tests'} it against your current supply`, '', "If it performs, we'd be glad to be your supplier. Shall I set it up?", '', LINK_CAT),
+      }) },
+  ],
+  calls: (m, ctx) => {
+    const co = ctx.company || 'the company';
+    const uses = m.dist ? 'sell' : 'use';
+    return [
+      { label: 'Call #1 — intro', day: '4–5', script:
+`CALL #1 — ${co}${zmIn(ctx)} (after Discovery + Product emails)\n\n1) "Hello, this is Vama from Peena Heat Elements in India — have I caught you at an okay moment?"\n2) "We manufacture heating elements — tubular, finned, immersion, cartridge — all made to drawing, tested before dispatch, 6-month guarantee. We already supply equipment builders in India, the Gulf, Africa and Australia."\n3) "For ${m.their}, we make ${m.elem}. I sent a note and our catalogue — did it reach the right person?"\n4) ASK: "Who looks after heating-element ${m.dist ? 'buying for your stock' : 'sourcing — purchase or technical'}? I'd love to send them a quote against one of your drawings."\n5) LISTEN: which elements they ${uses} now, where they buy them, lead-time and price pain, volumes.\n6) Close: "May I take the best email or WhatsApp so I can send a like-for-like quote?"` },
+      { label: 'Call #2 — sample offer', day: '13–14', script:
+`CALL #2 — ${co} (after Replacements + Flyer emails)\n\n1) Warm reopen: "Vama from Peena Heat Elements again — thanks for your time last week."\n2) "If you share one drawing of an element you ${uses} regularly, or send a photo of it beside a measuring tape, we'll make a sample to it — your team ${m.dist ? 'checks' : 'tests'} it against your current supply, no obligation."\n3) Reinforce: made to drawing, CNC-bent in-house, tested before dispatch, 6-month guarantee, dispatched in 5–7 days.\n4) Handle price/lead time: "Share a current price and the size you buy — we'll quote like-for-like."\n5) ASK: "Can you send me one drawing or photo today, or shall I call your technical person directly?"\n6) Close: confirm the next step and the drawing.` },
+      { label: 'Call #3 — close', day: '21', script:
+`CALL #3 — ${co} (after Become-our-client email)\n\n1) "Vama from Peena Heat Elements — I'll keep this short."\n2) The ask: ${m.dist ? '"Send one drawing of an element you sell regularly, we make a trial element to it, and your team checks it against your current supply.' : `"Send one drawing, we make a trial element to it, your team tests it in your ${m.short}.`} If it performs, we become your supplier."\n3) Make it easy: "Once a drawing is approved, repeat orders are made to the same drawing — you just send the quantity."\n4) Get commitment: "Shall we do the trial? Who should I coordinate the drawing and delivery with?"\n5) Lock: confirm contact, email/WhatsApp and the expected drawing.` },
+    ];
+  },
+};
+
 const CAMPAIGNS = {
   'khadya-khurak-exhibitors': exhibitors,
   'khadya-khurak-visitors': visitorsKK,
@@ -731,6 +820,7 @@ const CAMPAIGNS = {
   'oman': gulf('Oman'),
   'qatar': gulf('Qatar'),
   'vietnam': vietnam,
+  'zambia': zambia,
 };
 
 export const campaignFor = segment => CAMPAIGNS[segment] || null;
