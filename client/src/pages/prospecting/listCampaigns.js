@@ -567,9 +567,10 @@ const gulf = country => { const FLYER = country === 'Oman' ? OMAN_FLYER : QATAR_
       }) },
     { key: 'newparts', label: 'New parts', day: 8, attach: '🖼️ Product image (new range)',
       render: (m, ctx) => ({
-        subject: `New element ranges that suit ${m.short}`,
+        subject: m.dist ? `New element ranges for your ${m.short}` : `New element ranges that suit ${m.short}`,
         body: bulletBody({ greet: greetEmail(ctx), intro: `New ranges we're now making that suit ${m.their}:`, supplyLabel: 'New ranges we can supply you',
-          supply: [`Longer-life, low-watt-density ${m.elem}`, 'Incoloy 800 sheaths for high-temperature or aggressive service', `Custom flanges, fittings & terminals — drops straight into your ${m.short}`], why: [uae(ctx)],
+          supply: [`Longer-life, low-watt-density ${m.elem}`, 'Incoloy 800 sheaths for high-temperature or aggressive service',
+            m.dist ? 'Custom flanges, fittings & terminals — to match the elements you sell' : `Custom flanges, fittings & terminals — drops straight into your ${m.short}`], why: [uae(ctx)],
           cta: 'Want a sample or a quote on any of these?' }),
         whatsapp: wa(helloWa(ctx), `*New from Peena Heat Elements* for your ${m.short}:`, '', `• Longer-life ${m.elem}`, '• Incoloy 800 for high temperature', '• Custom flanges & terminals — drops straight in', '', 'Want a sample or a quote?', '', LINK_CAT),
       }) },
