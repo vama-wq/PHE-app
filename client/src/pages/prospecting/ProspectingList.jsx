@@ -4,7 +4,7 @@ import Modal from '../../components/ui/Modal';
 import { bodyToHtml, bodyToPlain, renderSms } from './applicationEmails';
 import { campaignFor, renderTouch, renderCalls, tailoredTo } from './listCampaigns';
 import { Link } from 'react-router-dom';
-import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye, Phone, Linkedin, FolderOpen } from 'lucide-react';
+import { Target, Download, RefreshCw, Filter, Mail, MessageSquare, CheckCircle2, Star, Upload, Copy, Eye, Phone, Linkedin, FolderOpen, Share2 } from 'lucide-react';
 import { FOLDERS, folderSaveSupported, folderNames, chooseFolder, forgetFolder, readyFolder, saveInto } from '../../lib/saveFolders';
 
 // Parse pasted CSV / Excel-copied (TSV) rows into prospect objects. Requires a
@@ -531,6 +531,9 @@ export default function ProspectingList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link to="/prospecting/social" className="btn-secondary flex items-center gap-1.5 text-sm">
+            <Share2 size={15} /> Social plan
+          </Link>
           <Link to="/prospecting/linkedin" className="btn-secondary flex items-center gap-1.5 text-sm">
             <Linkedin size={15} /> LinkedIn calendar
           </Link>

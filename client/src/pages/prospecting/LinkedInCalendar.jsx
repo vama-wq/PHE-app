@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import { LINKEDIN_POSTS, KIND_LABEL, KIND_CLS } from './linkedinCampaign';
-import { ArrowLeft, Copy, Download, CheckCircle2, Linkedin, RefreshCw, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Copy, Download, CheckCircle2, Linkedin, RefreshCw, ExternalLink, Share2 } from 'lucide-react';
 
 // LinkedIn calendar (owner, 26 Oct 2026): the weekly posts with their file, caption and a "posted" tick.
 // Posts are defined in linkedinCampaign.js; ticks live in linkedin_posts (server /prospects/linkedin).
@@ -49,7 +49,10 @@ export default function LinkedInCalendar() {
           </h1>
           <p className="text-xs text-gray-500 mt-1">One post every Wednesday, 10:30 am · 28 Oct – 30 Dec 2026. Download the file, copy the caption, post, then tick it here.</p>
         </div>
-        <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={load}><RefreshCw size={15} /> Refresh</button>
+        <div className="flex items-center gap-2">
+          <Link to="/prospecting/social" className="btn-secondary flex items-center gap-1.5 text-sm"><Share2 size={15} /> Social plan</Link>
+          <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={load}><RefreshCw size={15} /> Refresh</button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-5">

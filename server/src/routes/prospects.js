@@ -190,6 +190,41 @@ router.delete('/linkedin/:key', authenticate, authorize(...SALES), async (req, r
   res.json({ message: 'Removed' });
 });
 
+/** Social plan (owner, 13 Nov 2026): the weekly LinkedIn / Instagram / YouTube posts written by the social agent.
+ *  Only the owner approves a week; the approval is pinned to plan_hash, so the agent posts exactly what was seen. */
+router.get('/social', authenticate, authorize(...SALES), async (req, res) => {
+  res.json(await getDB().all(`SELECT s.week_key, s.post_date::text AS post_date, s.topic, s.plan, s.plan_hash, s.status,
+      s.approved_hash, s.approved_at, ua.name AS approved_by, s.change_note, s.change_at, uc.name AS change_by,
+      s.results, s.updated_at
+    FROM social_plan s LEFT JOIN users ua ON ua.id = s.approved_by LEFT JOIN users uc ON uc.id = s.change_by
+    ORDER BY s.post_date`));
+});
+const socialKey = k => /^[a-z0-9_-]{1,40}$/i.test(String(k || ''));
+router.post('/social/:key/approve', authenticate, authorize('owner'), async (req, res) => {
+  if (!socialKey(req.params.key)) return res.status(400).json({ error: 'Bad week' });
+  const row = await getDB().get('SELECT plan_hash FROM social_plan WHERE week_key = $1', [req.params.key]);
+  if (!row) return res.status(404).json({ error: 'Week not found' });
+  // The page sends the hash it showed; if the agent changed the plan meanwhile, the owner must look again.
+  if (String(req.body.hash || '') !== row.plan_hash) return res.status(409).json({ error: 'This week changed since you opened it. Refresh and check it again.' });
+  await getDB().run(`UPDATE social_plan SET status = 'approved', approved_hash = plan_hash, approved_by = $2, approved_at = NOW(),
+      change_note = NULL WHERE week_key = $1`, [req.params.key, req.user.id]);
+  res.json({ message: 'Approved' });
+});
+router.post('/social/:key/unapprove', authenticate, authorize('owner'), async (req, res) => {
+  if (!socialKey(req.params.key)) return res.status(400).json({ error: 'Bad week' });
+  await getDB().run(`UPDATE social_plan SET status = 'draft', approved_hash = NULL, approved_by = NULL, approved_at = NULL
+    WHERE week_key = $1`, [req.params.key]);
+  res.json({ message: 'Approval withdrawn' });
+});
+router.post('/social/:key/changes', authenticate, authorize(...SALES), async (req, res) => {
+  if (!socialKey(req.params.key)) return res.status(400).json({ error: 'Bad week' });
+  const note = String(req.body.note || '').trim().slice(0, 2000);
+  if (!note) return res.status(400).json({ error: 'Say what to change' });
+  await getDB().run(`UPDATE social_plan SET status = 'changes_requested', change_note = $2, change_by = $3, change_at = NOW(),
+      approved_hash = NULL, approved_by = NULL, approved_at = NULL WHERE week_key = $1`, [req.params.key, note, req.user.id]);
+  res.json({ message: 'Sent to the social agent' });
+});
+
 router.delete('/:id', authenticate, authorize(...SALES), async (req, res) => {
   await getDB().run('DELETE FROM prospects WHERE id = $1', [req.params.id]);
   res.json({ message: 'Deleted' });
