@@ -23,7 +23,7 @@ router.get('/', authenticate, authorize(...SALES), async (req, res) => {
   if (state)       { params.push(state);       where.push(`state = $${params.length}`); }
   if (application) { params.push(application); where.push(`application = $${params.length}`); }
   const sql = `
-    SELECT * FROM prospects
+    SELECT *, (SELECT c.customer_code FROM customers c WHERE c.id = prospects.customer_id) AS customer_code FROM prospects
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY CASE priority WHEN 'H' THEN 0 WHEN 'M' THEN 1 ELSE 2 END, company`;
   res.json(await getDB().all(sql, params));
@@ -223,6 +223,110 @@ router.post('/social/:key/changes', authenticate, authorize(...SALES), async (re
   await getDB().run(`UPDATE social_plan SET status = 'changes_requested', change_note = $2, change_by = $3, change_at = NOW(),
       approved_hash = NULL, approved_by = NULL, approved_at = NULL WHERE week_key = $1`, [req.params.key, note, req.user.id]);
   res.json({ message: 'Sent to the social agent' });
+});
+
+// Became a customer (owner, 13 Nov 2026). A prospect who places an order becomes a Customers record (or is linked
+// to the one already there), is marked Won, and moves into "Existing customers · reorder", so it gets the reorder
+// emails and stops getting its old list's cold campaign. Its old touches stay in its history, renamed
+// '<old list>:<touch>' so they can't collide with the same-named touch of the reorder campaign.
+const EC_SEGMENT = 'existing-customers';
+const EC_NEW_APP = 'Ordered 1–2 times';
+const CODE_RE = /^[A-Z0-9][A-Z0-9-]{0,11}$/;
+const FREE_MAIL = new Set(['gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.co.in', 'yahoo.in', 'hotmail.com', 'outlook.com',
+  'live.com', 'icloud.com', 'rediffmail.com', 'aol.com', 'zoho.com', 'protonmail.com', 'ymail.com', 'msn.com', 'mail.com']);
+const istDay = () => new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+const httpErr = (status, message) => Object.assign(new Error(message), { status });
+
+// Their codes are mostly the initials of the first words (Rajhans Metals Pvt Ltd → RMP); she can change it.
+function suggestCode(name, taken) {
+  const words = String(name || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/)
+    .filter(w => w && !['THE', 'AND', 'M', 'S', 'MS'].includes(w));
+  const base = (words.length === 1 ? words[0].slice(0, 3) : words.slice(0, 3).map(w => w[0]).join('')) || 'NEW';
+  let code = base, n = 2;
+  while (taken.has(code)) code = `${base}${n++}`;
+  return code;
+}
+const normName = s => String(s || '').toLowerCase()
+  .replace(/\b(pvt|private|ltd|limited|llp|llc|co|company|the|m\/s|ms)\b\.?/g, '').replace(/[^a-z0-9]/g, '');
+const mailDomains = s => String(s || '').toLowerCase().split(/[\s,;/]+/).map(e => e.split('@')[1]).filter(d => d && !FREE_MAIL.has(d));
+const mailAddrs = s => String(s || '').toLowerCase().split(/[\s,;/]+/).filter(e => e.includes('@'));
+const phones10 = s => String(s || '').split(/[/,;]/).map(x => x.replace(/\D/g, '').slice(-10)).filter(x => x.length === 10);
+
+/** Customers this prospect may already be, and a suggested code for a new one. */
+router.get('/:id/customer-match', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const p = await db.get('SELECT id, company, email, phone, office_phone FROM prospects WHERE id = $1', [parseInt(req.params.id, 10)]);
+  if (!p) return res.status(404).json({ error: 'Prospect not found' });
+  const customers = await db.all('SELECT id, customer_code, name, email, phone FROM customers');
+  const pName = normName(p.company), pMail = mailAddrs(p.email), pDom = mailDomains(p.email);
+  const pTel = [...phones10(p.phone), ...phones10(p.office_phone)];
+  const matches = [];
+  for (const c of customers) {
+    const cName = normName(c.name);
+    let why = null;
+    if (pMail.some(e => mailAddrs(c.email).includes(e))) why = 'same email';
+    else if (pTel.some(t => phones10(c.phone).includes(t))) why = 'same phone';
+    else if (pName && cName === pName) why = 'same name';
+    else if (pDom.some(d => mailDomains(c.email).includes(d))) why = 'same email domain';
+    else if (pName.length >= 5 && cName.length >= 5 && (cName.startsWith(pName) || pName.startsWith(cName))) why = 'similar name';
+    if (why) matches.push({ id: c.id, customer_code: c.customer_code, name: c.name, why });
+  }
+  const taken = new Set(customers.map(c => String(c.customer_code).toUpperCase()));
+  const RANK = ['same email', 'same phone', 'same name', 'same email domain', 'similar name'];
+  matches.sort((a, b) => RANK.indexOf(a.why) - RANK.indexOf(b.why));
+  res.json({ suggested_code: suggestCode(p.company, taken), matches: matches.slice(0, 5) });
+});
+
+/** Became a customer: create (or link) the Customers record, mark Won, move into Existing customers. */
+router.post('/:id/convert', authenticate, authorize('owner'), async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const b = req.body || {};
+  const linkId = b.customer_id ? parseInt(b.customer_id, 10) : null;
+  const code = String(b.customer_code || '').trim().toUpperCase();
+  if (!linkId && !CODE_RE.test(code)) return res.status(400).json({ error: 'Customer code: capital letters or numbers, up to 12 (e.g. BE)' });
+  const clean = v => (v === undefined || v === null || String(v).trim() === '' ? null : String(v).trim());
+  try {
+    const out = await getDB().withTransaction(async (c) => {
+      const p = (await c.query('SELECT * FROM prospects WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!p) throw httpErr(404, 'Prospect not found');
+      if (p.customer_id) throw httpErr(409, 'Already linked to a customer');
+      if (p.segment === EC_SEGMENT) throw httpErr(409, 'Already in the existing customers list');
+      const day = istDay();
+      let cust;
+      if (linkId) {
+        cust = (await c.query('SELECT id, customer_code, name FROM customers WHERE id = $1', [linkId])).rows[0];
+        if (!cust) throw httpErr(404, 'Customer not found');
+      } else {
+        const name = clean(b.name) || p.company;
+        const country = clean(b.country) ?? clean(p.country);
+        try {
+          cust = (await c.query(`
+            INSERT INTO customers (customer_code, name, contact_person, phone, email, country_of_destination, notes, created_by)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, customer_code, name`,
+            [code, name, clean(b.contact_person) ?? clean(p.contact_role), clean(b.phone) ?? clean(p.phone), clean(b.email) ?? clean(p.email),
+             country && !/^india$/i.test(country) ? country : null,
+             `Became a customer on ${day}, from the prospect list "${p.segment}".`, req.user.id])).rows[0];
+        } catch (e) {
+          if (e.code === '23505') throw httpErr(409, `Customer code ${code} is already used: pick another`);
+          throw e;
+        }
+      }
+      const touched = (await c.query(`
+        UPDATE prospect_touches SET touch_key = $2 || ':' || touch_key
+        WHERE prospect_id = $1 AND position(':' in touch_key) = 0 RETURNING channel`, [id, p.segment])).rows;
+      const note = `Customer code ${cust.customer_code}. Became a customer on ${day} (moved from the ${p.segment} list).`;
+      await c.query(`UPDATE prospects SET segment = $2, application = $3, priority = 'M', customer_id = $4, status = 'won',
+          notes = $5 || coalesce(E'\n' || notes, '') WHERE id = $1`, [id, EC_SEGMENT, EC_NEW_APP, cust.id, note]);
+      await c.query(`INSERT INTO prospect_status_log (prospect_id, from_status, to_status, note, changed_by) VALUES ($1,$2,'won',$3,$4)`,
+        [id, p.status, `Became a customer: ${cust.customer_code} · ${cust.name} (${linkId ? 'linked to the existing record' : 'added to Customers'}); moved from ${p.segment} to existing customers`, req.user.id]);
+      return { customer: cust, created: !linkId, from_segment: p.segment, emailed: touched.some(t => t.channel === 'email') || !['new'].includes(p.status) };
+    });
+    res.json(out);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    console.error('convert prospect failed:', e);
+    res.status(500).json({ error: 'Could not convert: ' + e.message });
+  }
 });
 
 router.delete('/:id', authenticate, authorize(...SALES), async (req, res) => {

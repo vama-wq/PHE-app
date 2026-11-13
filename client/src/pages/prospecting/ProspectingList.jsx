@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
+import { useAuthStore } from '../../store/authStore';
 import { bodyToHtml, bodyToPlain, renderSms } from './applicationEmails';
 import { campaignFor, renderTouch, renderCalls, tailoredTo } from './listCampaigns';
 import { Link } from 'react-router-dom';
@@ -65,6 +66,7 @@ const PRIORITY_LABEL = { H: 'High', M: 'Med', L: 'Low' };
 const SOURCE_BADGE = {
   'verified':   { cls: 'bg-emerald-100 text-emerald-800', label: '✓ Verified' },
   'phone-only': { cls: 'bg-amber-100 text-amber-800',     label: '☎ Phone only' },
+  'enquiry':    { cls: 'bg-blue-100 text-blue-800',       label: '✉ Enquiry' },   // they wrote to us (enquiry agent)
 };
 const sourceBadge = s => SOURCE_BADGE[s] || { cls: 'bg-gray-100 text-gray-500', label: 'Unverified' };
 
@@ -74,6 +76,7 @@ const SEGMENT_LABEL = {
   'khadya-khurak-visitors': 'Khadya Khurak 2026 · Visitors to invite',
   'pharma-tech-expo': 'Khadya Khurak 2026 · PharmaTech contacts',
   'existing-customers': 'Existing customers · reorder',
+  'inbound-enquiries': 'Inbound enquiries · website & marketplaces',
   'vietnam': 'Vietnam',
   'oman': 'Oman (Gulf)',
   'qatar': 'Qatar (Gulf)',
@@ -152,6 +155,10 @@ export default function ProspectingList() {
   const [impResult, setImpResult] = useState(null);
   // Per-company tailored campaign copy (e.g. expo cards) — opens in a modal
   const [campaignRow, setCampaignRow] = useState(null);
+  // "Became a customer" (owner): { loading } → { matches, choice: customer id | 'new', form, error }
+  const [convert, setConvert] = useState(null);
+  const { user } = useAuthStore();
+  const isOwner = user?.role === 'owner';
   const [seqTab, setSeqTab] = useState(0);              // active email in a multi-touch sequence
   const rowId = campaignRow?.id;
   useEffect(() => { setSeqTab(0); }, [rowId]);
@@ -198,6 +205,7 @@ export default function ProspectingList() {
   useEffect(() => { if (segment) { loadProspects(); loadTouches(); } /* eslint-disable-line */ }, [segment]);
   useEffect(() => {
     setHistory(null);
+    setConvert(null);
     if (!rowId) return;
     setRowNote(''); setCallNote({});
     loadHistory(rowId);
@@ -234,6 +242,34 @@ export default function ProspectingList() {
     await api.patch(`/prospects/${id}`, { status, status_note: note || undefined });
     await loadProspects(true);
     if (rowId === id) loadHistory(id);
+  };
+  // Became a customer: look for them in Customers first, so a known customer is linked, not added twice.
+  const openConvert = async () => {
+    const p = campaignRow;
+    setConvert({ loading: true });
+    try {
+      const { data } = await api.get(`/prospects/${p.id}/customer-match`);
+      const sure = data.matches.find(m => ['same email', 'same phone', 'same name'].includes(m.why));
+      setConvert({ matches: data.matches, choice: sure ? String(sure.id) : 'new',
+        form: { customer_code: data.suggested_code, name: p.company, contact_person: p.contact_role || '',
+          phone: p.phone || '', email: p.email || '', country: p.country || '' } });
+    } catch (e) { setConvert({ matches: [], choice: 'new', form: null, error: e.response?.data?.error || 'Could not check Customers' }); }
+  };
+  const doConvert = async () => {
+    setBusy(true);
+    try {
+      const body = convert.choice === 'new' ? convert.form : { customer_id: Number(convert.choice) };
+      const { data } = await api.post(`/prospects/${campaignRow.id}/convert`, body);
+      const c = data.customer;
+      const zoho = data.emailed && campaignFor(data.from_segment)
+        ? ` Remove them from the ${segmentLabel(data.from_segment)} Zoho list so its emails stop.` : '';
+      setConvert(null); setCampaignRow(null);
+      setToast(`${c.name} is customer ${c.customer_code} now: marked Won and moved to Existing customers.${zoho}`);
+      setTimeout(() => setToast(''), 10000);
+      await Promise.all([loadSegments(), loadProspects(true), loadTouches()]);
+    } catch (e) {
+      setConvert(cv => ({ ...cv, error: e.response?.data?.error || 'Could not convert' }));
+    } finally { setBusy(false); }
   };
 
   const hasEmail = p => !!(p.email && p.email.trim());
@@ -670,7 +706,7 @@ export default function ProspectingList() {
                 </thead>
                 <tbody>
                   {visible.map(p => {
-                    const sb = sourceBadge(rowSource(p));
+                    const sb = sourceBadge(p.source === 'enquiry' ? 'enquiry' : rowSource(p));
                     return (
                       <tr key={p.id} className="border-b last:border-0 hover:bg-gray-50">
                         <td className="px-3 py-2">
@@ -1039,6 +1075,60 @@ export default function ProspectingList() {
                   Save
                 </button>
               </div>
+              {campaignRow.customer_id ? (
+                <p className="text-xs text-emerald-700">✓ Customer {campaignRow.customer_code} · <Link className="underline" to="/customers">open Customers</Link></p>
+              ) : isOwner && campaignRow.segment !== 'existing-customers' && (!convert ? (
+                <button className="btn-secondary text-xs" disabled={busy} onClick={openConvert}>🤝 Became a customer</button>
+              ) : (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-md p-2.5 space-y-2 text-xs">
+                  <p className="font-semibold text-emerald-900">Became a customer</p>
+                  <p className="text-emerald-900">Adds them to Customers, marks them Won and moves them to “Existing customers · reorder”,
+                    so they get the reorder emails instead of this list's.</p>
+                  {convert.loading ? <p className="text-gray-500">Checking Customers…</p> : (
+                    <>
+                      {convert.matches.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="font-medium text-gray-700">Already in Customers?</p>
+                          {convert.matches.map(m => (
+                            <label key={m.id} className="flex items-center gap-1.5">
+                              <input type="radio" name="convert-choice" checked={convert.choice === String(m.id)}
+                                onChange={() => setConvert(cv => ({ ...cv, choice: String(m.id) }))} />
+                              Yes, it's <strong>{m.name}</strong> ({m.customer_code}) <span className="text-gray-400">· {m.why}</span>
+                            </label>
+                          ))}
+                          <label className="flex items-center gap-1.5">
+                            <input type="radio" name="convert-choice" checked={convert.choice === 'new'}
+                              onChange={() => setConvert(cv => ({ ...cv, choice: 'new' }))} />
+                            No, add a new customer
+                          </label>
+                        </div>
+                      )}
+                      {convert.choice === 'new' && convert.form && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {[['customer_code', 'Customer code *', 'e.g. BE'], ['name', 'Customer name *', 'Company name'],
+                            ['contact_person', 'Contact person', ''], ['phone', 'Phone', ''], ['email', 'Email', ''], ['country', 'Country', '']]
+                            .map(([k, label, ph]) => (
+                              <label key={k} className="block space-y-0.5">
+                                <span className="text-gray-600">{label}</span>
+                                <input className="input text-sm w-full" value={convert.form[k]} placeholder={ph}
+                                  onChange={e => { const v = k === 'customer_code' ? e.target.value.toUpperCase() : e.target.value;
+                                    setConvert(cv => ({ ...cv, error: null, form: { ...cv.form, [k]: v } })); }} />
+                              </label>
+                            ))}
+                        </div>
+                      )}
+                      {convert.error && <p className="text-rose-700">{convert.error}</p>}
+                      <div className="flex justify-end gap-2">
+                        <button className="btn-secondary text-xs" onClick={() => setConvert(null)}>Cancel</button>
+                        <button className="btn-primary text-xs" onClick={doConvert}
+                          disabled={busy || (convert.choice === 'new' && (!convert.form || !convert.form.customer_code.trim() || !convert.form.name.trim()))}>
+                          {convert.choice === 'new' ? 'Add to Customers' : 'Link and move'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
               {historyItems.length > 0 ? (
                 <details className="text-xs text-gray-600" open={historyItems.length <= 4}>
                   <summary className="cursor-pointer font-medium text-gray-700">History · {historyItems.length}</summary>

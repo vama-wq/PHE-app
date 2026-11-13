@@ -125,6 +125,8 @@ async function initDB(retries = 20, delayMs = 10000) {
       await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS campaign_sequence TEXT`);
       // Office / board / sales landline to CALL — kept apart from `phone`, which drives WhatsApp links
       await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS office_phone TEXT`);
+      // Became a customer (owner, 13 Nov 2026): the Customers record a won prospect was turned into or linked to
+      await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL`);
       // Campaign tracking (owner, 26 Oct 2026): which touch went out to whom, on which channel —
       // touch_key = the campaign touch ('awareness', 'product', …) or 'call1'…'call3' for the call scripts.
       await pool.query(`
