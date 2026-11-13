@@ -68,7 +68,8 @@ export default function SocialPlan() {
 
   const today = new Date().toISOString().slice(0, 10);
   const list = useMemo(() => weeks.filter(w => showPast || w.post_date >= today), [weeks, showPast, today]);
-  const waiting = weeks.filter(w => w.post_date >= today && w.status !== 'approved').length;
+  const isOut = w => Object.values(w.results || {}).some(r => r && (r.status === 'scheduled' || r.status === 'live'));
+  const waiting = weeks.filter(w => w.post_date >= today && w.status !== 'approved' && !isOut(w)).length;
 
   const act = async (w, path, body) => {
     setBusy(w.week_key + path); setErr('');
@@ -109,6 +110,8 @@ export default function SocialPlan() {
           const li = p.linkedin || {}, ig = p.instagram || {}, yt = p.youtube || {};
           const res = w.results || {};
           const approved = w.status === 'approved' && w.approved_hash === w.plan_hash;
+          // Weeks already out (or scheduled) before this page existed were approved in chat.
+          const alreadyOut = !approved && Object.values(res).some(r => r && (r.status === 'scheduled' || r.status === 'live'));
           return (
             <div key={w.week_key} className={`card p-4 ${approved ? 'ring-1 ring-emerald-300' : w.status === 'changes_requested' ? 'ring-1 ring-red-300' : 'ring-1 ring-amber-200'}`}>
               <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
@@ -122,6 +125,10 @@ export default function SocialPlan() {
                       <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 inline-flex items-center gap-1">
                         <CheckCircle2 size={12} /> Approved{w.approved_by ? ` by ${w.approved_by}` : ''} · {fmtAt(w.approved_at)} · the agent will schedule it
                       </span>
+                    ) : alreadyOut ? (
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 inline-flex items-center gap-1">
+                        <CheckCircle2 size={12} /> Already scheduled (approved in chat)
+                      </span>
                     ) : w.status === 'changes_requested' ? (
                       <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700 inline-flex items-center gap-1">
                         <AlertTriangle size={12} /> Changes asked{w.change_by ? ` by ${w.change_by}` : ''}: “{w.change_note}”
@@ -132,7 +139,7 @@ export default function SocialPlan() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  {isOwner && !approved && (
+                  {isOwner && !approved && !alreadyOut && (
                     <button className="btn-primary text-sm flex items-center gap-1.5" disabled={!!busy}
                       onClick={() => act(w, 'approve', { hash: w.plan_hash })}>
                       <CheckCircle2 size={15} /> {busy === w.week_key + 'approve' ? 'Approving…' : 'Approve this week'}
