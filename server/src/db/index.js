@@ -161,6 +161,26 @@ async function initDB(retries = 20, delayMs = 10000) {
           url       TEXT,
           note      TEXT
         )`);
+      // Social plan (owner, 13 Nov 2026): each week's LinkedIn / Instagram / YouTube posts, written by the social
+      // agent. The owner approves a week in the app; the agent then schedules exactly that content without asking
+      // again. approved_hash pins the approval to the content: any change to the plan makes it a draft again.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS social_plan (
+          week_key      TEXT PRIMARY KEY,
+          post_date     DATE NOT NULL,
+          topic         TEXT,
+          plan          JSONB NOT NULL,
+          plan_hash     TEXT NOT NULL,
+          status        TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','changes_requested')),
+          approved_hash TEXT,
+          approved_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          approved_at   TIMESTAMPTZ,
+          change_note   TEXT,
+          change_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          change_at     TIMESTAMPTZ,
+          results       JSONB,
+          updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS backup_log (
           id SERIAL PRIMARY KEY,
