@@ -105,7 +105,14 @@ function renderUTypeSheet(spec) {
   const r1Mode = spec.r1?.mode || null;
   // Which list line each fitting is (its balloon number) and how it is named.
   const roleOf = (p) => p.role || ({ ssnut: 'nut' }[p.key] || p.key);
-  const partFor = (role) => parts.find(p => roleOf(p) === role);
+  // A list with a brass AND an SS nut on a nut-washer stack: her order names SS
+  // nuts at both places ("ESB → SS nut → washer → washer → SS nut", owner,
+  // 14 Nov 2026), so the SS line is the one drawn and ballooned.
+  const ssNutStack = fit.pin.filter(rl => rl === 'nut').length === 2;
+  const partFor = (role) => {
+    const all = parts.filter(p => roleOf(p) === role);
+    return (role === 'nut' && ssNutStack && all.find(p => /^NUT-SS-/i.test(String(p.code || '')))) || all[0];
+  };
   const no = (role) => partFor(role)?.no ?? '–';
   const codeOf = (role) => String(partFor(role)?.code || '');
   const nutFill = /-BR-/i.test(codeOf('nut')) ? C.brass : C.ss;
@@ -166,11 +173,12 @@ function renderUTypeSheet(spec) {
 
   // Assembled positions (left edges) along the pin, outward from the ESB face.
   // A heavy pin sits on the pin's end; what follows it goes on its M6 stud.
+  // A heavy pin's `mid` is its hex body: its stud is under the washers and nut.
   const layoutPin = (xFace, pinEndX, sc) => {
     let cursor = xFace;
     return fit.pin.map((role) => {
       const p = sz[role] || { t: 2 };
-      if (role === 'hvpin') { cursor = pinEndX; return { role, x: pinEndX, mid: pinEndX - (p.studT * sc) / 2 + (p.t * sc) / 2 }; }
+      if (role === 'hvpin') { cursor = pinEndX; return { role, x: pinEndX, mid: pinEndX + (p.t * sc) / 2 }; }
       const x = cursor - p.t * sc; cursor = x;
       return { role, x, mid: x + (p.t * sc) / 2 };
     });
@@ -247,9 +255,12 @@ function renderUTypeSheet(spec) {
   // Dimensions. The U length always gives the true figure, broken view or not.
   // Total length = 2 × U (owner's ruling R1, 14 Nov 2026): the U is drawn as it
   // comes out of that tube, so its true end-to-end length is dimensioned here.
-  const uLabel = r1Mode === 'b' || r1Mode === '2u'
+  // A short U (7U and under) has room only for the figure and its label; the
+  // rest is in the element table and the notes.
+  let uLabel = r1Mode === 'b' || r1Mode === '2u'
     ? `${n1(shape.uLengthMm)} U LENGTH "${shape.uLabel}" — AS IT COMES OUT OF THE ${totalStr}" (2 × ${String(shape.uLengthIn)}") TUBE`
     : `${n1(shape.uLengthMm)} (${String(shape.uLengthIn)}") U LENGTH "${shape.uLabel}" — END OF THE TUBE TO THE FAR END OF THE U`;
+  if (K.textWidth(uLabel, 2.7) > xOuter - X0 - 3) uLabel = `${n1(shape.uLengthMm)} U LENGTH "${shape.uLabel}"`;
   out.push(K.dimH(X0, xOuter, 51, uLabel, { fromY1: yT - r, fromY2: Yc, size: 2.7 }));
   out.push(K.dimH(X0, X0 + czBig, 61, `${n1(card.coldZoneBigIn * 25.4)} (${card.coldZoneBigIn}") COLD ZONE`, { fromY1: yT - r, fromY2: yT - r, size: 2.6 }));
   out.push(K.dimH(X0 - pinOut, X0, 99, '25.4 (1") PIN OUT', { fromY1: yB + 1, fromY2: yB + r, above: false, size: 2.5 }));
@@ -266,11 +277,14 @@ function renderUTypeSheet(spec) {
     out.push(K.line(xt, y, xt - 3, y, { w: 0.25 }), K.arrowhead(xt - 3, y, Math.PI, { len: 1.4, half: 0.5, color: '#111' }));
     out.push(K.text(xt + 1.2, y + (y < yT ? -0.6 : 2.4), 'T', { size: 2.5, weight: 700 }));
   }
-  // Callouts.
+  // Callouts. None may run into the element table (it starts at x 276).
   // The sheath callout ends short of the U length's extension line. A short U
   // gets the short form, and when even that will not fit left of the bend it
-  // goes right of the OUTSIDE dimension.
-  const textW = (str) => String(str).length * 2.4 * 0.6 + 3.3;
+  // goes right of the OUTSIDE dimension — or, when that would run into the
+  // table too (a mid-length U with a big cold zone), above the top leg, between
+  // the U length and the cold zone dimensions.
+  const RIGHT = 272;
+  const textW = (str) => K.textWidth(str, 2.4) + 3.3;          // a 2.4 label and its leader's shoulder
   const finishUp = String(item.finish || '').toUpperCase();
   const sheathLong = `Ø${tube.diaMm} SHEATH — ${tube.label} · ${finishUp}`;
   const sheathShort = `Ø${tube.diaMm} SHEATH — ${String(tube.material || '').toUpperCase()} · ${tube.wallMm} WALL · ${finishUp}`;
@@ -282,9 +296,17 @@ function renderUTypeSheet(spec) {
   } else if (sheathFit(sheathShort) >= sheathMin) {
     const lx = sheathFit(sheathShort);
     out.push(K.leader(Math.min(xt + 30, lx - 6), yT - r, lx, 64.5, sheathShort, { size: 2.4 }));
-  } else {
-    const txt = xOuter + 9 + textW(sheathLong) <= 272 ? sheathLong : sheathShort;
+  } else if (xOuter + 9 + textW(sheathShort) <= RIGHT) {
+    const txt = xOuter + 9 + textW(sheathLong) <= RIGHT ? sheathLong : sheathShort;
     out.push(K.leader(Xb + half * Math.cos(-Math.PI / 3), Yc + half * Math.sin(-Math.PI / 3), xOuter + 9, 61, txt, { size: 2.4 }));
+  } else {
+    // Right of a straight-up leader, inside the U length's extension lines; left
+    // of it when only that side has room.
+    const fx = Math.min(Math.max(X0 + czBig + 30, xt + 6), Xb - 2);   // clear of BIG END and the T–T mark
+    const roomR = xOuter - 2 - fx, roomL = fx - X0 - 2;
+    const txt = [sheathLong, sheathShort].find(t => textW(t) <= roomR) || [sheathLong, sheathShort].find(t => textW(t) <= roomL) || sheathShort;
+    const side = textW(txt) > roomR && textW(txt) <= roomL ? 'left' : 'right';
+    out.push(K.leader(fx, yT - r, fx, 56, txt, { size: side === 'right' ? K.fitSize(txt, roomR - 3.3, 2.4) : 2.4, side }));
   }
   const czLines = [`COLD ZONE ${card.coldZoneBigIn}" (${n1(card.coldZoneBigIn * 25.4)}) EACH LEG — NO COIL`, `PIN ${card.pinStudsIn}": ${card.pinStudsIn - 1}" IN THE TUBE + 1" OUT`];
   const czTxtEnd = X0 + czSmall + 8 + Math.max(...czLines.map(textW));
@@ -295,15 +317,33 @@ function renderUTypeSheet(spec) {
   if (xh < czTxtEnd + 4) {
     if (czTxtEnd + 4 < Xb - 4) { xh = czTxtEnd + 4; xhl = xh + 6; } else xhl = xh + (czTxtEnd + 2 - xh) / 0.683;
   }
-  out.push(K.leader(xh, yB + r, xhl, 117, [`HEATED ZONE ≈ ${n1(card.heatedMm)} (${n2(card.heatedMm / 25.4)}") ALONG THE TUBE`, 'COIL INSIDE — SEE SECTION T–T'], { size: 2.4 }));
+  // A big cold zone pushes it so far right that it would run into the element
+  // table (44U with 8" cold zones, 14 Nov 2026): a leader already clear of the
+  // cold-zone label then drops straight down, and the label goes left of the
+  // leader's end, under the cold-zone label, when it still does not fit right.
+  const hTxt = [`HEATED ZONE ≈ ${n1(card.heatedMm)} (${n2(card.heatedMm / 25.4)}") ALONG THE TUBE`, 'COIL INSIDE — SEE SECTION T–T'];
+  const hW = Math.max(...hTxt.map(textW));
+  let hSide = 'right';
+  if (xhl + hW > RIGHT) {
+    if (xh >= czTxtEnd + 2) xhl = xh;
+    if (xhl + hW > RIGHT && xhl - hW > X0 + 22) hSide = 'left';
+  }
+  out.push(K.leader(xh, yB + r, xhl, 117, hTxt, { size: 2.4, side: hSide }));
   const ra = Math.PI / 6;
   const rTxt = `R${n1(geo.rCL)} CL · ROLLER ${shape.rollerMm}`;
-  // A short U leaves no room left of the bend for this label; put it right of it.
-  const rLeftEdge = Xb - 10 - textW(rTxt);
-  const rLeft = rLeftEdge > czTxtEnd && rLeftEdge > xh + (xhl - xh) * 0.683 + 2;
-  out.push(K.leader(Xb + half * Math.cos(ra), Yc + half * Math.sin(ra), rLeft ? Xb - 10 : xOuter + 9, rLeft ? 109 : 103, rTxt, { size: 2.4 }));
+  // Left of the bend, beside the cold-zone label; a short U leaves no room there,
+  // so right of the bend — unless that runs into the table, then left of the
+  // bend one row up, clear of the two leaders that cross that row.
+  const rW = textW(rTxt), rLeftEdge = Xb - 10 - rW;
+  const atRow = (x1, y1, x2, y2, y) => x1 + ((x2 - x1) * (y - y1)) / (y2 - y1);   // a leader's x at height y
+  let rAt = [xOuter + 9, 103];
+  if (rLeftEdge > czTxtEnd && rLeftEdge > xh + (xhl - xh) * 0.683 + 2) rAt = [Xb - 10, 109];
+  else if (xOuter + 9 + rW > RIGHT && rLeftEdge > 2 + Math.max(atRow(xh, yB + r, xhl, 117, 103), atRow(X0 + czSmall * 0.55, yB + r, X0 + czSmall + 8, 109, 103))) rAt = [Xb - 10, 103];
+  out.push(K.leader(Xb + half * Math.cos(ra), Yc + half * Math.sin(ra), rAt[0], rAt[1], rTxt, { size: 2.4 }));
   out.push(K.circle(X0 - 6, Yc, 15.5, { stroke: C.blue, sw: 0.3, dash: '1.6 0.9' }));
-  out.push(K.text(X0 + 8, Yc - 12.5, 'D', { size: 3.3, weight: 700, color: C.blue }));
+  // The letter goes right of anything on the tube (a nipple set reaches past it).
+  const tubeEnd = Math.max(X0, ...layoutTube(X0, s).map(p => p.x + (p.role === 'nipple' ? sz.nipple.t + sz.nipple.threadT : (sz[p.role] || { t: 2 }).t) * s));
+  out.push(K.text(Math.max(X0 + 8, tubeEnd + 1.5), Yc - 12.5, 'D', { size: 3.3, weight: 700, color: C.blue }));
   out.push(K.leader(X0 - 6 + 15.5 * Math.cos(0.95), Yc + 15.5 * Math.sin(0.95), X0 + 20, 125, 'TERMINAL END AND FITTING ORDER — SEE DETAIL D', { size: 2.4, color: C.blue }));
 
   // ── Detail D: terminal end, one leg, scale 2:1 (3:2 with a nipple) ──
@@ -334,11 +374,17 @@ function renderUTypeSheet(spec) {
   out.push(drawLeg(ya));
   const pinLay = layoutPin(xm - esbW, pinEndX, sD);
   // Each leader lands on its own part's top edge.
+  // Right to left from the ESB's, each balloon as close above its part as the
+  // spacing allows: a heavy pin's parts sit at the pin's end, far from the ESB,
+  // and leaders run from there would cross the other balloons (14 Nov 2026).
   const ballooned = [[xm - esbW / 2, 'esb', tubeR + 1], ...pinLay.map(p => [p.mid, p.role, p.role === 'hvpin' ? sz.hvpin.h * sD / 2 : partHalfH(p.role, sD)])].sort((a, b) => b[0] - a[0]);
-  ballooned.forEach(([x, role, hh], i) => out.push(K.balloonLeader(x, ya - hh - 0.5, 123 - i * 8.2, balloonY, no(role))));
+  let bx = 131.2;
+  ballooned.forEach(([x, role, hh]) => { bx = Math.min(bx - 8.2, x + 8); out.push(K.balloonLeader(x, ya - hh - 0.5, bx, balloonY, no(role))); });
   tubeParts.forEach((p, i) => out.push(K.balloonLeader(p.mid, ya - partHalfH(p.role, sD) - 0.5, Math.max(131.2 + i * 8.2, p.mid + 3), balloonY, no(p.role))));
   const pinLow = Math.max(0, ...pinLay.map(p => (p.role === 'hvpin' ? sz.hvpin.h * sD / 2 : partHalfH(p.role, sD)))) > 9.5;
-  out.push(K.leader(pinEndX + (pinLow ? 4 : 9), ya + pinR, pinEndX - 6, pinLow ? 178 : 171, [`${stud} SS PIN ${card.pinStudsIn}" — W/H: BIG END,`, `W/O: SMALL END (PARTS ${[no('pinwh'), no('pinwo')].join(', ')})`], { size: 2.2 }));
+  // On the M4 / M5 thread itself — past a heavy pin's hex body, which covers the pin's end.
+  const pinFoot = fit.pin.includes('hvpin') ? pinEndX + sz.hvpin.t * sD + 14 : pinEndX + (pinLow ? 4 : 9);
+  out.push(K.leader(pinFoot, ya + pinR, pinEndX - 6, pinLow ? 178 : 171, [`${stud} SS PIN ${card.pinStudsIn}" — W/H: BIG END,`, `W/O: SMALL END (PARTS ${[no('pinwh'), no('pinwo')].join(', ')})`], { size: 2.2 }));
   out.push(K.dimH(pinEndX, xm, 172, '25.4 (1")', { fromY1: ya + pinR, fromY2: ya + tubeR, above: false, size: 2.3 }));
   out.push(K.leader(tubeParts.length ? xEnd - 4 : 150, ya + pinR, 146, 187, [`PIN ${card.pinStudsIn - 1}" (${n1((card.pinStudsIn - 1) * 25.4)}) IN THE TUBE, SPOT WELDED`, 'TO THE COIL AT St 4 · ESB SPIGOT SHOWN DASHED'], { size: 2.2 }));
   // Exploded, in fitting order — lettered so the steps are not read as part numbers.
@@ -405,8 +451,9 @@ function renderUTypeSheet(spec) {
   out.push(K.text(267, 205, `(${n1(geo.clMm)} mm)`, { size: 2.4, anchor: 'end' }));
   out.push(K.text(177, 213, `DIAMETER = ${tube.diaMm} MM`, { size: 4.0, weight: 700 }));
   out.push(K.text(177, 221, `ROLLER = ${shape.rollerMm} MM`, { size: 4.0, weight: 700 }));
+  // A long fitting name is set smaller to stay inside the box.
   const tn = String(spec.terminalNote || '');
-  out.push(K.text(177, 228, tn, { size: tn.length > 40 ? 2.3 : 2.8, weight: 700, color: toConfirm ? C.red : '#1a1a1a' }));
+  out.push(K.text(177, 228, tn, { size: K.fitSize(tn, 90, tn.length > 40 ? 2.3 : 2.8, 700), weight: 700, color: toConfirm ? C.red : '#1a1a1a' }));
   out.push(K.text(177, 233.5, `Job card adds 0.7" (${n2(card.totalLengthIn)}") and cuts ${n2(card.cuttingLengthIn)}" (${n1(card.cuttingLengthMm)} mm) before draw.`, { size: 2.0, color: '#444' }));
 
   // ── Right column: element table, then parts and material by stage ──

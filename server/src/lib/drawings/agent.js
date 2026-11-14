@@ -467,6 +467,13 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   }
   p.fitting = { set: set || null, label: R.SET_LABEL[set] || '—', confirmed, nipple: nipple || null, pin: pinRoles, tube: tubeRoles,
     order: R.FITTING_ORDER[set] || [], ruled: !!R.RULED_SETS[set] };
+  // Her nut-washer order names SS nuts (owner, 14 Nov 2026); a brass nut on the
+  // list is pointed out, not changed (Detail D draws the SS line when there is one).
+  const brassNuts = lines.filter(l => /^NUT-BR-/i.test(l.code)).map(l => l.code);
+  if (brassNuts.length && pinRoles.filter(rl => rl === 'nut').length === 2) {
+    const ssNut = lines.some(l => /^NUT-SS-/i.test(l.code));
+    p.flags.push(`the list has brass nut ${brassNuts.join(', ')} — your nut-washer order names SS nuts (ESB → SS nut → washer → washer → SS nut); Detail D draws ${ssNut ? 'the SS nut line' : 'the list\'s brass nut'}`);
+  }
 
   // ── The sheet ──
   const ctx = { st, p, card, geo, TL, uIn, uLabel, W, wAns, std, d, cz, pin, fixture, stud, parts, group, rem, inv, approver, today };

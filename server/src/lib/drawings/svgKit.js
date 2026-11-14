@@ -21,6 +21,23 @@ function circle(cx, cy, r, { fill = 'none', stroke = INK, sw = 0.25, dash = null
 function path(d, { fill = 'none', stroke = INK, sw = 0.25, dash = null, join = 'round', cap = 'butt' } = {}) {
   return `<path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="${join}" stroke-linecap="${cap}"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
 }
+// Width of one line of Arial / Helvetica at `size` (mm), from the font's own
+// character widths in groups — close enough to keep a label inside its box.
+// Anything else (Gujarati, Devanagari) counts as a wide letter, so it errs large.
+function textWidth(str, size, weight = 400) {
+  let em = 0;
+  for (const ch of String(str ?? '')) {
+    em += /[ijl'|]/.test(ch) ? 0.22 : /[ .,:;!ftI/\\]/.test(ch) ? 0.28 : /[r()[\]\-·"]/.test(ch) ? 0.34
+      : /[mMW—]/.test(ch) ? 0.92 : /[a-z0-9–×≈±]/.test(ch) ? 0.56 : /[A-Z#&%@Ø°Ω]/.test(ch) ? 0.72 : 0.62;
+  }
+  return em * size * (weight >= 700 ? 1.08 : 1);
+}
+// The font size at which `str` fits `width` (never below `min`); `size` when it already fits.
+function fitSize(str, width, size, weight = 400, min = size * 0.6) {
+  const w = textWidth(str, size, weight);
+  return w > width ? Math.max(min, Math.floor((size * width / w) * 100) / 100) : size;
+}
+
 // One line of text, or several when `str` is an array (line height = size × 1.25).
 function text(x, y, str, { size = 2.3, anchor = 'start', weight = 400, color = INK, rotate = 0, family = null, italic = false } = {}) {
   const lines = Array.isArray(str) ? str : [str];
@@ -74,8 +91,9 @@ function dimV(y1, y2, x, label, { fromX1 = null, fromX2 = null, size = 2.4, colo
   return out.join('');
 }
 // Leader: a dot on the feature, a line to the label, a short shoulder, the label.
-function leader(fx, fy, lx, ly, label, { size = 2.3, color = INK, dot = true, weight = 400 } = {}) {
-  const right = lx >= fx;
+// The label sits on the side the leader runs to, unless `side` says 'left' / 'right'.
+function leader(fx, fy, lx, ly, label, { size = 2.3, color = INK, dot = true, weight = 400, side = null } = {}) {
+  const right = side ? side === 'right' : lx >= fx;
   const sx = lx + (right ? 2.5 : -2.5);
   const lines = Array.isArray(label) ? label : [label];
   return [
@@ -104,6 +122,8 @@ function viewTitle(x, y, title, sub = null) {
 }
 // A ruled table. cols: widths; rows: arrays of cells; a cell is a string or an
 // array of lines (first line bold when opts.boldFirstLine). opts.head: header row.
+// A line too long for its column is set smaller rather than run into the next
+// one (a long inventory name, 14 Nov 2026).
 function table(x, y, cols, rows, { head = null, rowH = 5, headH = 5.5, size = 2.2, title = null, titleH = 5.5, boldFirstCol = false, boldFirstLine = false, align = [] } = {}) {
   const W = cols.reduce((a, b) => a + b, 0);
   const out = [];
@@ -137,7 +157,8 @@ function table(x, y, cols, rows, { head = null, rowH = 5, headH = 5.5, size = 2.
       const top = cy + (h - cell.length * size * 1.22) / 2 + size * 0.95;
       cell.forEach((s, k) => {
         const bold = (boldFirstCol && i === 0) || (boldFirstLine && k === 0 && cell.length > 1);
-        out.push(text(tx, top + k * size * 1.22, s, { size: k > 0 && boldFirstLine ? size - 0.15 : size, anchor: a, weight: bold ? 700 : 400, color: k > 0 && boldFirstLine ? '#444' : INK }));
+        const sz = fitSize(s, cols[i] - 2.4, k > 0 && boldFirstLine ? size - 0.15 : size, bold ? 700 : 400);
+        out.push(text(tx, top + k * size * 1.22, s, { size: sz, anchor: a, weight: bold ? 700 : 400, color: k > 0 && boldFirstLine ? '#444' : INK }));
       });
       cx += cols[i];
     });
@@ -146,4 +167,4 @@ function table(x, y, cols, rows, { head = null, rowH = 5, headH = 5.5, size = 2.
   return { svg: out.join(''), height: cy - y, width: W };
 }
 
-module.exports = { esc, f, INK, NAVY, DIM, line, rect, circle, path, text, arrowhead, dimH, dimV, leader, balloon, balloonLeader, breakMark, viewTitle, table };
+module.exports = { esc, f, INK, NAVY, DIM, textWidth, fitSize, line, rect, circle, path, text, arrowhead, dimH, dimV, leader, balloon, balloonLeader, breakMark, viewTitle, table };
