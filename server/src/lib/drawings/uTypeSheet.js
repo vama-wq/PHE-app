@@ -66,7 +66,7 @@ function renderUTypeSheet(spec) {
     out.push(K.rect(X0 - 1.2, y - 2.5, 1.2, 5, { fill: C.esb, stroke: 'none' }));
     out.push(K.rect(X0, y - 1.4, 2.2, 2.8, { fill: 'none', stroke: '#555', sw: 0.12, dash: '0.5 0.35' }));
     let x = X0 - 1.2;
-    for (const p of [{ w: 1.6, h: 3.5, fill: C.ss }, { w: 0.4, h: 4.5, fill: C.brass }, { w: 0.75, h: 3, fill: 'none', dash: '0.6 0.4' }, { w: 0.4, h: 4.5, fill: C.brass }, { w: 1.6, h: 3.5, fill: C.ss }]) {
+    for (const p of [{ w: 1.6, h: 3.5, fill: C.ss }, { w: 0.4, h: 4.5, fill: C.brass }, { w: 0.4, h: 4.5, fill: C.brass }, { w: 1.6, h: 3.5, fill: C.ss }]) {
       x -= p.w;
       out.push(K.rect(x, y - p.h / 2, p.w, p.h, { fill: p.fill, stroke: '#333', sw: 0.12, dash: p.dash || null }));
     }
@@ -102,10 +102,11 @@ function renderUTypeSheet(spec) {
   out.push(K.viewTitle(92, 135, 'DETAIL D — TERMINAL END, ONE LEG (SCALE 2:1)'));
   const s2 = 2, tubeR = (tube.diaMm / 2) * s2, pinR = (4 / 2) * s2, xm = 120, xEnd = 168;
   const pinL = 25.4 * s2;
+  // Owner, 14 Nov 2026: ESB, then SS nut, washer, washer, SS nut — "there is
+  // no wire lug in the middle".
   const STACK = [
     { key: 'ssnut', w: 6.4, h: 14, fill: C.ss }, { key: 'washer', w: 1.6, h: 18, fill: C.brass },
-    { key: 'lug', w: 6, h: 11, fill: 'none', dash: '0.9 0.6' }, { key: 'washer', w: 1.6, h: 18, fill: C.brass },
-    { key: 'ssnut', w: 6.4, h: 14, fill: C.ss },
+    { key: 'washer', w: 1.6, h: 18, fill: C.brass }, { key: 'ssnut', w: 6.4, h: 14, fill: C.ss },
   ];
   const drawLeg = (y, { stack = true } = {}) => {
     const o = [];
@@ -124,28 +125,26 @@ function renderUTypeSheet(spec) {
   };
   const no = (key) => parts.find(p => p.key === key)?.no;
   const ya = 160;
-  out.push(K.text(16, 146, 'ASSEMBLED — TO CONFIRM', { size: 2.3, weight: 700, color: C.red }));
+  out.push(K.text(16, 146, 'ASSEMBLED', { size: 2.3, weight: 700, color: '#555' }));
   out.push(drawLeg(ya));
-  const ballooned = [[xm - 2, 'esb'], ...STACK.map(p => [p._x, p.key])].filter(([, k]) => k !== 'lug').sort((a, b) => b[0] - a[0]);
+  const ballooned = [[xm - 2, 'esb'], ...STACK.map(p => [p._x, p.key])].sort((a, b) => b[0] - a[0]);
   ballooned.forEach(([x, key], i) => out.push(K.balloonLeader(x, ya - 9.5, 123 - i * 8.2, 143, no(key))));
-  const lug = STACK.find(p => p.key === 'lug');
-  out.push(K.leader(lug._x, ya + 5.5, lug._x - 2, 181, 'WIRE LUG — CUSTOMER', { size: 2.2 }));
   out.push(K.leader(xm - pinL + 9, ya + pinR, xm - pinL - 6, 171, [`M4 SS PIN ${card.pinStudsIn}" — W/H: BIG END,`, 'W/O: SMALL END (PARTS 2, 3)'], { size: 2.2 }));
   out.push(K.dimH(xm - pinL, xm, 172, '25.4 (1")', { fromY1: ya + pinR, fromY2: ya + tubeR, above: false, size: 2.3 }));
   out.push(K.leader(150, ya + pinR, 146, 187, [`PIN ${card.pinStudsIn - 1}" (${n1((card.pinStudsIn - 1) * 25.4)}) IN THE TUBE, SPOT WELDED`, 'TO THE COIL AT St 4 · ESB SPIGOT SHOWN DASHED'], { size: 2.2 }));
   // Exploded, in fitting order — lettered so the steps are not read as part numbers.
   const ye = 217;
-  out.push(K.text(16, 198, 'FITTING ORDER — TO CONFIRM', { size: 2.3, weight: 700, color: C.red }));
+  out.push(K.text(16, 198, 'FITTING ORDER', { size: 2.3, weight: 700, color: '#555' }));
   out.push(drawLeg(ye, { stack: false }));
   out.push(K.line(12.5, ye, xm - pinL, ye, { w: 0.15, dash: '4 1 1 1', color: '#777' }));
-  const EXP = [{ x: 62.5, ...STACK[0] }, { x: 51.5, ...STACK[1] }, { x: 41, ...STACK[2] }, { x: 30.5, ...STACK[3] }, { x: 19.5, ...STACK[4] }];
+  const EXP = [{ x: 60, ...STACK[0] }, { x: 47, ...STACK[1] }, { x: 35, ...STACK[2] }, { x: 22, ...STACK[3] }];
   for (const p of EXP) out.push(K.rect(p.x - p.w / 2, ye - p.h / 2, p.w, p.h, { fill: p.fill, stroke: '#333', sw: 0.2, dash: p.dash || null }));
   out.push(K.line(72, ye - 9, 94, ye - 9, { w: 0.25, color: C.blue }), K.arrowhead(94, ye - 9, 0, { color: C.blue }));
   out.push(K.text(83, ye - 10.5, 'slide on in this order', { size: 2.0, anchor: 'middle', color: C.blue }));
   const steps = [
-    { x: xm - 2, txt: ['A', 'ESB', 'St 23'], key: 'esb' }, { x: 62.5, txt: ['B', 'SS nut', 'St 26'], key: 'ssnut' },
-    { x: 51.5, txt: ['C', 'washer', 'St 26'], key: 'washer' }, { x: 41, txt: ['D', 'lug', 'customer'], key: null },
-    { x: 30.5, txt: ['E', 'washer', 'St 26'], key: 'washer' }, { x: 19.5, txt: ['F', 'SS nut', 'St 26'], key: 'ssnut' },
+    { x: xm - 2, txt: ['A', 'ESB', 'St 23'], key: 'esb' }, { x: 60, txt: ['B', 'SS nut', 'St 26'], key: 'ssnut' },
+    { x: 47, txt: ['C', 'washer', 'St 26'], key: 'washer' }, { x: 35, txt: ['D', 'washer', 'St 26'], key: 'washer' },
+    { x: 22, txt: ['E', 'SS nut', 'St 26'], key: 'ssnut' },
   ];
   for (const st of steps) {
     out.push(K.text(st.x, ye + 13.5, st.txt[0], { size: 2.6, anchor: 'middle', weight: 700, color: C.blue }));
