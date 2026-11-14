@@ -125,7 +125,7 @@ function renderUTypeSheet(spec) {
   };
   const toConfirm = !fit.confirmed;
   const redTag = (x, y, label = 'TO CONFIRM', size = 2.3) => {
-    const w = label.length * size * 0.66 + 2.4;
+    const w = label.length * size * 0.6 + 2.4;
     return K.rect(x, y - size - 0.9, w, size + 2, { stroke: C.red, sw: 0.35, fill: '#fff' })
       + K.text(x + 1.2, y, label, { size, weight: 700, color: C.red });
   };
@@ -252,35 +252,62 @@ function renderUTypeSheet(spec) {
   out.push(K.dimH(X0, X0 + czBig, 61, `${n1(card.coldZoneBigIn * 25.4)} (${card.coldZoneBigIn}") COLD ZONE`, { fromY1: yT - r, fromY2: yT - r, size: 2.6 }));
   out.push(K.dimH(X0 - pinOut, X0, 99, '25.4 (1") PIN OUT', { fromY1: yB + 1, fromY2: yB + r, above: false, size: 2.5 }));
   out.push(K.dimV(yT - r, yB + r, xOuter + 4.5, `${shape.outsideWidthMm} OUTSIDE`, { fromX1: Xb, fromX2: Xb, size: 2.6 }));
-  const xg = Xb - 20;
+  // Section mark T–T in the heated zone of the top leg, clear of the BIG END
+  // label on a short U; the INSIDE dimension keeps clear of it.
+  let xt = X0 + czMax + heatedPaper * 0.33;
+  if (xt < X0 + czBig + 31 && X0 + czBig + 31 < Xb - 10) xt = X0 + czBig + 31;
+  let xg = Xb - 20;
+  if (Math.abs(xg - xt) < 8) xg = Math.min(Xb - 6, xt + 10);
   out.push(K.dimV(yT + r, yB - r, xg, `${geo.insideMm} INSIDE`, { size: 2.2 }));
-  // Section mark T–T in the heated zone of the top leg.
-  const xt = X0 + czMax + heatedPaper * 0.33;
   for (const y of [yT - r - 3.2, yT + r + 3.2]) {
     out.push(K.line(xt, y - 1.6, xt, y + 1.6, { w: 0.35 }));
     out.push(K.line(xt, y, xt - 3, y, { w: 0.25 }), K.arrowhead(xt - 3, y, Math.PI, { len: 1.4, half: 0.5, color: '#111' }));
     out.push(K.text(xt + 1.2, y + (y < yT ? -0.6 : 2.4), 'T', { size: 2.5, weight: 700 }));
   }
   // Callouts.
-  const sheathTxt = `Ø${tube.diaMm} SHEATH — ${tube.label} · ${String(item.finish || '').toUpperCase()}`;
-  const sheathLx = Math.min(xt + 36, 268 - sheathTxt.length * 2.4 * 0.56);
-  out.push(K.leader(Math.min(xt + 30, Xb - 4), yT - r, sheathLx, 64.5, sheathTxt, { size: 2.4 }));
-  const czTxtEnd = X0 + czSmall + 8 + 82;
-  out.push(K.leader(X0 + czSmall * 0.55, yB + r, X0 + czSmall + 8, 109, [`COLD ZONE ${card.coldZoneBigIn}" (${n1(card.coldZoneBigIn * 25.4)}) EACH LEG — NO COIL`, `PIN ${card.pinStudsIn}": ${card.pinStudsIn - 1}" IN THE TUBE + 1" OUT`], { size: 2.4 }));
-  const xh = X0 + czMax + heatedPaper * 0.485;
-  out.push(K.leader(xh, yB + r, xh + 6, 117, [`HEATED ZONE ≈ ${n1(card.heatedMm)} (${n2(card.heatedMm / 25.4)}") ALONG THE TUBE`, 'COIL INSIDE — SEE SECTION T–T'], { size: 2.4 }));
+  // The sheath callout ends short of the U length's extension line. A short U
+  // gets the short form, and when even that will not fit left of the bend it
+  // goes right of the OUTSIDE dimension.
+  const textW = (str) => String(str).length * 2.4 * 0.6 + 3.3;
+  const finishUp = String(item.finish || '').toUpperCase();
+  const sheathLong = `Ø${tube.diaMm} SHEATH — ${tube.label} · ${finishUp}`;
+  const sheathShort = `Ø${tube.diaMm} SHEATH — ${String(tube.material || '').toUpperCase()} · ${tube.wallMm} WALL · ${finishUp}`;
+  const sheathRight = xOuter - 5, sheathMin = Math.max(X0 + czBig + 32, xt + 5);
+  const sheathFit = (txt) => Math.min(xt + 36, sheathRight - textW(txt));
+  if (sheathFit(sheathLong) >= sheathMin) {
+    const lx = sheathFit(sheathLong);
+    out.push(K.leader(Math.min(xt + 30, lx - 6), yT - r, lx, 64.5, sheathLong, { size: 2.4 }));
+  } else if (sheathFit(sheathShort) >= sheathMin) {
+    const lx = sheathFit(sheathShort);
+    out.push(K.leader(Math.min(xt + 30, lx - 6), yT - r, lx, 64.5, sheathShort, { size: 2.4 }));
+  } else {
+    const txt = xOuter + 9 + textW(sheathLong) <= 272 ? sheathLong : sheathShort;
+    out.push(K.leader(Xb + half * Math.cos(-Math.PI / 3), Yc + half * Math.sin(-Math.PI / 3), xOuter + 9, 61, txt, { size: 2.4 }));
+  }
+  const czLines = [`COLD ZONE ${card.coldZoneBigIn}" (${n1(card.coldZoneBigIn * 25.4)}) EACH LEG — NO COIL`, `PIN ${card.pinStudsIn}": ${card.pinStudsIn - 1}" IN THE TUBE + 1" OUT`];
+  const czTxtEnd = X0 + czSmall + 8 + Math.max(...czLines.map(textW));
+  out.push(K.leader(X0 + czSmall * 0.55, yB + r, X0 + czSmall + 8, 109, czLines, { size: 2.4 }));
+  // The heated-zone leader must not cut through the cold-zone label on a short U.
+  let xh = X0 + czMax + heatedPaper * 0.485, xhl = xh + 6;
+  if (xh < X0 + czSmall + 30 && X0 + czSmall + 30 < Xb - 4) { xh = X0 + czSmall + 30; xhl = xh + 6; }   // clear of SMALL END
+  if (xh < czTxtEnd + 4) {
+    if (czTxtEnd + 4 < Xb - 4) { xh = czTxtEnd + 4; xhl = xh + 6; } else xhl = xh + (czTxtEnd + 2 - xh) / 0.683;
+  }
+  out.push(K.leader(xh, yB + r, xhl, 117, [`HEATED ZONE ≈ ${n1(card.heatedMm)} (${n2(card.heatedMm / 25.4)}") ALONG THE TUBE`, 'COIL INSIDE — SEE SECTION T–T'], { size: 2.4 }));
   const ra = Math.PI / 6;
   const rTxt = `R${n1(geo.rCL)} CL · ROLLER ${shape.rollerMm}`;
   // A short U leaves no room left of the bend for this label; put it right of it.
-  const rLeft = Xb - 10 - rTxt.length * 2.4 * 0.56 > czTxtEnd;
+  const rLeftEdge = Xb - 10 - textW(rTxt);
+  const rLeft = rLeftEdge > czTxtEnd && rLeftEdge > xh + (xhl - xh) * 0.683 + 2;
   out.push(K.leader(Xb + half * Math.cos(ra), Yc + half * Math.sin(ra), rLeft ? Xb - 10 : xOuter + 9, rLeft ? 109 : 103, rTxt, { size: 2.4 }));
   out.push(K.circle(X0 - 6, Yc, 15.5, { stroke: C.blue, sw: 0.3, dash: '1.6 0.9' }));
   out.push(K.text(X0 + 8, Yc - 12.5, 'D', { size: 3.3, weight: 700, color: C.blue }));
   out.push(K.leader(X0 - 6 + 15.5 * Math.cos(0.95), Yc + 15.5 * Math.sin(0.95), X0 + 20, 125, 'TERMINAL END AND FITTING ORDER — SEE DETAIL D', { size: 2.4, color: C.blue }));
 
   // ── Detail D: terminal end, one leg, scale 2:1 (3:2 with a nipple) ──
-  const sD = fit.tube.includes('nipple') ? 1.5 : 2;
-  out.push(K.viewTitle(92, 135, `DETAIL D — TERMINAL END, ONE LEG (SCALE ${sD === 2 ? '2:1' : '3:2'})`));
+  // A nipple is too big for 2:1: 3:2 for M12, 5:4 for M16.
+  const sD = fit.tube.includes('nipple') ? (String(fit.nipple).toUpperCase() === 'M16' ? 1.25 : 1.5) : 2;
+  out.push(K.viewTitle(92, 135, `DETAIL D — TERMINAL END, ONE LEG (SCALE ${({ 2: '2:1', 1.5: '3:2', 1.25: '5:4' })[sD]})`));
   const tubeR = (tube.diaMm / 2) * sD, pinR = (pinThread / 2) * sD, xm = 120, xEnd = 168;
   const pinL = 25.4 * sD, pinEndX = xm - pinL, esbW = 2 * sD;
   const tubeParts = layoutTube(xm, sD);
@@ -301,14 +328,15 @@ function renderUTypeSheet(spec) {
   };
   const ya = 160;
   out.push(K.text(16, 146, 'ASSEMBLED', { size: 2.3, weight: 700, color: '#555' }));
-  if (toConfirm) out.push(redTag(16, 140.5, `FITTING ORDER TO CONFIRM — ${fit.label.toUpperCase()}`, 2.2));
+  if (toConfirm) out.push(redTag(16, 140.5, 'TO CONFIRM: FITTING ORDER', 2.2));
   out.push(drawLeg(ya));
   const pinLay = layoutPin(xm - esbW, pinEndX, sD);
-  const pinTop = Math.max(...fit.pin.map(rl => partHalfH(rl, sD)), tubeR + 1);
-  const ballooned = [[xm - esbW / 2, 'esb', tubeR + 1], ...pinLay.map(p => [p.mid, p.role, partHalfH(p.role, sD)])].sort((a, b) => b[0] - a[0]);
-  ballooned.forEach(([x, role], i) => out.push(K.balloonLeader(x, ya - pinTop - 0.5, 123 - i * 8.2, balloonY, no(role))));
+  // Each leader lands on its own part's top edge.
+  const ballooned = [[xm - esbW / 2, 'esb', tubeR + 1], ...pinLay.map(p => [p.mid, p.role, p.role === 'hvpin' ? sz.hvpin.h * sD / 2 : partHalfH(p.role, sD)])].sort((a, b) => b[0] - a[0]);
+  ballooned.forEach(([x, role, hh], i) => out.push(K.balloonLeader(x, ya - hh - 0.5, 123 - i * 8.2, balloonY, no(role))));
   tubeParts.forEach((p, i) => out.push(K.balloonLeader(p.mid, ya - partHalfH(p.role, sD) - 0.5, Math.max(131.2 + i * 8.2, p.mid + 3), balloonY, no(p.role))));
-  out.push(K.leader(pinEndX + 9, ya + pinR, pinEndX - 6, 171, [`${stud} SS PIN ${card.pinStudsIn}" — W/H: BIG END,`, `W/O: SMALL END (PARTS ${[no('pinwh'), no('pinwo')].join(', ')})`], { size: 2.2 }));
+  const pinLow = Math.max(0, ...pinLay.map(p => (p.role === 'hvpin' ? sz.hvpin.h * sD / 2 : partHalfH(p.role, sD)))) > 9.5;
+  out.push(K.leader(pinEndX + (pinLow ? 4 : 9), ya + pinR, pinEndX - 6, pinLow ? 178 : 171, [`${stud} SS PIN ${card.pinStudsIn}" — W/H: BIG END,`, `W/O: SMALL END (PARTS ${[no('pinwh'), no('pinwo')].join(', ')})`], { size: 2.2 }));
   out.push(K.dimH(pinEndX, xm, 172, '25.4 (1")', { fromY1: ya + pinR, fromY2: ya + tubeR, above: false, size: 2.3 }));
   out.push(K.leader(tubeParts.length ? xEnd - 4 : 150, ya + pinR, 146, 187, [`PIN ${card.pinStudsIn - 1}" (${n1((card.pinStudsIn - 1) * 25.4)}) IN THE TUBE, SPOT WELDED`, 'TO THE COIL AT St 4 · ESB SPIGOT SHOWN DASHED'], { size: 2.2 }));
   // Exploded, in fitting order — lettered so the steps are not read as part numbers.
@@ -339,15 +367,16 @@ function renderUTypeSheet(spec) {
   let li = 0;
   if (tubeParts.length) {
     // The parts on the tube go on first, as one step.
-    const x0 = Math.min(...tubeParts.map(p => p.x)), x1 = Math.max(...tubeParts.map(p => p.x + partWidth(p.role, sD)));
     const isNipple = fit.tube.includes('nipple');
     const yl = ye + Math.max(...fit.tube.map(rl => partHalfH(rl, sD))) + 3.4;
-    out.push(K.text((x0 + x1) / 2, yl, `${letters[li++]} · ${isNipple ? `${NAME.nipple} set` : 'bracket'} · ${stageOf(fit.tube[0])}${isNipple ? '' : ' (before the ESB)'}`, { size: 2.1, anchor: 'middle', weight: 700, color: C.blue }));
+    const what = isNipple ? (fit.tube.length > 1 ? `${NAME.nipple} set` : NAME.nipple) : 'bracket';
+    out.push(K.text(xm + 7, yl, `${letters[li++]} · ${what} · ${stageOf(fit.tube[0])}${isNipple ? '' : ' (before the ESB)'}`, { size: 2.1, weight: 700, color: C.blue }));
   }
   const steps = [{ x: xm - esbW / 2, role: 'esb', name: 'ESB' }, ...exp.map(p => ({ x: p.mid, role: p.role, name: NAME[p.role] || p.role }))];
+  const yL = ye + Math.max(13.5, tubeR + 1 + 3.2, ...fit.pin.map(rl => (rl === 'hvpin' ? sz.hvpin.h * sD / 2 : partHalfH(rl, sD)) + 3.2));
   for (const st of steps) {
-    out.push(K.text(st.x, ye + 13.5, letters[li++] || '?', { size: 2.6, anchor: 'middle', weight: 700, color: C.blue }));
-    out.push(K.text(st.x, ye + 16.6, [st.name, stageOf(st.role)], { size: 2.0, anchor: 'middle', color: '#333' }));
+    out.push(K.text(st.x, yL, letters[li++] || '?', { size: 2.6, anchor: 'middle', weight: 700, color: C.blue }));
+    out.push(K.text(st.x, yL + 3.1, [st.name, stageOf(st.role)], { size: 2.0, anchor: 'middle', color: '#333' }));
     out.push(K.balloon(st.x, ye - 15.5, no(st.role), { r: 2.3 }));
   }
 
