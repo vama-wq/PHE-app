@@ -128,6 +128,10 @@ function renderUTypeSheet(spec) {
     return (role === 'nut' && ssNutStack && all.find(p => /^NUT-SS-/i.test(String(p.code || '')))) || all[0];
   };
   const no = (role) => partFor(role)?.no ?? '–';
+  // An order on the old pin rule takes its pins from the item's list (role
+  // 'listpin'); a newer one from the job card (pinwh / pinwo).
+  const listPinNos = (parts || []).filter(p => roleOf(p) === 'listpin').map(p => p.no);
+  const pinNos = listPinNos.length ? listPinNos : [no('pinwh'), no('pinwo')];
   const codeOf = (role) => String(partFor(role)?.code || (fit.nuts && role === 'nut2' ? fit.nuts[1] : fit.nuts && role === 'nut' ? fit.nuts[0] : ''));
   const nutFill = (role) => (/-BR-/i.test(codeOf(role)) ? C.brass : C.ss);
   const nutName = (role) => (/-BR-/i.test(codeOf(role)) ? (fit.nuts ? 'brass nut' : 'nut') : 'SS nut');
@@ -277,7 +281,11 @@ function renderUTypeSheet(spec) {
     : `${n1(shape.uLengthMm)} (${String(shape.uLengthIn)}") U LENGTH "${shape.uLabel}" — END OF THE TUBE TO THE FAR END OF THE U`;
   if (K.textWidth(uLabel, 2.7) > xOuter - X0 - 3) uLabel = `${n1(shape.uLengthMm)} U LENGTH "${shape.uLabel}"`;
   out.push(K.dimH(X0, xOuter, 51, uLabel, { fromY1: yT - r, fromY2: Yc, size: 2.7 }));
-  out.push(K.dimH(X0, X0 + czBig, 61, `${n1(card.coldZoneBigIn * 25.4)} (${card.coldZoneBigIn}") COLD ZONE`, { fromY1: yT - r, fromY2: yT - r, size: 2.6 }));
+  // A short cold zone (2" is 25.4 at 1:2) gets a smaller label, so the words
+  // stay between its extension lines (≈ 0.56 × size per character).
+  const czLabel = `${n1(card.coldZoneBigIn * 25.4)} (${card.coldZoneBigIn}") COLD ZONE`;
+  const czSize = Math.max(1.9, Math.min(2.6, (czBig - 1.5) / (czLabel.length * 0.56)));
+  out.push(K.dimH(X0, X0 + czBig, 61, czLabel, { fromY1: yT - r, fromY2: yT - r, size: Math.round(czSize * 100) / 100 }));
   out.push(K.dimH(X0 - pinOut, X0, 99, '25.4 (1") PIN OUT', { fromY1: yB + 1, fromY2: yB + r, above: false, size: 2.5 }));
   out.push(K.dimV(yT - r, yB + r, xOuter + 4.5, `${shape.outsideWidthMm} OUTSIDE`, { fromX1: Xb, fromX2: Xb, size: 2.6 }));
   // Section mark T–T in the heated zone of the top leg, clear of the BIG END
@@ -399,7 +407,7 @@ function renderUTypeSheet(spec) {
   const pinLow = Math.max(0, ...pinLay.map(p => (p.role === 'hvpin' ? sz.hvpin.h * sD / 2 : partHalfH(p.role, sD)))) > 9.5;
   // On the M4 / M5 thread itself — past a heavy pin's hex body, which covers the pin's end.
   const pinFoot = fit.pin.includes('hvpin') ? pinEndX + sz.hvpin.t * sD + 14 : pinEndX + (pinLow ? 4 : 9);
-  out.push(K.leader(pinFoot, ya + pinR, pinEndX - 6, pinLow ? 178 : 171, [`${stud} SS PIN ${card.pinStudsIn}" — W/H: BIG END,`, `W/O: SMALL END (PARTS ${[no('pinwh'), no('pinwo')].join(', ')})`], { size: 2.2 }));
+  out.push(K.leader(pinFoot, ya + pinR, pinEndX - 6, pinLow ? 178 : 171, [`${stud} SS PIN ${card.pinStudsIn}" — W/H: BIG END,`, `W/O: SMALL END (PARTS ${pinNos.join(', ')})`], { size: 2.2 }));
   out.push(K.dimH(pinEndX, xm, 172, '25.4 (1")', { fromY1: ya + pinR, fromY2: ya + tubeR, above: false, size: 2.3 }));
   out.push(K.leader(tubeParts.length ? xEnd - 4 : 150, ya + pinR, 146, 187, [`PIN ${card.pinStudsIn - 1}" (${n1((card.pinStudsIn - 1) * 25.4)}) IN THE TUBE, SPOT WELDED`, 'TO THE COIL AT St 4 · ESB SPIGOT SHOWN DASHED'], { size: 2.2 }));
   // Exploded, in fitting order — lettered so the steps are not read as part numbers.

@@ -17,6 +17,7 @@ const E = require('../jobCardEngine');
 const { buildDraft } = require('../jobCardDraft');
 const TG = require('../terminalGroups');
 const { PINS_RULE } = require('../terminals');
+const { isTerminalCategory } = require('../stockLedger');
 const { toGujarati, toHindi, isTranslated } = require('../translit');
 const U = require('./uTypeSheet');
 const R = require('./uRules');
@@ -61,10 +62,11 @@ const roleFor = (code) => {
   if (/^NIP-BR-/.test(c)) return 'nipple';
   if (/^IWS-/.test(c)) return 'nipwasher';
   if (/^FIN-/.test(c)) return 'fins';
+  if (/^TP-/.test(c)) return 'listpin';
   return 'other';
 };
-const STAGE_FOR = { esb: ['St 23', 'Sealing'], nipple: ['St 21', 'Nipple Press'], nipnut: ['St 21', 'Nipple Press'], nipwasher: ['St 21', 'Nipple Press'] };
-const ORDER_OF = { nipple: 1, nipwasher: 2, nipnut: 3, bracket: 4, esb: 5, nut: 6, washer: 7, hvpin: 8, hvwasher: 9, hvnut: 10, other: 11, fins: 12 };
+const STAGE_FOR = { listpin: ['St 4 Spot', 'from the list'], esb: ['St 23', 'Sealing'], nipple: ['St 21', 'Nipple Press'], nipnut: ['St 21', 'Nipple Press'], nipwasher: ['St 21', 'Nipple Press'] };
+const ORDER_OF = { listpin: 0, nipple: 1, nipwasher: 2, nipnut: 3, bracket: 4, esb: 5, nut: 6, washer: 7, hvpin: 8, hvwasher: 9, hvnut: 10, other: 11, fins: 12 };
 
 // ── Her answers ───────────────────────────────────────────────────────────────
 // Only these keys, trimmed; a blank answer means "use the default". `ack:<kind>`
@@ -125,7 +127,7 @@ async function loadItem(db, itemId) {
       c.customer_code, c.name AS customer_name
     FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE o.id=$1`, [item.order_id]);
   const lines = await db.all(`SELECT oii.id, oii.inventory_item_id, oii.qty, oii.rework_qty, oii.qty_deducted, oii.qty_waived,
-      ii.item_code AS code, ii.name, ii.name_gu, TRIM(ii.category) AS category, ii.unit
+      ii.item_code AS code, ii.name, ii.name_gu, TRIM(ii.category) AS category, ii.unit, ii.terminal_group
     FROM order_item_inventory oii JOIN inventory_items ii ON ii.id = oii.inventory_item_id
     WHERE oii.order_item_id=$1 ORDER BY oii.id`, [itemId]);
   const drawings = await db.all(`SELECT id, drawing_status, original_name, file_name, file_path, created_at
@@ -485,18 +487,23 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
     return { line1: `${code} · ${name}`, gu, hi: isTranslated(name, hi) ? hi : '' };
   };
   const q0 = Number(item.quantity);
+  // An order on the old pin rule (up to ORD-160-26) keeps the list's pins and
+  // its job card adds none (lib/terminals.js), so the sheet shows the list's.
+  const listPins = Number(order.id) <= PINS_RULE.afterOrderId ? lines.filter(l => isTerminalCategory(l.category)) : [];
+  const pinsFromList = listPins.length > 0;
+  const shownGroup = pinsFromList ? (TG.normaliseGroup(listPins[0].terminal_group) || group) : group;
   const pinCode = (end) => draft.pins?.[end] || `TP-SS-${stud}-${String(end === 'big' ? card.terminalPinBig.studs : card.terminalPinSmall.studs).padStart(2, '0')}-${end === 'big' ? 'WH' : 'WO'}`;
   const ftPc = card.cuttingLengthMm / 304.8;
   const mgoKgPc = (card.cuttingLengthIn / 5) * 0.018;            // MgO 18 g per 5" of cut tube
   const fbush = d === 11 ? 'PVC-FB11-M5' : 'PVC-FB08-M4';
   const parts = [
     { key: 'coil', role: 'coil', code: `SPR-KD-${card.gauge}`, stage: ['St 1 Coil', '(weighed St 3)'], ...tri(`SPR-KD-${card.gauge}`), perPc: '1 coil', forOrder: `${q0} coils` },
-    { key: 'pinwh', role: 'pinwh', code: pinCode('big'), stage: ['St 4 Spot', 'big end'], ...tri(pinCode('big'), draft.pins?.big ? null : 'no item in inventory'), perPc: '1', forOrder: String(q0) },
-    { key: 'pinwo', role: 'pinwo', code: pinCode('small'), stage: ['St 4 Spot', 'small end'], ...tri(pinCode('small'), draft.pins?.small ? null : 'no item in inventory'), perPc: '1', forOrder: String(q0) },
+    ...(pinsFromList ? [] : [{ key: 'pinwh', role: 'pinwh', code: pinCode('big'), stage: ['St 4 Spot', 'big end'], ...tri(pinCode('big'), draft.pins?.big ? null : 'no item in inventory'), perPc: '1', forOrder: String(q0) },
+      { key: 'pinwo', role: 'pinwo', code: pinCode('small'), stage: ['St 4 Spot', 'small end'], ...tri(pinCode('small'), draft.pins?.small ? null : 'no item in inventory'), perPc: '1', forOrder: String(q0) }]),
     { key: 'tube', role: 'tube', code: item.tube_material, stage: ['St 5', 'Tube cutting'], ...tri(item.tube_material), perPc: [`${fx(ftPc)} ft`, `${fx(card.cuttingLengthMm, 1)} mm`], forOrder: `${fx(ftPc * q0, 1)} ft` },
     { key: 'fbush', role: 'fbush', code: fbush, stage: ['St 6', 'Filling'], ...tri(fbush), perPc: '2', forOrder: String(2 * q0) },
     { key: 'mgo', role: 'mgo', code: 'MGO-65A', stage: ['St 6', 'Filling'], ...tri('MGO-65A'), perPc: `${Math.round(mgoKgPc * 1000)} g`, forOrder: `${fx(mgoKgPc * q0)} kg` },
-    ...[...lines].sort((a, b) => (ORDER_OF[roleFor(a.code)] || 99) - (ORDER_OF[roleFor(b.code)] || 99)).map(l => {
+    ...[...lines].sort((a, b) => (ORDER_OF[roleFor(a.code)] ?? 99) - (ORDER_OF[roleFor(b.code)] ?? 99)).map(l => {
       const role = roleFor(l.code);
       const per = Number(l.qty) / (q0 || 1);
       return { key: role, role, code: l.code, stage: STAGE_FOR[role] || ['St 26', 'Nut Washer'], ...tri(l.code, l.name, l.name_gu),
@@ -522,7 +529,7 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
     order: R.FITTING_ORDER[set] || [], stack, nuts: nutC?.nuts || null, nutsAnswer: nutC?.answer || null, ruled: !!R.RULED_SETS[set] };
 
   // ── The sheet ──
-  const ctx = { st, p, card, geo, TL, uIn, uLabel, W, wAns, std, d, cz, pin, fixture, stud, parts, group, rem, inv, approver, today };
+  const ctx = { st, p, card, geo, TL, uIn, uLabel, W, wAns, std, d, cz, pin, fixture, stud, parts, group, shownGroup, pinsFromList, rem, inv, approver, today };
   const preview = U.renderUTypeSheet(buildSheetSpec(ctx, { production: false, confirmed }));
   p.html = preview.html;
   // Her approval covers the order item as she saw it, her answers, and exactly
@@ -547,7 +554,7 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
 // says FOR APPROVAL; the production copy — the one stored on the order item —
 // FOR PRODUCTION, with the fitting order no longer TO CONFIRM once she approved it.
 function buildSheetSpec(c, { production, confirmed }) {
-  const { st, p, card, geo, TL, uIn, uLabel, W, wAns, std, d, cz, pin, fixture, stud, parts, group, rem, inv, approver, today } = c;
+  const { st, p, card, geo, TL, uIn, uLabel, W, wAns, std, d, cz, pin, fixture, stud, parts, group, shownGroup, pinsFromList, rem, inv, approver, today } = c;
   const { item, order } = st;
   const q0 = Number(item.quantity);
   const matShort = MAT(item.tube_material);
@@ -596,7 +603,7 @@ function buildSheetSpec(c, { production, confirmed }) {
         ['Cold zone', `${card.coldZoneBigIn}" (${fx(card.coldZoneBigIn * 25.4, 1)}) ${card.coldZoneSmallIn === card.coldZoneBigIn ? 'each leg' : `big / ${card.coldZoneSmallIn}" small`} — ${czShort}`],
         ['Heated length', `≈ ${fx(heatedMm, 1)} mm (${fx(heatedIn)}")`],
         ['Surface load', `≈ ${fx(load, 1)} W/cm² · ${fx(card.wattage / heatedIn, 1)} W per inch`],
-        ['Terminal pins', `${stud} SS ${card.terminalPinBig.studs}" (${TG.groupLabel(group) || 'Regular'}): ${card.terminalPinBig.studs - 1}" in + 1" out`],
+        ['Terminal pins', `${stud} SS ${card.terminalPinBig.studs}" (${TG.groupLabel(shownGroup) || 'Regular'}): ${card.terminalPinBig.studs - 1}" in + 1" out${pinsFromList ? ' · from the list' : ''}`],
         ['Finish', `${item.plating_instructions || '—'} (plating instruction)`],
       ],
     },
@@ -606,7 +613,7 @@ function buildSheetSpec(c, { production, confirmed }) {
       `The order as typed: ${order.order_code} · ${order.customer_code || ''} · ${item.drawing_number} · ${q0} Nos · ${card.statedWattage} W ${card.voltage} V · ${item.tube_material} · remark "${p.order.remark}" · ${item.plating_instructions || '—'}.`,
       `Shape: ${W} outside / ${geo.insideMm} inside / roller ${std.rollerMm}${wAns ? '' : ` (the Ø${d} standard)`}. TOTAL LENGTH ${TL.str}" = 2 × ${uIn}" (Ms. Vama, 14 Nov 2026); the U is drawn as it comes out of that tube — ${fx(drawnMm, 1)} mm end to end, ${fx(nominalMm - drawnMm, 1)} mm short of ${fx(nominalMm, 1)}.`,
       `Cold zone ${card.coldZoneBigIn}"${card.coldZoneSmallIn !== card.coldZoneBigIn ? ` / ${card.coldZoneSmallIn}"` : ''} from ${cz.source === 'your answer' ? 'Ms. Vama' : cz.source}; pins ${card.terminalPinBig.studs}" from ${pin.source === 'your answer' ? 'Ms. Vama' : pin.source}. The job card adds 0.7" and works out the cut, coil, wire length and spring from the spool picked on the machine.`,
-      `Parts: lines ${parts.filter(x => !['coil', 'pinwh', 'pinwo', 'tube', 'fbush', 'mgo'].includes(x.role)).map(x => x.no).join(', ') || '—'} are the item's list in the app, unchanged; lines 1–6 are what the stages take by the job card.${p.fitting.set && p.fitting.set.includes('ceramic') ? ' The ceramic is not an inventory item.' : ''}`,
+      `Parts: lines ${parts.filter(x => !['coil', 'pinwh', 'pinwo', 'tube', 'fbush', 'mgo'].includes(x.role)).map(x => x.no).join(', ') || '—'} are the item's list in the app, unchanged; lines 1–${parts.filter(x => ['coil', 'pinwh', 'pinwo', 'tube', 'fbush', 'mgo'].includes(x.role)).length} are what the stages take by the job card.${p.fitting.set && p.fitting.set.includes('ceramic') ? ' The ceramic is not an inventory item.' : ''}`,
       ...(p.mismatches.length ? [`List vs remark: ${p.mismatches.join('; ')}.`] : []),
       `${fitOrder.length ? `Terminal end, from the tube: ${fitOrder.join(', ')}.` : 'Terminal end: as Detail D.'}${confirmed ? (p.fitting.ruled ? ' (Ms. Vama, 14 Nov 2026.)' : ' (confirmed by Ms. Vama.)') : ' Fitting order TO CONFIRM by Ms. Vama before production.'}${brassByAnswer ? ` ${p.fitting.nuts.every(c => /^NUT-BR-/i.test(c)) ? 'Brass nuts' : 'Brass nut'} as the item's list — Ms. Vama's answer on this sheet.` : ''}`,
       ...instrNotes,
