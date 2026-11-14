@@ -1040,6 +1040,60 @@ router.get('/:id/drawings', authenticate, async (req, res) => {
   ));
 });
 
+// The checks a drawing's inventory list passes before anything is saved —
+// shared by the upload below and the drawing agent (lib/drawings/agent.js), so
+// a list the upload would refuse is refused there too. `sels` is the list as
+// sent ([{ id, qty, rework_qty }]); returns { sels, orderItemId } with the list
+// as it would be kept, or { status, body } for the refusal.
+async function checkDrawingList(db, { orderId, itemId, sels, ord }) {
+  const isFgOrder = ord?.order_type === 'finished_goods';
+  // A replacement from a customer query may keep no list (lib/bom.js bomOptional).
+  const optional = bomOptional(ord);
+  const refuse = (status, body) => ({ status, body });
+  let invSelections = (sels || []).filter(s => s && s.id);
+  // Fins lines carry no qty — they deduct by tube length at QC approval
+  const finsIds = await finsIdSet(db, invSelections.map(s => parseInt(s.id)));
+  // A Cap heater's sleeve carries no qty either — taken by weight at Brazing.
+  const byWeight = await heaterFittings.sleeveByWeightIds(db, parseInt(itemId, 10), invSelections.map(s => s.id));
+  invSelections = (await dropTerminalPins(db, invSelections.filter(s => parseFloat(s.qty) > 0 || finsIds.has(parseInt(s.id)) || byWeight.has(parseInt(s.id))), orderId))
+    .map(s => (byWeight.has(parseInt(s.id)) ? { ...s, qty: 0, rework_qty: 0 } : s));
+  if (!invSelections.length && !optional) return refuse(400, { error: 'Select at least one inventory item (with quantity) for this drawing — terminal pins are not added to the list, they come from the job card' });
+  if (!isFgOrder && !optional) {
+    const itemRow = await db.get('SELECT remark FROM order_items WHERE id=$1 AND order_id=$2', [parseInt(itemId), orderId]);
+    const pinCat = requiredPinCategory(itemRow?.remark, orderId);
+    if (pinCat && !(await hasPinCategory(db, invSelections.map(s => parseInt(s.id)), pinCat))) {
+      return refuse(400, {
+        error: pinCat === 'Heavy Terminal Pin'
+          ? 'This item\'s remark calls for a Heavy Terminal Pin — add one from the Heavy Terminal Pin category'
+          : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory',
+      });
+    }
+    // Each ticked heater fitting needs its part on the list (owner, 12 Oct 2026).
+    const fitErr = await heaterFittings.listError(db, parseInt(itemId), invSelections.map(s => s.id));
+    if (fitErr) return refuse(400, { error: fitErr, code: 'FITTINGS_PARTS_MISSING' });
+  }
+  const orderItem = await db.get('SELECT id FROM order_items WHERE id=$1 AND order_id=$2', [parseInt(itemId), orderId]);
+  if (!orderItem) return refuse(404, { error: 'Item not found' });
+  // Checked before anything is written (it used to run after the drawing was saved).
+  const reworkErr = await checkReworkPortions(db, invSelections, orderItem.id);
+  if (reworkErr) return refuse(400, { error: reworkErr });
+  return { sels: invSelections, orderItemId: orderItem.id };
+}
+
+// The drawing row (waiting for the owner's review) and its timeline entry —
+// shared with the drawing agent, which passes `log` to write the entry inside
+// its own transaction. `file` is multer's: storagePath, filename, originalname.
+async function recordOrderDrawing(db, { orderId, itemId, file, notes, userId, log = logActivity }) {
+  const r = await db.insert(
+    `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
+    [orderId, itemId, file?.storagePath || null, file?.filename || null, file?.originalname || null, notes||null, userId]
+  );
+  await log(orderId, null, 'drawing_uploaded',
+    file ? `Reference drawing uploaded: ${file.originalname}` : 'Drawing entry recorded without file (finished-goods order)', userId);
+  return r.lastInsertRowid;
+}
+
 router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner'), ...uploadOrderDrawing, async (req, res) => {
   try {
     const { notes, item_id } = req.body;
@@ -1048,8 +1102,6 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     const db = getDB();
     const ord = await db.get('SELECT order_type, replacement_query_id FROM orders WHERE id=$1', [req.params.id]);
     const isFgOrder = ord?.order_type === 'finished_goods';
-    // A replacement from a customer query may keep no list (lib/bom.js bomOptional).
-    const optional = bomOptional(ord);
     // Finished-Goods orders may record the inventory selection without a drawing
     // file; every other order type still requires the file.
     if (!req.file && !isFgOrder) return res.status(400).json({ error: 'File required' });
@@ -1058,33 +1110,10 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
     // It arrives as a JSON string in the multipart form.
     let invSelections = [];
     try { invSelections = JSON.parse(req.body.inventory_item_ids || '[]'); } catch { invSelections = []; }
-    invSelections = (invSelections || []).filter(s => s && s.id);
-    // Fins lines carry no qty — they deduct by tube length at QC approval
-    const finsIds = await finsIdSet(db, invSelections.map(s => parseInt(s.id)));
-    // A Cap heater's sleeve carries no qty either — taken by weight at Brazing.
-    const byWeight = await heaterFittings.sleeveByWeightIds(db, parseInt(item_id, 10), invSelections.map(s => s.id));
-    invSelections = (await dropTerminalPins(db, invSelections.filter(s => parseFloat(s.qty) > 0 || finsIds.has(parseInt(s.id)) || byWeight.has(parseInt(s.id))), req.params.id))
-      .map(s => (byWeight.has(parseInt(s.id)) ? { ...s, qty: 0, rework_qty: 0 } : s));
-    if (!invSelections.length && !optional) return res.status(400).json({ error: 'Select at least one inventory item (with quantity) for this drawing — terminal pins are not added to the list, they come from the job card' });
-    if (!isFgOrder && !optional) {
-      const itemRow = await db.get('SELECT remark FROM order_items WHERE id=$1 AND order_id=$2', [parseInt(item_id), req.params.id]);
-      const pinCat = requiredPinCategory(itemRow?.remark, req.params.id);
-      if (pinCat && !(await hasPinCategory(db, invSelections.map(s => parseInt(s.id)), pinCat))) {
-        return res.status(400).json({
-          error: pinCat === 'Heavy Terminal Pin'
-            ? 'This item\'s remark calls for a Heavy Terminal Pin — add one from the Heavy Terminal Pin category'
-            : 'A Terminal Pin is required — add one from the Terminal Pin category to this item\'s inventory',
-        });
-      }
-      // Each ticked heater fitting needs its part on the list (owner, 12 Oct 2026).
-      const fitErr = await heaterFittings.listError(db, parseInt(item_id), invSelections.map(s => s.id));
-      if (fitErr) return res.status(400).json({ error: fitErr, code: 'FITTINGS_PARTS_MISSING' });
-    }
-    const orderItem = await db.get('SELECT id FROM order_items WHERE id=$1 AND order_id=$2', [parseInt(item_id), req.params.id]);
-    if (!orderItem) return res.status(404).json({ error: 'Item not found' });
-    // Checked before anything is written (it used to run after the drawing was saved).
-    const reworkErr = await checkReworkPortions(db, invSelections, orderItem.id);
-    if (reworkErr) return res.status(400).json({ error: reworkErr });
+    const checked = await checkDrawingList(db, { orderId: req.params.id, itemId: item_id, sels: invSelections || [], ord });
+    if (checked.status) return res.status(checked.status).json(checked.body);
+    invSelections = checked.sels;
+    const orderItem = { id: checked.orderItemId };
 
     // The inventory list chosen with the drawing goes through the owner's
     // inventory-correction rules (1 Oct 2026), exactly like the inventory box:
@@ -1099,19 +1128,12 @@ router.post('/:id/drawings', authenticate, authorize('design', 'admin', 'owner')
       throw err;
     }
 
-    const r = await db.insert(
-      `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
-      [req.params.id, orderItem.id, req.file?.storagePath || null, req.file?.filename || null, req.file?.originalname || null, notes||null, req.user.id]
-    );
-
-    await logActivity(req.params.id, null, 'drawing_uploaded',
-      req.file ? `Reference drawing uploaded: ${req.file.originalname}` : 'Drawing entry recorded without file (finished-goods order)', req.user.id);
+    const drawingId = await recordOrderDrawing(db, { orderId: req.params.id, itemId: orderItem.id, file: req.file, notes, userId: req.user.id });
     if (!result.fresh) {
       await logActivity(req.params.id, null, 'inventory_edited',
         `Inventory selection updated for item #${orderItem.id} (with a drawing upload) — ${result.summary}`, req.user.id);
     }
-    res.status(201).json({ id: r.lastInsertRowid, file_name: req.file?.filename || null, original_name: req.file?.originalname || null,
+    res.status(201).json({ id: drawingId, file_name: req.file?.filename || null, original_name: req.file?.originalname || null,
       summary: result.summary, mode: result.mode, fresh: result.fresh, moves: result.moves, short: result.short });
   } catch (e) {
     console.error('drawing upload error:', e);
@@ -1170,29 +1192,37 @@ router.put('/:id/items/:itemId/bom-confirm', authenticate, authorize('design', '
 });
 
 // ── Drawing review: owner approves or rejects individual drawings ──────────────
-router.put('/:id/drawings/:drawingId/approve', authenticate, authorize('owner'), async (req, res) => {
-  const db = getDB();
-  const d = await db.get('SELECT * FROM order_drawings WHERE id=$1 AND order_id=$2', [req.params.drawingId, req.params.id]);
-  if (!d) return res.status(404).json({ error: 'Drawing not found' });
-
+// The approval itself, shared with the drawing agent (which passes `log` to
+// write the entry inside its own transaction). Returns null once approved, or
+// { status, body } for the refusal.
+async function approveOrderDrawing(db, { orderId, drawing: d, userId, log = logActivity }) {
   // Design's check of the BOM is compulsory (owner, 24 Sep 2026). A reused item
   // reaches production without ever passing the screen where a BOM is chosen,
   // so the approval that lets it through is where the check is enforced.
   if (d.item_id) {
     const it = await db.get('SELECT bom_review, bom_review_reason, drawing_number, product_code FROM order_items WHERE id=$1', [d.item_id]);
     if (it && it.bom_review === 'needed') {
-      return res.status(400).json({
+      return { status: 400, body: {
         error: `Design has not confirmed the inventory on ${it.drawing_number || it.product_code || 'this item'} yet. ${it.bom_review_reason || ''}`.trim(),
         code: 'BOM_REVIEW_REQUIRED', item_id: d.item_id,
-      });
+      } };
     }
   }
 
-  await db.run(`UPDATE order_drawings SET drawing_status='approved', rejection_reason=NULL WHERE id=$1`, [req.params.drawingId]);
+  await db.run(`UPDATE order_drawings SET drawing_status='approved', rejection_reason=NULL WHERE id=$1`, [d.id]);
   // NOTE: inventory is NOT deducted here anymore. The item's selected inventory is
   // confirmed/edited and deducted at the QC stage (single job card) or once the
   // whole qty is dispatched for a partially-dispatched item.
-  await logActivity(req.params.id, null, 'drawing_approved', `Drawing approved: ${d.original_name || d.file_name || 'entry without file'}`, req.user.id);
+  await log(orderId, null, 'drawing_approved', `Drawing approved: ${d.original_name || d.file_name || 'entry without file'}`, userId);
+  return null;
+}
+
+router.put('/:id/drawings/:drawingId/approve', authenticate, authorize('owner'), async (req, res) => {
+  const db = getDB();
+  const d = await db.get('SELECT * FROM order_drawings WHERE id=$1 AND order_id=$2', [req.params.drawingId, req.params.id]);
+  if (!d) return res.status(404).json({ error: 'Drawing not found' });
+  const refused = await approveOrderDrawing(db, { orderId: req.params.id, drawing: d, userId: req.user.id });
+  if (refused) return res.status(refused.status).json(refused.body);
   res.json({ message: 'Drawing approved' });
 });
 
@@ -1280,6 +1310,10 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
       }
       return sendOrderActionFailure(res, r, { notFound: 'Order not found', alreadyDoneStatus: 409 });
     }
+    // Plain U items on it the app can draw itself: the owner hears so (Drawings
+    // to make, owner 14 Nov 2026). A failure here never fails the approval.
+    try { await require('../lib/drawings/agent').notifyDrawingsDue(getDB(), r.data?.orderId || req.params.id, req.user); }
+    catch (e) { console.error('[orders] drawings-to-make notice failed:', e.message); }
     res.json({ message: 'Order approved' });
   } catch (e) {
     console.error('[orders] approve failed:', e);
@@ -1493,3 +1527,8 @@ router.post('/inquiries/:id/quotation', authenticate, authorize('admin', 'owner'
 });
 
 module.exports = router;
+// Shared with the drawing agent (lib/drawings/agent.js), so its drawing passes
+// the same checks and leaves the same trail as an upload + approval here.
+module.exports.checkDrawingList = checkDrawingList;
+module.exports.recordOrderDrawing = recordOrderDrawing;
+module.exports.approveOrderDrawing = approveOrderDrawing;

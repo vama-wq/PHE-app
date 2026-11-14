@@ -8,8 +8,8 @@
 // here — the spec handed in already holds the order as typed, the shape, the
 // job card engine's figures and the parts; this file only lays them out.
 //
-// Used only by the drawing agent on the owner's Mac (phe-claude-code/scripts/
-// drawings). No route loads this file.
+// Used by the in-app drawing agent (lib/drawings/agent.js, the Drawings to make
+// page): the sheet she approves there is the one stored on the order item.
 const K = require('./svgKit');
 
 // U shape from the numbers design gives: U length L ("18U" = 18", from the end
@@ -245,8 +245,10 @@ function renderUTypeSheet(spec) {
   out.push(K.text(X0 + czBig + 3, yT - r - 1.3, 'BIG END · PIN W/H', { size: 2.2, weight: 700, color: C.blue }));
   out.push(K.text(X0 + czSmall + 3, yB + r + 3.3, 'SMALL END · PIN W/O', { size: 2.2, weight: 700, color: C.blue }));
   // Dimensions. The U length always gives the true figure, broken view or not.
-  const uLabel = r1Mode === 'b'
-    ? `${n1(shape.uLengthMm)} U LENGTH — "${shape.uLabel}" ORDERED, TUBE CUT TO 2U = ${totalStr}" (RULING R1 b)`
+  // Total length = 2 × U (owner's ruling R1, 14 Nov 2026): the U is drawn as it
+  // comes out of that tube, so its true end-to-end length is dimensioned here.
+  const uLabel = r1Mode === 'b' || r1Mode === '2u'
+    ? `${n1(shape.uLengthMm)} U LENGTH "${shape.uLabel}" — AS IT COMES OUT OF THE ${totalStr}" (2 × ${String(shape.uLengthIn)}") TUBE`
     : `${n1(shape.uLengthMm)} (${String(shape.uLengthIn)}") U LENGTH "${shape.uLabel}" — END OF THE TUBE TO THE FAR END OF THE U`;
   out.push(K.dimH(X0, xOuter, 51, uLabel, { fromY1: yT - r, fromY2: Yc, size: 2.7 }));
   out.push(K.dimH(X0, X0 + czBig, 61, `${n1(card.coldZoneBigIn * 25.4)} (${card.coldZoneBigIn}") COLD ZONE`, { fromY1: yT - r, fromY2: yT - r, size: 2.6 }));

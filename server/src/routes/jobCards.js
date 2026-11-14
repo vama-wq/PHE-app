@@ -363,13 +363,17 @@ async function rplNumbers(db, orderId, numbers) {
   return numbers.map(n => (/-RPL$/i.test(String(n)) ? n : `${n}-RPL`));
 }
 
-router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, res) => {
-  const db = getDB();
-  const { order_item_id, ...answers } = req.body || {};
-  if (!order_item_id) return res.status(400).json({ error: 'Order item is required' });
+// The body of POST /generate, shared with the drawing agent (lib/drawings/
+// agent.js), which makes its card through exactly this path inside its own
+// transaction — `db` may be a transaction-bound db, and `log` writes the
+// timeline entries with it. `body` is the request body as the Make Job Card
+// form sends it. Returns { status, body } for the route to send.
+async function generateJobCard(db, { body: reqBody, user, log = logActivity }) {
+  const { order_item_id, ...answers } = reqBody || {};
+  if (!order_item_id) return { status: 400, body: { error: 'Order item is required' } };
 
   const draft = await buildDraft(db, parseInt(order_item_id, 10), answers);
-  if (!draft.ok) return res.status(400).json(draft);
+  if (!draft.ok) return { status: 400, body: draft };
 
   const item = await db.get('SELECT * FROM order_items WHERE id=$1', [parseInt(order_item_id, 10)]);
 
@@ -378,19 +382,19 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
   const bom = await db.get('SELECT COUNT(*)::int AS n FROM order_item_inventory WHERE order_item_id=$1', [item.id]);
   // A replacement from a customer query may have no list (lib/bom.js bomOptional).
   const noBomOk = bomOptional(await db.get('SELECT replacement_query_id FROM orders WHERE id=$1', [item.order_id]));
-  if (!bom.n && !noBomOk && !(req.user.role === 'owner' && String(req.body.confirm_no_bom) === 'true')) {
-    return res.status(400).json({
+  if (!bom.n && !noBomOk && !(user.role === 'owner' && String(reqBody.confirm_no_bom) === 'true')) {
+    return { status: 400, body: {
       error: 'This item has no inventory BOM attached — no materials would ever be deducted for it. Ask design to attach the BOM on the order item first.',
       code: 'NO_BOM',
-    });
+    } };
   }
   const reviewBlock = await bomReviewBlock(db, item);
-  if (reviewBlock) return res.status(400).json(reviewBlock);
+  if (reviewBlock) return { status: 400, body: reviewBlock };
 
   const covered = await db.get(
     'SELECT COUNT(*)::int AS n, COALESCE(SUM(qty),0)::int AS covered FROM job_cards WHERE order_item_id=$1', [item.id]);
   if (covered.n > 0 && covered.covered >= (parseInt(item.quantity, 10) || 0)) {
-    return res.status(409).json({ error: `This item is already covered by ${covered.n} job card(s) totalling ${covered.covered} of ${item.quantity} pcs` });
+    return { status: 409, body: { error: `This item is already covered by ${covered.n} job card(s) totalling ${covered.covered} of ${item.quantity} pcs` } };
   }
 
   const html = renderJobCard(withPinType(draft.card, draft.terminalGroup), draft.sheets, draft.provenance || []);
@@ -400,7 +404,7 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
   try {
     storagePath = await uploadToStorage('job-cards', filename, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
   } catch (e) {
-    return res.status(502).json({ error: `Could not save the generated job card: ${e.message}` });
+    return { status: 502, body: { error: `Could not save the generated job card: ${e.message}` } };
   }
 
   const baseNo = String(item.drawing_number || item.product_code || `ITEM-${item.id}`).toUpperCase();
@@ -411,7 +415,7 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
     numbers = allocateCardNumbers(baseNo, Math.max(parts.length, 1), taken, { forceMarker: covered.n > 0 });
     numbers = await rplNumbers(db, item.order_id, numbers);
   } catch (e) {
-    return res.status(409).json({ error: e.message });
+    return { status: 409, body: { error: e.message } };
   }
 
   let created;
@@ -450,31 +454,36 @@ router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, 
           [numbers[i], item.order_id, storagePath, filename, filename,
            parts[i], answers.dispatch_date, answers.notes || null,
            draft.head.punching, item.drawing_number || null, item.product_code || null,
-           req.user.id, item.id, JSON.stringify(spec)]);
+           user.id, item.id, JSON.stringify(spec)]);
         out.push({ id: ins[0].id, job_card_no: numbers[i], qty: parts[i] });
       }
       return out;
     });
   } catch (e) {
-    if (e.code === '23505') return res.status(409).json({ error: 'Could not allocate a job card number — please retry' });
+    if (e.code === '23505') return { status: 409, body: { error: 'Could not allocate a job card number — please retry' } };
     throw e;
   }
 
   await db.run("UPDATE orders SET status='job_card_created' WHERE id=$1 AND status='approved'", [item.order_id]);
   for (const c of created) {
-    await logActivity(item.order_id, c.id, 'job_card_created',
+    await log(item.order_id, c.id, 'job_card_created',
       `Job Card ${c.job_card_no} generated by the app — ${c.qty} pcs`
       + (created.length > 1 ? ` (${describeSplit(parts)}, max ${MAX_CARD_QTY} per card)` : '')
       + (draft.card.gauge != null ? ` · ${draft.card.gauge} SWG @ ${(draft.card.wireDrawPct * 100).toFixed(1)}%` : ' · gauge left blank')
       + (draft.pins?.groupLabel ? ` · ${draft.pins.groupLabel} terminal pins` : ''),
-      req.user.id);
+      user.id);
   }
 
-  res.status(201).json({
+  return { status: 201, body: {
     id: created[0].id, job_card_no: created[0].job_card_no,
     split: created.length > 1, cards: created, file_path: storagePath,
     warnings: draft.card.warnings, notes: draft.notes,
-  });
+  } };
+}
+
+router.post('/generate', authenticate, authorize('admin', 'owner'), async (req, res) => {
+  const r = await generateJobCard(getDB(), { body: req.body, user: req.user });
+  res.status(r.status).json(r.body);
 });
 
 // Design's BOM check is compulsory (owner, 24 Sep 2026). It is enforced at
@@ -2173,3 +2182,4 @@ module.exports = router;
 // dispatch.js needs this: marking one card dispatched must recompute the order
 // from every card, not stamp it closed.
 module.exports.syncOrderStatus = syncOrderStatus;
+module.exports.generateJobCard = generateJobCard;
