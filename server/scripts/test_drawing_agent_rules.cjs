@@ -138,6 +138,22 @@ const REMARKS = ['NUT WASHER + 2 CLAMPS', 'NUT WASHER+ 2 CLAMPS', 'M12 BRASS NIP
   ok('3k. nut washer is the only fitting order she has ruled: ESB → SS nut → washer → washer → SS nut',
     Object.keys(R.RULED_SETS).join() === 'nut_washer' && R.FITTING_ORDER.nut_washer.join(' → ') === 'ESB → SS nut → washer → washer → SS nut'
     && Object.keys(R.SET_LABEL).every(k => R.FITTING_ORDER[k]?.length));
+  // Words no rule reads are asked about (review, 14 Nov 2026): a remark only
+  // ever fills a default or raises a question.
+  const other = (t) => R.parseRemark(t).instructions.find(i => i.kind === 'other')?.text || null;
+  const UNREAD = { 'Nut Washer, lead wire 12 inch': 'LEAD WIRE 12 INCH', 'Nut Washer with thermostat': 'THERMOSTAT', 'Nut washer + 1 inch BSP flange': '1 INCH BSP FLANGE',
+    'nut washer silicone sleeve 300mm': 'SILICONE SLEEVE 300 MM', 'Nut Washer + Earthing': 'EARTHING', 'Buffing': 'BUFFING', 'Urgent Dispatch': 'URGENT DISPATCH', 'NUT WASHER M6': 'M6' };
+  const missU = Object.entries(UNREAD).filter(([t, want]) => other(t) !== want).map(([t, want]) => `${t}: ${other(t)} (want ${want})`);
+  const QUIET = ['NUT WASHER', 'NUT WASHER + 2 CLAMPS', 'M 12 brass nipple', '6" cold zone / Stud length outside heater 1”, Nut Washer', 'M6 HEAVY TERMINAL PIN',
+    '190 MM ,,VALA COLD ZONE / WITH NIPPLE', 'ONE NUT + ONE CERAMICS', 'WITH HEAVY TERMINAL AND BRACKETS'];
+  const noisy = QUIET.filter(t => other(t));
+  ok('3l. a remark word no rule reads (lead wire, thermostat, flange, sleeve, earthing, buffing, urgent, a stray M6) is asked as "other words"; plain fitting remarks ask nothing',
+    missU.length === 0 && noisy.length === 0, [...missU, ...noisy.map(t => `${t}: ${other(t)}`)].join('; '));
+  const asked = REMARKS.filter(t => other(t)).map(t => `${t} → ${other(t)}`);
+  ok('3m. of her 56 U remark texts, exactly 5 have words no rule reads (urgent dispatch, buffing, "24U ABOVE", "TUBE 22MM", the "taken for 17U" note)',
+    asked.length === 5 && ['URGENT DISPATCH', 'BUFFING', '24U ABOVE', 'TUBE 22 MM', 'TAKEN FOR 17U ORDER AS NOS WAS LESS'].every(w => asked.some(a => a.endsWith(`→ ${w}`))), asked.join(' | '));
+  ok('3n. a bare large number before "cold zone" (30 COLD ZONE: inches or mm?) is asked, not dropped',
+    R.parseRemark('30 cold zone, nut washer').instructions.some(i => i.kind === 'cold zone unit') && R.parseRemark('30 cold zone, nut washer').coldZoneIn == null);
   if (VERBOSE) for (const t of REMARKS) info(`${JSON.stringify(t)} → cz ${got[t].coldZoneIn ?? '-'} · set ${R.fittingSetFor(got[t], [], 1).set || '-'}${got[t].instructions.length ? ` · asks ${got[t].instructions.map(i => i.kind).join(', ')}` : ''}`);
 }
 
@@ -237,6 +253,58 @@ if (fs.existsSync(path.join(FIX, 'u_gen_cards.json'))) {
     (html.match(/[^>]*U LENGTH[^<]*/) || [''])[0]);
   const draft = renderUTypeSheet({ ...spec, fitting: { set: 'ceramic_nut', confirmed: false }, terminalNote: 'M4 SS PIN 3" + ONE CERAMIC + ONE NUT — TO CONFIRM' }).html;
   ok('6b. a fitting set she has not confirmed is drawn with a red TO CONFIRM; a confirmed one is not', draft.includes('TO CONFIRM') && !html.includes('TO CONFIRM'));
+
+  // ── The notes box (review, 14 Nov 2026): every note line inside the box
+  // (238 × 45 at 12, 240), whatever the answers; when even the smallest
+  // letters cannot hold them the sheet says so (the agent then refuses it).
+  const K = require(S + '/src/lib/drawings/svgKit.js');
+  const unesc = (s) => s.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'");
+  const noteBoxes = (svg) => [...svg.matchAll(/<text x="(16|19\.5)" y="([\d.]+)" font-size="([\d.]+)" text-anchor="start" font-weight="400"[^>]*>([^<]*)<\/text>/g)]
+    .map(m => ({ x: Number(m[1]), y: Number(m[2]), size: Number(m[3]), t: unesc(m[4]) })).filter(b => b.y > 247);
+  const inBox = (bs) => bs.filter(b => b.y + b.size * 0.21 > 284.8 || b.x + K.textWidth(b.t, b.size) / 1.04 > 250);
+  const base = ['All dimensions in mm; inches marked ". Do not scale. Tolerances as the title block; resistance ± 5%.',
+    'The order as typed: ORD-196-26 · IT · PT-UType-44U -1.25kw · 52 Nos · 1250 W 230 V · TUB-SS316-038-T06 · remark "heavy terminal pin / 8" cold zone" · No Plating.',
+    'Shape: 43 outside / 27 inside / roller 25 (the Ø8 standard). TOTAL LENGTH 88" = 2 × 44" (Ms. Vama, 14 Nov 2026); the U is drawn as it comes out of that tube — 1111.6 mm end to end, 6.0 mm short of 1117.6.',
+    'Cold zone 8" from the remark ("8" COLD ZONE"); pins 9" from cold zone + 1" — heavy terminal pin with the remark\'s cold zone (as on her card for item 2215). The job card adds 0.7" and works out the cut, coil, wire length and spring from the spool picked on the machine.',
+    'Parts: lines 7, 8, 9, 10 are the item\'s list in the app, unchanged; lines 1–6 are what the stages take by the job card.',
+    'Terminal end, from the tube: brass nipple (with washer, washer, nipple nut on its thread), ESB, SS nut, washer, washer, SS nut. Fitting order TO CONFIRM by Ms. Vama before production.'];
+  const qc = 'Every heater: HV + light check, megger (IR) and resistance before dispatch.';
+  const words400 = (w) => (`${w} `.repeat(200)).slice(0, 400).trim();
+  // An answer as she might write one, at the 400-letter limit.
+  const a400 = 'Make the bend at 7 inches from the cold side as on the last order for this customer, and check the leg length after bending; the cold zone stays as the job card says and the pins are the standard ones. '.repeat(3).slice(0, 400).trim();
+  const mism = 'List vs remark: "Nut Washer" takes 4 nuts per heater; the list has 2; "Nut Washer" takes 4 washers per heater; the list has 0; the list looks like "One Ceramic + One Nut", the remark says "Nut Washer".';
+  const CASES = {
+    'a list-vs-remark note + one short remark answer': [...base, mism, 'Remark (trim): Make it 7U as the remark says', qc],
+    'a list-vs-remark note + two answers (12+ lines)': [...base, mism, 'Remark (trim): Make it 7U as the remark says, the cold zone as the earlier card for this customer.', `Remark (bend): ${a400.slice(0, 220)}`, qc],
+    'three remark answers and a note at 400 letters each, and a list-vs-remark note': [...base, mism,
+      `Remark (trim): ${a400}`, `Remark (bend): ${a400}`, `Remark, the words "BUFFING": ${a400}`, a400, qc],
+    'one long capitalised note (200 letters, no spaces to break at)': [...base, 'X'.repeat(200), qc],
+  };
+  const bad6 = [];
+  for (const [label, notes] of Object.entries(CASES)) {
+    const r = renderUTypeSheet({ ...spec, notes });
+    const bs = noteBoxes(r.svg);
+    const out = inBox(bs);
+    const words = notes.join(' ').replace(/\s+/g, '');
+    if (!r.notesFit || out.length || bs.map(b => b.t.replace(/^\d+\. /, '')).join('').replace(/\s+/g, '') !== words) bad6.push(`${label}: fit ${r.notesFit} at ${r.notesSize}, ${out.length} line(s) outside, text kept ${bs.map(b => b.t.replace(/^\d+\. /, '')).join('').replace(/\s+/g, '') === words}`);
+    else info(`notes: ${label} — ${bs.length} lines at ${r.notesSize} mm`);
+  }
+  ok('6c. the notes always stay inside the box (wrapped by width, set smaller as they grow), every word kept: 11+ lines, 3 answers + a note at 400 letters + a mismatch, a 200-letter word', bad6.length === 0, bad6.join(' | '));
+  const tooMuch = renderUTypeSheet({ ...spec, notes: [...base, ...Array(6).fill(words400('WWWW MMMM')), qc] });
+  ok('6d. notes that cannot fit even in the smallest letters are reported (notesFit false), for the agent to refuse the sheet', tooMuch.notesFit === false, tooMuch.notesSize);
+
+  // ── Brass and SS nuts on one pin end (review, 14 Nov 2026) ──
+  const nutParts = [...spec.parts,
+    { no: 2, key: 'nut', role: 'nut', code: 'NUT-SS-M4-08', stage: ['St 26', 'Nut Washer'], line1: 'NUT-SS-M4-08 · SS Nut M4', gu: '', hi: '', perPc: '2', forOrder: '20' },
+    { no: 3, key: 'nut', role: 'nut', code: 'NUT-BR-M4-08', stage: ['St 26', 'Nut Washer'], line1: 'NUT-BR-M4-08 · Brass Nut M4', gu: '', hi: '', perPc: '2', forOrder: '20' },
+    { no: 4, key: 'washer', role: 'washer', code: 'WSH-BR-08', stage: ['St 26', 'Nut Washer'], line1: 'WSH-BR-08 · Brass Washer', gu: '', hi: '', perPc: '4', forOrder: '40' }];
+  const balloonsOf = (svg) => [...svg.matchAll(/<circle cx="[\d.]+" cy="([\d.]+)" r="[\d.]+" fill="#fff"[^>]*\/><text[^>]*>(\d+)<\/text>/g)].map(m => m[2]);
+  const mixed = renderUTypeSheet({ ...spec, parts: nutParts, fitting: { set: 'nut_washer', confirmed: true, pin: ['nut', 'washer', 'washer', 'nut'], nuts: ['NUT-BR-M4-08', 'NUT-SS-M4-08'] } });
+  const legacy = renderUTypeSheet({ ...spec, parts: nutParts, fitting: { set: 'nut_washer', confirmed: true } });
+  const bm = balloonsOf(mixed.svg), bl = balloonsOf(legacy.svg);
+  ok('6e. with the nut at each place named (brass next to the ESB, SS outside), Detail D balloons both lines and names them "brass nut" / "SS nut"; without it, the SS line at both places as before',
+    bm.includes('2') && bm.includes('3') && mixed.svg.includes('>brass nut<') && mixed.svg.includes('>SS nut<') && bl.includes('2') && !bl.includes('3'),
+    `with: ${bm.join(',')} · without: ${bl.join(',')}`);
 }
 
 console.log(failed ? `\n${failed} CHECK(S) FAILED` : '\nALL PASS');

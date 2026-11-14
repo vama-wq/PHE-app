@@ -132,7 +132,7 @@ function Queue({ onOpen }) {
 }
 
 // ── One item: the sheet, the questions, the card, the approval ────────────────
-const FIELD_ORDER = ['fitting_set', 'nipple', 'u_length_in', 'outside_width_mm', 'cold_zone_in', 'cold_zone_small_in',
+const FIELD_ORDER = ['fitting_set', 'nipple', 'nuts', 'u_length_in', 'outside_width_mm', 'cold_zone_in', 'cold_zone_small_in',
   'pin_in', 'pin_small_in', 'fixture', 'asmbly', 'dispatch_date', 'terminal_group'];
 
 function Field({ q, value, onChange, onReset }) {
@@ -167,12 +167,17 @@ function ItemSheet({ itemId, onBack }) {
   const [answers, setAnswers] = useState({});
   const [error, setError] = useState('');
   const [dirty, setDirty] = useState(false);          // an answer changed, its sheet not back yet
-  const [fittingOk, setFittingOk] = useState(false);
+  // Her tick on a first fitting order, kept with the set and order it was for:
+  // switching the Fittings answer to another set un-ticks it (review, 14 Nov 2026).
+  const [fittingOkFor, setFittingOkFor] = useState(null);
+  const [savedUnknown, setSavedUnknown] = useState(false);   // no answer came back from an approval
   const [confirming, setConfirming] = useState(false);
   const [approving, setApproving] = useState(false);
   const [done, setDone] = useState(null);
   const timer = useRef(null);
   const reqNo = useRef(0);
+  const fittingKey = p?.fitting?.set ? `${p.fitting.set}|${(p.fitting.stack || p.fitting.order || []).join('>')}` : null;
+  const fittingOk = !!fittingKey && fittingOkFor === fittingKey;
 
   const preview = useCallback(async (ans) => {
     const my = ++reqNo.current;
@@ -187,7 +192,7 @@ function ItemSheet({ itemId, onBack }) {
   }, [itemId]);
 
   useEffect(() => {
-    setP(null); setAnswers({}); setDone(null); setFittingOk(false); setError('');
+    setP(null); setAnswers({}); setDone(null); setFittingOkFor(null); setSavedUnknown(false); setError('');
     api.get(`/drawing-agent/items/${itemId}`)
       .then(r => setP(r.data))
       .catch(e => setError(e.response?.data?.error || 'Could not open this item'));
@@ -204,19 +209,35 @@ function ItemSheet({ itemId, onBack }) {
   const resetAnswer = (k) => { const next = { ...answers }; delete next[k]; change(next); };
 
   const approve = async () => {
-    setApproving(true); setError('');
+    setApproving(true); setError(''); setSavedUnknown(false);
     try {
       const r = await api.post(`/drawing-agent/items/${itemId}/approve`, {
-        answers, sheet_code: p.sheetCode, fitting_confirmed: fittingOk, seen_snapshot: p.snapshot,
+        answers, sheet_code: p.sheetCode, fitting_confirmed: fittingOk, fitting_confirmed_set: fittingOk ? p.fitting.set : null,
+        seen_snapshot: p.snapshot,
       }, { timeout: 120000 });
       setDone(r.data); setConfirming(false);
       useWorkStore.getState().fetch();
       document.querySelector('main')?.scrollTo?.({ top: 0 });   // the result is short; show it
     } catch (e) {
       setConfirming(false);
-      setError(e.response?.data?.error || 'Could not save the drawing — nothing was saved.');
+      if (!e.response) {
+        // No answer (the network, or the 2-minute wait): the app may still have
+        // saved it. The item is read again — a drawing or a card on it now
+        // means it was (review, 14 Nov 2026); approving again is refused anyway.
+        setError('No answer from the app — checking whether the drawing was saved…');
+        try {
+          const r = await api.get(`/drawing-agent/items/${itemId}`);
+          const s = r.data?.snapshot || {};
+          if (s.drawings > 0 || s.cards > 0) { setError(''); setSavedUnknown(true); setP(r.data); useWorkStore.getState().fetch(); }
+          else { setError('No answer from the app, and the item has no drawing or job card — it was not saved. Approve it again.'); setP(r.data); }
+        } catch {
+          setError('No answer from the app, so it is not known whether the drawing was saved — open the order to check before approving again.');
+        }
+        return;
+      }
+      setError(e.response.data?.error || 'Could not save the drawing — nothing was saved.');
       // The sheet changed under her: show the current one.
-      if (e.response?.data?.code === 'SHEET_CHANGED') { setDirty(true); preview(answers); }
+      if (e.response.data?.code === 'SHEET_CHANGED') { setDirty(true); preview(answers); }
     } finally { setApproving(false); }
   };
 
@@ -277,6 +298,11 @@ function ItemSheet({ itemId, onBack }) {
 
       {p.status === 'not_due' || p.status === 'out_of_scope' ? (
         <div className="card p-5 text-sm">
+          {savedUnknown && (
+            <div className="flex items-center gap-2 text-green-700 font-semibold mb-3">
+              <CheckCircle2 size={16} /> It was saved — the reply did not come back in time, but the item now has its drawing and job card. See them on the order.
+            </div>
+          )}
           <div className="flex items-center gap-2 font-semibold text-gray-800 mb-2"><Info size={16} /> The app does not draw this item</div>
           <ul className="list-disc ml-5 text-gray-600 space-y-0.5">{(p.reasons || []).map((r, i) => <li key={i}>{r}</li>)}</ul>
         </div>
@@ -364,10 +390,10 @@ function ItemSheet({ itemId, onBack }) {
 
               {needsFitting && (
                 <label className="flex items-start gap-2 rounded-xl border border-red-200 bg-white p-3 text-sm cursor-pointer">
-                  <input type="checkbox" className="mt-0.5" checked={fittingOk} onChange={e => setFittingOk(e.target.checked)} />
+                  <input type="checkbox" className="mt-0.5" checked={fittingOk} onChange={e => setFittingOkFor(e.target.checked ? fittingKey : null)} />
                   <span>
                     <span className="font-semibold text-red-700">First "{p.fitting.label}" drawing: </span>
-                    the terminal end goes on in this order — <span className="font-medium">{p.fitting.order.join(' → ')}</span>. That is right.
+                    the terminal end goes on in this order — <span className="font-medium">{(p.fitting.stack || p.fitting.order).join(' → ')}</span>. That is right.
                     <span className="block text-xs text-gray-500 mt-0.5">Ticked once, later sheets for this set no longer ask.</span>
                   </span>
                 </label>

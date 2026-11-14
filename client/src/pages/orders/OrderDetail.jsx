@@ -771,6 +771,10 @@ export default function OrderDetail() {
                                 <span className="text-xs font-medium text-gray-500 block truncate">No drawing file — inventory only</span>
                               )}
                               <div className="text-xs text-gray-400">{d.uploaded_by_name} · {fmtDate(d.created_at)}</div>
+                              {/* A reused sheet the app drew for another order (Drawings to make) */}
+                              {/^App sheet from /.test(d.notes || '') && (
+                                <div className="text-xs text-amber-700 mt-0.5">{d.notes}</div>
+                              )}
                             </div>
                             {/* Design/admin may delete only pre-approval; the OWNER can
                                 also delete an approved drawing so a fresh one can be

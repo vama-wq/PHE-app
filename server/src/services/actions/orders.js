@@ -163,6 +163,12 @@ async function decideOrder(db, { orderId, actor, via, decision, reason }) {
   }
 
   if (decision === 'approve') {
+    // Plain U items on it the app can draw itself: the owner hears so (Drawings
+    // to make, owner 14 Nov 2026) — here, so a WhatsApp approval tells her too.
+    // Loaded late (the agent loads the order routes, which load this file).
+    // A failure here never fails the approval.
+    try { await require('../../lib/drawings/agent').notifyDrawingsDue(db, id, actor); }
+    catch (e) { console.error('[orders] drawings-to-make notice failed:', e.message); }
     return { ok: true, summary: `Approved order ${orderLabel(order)}`,
       data: { orderId: id, order_code: order.order_code, status: 'approved' } };
   }

@@ -51,6 +51,8 @@ router.post('/items/:id/approve', authenticate, authorize('owner'), async (req, 
     const r = await agent.approve(getDB(), id, {
       answers: answersFrom(b.answers), sheetCode: b.sheet_code,
       fittingConfirmed: b.fitting_confirmed === true || b.fitting_confirmed === 'true',
+      // The set her tick was for: it confirms that set only.
+      fittingConfirmedSet: typeof b.fitting_confirmed_set === 'string' ? b.fitting_confirmed_set : null,
       seenSnapshot: b.seen_snapshot && typeof b.seen_snapshot === 'object' ? b.seen_snapshot : null,
     }, req.user);
     res.status(r.status).json(r.body);

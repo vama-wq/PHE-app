@@ -699,11 +699,23 @@ router.post('/:id/items', authenticate, authorize('admin', 'owner'), async (req,
         newPath = await copyInStorage(src.file_path, 'order-drawings', copyName);
         newName = copyName;
       } catch (e) { console.error('[orders] drawing file copy failed, referencing source file:', e.message); }
+      // A sheet the app drew (Drawings to make) carries its own order in its
+      // title block — order code, client, quantity, parts for that quantity and
+      // FOR PRODUCTION. The copy says so on its row, so she checks it against
+      // this order before approving it (review, 14 Nov 2026).
+      let copyNotes = src.notes || null;
+      if (src.agent_spec) {
+        const from = await db.get(`SELECT o.order_code, c.customer_code, oi.quantity FROM order_items oi JOIN orders o ON o.id = oi.order_id
+          LEFT JOIN customers c ON c.id = o.customer_id WHERE oi.id=$1`, [src.item_id]);
+        copyNotes = `App sheet from ${from?.order_code || 'another order'}: its title block and parts table are that order's `
+          + `(${[from?.customer_code, from?.quantity != null ? `${Number(from.quantity)} Nos` : null].filter(Boolean).join(', ') || 'its client and quantity'}, FOR PRODUCTION there), `
+          + `not this order's — check it against this order before approving.`;
+      }
       try {
         await db.run(
           `INSERT INTO order_drawings (order_id, item_id, file_path, file_name, original_name, notes, uploaded_by, drawing_status)
            VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_review')`,
-          [req.params.id, itemId, newPath, newName, src.original_name, src.notes || null, req.user.id]
+          [req.params.id, itemId, newPath, newName, src.original_name, copyNotes, req.user.id]
         );
         drawingCopied = true;
       } catch (e) { console.error('[orders] drawing record insert failed:', e.message); }
@@ -1003,6 +1015,10 @@ router.put('/:id/items/:itemId/inventory', authenticate, authorize('design', 'ad
   }
   await logActivity(req.params.id, null, 'inventory_edited',
     `Inventory selection updated for item #${item.id} — ${result.summary}`, req.user.id);
+  // A plain U item with its list now in may be one the app can draw (Drawings
+  // to make): the owner hears so, once per item. Never fails the save.
+  try { await require('../lib/drawings/agent').notifyDrawingsDue(db, req.params.id, req.user, { itemIds: [item.id] }); }
+  catch (e) { console.error('[orders] drawings-to-make notice failed:', e.message); }
   res.json({ message: 'Inventory updated', summary: result.summary, mode: result.mode,
     moves: result.moves, short: result.short, reDeducted: result.moves.length > 0 });
 });
@@ -1188,6 +1204,9 @@ router.put('/:id/items/:itemId/bom-confirm', authenticate, authorize('design', '
     [req.user.id, req.params.itemId]);
   await logActivity(req.params.id, null, 'bom_confirmed',
     `Inventory confirmed on ${it.drawing_number || it.product_code || `item #${it.id}`} by ${req.user.name}`, req.user.id);
+  // Design's check done: a plain U item may now be one the app can draw (Drawings to make).
+  try { await require('../lib/drawings/agent').notifyDrawingsDue(db, req.params.id, req.user, { itemIds: [it.id] }); }
+  catch (e) { console.error('[orders] drawings-to-make notice failed:', e.message); }
   res.json({ message: 'Inventory confirmed — the drawing can be approved now.' });
 });
 
@@ -1310,10 +1329,6 @@ router.put('/:id/approve', authenticate, authorize('owner'), async (req, res) =>
       }
       return sendOrderActionFailure(res, r, { notFound: 'Order not found', alreadyDoneStatus: 409 });
     }
-    // Plain U items on it the app can draw itself: the owner hears so (Drawings
-    // to make, owner 14 Nov 2026). A failure here never fails the approval.
-    try { await require('../lib/drawings/agent').notifyDrawingsDue(getDB(), r.data?.orderId || req.params.id, req.user); }
-    catch (e) { console.error('[orders] drawings-to-make notice failed:', e.message); }
     res.json({ message: 'Order approved' });
   } catch (e) {
     console.error('[orders] approve failed:', e);

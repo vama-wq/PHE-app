@@ -407,14 +407,20 @@ async function generateJobCard(db, { body: reqBody, user, log = logActivity }) {
     return { status: 502, body: { error: `Could not save the generated job card: ${e.message}` } };
   }
 
+  // From here until the cards are in, a refusal or a failure takes the stored
+  // card file away again — a 409 here used to leave it behind in storage
+  // (review, 14 Nov 2026; on the hand route as well as the drawing agent's).
+  const dropFile = () => deleteFromStorage(storagePath);
   const baseNo = String(item.drawing_number || item.product_code || `ITEM-${item.id}`).toUpperCase();
   const parts = draft.split.quantities;
-  const taken = await takenNumbersFor(db, baseNo);
+  let taken;
+  try { taken = await takenNumbersFor(db, baseNo); } catch (e) { await dropFile(); throw e; }
   let numbers;
   try {
     numbers = allocateCardNumbers(baseNo, Math.max(parts.length, 1), taken, { forceMarker: covered.n > 0 });
     numbers = await rplNumbers(db, item.order_id, numbers);
   } catch (e) {
+    await dropFile();
     return { status: 409, body: { error: e.message } };
   }
 
@@ -460,6 +466,7 @@ async function generateJobCard(db, { body: reqBody, user, log = logActivity }) {
       return out;
     });
   } catch (e) {
+    await dropFile();
     if (e.code === '23505') return { status: 409, body: { error: 'Could not allocate a job card number — please retry' } };
     throw e;
   }

@@ -11,7 +11,7 @@
 //   findDue(db)                       which items need a drawing, and why the rest are skipped
 //   propose(db, itemId, answers)      the sheet, the questions with their defaults, the card figures
 //   approve(db, itemId, {...}, user)  her approval: the drawing on the item + its job card(s), one transaction
-//   notifyDrawingsDue(db, orderId)    tells the owner when an approved order has items to draw
+//   notifyDrawingsDue(db, orderId)    tells the owner when items on an approved order become drawable
 // Only the owner answers and approves (owner, 14 Nov 2026; routes/drawingAgent.js).
 const E = require('../jobCardEngine');
 const { buildDraft } = require('../jobCardDraft');
@@ -70,7 +70,42 @@ const ORDER_OF = { nipple: 1, nipwasher: 2, nipnut: 3, bracket: 4, esb: 5, nut: 
 // Only these keys, trimmed; a blank answer means "use the default". `ack:<kind>`
 // is her answer to a remark instruction the rules cannot apply.
 const ANSWER_KEYS = ['u_length_in', 'outside_width_mm', 'cold_zone_in', 'cold_zone_small_in', 'pin_in', 'pin_small_in',
-  'fixture', 'asmbly', 'dispatch_date', 'terminal_group', 'fitting_set', 'nipple', 'note'];
+  'fixture', 'asmbly', 'dispatch_date', 'terminal_group', 'fitting_set', 'nipple', 'nuts', 'note'];
+
+// ── Brass nuts on a two-nut stack ─────────────────────────────────────────────
+// Her nut-washer order names SS nuts: "ESB → SS nut → washer → washer → SS nut"
+// (owner, 14 Nov 2026). Some lists carry brass nuts instead (2 SS + 2 brass per
+// heater on 1403 / 1404 / 283 / 298; brass only on 1907, 2077, 2198…). The
+// drawing must show what St 26 will take, and the agent never edits a list, so
+// she says which (review, 14 Nov 2026) — until then the sheet cannot be approved.
+// → null when the list has no brass nut; else the choices and the nut line
+// drawn at each place (from the ESB outward) for her answer.
+function nutChoice(lines, qty, answer) {
+  const per = (re) => lines.filter(l => re.test(String(l.code || ''))).reduce((a, l) => a + Number(l.qty || 0), 0) / (Number(qty) || 1);
+  const br = lines.find(l => /^NUT-BR-/i.test(String(l.code || '')))?.code;
+  const ss = lines.find(l => /^NUT-SS-/i.test(String(l.code || '')))?.code;
+  if (!br) return ss ? { nuts: [ss, ss], asked: false } : null;
+  const toSs = { value: 'ss', label: 'SS nuts at both places, as your order — design changes the list to SS first' };
+  const c = { asked: true, brass: br, ss: ss || null, perBrass: R.round(per(/^NUT-BR-/i), 2), perSs: R.round(per(/^NUT-SS-/i), 2) };
+  if (!ss) {
+    c.options = [{ value: 'brass', label: `Brass nuts at both places, as the list (ESB → brass nut → washer → washer → brass nut)` }, toSs];
+    c.nuts = [br, br];
+  } else if (c.perBrass === 2 && c.perSs === 2) {
+    // One of each on every pin end: which one goes next to the ESB is hers to say.
+    c.options = [
+      { value: 'brass_inner', label: 'Brass nut next to the ESB, SS nut outside (ESB → brass nut → washer → washer → SS nut)' },
+      { value: 'brass_outer', label: 'SS nut next to the ESB, brass nut outside (ESB → SS nut → washer → washer → brass nut)' }, toSs];
+    c.nuts = answer === 'brass_inner' ? [br, ss] : answer === 'brass_outer' ? [ss, br] : [ss, ss];
+  } else {
+    c.options = [];
+    c.nuts = [ss, ss];
+    c.block = `the list has ${c.perSs} SS and ${c.perBrass} brass nuts per heater — not one of each per pin end; design to fix the list`;
+  }
+  c.answer = c.options.some(o => o.value === answer) ? answer : null;
+  if (c.answer === 'ss') c.block = `you chose SS nuts: design changes the list's brass nut ${br} to SS (Inventory Add), then the sheet can be approved`;
+  return c;
+}
+const nutWord = (code) => (/^NUT-BR-/i.test(String(code || '')) ? 'brass nut' : 'SS nut');
 function cleanAnswers(raw) {
   const out = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
@@ -310,6 +345,11 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   p.mismatches = fitRes.notes;
   const confirmedSet = await confirmedSets(db);
   const confirmed = !!set && confirmedSet.has(set);
+  // A set with two nut places (nut washer, + brackets, + nipple): which nut line
+  // is at each, and whether she must say so because the list has brass.
+  const twoNuts = (U.FITTING_SETS[set]?.pin || []).filter(rl => rl === 'nut').length === 2;
+  const nutC = twoNuts ? nutChoice(lines, item.quantity, answers.nuts) : null;
+  if (nutC?.block) p.blocks.push(nutC.block);
 
   // ── Shape and total length (ruling R1: 2 × U) ──
   const d = Number(item.tube_diameter);
@@ -368,8 +408,12 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   // ── The questions: blocking ones first, then the defaults she may change ──
   const q = (o) => p.questions.push({ required: false, answered: answers[o.key] != null, ...o });
   for (const ins of rem.instructions) {
-    q({ key: `ack:${ins.kind}`, type: 'textarea', required: true, label: `Remark: ${ins.kind}`, value: answers[`ack:${ins.kind}`] || '',
-      text: `The remark says "${ins.text}". The rules cannot apply that — say what the drawing should do (change a figure below if it needs one); your answer is printed on the sheet.`,
+    // Words no rule reads (uRules 'other'): quoted, so nothing in a remark is passed over.
+    const other = ins.kind === 'other';
+    q({ key: `ack:${ins.kind}`, type: 'textarea', required: true, label: other ? 'Remark: other words' : `Remark: ${ins.kind}`, value: answers[`ack:${ins.kind}`] || '',
+      text: other
+        ? `The remark "${p.order.remark}" has words no rule reads: "${ins.text}". Say what the drawing or the job card should do about them ("nothing" if they are not for the drawing; change a figure below if it needs one); your answer is printed on the sheet.`
+        : `The remark says "${ins.text}". The rules cannot apply that — say what the drawing should do (change a figure below if it needs one); your answer is printed on the sheet.`,
       source: 'the remark' });
   }
   const setOptions = Object.entries(R.SET_LABEL).map(([value, label]) => ({ value, label }));
@@ -378,6 +422,11 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   if (set && set.startsWith('nipple')) {
     q({ key: 'nipple', type: 'select', options: ['M12', 'M16'].map(x => ({ value: x, label: x })), required: !nipple, label: 'Nipple size',
       value: nipple || '', source: answers.nipple ? 'your answer' : nipple ? 'the remark / list' : 'not in the remark or the list — choose it' });
+  }
+  if (nutC?.asked && nutC.options.length) {
+    q({ key: 'nuts', type: 'select', options: nutC.options, required: true, answered: !!nutC.answer, label: 'Nuts (the list has brass)', value: nutC.answer || '',
+      text: `Your nut-washer order names SS nuts; the list has ${nutC.ss ? `${nutC.perSs} SS (${nutC.ss}) and ` : ''}${nutC.perBrass} brass (${nutC.brass}) per heater. Say which the drawing shows — St 26 takes what the list says.`,
+      source: nutC.answer ? 'your answer' : 'the parts list has brass — choose it' });
   }
   q({ key: 'u_length_in', type: 'number', label: 'U length (in)', value: String(uIn),
     source: uAns ? 'your answer' : `the drawing number ("${v.label.label}" = ${v.label.uIn}" from the end of the tube to the far end of the U)` });
@@ -465,23 +514,25 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
     const w = Math.min(2, Math.round(ls.nipwasher / 2));
     tubeRoles = ['nipple', ...Array(w).fill('nipwasher'), ...(ls.nipnut > 0 ? ['nipnut'] : [])];
   }
+  // `order` is the set's fitting order (what she confirms once per set);
+  // `stack` is this sheet's, with each nut named as the line drawn there.
+  const stack = [...(R.FITTING_ORDER[set] || [])];
+  if (nutC?.nuts) { let k = 0; stack.forEach((s, i) => { if (s === 'SS nut') stack[i] = nutWord(nutC.nuts[k++]); }); }
   p.fitting = { set: set || null, label: R.SET_LABEL[set] || '—', confirmed, nipple: nipple || null, pin: pinRoles, tube: tubeRoles,
-    order: R.FITTING_ORDER[set] || [], ruled: !!R.RULED_SETS[set] };
-  // Her nut-washer order names SS nuts (owner, 14 Nov 2026); a brass nut on the
-  // list is pointed out, not changed (Detail D draws the SS line when there is one).
-  const brassNuts = lines.filter(l => /^NUT-BR-/i.test(l.code)).map(l => l.code);
-  if (brassNuts.length && pinRoles.filter(rl => rl === 'nut').length === 2) {
-    const ssNut = lines.some(l => /^NUT-SS-/i.test(l.code));
-    p.flags.push(`the list has brass nut ${brassNuts.join(', ')} — your nut-washer order names SS nuts (ESB → SS nut → washer → washer → SS nut); Detail D draws ${ssNut ? 'the SS nut line' : 'the list\'s brass nut'}`);
-  }
+    order: R.FITTING_ORDER[set] || [], stack, nuts: nutC?.nuts || null, nutsAnswer: nutC?.answer || null, ruled: !!R.RULED_SETS[set] };
 
   // ── The sheet ──
   const ctx = { st, p, card, geo, TL, uIn, uLabel, W, wAns, std, d, cz, pin, fixture, stud, parts, group, rem, inv, approver, today };
-  p.html = U.renderUTypeSheet(buildSheetSpec(ctx, { production: false, confirmed })).html;
+  const preview = U.renderUTypeSheet(buildSheetSpec(ctx, { production: false, confirmed }));
+  p.html = preview.html;
   // Her approval covers the order item as she saw it, her answers, and exactly
   // what would be written: the production sheet and the job card body.
   // (The approver's name in the title block is left out: it is whoever presses approve.)
   const production = buildSheetSpec(ctx, { production: true, confirmed: true });
+  // A note cut off at the box edge would be lost on the floor: refused instead.
+  if (!preview.notesFit || !U.renderUTypeSheet(production).notesFit) {
+    p.blocks.push('the notes do not fit on the sheet even in the smallest letters — shorten your answers or the note');
+  }
   const sheetForCode = { ...production, tb: { ...production.tb, approved: null } };
   p.sheetCode = R.sheetCode({ snapshot: p.snapshot, answers, spec: { body: p.body, figures: p.figures, sheet: sheetForCode } });
   Object.defineProperty(p, 'production', { value: production, enumerable: false });
@@ -496,21 +547,25 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
 // says FOR APPROVAL; the production copy — the one stored on the order item —
 // FOR PRODUCTION, with the fitting order no longer TO CONFIRM once she approved it.
 function buildSheetSpec(c, { production, confirmed }) {
-  const { st, p, card, geo, TL, uIn, uLabel, W, wAns, std, d, cz, pin, fixture, stud, parts, group, inv, approver, today } = c;
+  const { st, p, card, geo, TL, uIn, uLabel, W, wAns, std, d, cz, pin, fixture, stud, parts, group, rem, inv, approver, today } = c;
   const { item, order } = st;
   const q0 = Number(item.quantity);
   const matShort = MAT(item.tube_material);
   const tubeName = inv[String(item.tube_material || '').toUpperCase()]?.name || item.tube_material;
   const fixUp = String(fixture || '').toUpperCase();
-  const fitOrder = p.fitting.order;
+  const fitOrder = p.fitting.stack;
+  const brassByAnswer = !!p.fitting.nutsAnswer && p.fitting.nutsAnswer !== 'ss';
   const heatedMm = geo.clMm - (card.coldZoneBigIn + card.coldZoneSmallIn) * 25.4;
   const heatedIn = heatedMm / 25.4;
   const load = card.wattage / (Math.PI * (d / 10) * (heatedMm / 10));
   const nominalMm = TL.nominalULengthMm, drawnMm = TL.drawnULengthMm;
   const czShort = cz.source.startsWith('the remark') ? 'from the remark' : cz.source.startsWith('the earlier') ? 'as the earlier card' : cz.source === 'your answer' ? 'Ms. Vama' : `the Ø${d} standard`;
   const tbDate = `${today.slice(8, 10)}.${today.slice(5, 7)}.${today.slice(0, 4)}`;
-  const instrNotes = Object.entries(p.answers).filter(([k]) => k.startsWith('ack:'))
-    .map(([k, v]) => `Remark (${k.slice(4)}): ${v}`);
+  // Her answer to each remark instruction this remark has (an answer left over
+  // from an earlier remark is not hers for this one, and is not printed).
+  const instrNotes = [...new Map(rem.instructions.map(ins => [ins.kind, ins])).values()]
+    .filter(ins => p.answers[`ack:${ins.kind}`])
+    .map(ins => (ins.kind === 'other' ? `Remark, the words "${ins.text}": ${p.answers['ack:other']}` : `Remark (${ins.kind}): ${p.answers[`ack:${ins.kind}`]}`));
   return {
     banner: `U TYPE HEATER  |  ${card.statedWattage} W, ${card.voltage} V AC  |  ${matShort} Ø${d}  |  ${q0} NOS  |  ${order.order_code} · ${order.customer_code || ''}  |  ${card.coldZoneBigIn}" COLD ZONE · ${fixUp}`,
     title: `U TYPE HEATER — ${card.statedWattage} W / ${card.voltage} V`,
@@ -553,7 +608,7 @@ function buildSheetSpec(c, { production, confirmed }) {
       `Cold zone ${card.coldZoneBigIn}"${card.coldZoneSmallIn !== card.coldZoneBigIn ? ` / ${card.coldZoneSmallIn}"` : ''} from ${cz.source === 'your answer' ? 'Ms. Vama' : cz.source}; pins ${card.terminalPinBig.studs}" from ${pin.source === 'your answer' ? 'Ms. Vama' : pin.source}. The job card adds 0.7" and works out the cut, coil, wire length and spring from the spool picked on the machine.`,
       `Parts: lines ${parts.filter(x => !['coil', 'pinwh', 'pinwo', 'tube', 'fbush', 'mgo'].includes(x.role)).map(x => x.no).join(', ') || '—'} are the item's list in the app, unchanged; lines 1–6 are what the stages take by the job card.${p.fitting.set && p.fitting.set.includes('ceramic') ? ' The ceramic is not an inventory item.' : ''}`,
       ...(p.mismatches.length ? [`List vs remark: ${p.mismatches.join('; ')}.`] : []),
-      `${fitOrder.length ? `Terminal end, from the tube: ${fitOrder.join(', ')}.` : 'Terminal end: as Detail D.'}${confirmed ? (p.fitting.ruled ? ' (Ms. Vama, 14 Nov 2026.)' : ' (confirmed by Ms. Vama.)') : ' Fitting order TO CONFIRM by Ms. Vama before production.'}`,
+      `${fitOrder.length ? `Terminal end, from the tube: ${fitOrder.join(', ')}.` : 'Terminal end: as Detail D.'}${confirmed ? (p.fitting.ruled ? ' (Ms. Vama, 14 Nov 2026.)' : ' (confirmed by Ms. Vama.)') : ' Fitting order TO CONFIRM by Ms. Vama before production.'}${brassByAnswer ? ` ${p.fitting.nuts.every(c => /^NUT-BR-/i.test(c)) ? 'Brass nuts' : 'Brass nut'} as the item's list — Ms. Vama's answer on this sheet.` : ''}`,
       ...instrNotes,
       ...(p.answers.note ? [p.answers.note] : []),
       'Every heater: HV + light check, megger (IR) and resistance before dispatch.',
@@ -610,11 +665,33 @@ function clientTx(client, pool) {
   };
 }
 
-async function approve(db, itemId, { answers = {}, sheetCode, fittingConfirmed = false, seenSnapshot = null } = {}, user) {
+// The two schema additions this needs (initDB, 14 Nov 2026): order_drawings.
+// agent_spec and the drawing_rulings table. Checked before an approval so that
+// one made in the minutes before the main session adds them gets a plain answer
+// instead of a failed write (as lib/stockLedger.js ledgerColumnsReady does).
+// Looked up through the search path, as the writes themselves are.
+let schemaReady = false;
+let schemaCheckedAt = 0;
+async function agentSchemaReady(db) {
+  if (schemaReady) return true;
+  if (Date.now() - schemaCheckedAt < 30e3) return false;
+  schemaCheckedAt = Date.now();
+  try {
+    const r = await db.get(`SELECT to_regclass('drawing_rulings') IS NOT NULL AS rulings,
+      EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('order_drawings') AND attname = 'agent_spec' AND NOT attisdropped) AS spec`);
+    schemaReady = !!(r?.rulings && r?.spec);
+  } catch (_) { schemaReady = false; }
+  return schemaReady;
+}
+
+async function approve(db, itemId, { answers = {}, sheetCode, fittingConfirmed = false, fittingConfirmedSet = null, seenSnapshot = null } = {}, user) {
   if (!user || user.role !== 'owner') return { status: 403, body: { error: 'Only the owner approves drawings.' } };
   const id = parseInt(itemId, 10);
   if (!(id > 0)) return { status: 400, body: { error: 'No order item was given.' } };
   if (!/^[0-9a-f]{6}-[0-9a-f]{6}-[0-9a-f]{6}$/.test(String(sheetCode || ''))) return { status: 400, body: { error: 'The sheet code is missing — open the drawing again.' } };
+  if (!(await agentSchemaReady(db))) {
+    return { status: 503, body: { error: 'The app is finishing an update — nothing was saved. Try again in a few minutes.', code: 'SCHEMA_NOT_READY' } };
+  }
   const today = todayIst();
   const written = [];          // storage paths, removed again if nothing is kept
   try {
@@ -641,8 +718,11 @@ async function approve(db, itemId, { answers = {}, sheetCode, fittingConfirmed =
       if (p.blocks.length) throw refusal(400, { error: p.blocks[0], code: 'BLOCKED', blocks: p.blocks });
       const open = p.questions.filter(x => x.required && !x.answered);
       if (open.length) throw refusal(400, { error: `Answer first: ${open.map(x => x.label).join(', ')}.`, code: 'NEEDS_ANSWER' });
-      if (!p.fitting.confirmed && fittingConfirmed !== true) {
-        throw refusal(400, { error: `Confirm the fitting order first: ${p.fitting.order.join(' → ')}.`, code: 'FITTING_CONFIRM_REQUIRED' });
+      // Her tick counts only for the set it was given for: ticked for one set,
+      // then the Fittings answer switched to another, is not a confirmation of
+      // the other (review, 14 Nov 2026).
+      if (!p.fitting.confirmed && !(fittingConfirmed === true && fittingConfirmedSet === p.fitting.set)) {
+        throw refusal(400, { error: `Confirm the fitting order first: ${p.fitting.stack.join(' → ')}.`, code: 'FITTING_CONFIRM_REQUIRED' });
       }
       // Timeline entries go in with everything else, or not at all.
       const log = (orderId, jobCardId, type, description, userId) => t.run(
@@ -653,9 +733,9 @@ async function approve(db, itemId, { answers = {}, sheetCode, fittingConfirmed =
       if (!p.fitting.confirmed) {
         await t.run(`INSERT INTO drawing_rulings (key, value, set_by, set_at) VALUES ($1, $2, $3, NOW())
           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, set_by = EXCLUDED.set_by, set_at = NOW()`,
-          [`fitting:${p.fitting.set}`, JSON.stringify({ confirmed: true, label: p.fitting.label, order: p.fitting.order,
+          [`fitting:${p.fitting.set}`, JSON.stringify({ confirmed: true, label: p.fitting.label, order: p.fitting.order, stack: p.fitting.stack,
             words: 'Confirmed on Drawings to make, with the approval of this drawing', item_id: id, order_code: p.order.orderCode }), user.id]);
-        await log(p.orderId, null, 'drawing_ruling', `Fitting order confirmed for "${p.fitting.label}": ${p.fitting.order.join(' → ')}`, user.id);
+        await log(p.orderId, null, 'drawing_ruling', `Fitting order confirmed for "${p.fitting.label}": ${p.fitting.stack.join(' → ')}`, user.id);
       }
 
       // The production sheet, stored like an uploaded drawing and named after the drawing number.
@@ -697,20 +777,37 @@ async function approve(db, itemId, { answers = {}, sheetCode, fittingConfirmed =
 }
 
 // ── Telling the owner ─────────────────────────────────────────────────────────
-// When an order is approved with items the app can draw now (routes/orders.js
-// calls this after the approval, failure-safe).
-async function notifyDrawingsDue(db, orderId, actor) {
-  const { due } = await findDue(db, { orderId });
+// When items on an approved order become drawable: at the order's approval
+// (services/actions/orders.js — in the app and on WhatsApp alike), and when
+// design saves an item's list or confirms its BOM (routes/orders.js), which is
+// when a new item usually does — at approval it rarely has a list yet (review,
+// 14 Nov 2026). `itemIds` limits it to those items. Each item is told once:
+// the notice links to its item(s) (?item= / ?items=), and an item an owner was
+// already told about is left out. Every caller is failure-safe.
+const itemsInLink = (link) => {
+  const m = String(link || '').match(/[?&]items?=([\d,]+)/);
+  return m ? m[1].split(',').map(Number).filter(n => n > 0) : [];
+};
+async function notifyDrawingsDue(db, orderId, actor, { itemIds = null } = {}) {
+  let { due } = await findDue(db, { orderId });
+  if (itemIds) { const want = new Set(itemIds.map(Number)); due = due.filter(x => want.has(x.itemId)); }
   if (!due.length) return 0;
-  const n = due.length;
+  let sent = 0;
   for (const u of await db.all("SELECT id FROM users WHERE role='owner'")) {
+    const told = new Set((await db.all("SELECT link FROM notifications WHERE user_id=$1 AND type='drawing_ready' AND link LIKE '/drawings-to-make?item%'", [u.id]))
+      .flatMap(r => itemsInLink(r.link)));
+    const fresh = due.filter(x => !told.has(x.itemId));
+    if (!fresh.length) continue;
+    const n = fresh.length;
     await createNotification(db, {
-      userId: u.id, type: 'drawing_ready', link: '/drawings-to-make', sourceUserId: actor?.id || null,
-      title: `${n} U type drawing${n > 1 ? 's' : ''} ready to check on ${due[0].order}`,
-      body: `${due.map(x => x.dwg).join(', ')} — the app has worked out the sheet${n > 1 ? 's' : ''} and the job card figures; check the answers and approve.`,
+      userId: u.id, type: 'drawing_ready', sourceUserId: actor?.id || null,
+      link: n === 1 ? `/drawings-to-make?item=${fresh[0].itemId}` : `/drawings-to-make?items=${fresh.map(x => x.itemId).join(',')}`,
+      title: `${n} U type drawing${n > 1 ? 's' : ''} ready to check on ${fresh[0].order}`,
+      body: `${fresh.map(x => x.dwg).join(', ')} — the app has worked out the sheet${n > 1 ? 's' : ''} and the job card figures; check the answers and approve.`,
     });
+    sent++;
   }
-  return n;
+  return sent ? due.length : 0;
 }
 
 module.exports = { findDue, dueCount, propose, approve, notifyDrawingsDue, cleanAnswers, verdict, listBlocks, loadItem, LOCK_DRAWING_AGENT };

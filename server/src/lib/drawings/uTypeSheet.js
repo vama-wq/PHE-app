@@ -79,15 +79,22 @@ function partSizes(dia, nipple) {
 }
 
 // The set the spec names, with its parts; an unknown set draws the ESB only.
+// `nuts` (two list codes, from the ESB outward) says which nut line sits at
+// each of a two-nut stack's places: the second place is drawn as role 'nut2'
+// so it can carry its own part — an SS nut and a brass nut on one pin end.
 function resolveFitting(spec) {
   const f = spec.fitting || {};
   const base = FITTING_SETS[f.set] || (f.set ? { label: f.set, pin: [], tube: [] } : FITTING_SETS.nut_washer);
+  let pin = Array.isArray(f.pin) ? f.pin : base.pin;
+  const nuts = Array.isArray(f.nuts) && f.nuts.length === 2 && f.nuts.every(Boolean) && pin.filter(rl => rl === 'nut').length === 2 ? f.nuts : null;
+  if (nuts) pin = pin.map((rl, i) => (rl === 'nut' && i === pin.lastIndexOf('nut') ? 'nut2' : rl));
   return {
     set: f.set || 'nut_washer',
     label: f.label || base.label,
-    pin: Array.isArray(f.pin) ? f.pin : base.pin,
+    pin,
     tube: Array.isArray(f.tube) ? f.tube : base.tube,
     nipple: f.nipple || null,
+    nuts,
     // A sheet without a fitting block is the original nut-washer sample.
     confirmed: spec.fitting ? f.confirmed === true : true,
   };
@@ -99,28 +106,36 @@ function renderUTypeSheet(spec) {
   const W = 420, H = 297;
   const fit = resolveFitting(spec);
   const sz = partSizes(tube.diaMm, fit.nipple);
+  sz.nut2 = sz.nut;
   const stud = /M5/i.test(String(card.studLabel || '')) || Number(tube.diaMm) === 11 ? 'M5' : 'M4';
   const pinThread = stud === 'M5' ? 5 : 4;
   const totalStr = spec.r1?.totalLengthStr != null ? String(spec.r1.totalLengthStr) : n2(geo.drawingTotalIn);
   const r1Mode = spec.r1?.mode || null;
   // Which list line each fitting is (its balloon number) and how it is named.
   const roleOf = (p) => p.role || ({ ssnut: 'nut' }[p.key] || p.key);
-  // A list with a brass AND an SS nut on a nut-washer stack: her order names SS
-  // nuts at both places ("ESB → SS nut → washer → washer → SS nut", owner,
-  // 14 Nov 2026), so the SS line is the one drawn and ballooned.
+  // A two-nut stack names the line at each place (fit.nuts, from the ESB
+  // outward — the agent works it out from the list and her answer, owner
+  // 14 Nov 2026), so an SS and a brass nut each point at their own line. A
+  // sheet without it draws the SS line at both places when the list has one:
+  // her order names SS nuts ("ESB → SS nut → washer → washer → SS nut").
   const ssNutStack = fit.pin.filter(rl => rl === 'nut').length === 2;
   const partFor = (role) => {
+    if (fit.nuts && (role === 'nut' || role === 'nut2')) {
+      const want = String(fit.nuts[role === 'nut' ? 0 : 1]).toUpperCase();
+      return parts.find(p => roleOf(p) === 'nut' && String(p.code || '').toUpperCase() === want);
+    }
     const all = parts.filter(p => roleOf(p) === role);
     return (role === 'nut' && ssNutStack && all.find(p => /^NUT-SS-/i.test(String(p.code || '')))) || all[0];
   };
   const no = (role) => partFor(role)?.no ?? '–';
-  const codeOf = (role) => String(partFor(role)?.code || '');
-  const nutFill = /-BR-/i.test(codeOf('nut')) ? C.brass : C.ss;
+  const codeOf = (role) => String(partFor(role)?.code || (fit.nuts && role === 'nut2' ? fit.nuts[1] : fit.nuts && role === 'nut' ? fit.nuts[0] : ''));
+  const nutFill = (role) => (/-BR-/i.test(codeOf(role)) ? C.brass : C.ss);
+  const nutName = (role) => (/-BR-/i.test(codeOf(role)) ? (fit.nuts ? 'brass nut' : 'nut') : 'SS nut');
   const washerFill = /WSH-SS/i.test(codeOf('washer')) ? C.ss : C.brass;
-  const FILL = { nut: nutFill, washer: washerFill, ceramic: C.ceramic, hvpin: C.ss, hvwasher: C.ss, hvnut: C.ss,
+  const FILL = { nut: nutFill('nut'), nut2: nutFill('nut2'), washer: washerFill, ceramic: C.ceramic, hvpin: C.ss, hvwasher: C.ss, hvnut: C.ss,
     bracket: C.ms, nipple: C.brass, nipnut: C.brass, nipwasher: /SIL/i.test(codeOf('nipwasher')) ? C.silicone : C.fibre };
   const NAME = {
-    nut: /-BR-/i.test(codeOf('nut')) ? 'nut' : 'SS nut', washer: 'washer', ceramic: 'ceramic', hvpin: 'heavy pin',
+    nut: nutName('nut'), nut2: nutName('nut2'), washer: 'washer', ceramic: 'ceramic', hvpin: 'heavy pin',
     hvwasher: 'washer', hvnut: 'M6 nut', bracket: 'bracket', nipple: `${fit.nipple || ''} nipple`.trim(),
     nipnut: 'nipple nut', nipwasher: /SIL/i.test(codeOf('nipwasher')) ? 'silicone washer' : 'fibre washer',
   };
@@ -467,24 +482,58 @@ function renderUTypeSheet(spec) {
   for (const lines of [3, 2, 1]) { T2 = K.table(276, y2, [6.5, 21, 67.5, 18.5, 18.5], rowsFor(lines), t2opts); if (y2 + T2.height <= 236) break; }
   out.push(T2.svg);
 
-  // ── Notes ── (wrapped to the box; a long set is set smaller)
+  // ── Notes ── wrapped by measured width, and set smaller (line spacing with
+  // it) until the whole set fits the box: 238 × 45 at (12, 240), first line at
+  // 250.5. Her answers can be long (an answer or a note up to 400 letters), so
+  // when even the smallest size will not hold them, notesFit says so and the
+  // agent refuses the sheet rather than lose the end of a note (review, 14 Nov 2026).
   out.push(K.rect(12, 240, 238, 45, { sw: 0.35 }));
   out.push(K.text(16, 245.5, 'NOTES', { size: 2.8, weight: 700, color: K.NAVY }));
-  const wrap = (str, max) => {
-    const words = String(str).split(' '); const lines = []; let cur = '';
-    for (const w of words) { if ((cur + ' ' + w).trim().length > max && cur) { lines.push(cur); cur = w; } else cur = (cur + ' ' + w).trim(); }
+  const NOTE_X = 16, NOTE_X2 = 19.5, NOTE_RIGHT = 248.5, NOTE_TOP = 250.5, NOTE_FLOOR = 284.4;
+  const wrapTo = (str, first, rest, size) => {
+    const lines = []; let cur = '';
+    const room = () => (lines.length ? rest : first);
+    for (const w of String(str).split(' ').filter(Boolean)) {
+      const next = cur ? `${cur} ${w}` : w;
+      if (K.textWidth(next, size) <= room()) { cur = next; continue; }
+      if (cur) { lines.push(cur); cur = ''; }
+      // A word longer than the line (a long code) is broken where it reaches the edge.
+      let word = w;
+      while (K.textWidth(word, size) > room()) {
+        let k = word.length - 1;
+        while (k > 1 && K.textWidth(word.slice(0, k), size) > room()) k--;
+        lines.push(word.slice(0, k)); word = word.slice(k);
+      }
+      cur = word;
+    }
     if (cur) lines.push(cur);
-    return lines;
+    return lines.length ? lines : [''];
   };
-  const noteLines = notes.map(nt => (Array.isArray(nt) ? nt : [nt]).flatMap(l => wrap(l, 200)));
-  const nLines = noteLines.reduce((a, l) => a + l.length, 0);
-  const nSize = nLines > 11 ? 1.85 : 2.1, nStep = nLines > 11 ? 2.5 : 2.9;
-  let ny = 250.5;
-  noteLines.forEach((lines, i) => {
+  const layNotes = (size, lead, gapF) => {
+    const step = size * lead, gap = size * gapF;
+    const noteLines = notes.map((nt, i) => (Array.isArray(nt) ? nt : [nt]).flatMap((l, k) => (k === 0
+      ? wrapTo(l, NOTE_RIGHT - NOTE_X - K.textWidth(`${i + 1}. `, size), NOTE_RIGHT - NOTE_X2, size)
+      : wrapTo(l, NOTE_RIGHT - NOTE_X2, NOTE_RIGHT - NOTE_X2, size))));
+    const nLines = noteLines.reduce((a, l) => a + l.length, 0);
+    const lastBaseline = NOTE_TOP + (nLines - 1) * step + (noteLines.length - 1) * gap;
+    return { size, step, gap, noteLines, fits: lastBaseline + size * 0.25 <= NOTE_FLOOR };
+  };
+  // Largest letters first; at each size the usual spacing, then lines set
+  // closer (1.25, as svgKit sets a block of lines) before going a size down.
+  const NOTE_SIZES = [2.1, 2.0, 1.9, 1.8, 1.7, 1.6, 1.5];
+  let lay = null;
+  for (const size of NOTE_SIZES) {
+    lay = layNotes(size, 1.38, 0.4);
+    if (lay.fits) break;
+    lay = layNotes(size, 1.25, 0.2);
+    if (lay.fits) break;
+  }
+  let ny = NOTE_TOP;
+  lay.noteLines.forEach((lines, i) => {
     const red = /TO CONFIRM/.test(lines.join(' '));
-    out.push(K.text(16, ny, `${i + 1}. ${lines[0]}`, { size: nSize, color: red ? C.red : '#1a1a1a' }));
-    lines.slice(1).forEach((l, k) => out.push(K.text(19.5, ny + (k + 1) * nStep, l, { size: nSize, color: red ? C.red : '#1a1a1a' })));
-    ny += lines.length * nStep + (nLines > 11 ? 0.5 : 0.9);
+    out.push(K.text(NOTE_X, ny, `${i + 1}. ${lines[0]}`, { size: lay.size, color: red ? C.red : '#1a1a1a' }));
+    lines.slice(1).forEach((l, k) => out.push(K.text(NOTE_X2, ny + (k + 1) * lay.step, l, { size: lay.size, color: red ? C.red : '#1a1a1a' })));
+    ny += lines.length * lay.step + lay.gap;
   });
 
   // ── Title block: the fields PHE's SolidWorks block carries ──
@@ -510,7 +559,7 @@ function renderUTypeSheet(spec) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}mm" height="${H}mm" font-family="Arial, Helvetica, 'Noto Sans Gujarati', 'Noto Sans Devanagari', sans-serif">${out.join('')}</svg>`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${K.esc(item.drawingNumber)} — drawing</title>
 <style>@page { size: A3 landscape; margin: 0 } html, body { margin: 0; background: #fff } svg { display: block; width: 420mm; height: 297mm }</style></head><body>${svg}</body></html>`;
-  return { svg, html };
+  return { svg, html, notesFit: lay.fits, notesSize: lay.size };
 }
 
 module.exports = { deriveUShape, uLengthForCentreline, renderUTypeSheet, FITTING_SETS };

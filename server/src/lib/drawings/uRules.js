@@ -76,14 +76,41 @@ function normaliseRemark(r) {
 }
 const mmToIn1 = (mm) => round(mm / IN, 1);
 
-// → { coldZones:[{in, text, unit}], coldZoneIn, studOutside, fins, nipple, words, instructions[] }.
+// Words the rules here read (the fitting words, the cold zone, the 1" stud
+// outside) and plain joining words. A thread size counts as read only where a
+// rule reads it: M12 / M14 / M16 with a nipple, M6 with a heavy terminal pin.
+const READ_WORDS = new Set(['NUT', 'NUTS', 'WASHER', 'WASHERS', 'AND', 'WITH', 'ONE', 'ONLY', 'CERAMIC', 'HEAVY', 'TERMINAL', 'PIN', 'PINS',
+  'CLAMP', 'CLAMPS', 'BRACKET', 'BRACKETS', 'MS', 'SS', 'NIPPLE', 'BRASS', 'FINS', 'COLD', 'ZONE', 'CZ', 'VALA', 'MM', 'INCH', 'INCHES', 'IN',
+  'STUD', 'LENGTH', 'OUTSIDE', 'HEATER', 'THE', 'A', 'OF', 'TO']);
+// What is left of the remark once every part a rule read or asked about is
+// taken out: the words no rule reads, and any measurement (4", 22MM, 7U) no
+// rule used. A bare count ("2 CLAMPS") is not a measurement.
+function unreadWords(t, read, { nipple, heavy }) {
+  const rest = read.filter(Boolean).reduce((s, span) => s.split(span).join(' / '), t).replace(/\bM\s+(\d)/g, 'M$1');
+  const out = [];
+  const re = /(\d+(?:\.\d+)?)\s*(MM|INCH(?:ES)?|IN|"|U)?(?![A-Z0-9.])|[A-Z][A-Z0-9]*/g;
+  let m;
+  while ((m = re.exec(rest))) {
+    if (m[1] != null) { if (m[2]) out.push(['"', 'U'].includes(m[2]) ? `${m[1]}${m[2]}` : `${m[1]} ${m[2]}`); continue; }
+    const w = m[0];
+    if (READ_WORDS.has(w)) continue;
+    if ((nipple && /^M1[246]$/.test(w)) || (heavy && w === 'M6')) continue;
+    out.push(w);
+  }
+  return [...new Set(out)];
+}
+
+// → { coldZones:[{in, text, unit}], coldZoneIn, studOutside, fins, nipple, words, unread[], instructions[] }.
 // An instruction is something in the remark the rules cannot apply (a bend, a
 // trim, "like last time"…): the owner is asked about it before she approves.
+// Words no rule reads are one more instruction, 'other' (review, 14 Nov 2026:
+// "Nut Washer with thermostat" or "Buffing" must not come out as ready).
 function parseRemark(remark) {
   const t = normaliseRemark(remark);
-  const res = { text: t, coldZones: [], coldZoneIn: null, studOutside: false, studNamed: null, fins: false, nipple: null, words: {}, instructions: [] };
+  const res = { text: t, coldZones: [], coldZoneIn: null, studOutside: false, studNamed: null, fins: false, nipple: null, words: {}, unread: [], instructions: [] };
   if (!t) return res;
-  const instr = (kind, text) => res.instructions.push({ kind, text });
+  const read = [];                      // the parts of the remark a rule read or asked about
+  const instr = (kind, text) => { res.instructions.push({ kind, text }); read.push(text); };
   // Bends are not cold zones: '7" COLD SIDE BEND'.
   if (/COLD\s*SIDE\s*BEND|\bBEND\b/.test(t)) instr('bend', (t.match(/[^/,]*BEND[^/,]*/) || [t])[0].trim());
   // Hot + cold given together, e.g. '12" HOT + 8" COLD. 8" STUD'.
@@ -93,13 +120,16 @@ function parseRemark(remark) {
   while ((m = czRe.exec(t))) {
     const unit = m[2] === 'MM' ? 'mm' : 'in';
     const v = Number(m[1]);
-    if (unit === 'in' && !m[2] && v > 24) continue;          // a bare large number is not an inch cold zone
+    // A bare large number is not an inch cold zone — nor is it read as mm: asked.
+    if (unit === 'in' && !m[2] && v > 24) { instr('cold zone unit', m[0].trim()); continue; }
     res.coldZones.push({ in: unit === 'mm' ? mmToIn1(v) : v, unit, text: m[0].trim() });
+    read.push(m[0]);
   }
   if (res.coldZones.length === 1 && !res.instructions.some(i => i.kind === 'hot + cold')) res.coldZoneIn = res.coldZones[0].in;
   if (res.coldZones.length > 1) instr('more than one cold zone', res.coldZones.map(c => c.text).join(' · '));
   // Stud / pin length: the 1" stud outside is a rule (cold zone + 1"); any other is asked.
-  if (/STUD\s*LENGTH\s*OUTSIDE[^0-9]*1\s*"|1\s*"\s*STUD\s*OUTSIDE/.test(t)) res.studOutside = true;
+  const outside = t.match(/STUD\s*LENGTH\s*OUTSIDE[^0-9]*1\s*"|1\s*"\s*STUD\s*OUTSIDE/);
+  if (outside) { res.studOutside = true; read.push(outside[0]); }
   else if (/STUD|TERMINAL\s*(PIN\s*)?\d|TERMINAL\s*OUTSIDE|PIN\s*\d+(?:\.\d+)?\s*"\s*LONG/.test(t)) {
     const sm = t.match(/(\d+(?:\.\d+)?)\s*"\s*STUD/);
     if (sm) res.studNamed = Number(sm[1]);
@@ -113,7 +143,8 @@ function parseRemark(remark) {
   if (/STEATITE|CRIMP|FABRICATE|MALE\s*FEMALE/.test(t)) instr('special build', t);
   if (/\b\d+\s*DEGREE|\bDEG\b|°/.test(t)) instr('temperature', (t.match(/[^/,]*DEG[^/,]*/) || [t])[0].trim());
   if (/GAUGE|\bGEJ\b|\bSWG\b/.test(t)) instr('wire gauge stated', (t.match(/[^/,]*(GAUGE|GEJ|SWG)[^/,]*/) || [t])[0].trim());
-  if (/WITHOUT\s*GROO?VE/.test(t)) instr('nipple without groove', 'WITHOUT GROOVE');
+  const groove = t.match(/WITHOUT\s*GROO?VE/);
+  if (groove) { instr('nipple without groove', 'WITHOUT GROOVE'); read.push(groove[0]); }
   // Fitting words.
   res.fins = /\bFINS\b/.test(t);
   const nip = t.match(/\bM\s?(12|14|16)\b[^/]*NIPPLE|NIPPLE[^/]*\bM\s?(12|14|16)\b/);
@@ -128,6 +159,8 @@ function parseRemark(remark) {
     clamps: /CLAMP|BRACKET/.test(t),
     nipple: /NIPPLE/.test(t),
   };
+  res.unread = unreadWords(t, read, { nipple: res.words.nipple, heavy: res.words.heavy });
+  if (res.unread.length) instr('other', res.unread.join(' '));
   return res;
 }
 
