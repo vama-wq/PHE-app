@@ -57,19 +57,22 @@ function renderUTypeSheet(spec) {
   // Pins, sealing bush and the nut stack, each leg.
   for (const y of [yT, yB]) {
     out.push(K.rect(X0 - pinOut, y - 1, pinOut, 2, { fill: C.pin, stroke: '#555', sw: 0.15 }));
-    out.push(K.rect(X0 - 1, y - 2.5, 2.5, 5, { fill: C.esb, stroke: 'none' }));
-    let x = X0 - 1;
+    out.push(K.rect(X0 - 1.2, y - 2.5, 1.2, 5, { fill: C.esb, stroke: 'none' }));
+    out.push(K.rect(X0, y - 1.4, 2.2, 2.8, { fill: 'none', stroke: '#555', sw: 0.12, dash: '0.5 0.35' }));
+    let x = X0 - 1.2;
     for (const p of [{ w: 1.6, h: 3.5, fill: C.ss }, { w: 0.4, h: 4.5, fill: C.brass }, { w: 0.75, h: 3, fill: 'none', dash: '0.6 0.4' }, { w: 0.4, h: 4.5, fill: C.brass }, { w: 1.6, h: 3.5, fill: C.brass }]) {
       x -= p.w;
       out.push(K.rect(x, y - p.h / 2, p.w, p.h, { fill: p.fill, stroke: '#333', sw: 0.12, dash: p.dash || null }));
     }
   }
   // Dimensions.
-  out.push(K.dimH(X0, xOuter, 44, `${n1(shape.uLengthMm)} (${n2(shape.uLengthMm / 25.4).replace(/\.00$/, '')}") U LENGTH — TUBE END TO OUTSIDE OF BEND`, { fromY1: yT - r, fromY2: Yc }));
+  out.push(K.dimH(X0, xOuter, 44, `${n1(shape.uLengthMm)} (${n2(shape.uLengthMm / 25.4).replace(/\.00$/, '')}") U LENGTH = "${shape.uLabel}" — END OF THE TUBE TO THE FAR END OF THE U`, { fromY1: yT - r, fromY2: Yc }));
   out.push(K.dimH(X0, X0 + czBig, 54, `${n1(card.coldZoneBigIn * 25.4)} (${card.coldZoneBigIn}") COLD ZONE`, { fromY1: yT - r, fromY2: yT - r }));
   out.push(K.dimH(X0 - pinOut, X0, 92, `${n1(25.4)} (1") PIN OUT`, { fromY1: yB + 1, fromY2: yB + r, above: false }));
   out.push(K.dimV(yT - r, yB + r, xOuter + 4.5, `${shape.outsideWidthMm} OUTSIDE`, { fromX1: Xb, fromX2: Xb }));
-  out.push(K.dimV(yT, yB, xOuter + 10, `${geo.cc} C/C`, { fromX1: Xb + 1, fromX2: Xb + 1 }));
+  const xg = Xb - 22;
+  out.push(K.dimV(yT + r, yB - r, xg, `${shape.outsideWidthMm - 2 * tube.diaMm}`, { size: 2.2 }));
+  out.push(K.text(xg + 1.6, Yc - 1.6, `INSIDE · LEGS ${geo.cc} C/C`, { size: 1.9, color: K.DIM }));
   // Section mark T–T in the heated zone of the top leg.
   const xt = X0 + 150 * s * 2 * 0.62;
   for (const y of [yT - r - 3.2, yT + r + 3.2]) {
@@ -85,7 +88,7 @@ function renderUTypeSheet(spec) {
   out.push(K.leader(Xb + half * Math.cos(ra), Yc + half * Math.sin(ra), Xb - 12, 101, `R${n1(geo.rCL)} CL · ROLLER ${shape.rollerMm}`, { size: 2.1 }));
   out.push(K.circle(X0 - 6, Yc, 15.5, { stroke: '#2f5597', sw: 0.3, dash: '1.6 0.9' }));
   out.push(K.text(X0 + 7.5, Yc - 12, 'D', { size: 3.2, weight: 700, color: '#2f5597' }));
-  out.push(K.leader(X0 - 6, Yc + 15.5, X0 + 2, 118, 'TERMINAL END AND FITTING ORDER — SEE DETAIL D', { size: 2.1, color: '#2f5597' }));
+  out.push(K.leader(X0 - 6 + 15.5 * Math.cos(0.95), Yc + 15.5 * Math.sin(0.95), X0 + 18, 118, 'TERMINAL END AND FITTING ORDER — SEE DETAIL D', { size: 2.1, color: '#2f5597' }));
 
   // ── Detail D: terminal end, one leg, scale 2:1 ──
   out.push(K.viewTitle(92, 129, 'DETAIL D — TERMINAL END, ONE LEG (SCALE 2:1)'));
