@@ -210,6 +210,10 @@ function listBlocks(st) {
   if (lines.length && R.filteredForResend(lines, order.id, PINS_RULE.afterOrderId).length !== lines.length) {
     b.push('the list has a line the drawing upload would drop (quantity 0, or a regular terminal pin — those come from the job card) — design to fix the list');
   }
+  const otherSize = R.partsForOtherTube(lines, item.tube_diameter);
+  if (otherSize.length) {
+    b.push(`the list has parts for a Ø${otherSize[0].sizeMm} tube on this Ø${Number(item.tube_diameter)} tube (${[...new Set(otherSize.map(x => x.code))].join(', ')}) — design to fix the tube or the list`);
+  }
   if (HEAVY_PIN_REMARK_RE.test(item.remark || '') && lines.length && !lines.some(l => /^heavy terminal pin$/i.test(String(l.category || '').trim()))) {
     b.push('the remark calls for a Heavy Terminal Pin and the list has none — design to add it');
   }

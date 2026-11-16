@@ -543,6 +543,23 @@ function widthHistoryFlag({ rows, customerCode, diaMm, set, itemId, madeInsideMm
     + `${names.slice(0, 3).join(', ')}${names.length > 3 ? ` and ${names.length - 3} more` : ''} — this sheet uses ${trimNum(madeInsideMm)}. Check the client's drawing.`;
 }
 
+// ── Parts sized for another tube ─────────────────────────────────────────────
+// The ESB, the stud nuts / washers and the filling bush carry the tube they fit
+// in their code (ESB-08 / ESB-11, NUT-SS-M4-08 / NUT-SS-M5-11, WSH-BR-08 /
+// WSH-SS-11, PVC-FB08-M4 / PVC-FB11-M5). On 16 Nov 2026 four live items had the
+// other size (ORD-198-26: an Ø11 tube with ESB-08, NUT-SS-M4-08, WSH-BR-08) out
+// of 234 with such parts; a sheet drawn from that list would hand the floor the
+// wrong parts. → [{ code, sizeMm }] for the lines that do not fit diaMm.
+const PART_SIZE_RE = /^(?:ESB|NUT-(?:SS|BR)-M\d+|WSH-(?:SS|BR))-(08|11)(?![0-9])|^PVC-FB(08|11)-/;
+function partSizeOf(code) {
+  const m = String(code || '').trim().toUpperCase().match(PART_SIZE_RE);
+  return m ? Number(m[1] || m[2]) : null;
+}
+function partsForOtherTube(lines, diaMm) {
+  const d = Number(diaMm);
+  return (lines || []).map(l => ({ code: l.code, sizeMm: partSizeOf(l.code) })).filter(x => x.sizeMm && x.sizeMm !== d);
+}
+
 // ── The list as the drawing upload would keep it (routes/orders.js) ─────────
 // Drops qty ≤ 0 (except Fins) and, on orders after id 452, regular Terminal Pins.
 function filteredForResend(lines, orderId, pinsAfterOrderId = 452) {
@@ -609,6 +626,6 @@ module.exports = {
   gapToMm, readDwgGap, readRemarkGaps, insideDefault, insideChecks, WIDE_U_TOTAL, widthHistoryFlag, shortDwg,
   normaliseRemark, parseRemark, listShape, setFromList, fittingSetFor, SET_LABEL, FITTING_ORDER, RULED_SETS,
   fixtureText, asmblyDefault, isIsoDate, weekday, dispatchDefault, totalLength, coldZoneDefault, pinDefault,
-  shapeChecks, MAX_SURFACE_LOAD_SEEN_W_CM2, filteredForResend, CLOSED, statusClass,
+  shapeChecks, MAX_SURFACE_LOAD_SEEN_W_CM2, filteredForResend, partSizeOf, partsForOtherTube, CLOSED, statusClass,
   stable, sha256Hex, sheetCode, codeChanges, itemSnapshot, snapshotDiff,
 };

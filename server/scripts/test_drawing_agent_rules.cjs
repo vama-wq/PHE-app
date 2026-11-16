@@ -402,5 +402,18 @@ if (fs.existsSync(path.join(FIX, 'u_gen_cards.json'))) {
     `IT: ${itFlag}`);
 }
 
+// Parts sized for another tube (16 Nov 2026, ORD-198-26).
+{
+  const L = (...codes) => codes.map(code => ({ code }));
+  const o198 = R.partsForOtherTube(L('NUT-SS-M4-08', 'WSH-BR-08', 'ESB-08'), 11);
+  ok('8a. parts for another tube: ORD-198-26 (Ø11 with ESB-08 / NUT-SS-M4-08 / WSH-BR-08) → all three; the same on Ø8 → none; Ø11 with ESB-11 / NUT-SS-M5-11 / WSH-SS-11 / PVC-FB11-M5 → none; WSH-BR-08 among M5-11 parts (ORD-199) → just it; nipples, pins, fins and coils are not size-coded',
+    o198.map(x => x.code).join() === 'NUT-SS-M4-08,WSH-BR-08,ESB-08' && o198.every(x => x.sizeMm === 8)
+    && R.partsForOtherTube(L('NUT-SS-M4-08', 'WSH-BR-08', 'ESB-08', 'PVC-FB08-M4'), 8).length === 0
+    && R.partsForOtherTube(L('ESB-11', 'NUT-SS-M5-11', 'WSH-SS-11', 'PVC-FB11-M5'), 11).length === 0
+    && R.partsForOtherTube(L('ESB-11', 'WSH-BR-08', 'NUT-SS-M5-11'), 11).map(x => x.code).join() === 'WSH-BR-08'
+    && R.partsForOtherTube(L('NIP-BR-M12-ROUND', 'TP-SS-M4-03-WH', 'FIN-SS-08', 'SPR-KD-36', 'ESB-110'), 11).length === 0,
+    JSON.stringify(o198));
+}
+
 console.log(failed ? `\n${failed} CHECK(S) FAILED` : '\nALL PASS');
 process.exit(failed ? 1 : 0);
