@@ -110,6 +110,7 @@ app.use('/api/payroll',          require('./routes/payroll'));
 app.use('/api/plating',          require('./routes/plating'));
 app.use('/api/capa',             require('./routes/capa'));
 app.use('/api/whatsapp',         require('./routes/whatsapp'));
+app.use('/api/linkedin',         require('./routes/linkedin'));
 
 // Serve React client in production
 if (process.env.NODE_ENV === 'production') {

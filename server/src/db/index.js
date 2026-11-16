@@ -183,6 +183,103 @@ async function initDB(retries = 20, delayMs = 10000) {
           results       JSONB,
           updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )`);
+      // LinkedIn connections (owner, 16 Nov 2026): the daily connection work moves out of the Excel workbook into
+      // the app. The LinkedIn agent fills these tables every evening: who to invite today (with the note to copy),
+      // who accepted and needs a thank-you, new people it found, groups to join with posts for them, and ideas to
+      // grow from people who accepted. The owner presses Connect / posts / sends notes herself on LinkedIn.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS li_people (
+          id           SERIAL PRIMARY KEY,
+          slug         TEXT UNIQUE NOT NULL,
+          profile_url  TEXT NOT NULL,
+          person       TEXT NOT NULL,
+          title        TEXT,
+          role         TEXT,
+          company      TEXT,
+          place        TEXT,
+          list_name    TEXT,
+          phase        TEXT,
+          phase_order  INTEGER NOT NULL DEFAULT 9,
+          plan_date    DATE,
+          note         TEXT,
+          use_note     BOOLEAN NOT NULL DEFAULT FALSE,
+          why          TEXT,
+          message      TEXT,
+          company_page TEXT,
+          prospect_id  INTEGER REFERENCES prospects(id) ON DELETE SET NULL,
+          sent_at      TIMESTAMPTZ,
+          sent_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          sent_how     TEXT,
+          pending_seen DATE,
+          accepted_on  DATE,
+          thanked_at   TIMESTAMPTZ,
+          thanked_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          skipped_at   TIMESTAMPTZ,
+          skip_reason  TEXT,
+          check_note   TEXT,
+          source       TEXT NOT NULL DEFAULT 'agent',
+          added_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS li_groups (
+          group_key  TEXT PRIMARY KEY,
+          name       TEXT NOT NULL,
+          url        TEXT NOT NULL,
+          area       TEXT,
+          region     TEXT,
+          members    TEXT,
+          who        TEXT,
+          why        TEXT,
+          rules      TEXT,
+          status     TEXT NOT NULL DEFAULT 'suggested' CHECK (status IN ('suggested','requested','joined','skip')),
+          status_at  TIMESTAMPTZ,
+          added_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS li_group_posts (
+          post_key   TEXT PRIMARY KEY,
+          area       TEXT,
+          kind       TEXT,
+          title      TEXT,
+          body       TEXT NOT NULL,
+          image      TEXT,
+          status     TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready','posted','skip')),
+          posted_in  TEXT,
+          posted_at  TIMESTAMPTZ,
+          posted_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          added_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS li_ideas (
+          idea_key   TEXT PRIMARY KEY,
+          day        DATE NOT NULL,
+          person_id  INTEGER REFERENCES li_people(id) ON DELETE CASCADE,
+          kind       TEXT,
+          text       TEXT NOT NULL,
+          copy_text  TEXT,
+          link       TEXT,
+          done_at    TIMESTAMPTZ,
+          done_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          added_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS li_checks (
+          id               SERIAL PRIMARY KEY,
+          checked_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          connections_read INTEGER,
+          pending          INTEGER,
+          accepted_new     INTEGER,
+          not_found        JSONB,
+          note             TEXT
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS li_searched (
+          company     TEXT PRIMARY KEY,
+          prospect_id INTEGER REFERENCES prospects(id) ON DELETE SET NULL,
+          searched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          found       INTEGER NOT NULL DEFAULT 0
+        )`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS backup_log (
           id SERIAL PRIMARY KEY,

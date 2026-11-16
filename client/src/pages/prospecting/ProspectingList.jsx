@@ -567,6 +567,9 @@ export default function ProspectingList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link to="/prospecting/linkedin-connections" className="btn-secondary flex items-center gap-1.5 text-sm">
+            <Linkedin size={15} /> LinkedIn connections
+          </Link>
           <Link to="/prospecting/social" className="btn-secondary flex items-center gap-1.5 text-sm">
             <Share2 size={15} /> Social plan
           </Link>

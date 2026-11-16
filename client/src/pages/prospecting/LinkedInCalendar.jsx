@@ -50,6 +50,7 @@ export default function LinkedInCalendar() {
           <p className="text-xs text-gray-500 mt-1">One post every Wednesday, 10:30 am · 28 Oct – 30 Dec 2026. Download the file, copy the caption, post, then tick it here.</p>
         </div>
         <div className="flex items-center gap-2">
+          <Link to="/prospecting/linkedin-connections" className="btn-secondary flex items-center gap-1.5 text-sm"><Linkedin size={15} /> Connections</Link>
           <Link to="/prospecting/social" className="btn-secondary flex items-center gap-1.5 text-sm"><Share2 size={15} /> Social plan</Link>
           <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={load}><RefreshCw size={15} /> Refresh</button>
         </div>
