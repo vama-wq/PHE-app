@@ -375,7 +375,11 @@ function renderUTypeSheet(spec) {
   const ringFits = half + r + 2.75 <= 15.5 + 0.01;   // Detail D's usual circle holds both terminal ends
   // An 18U leg at 1:2 just fits; a wider bend takes more room, and the OUTSIDE
   // dimension right of it must still stop short of the element table (x 276).
-  const LEG_MAX = Math.min(217.9, 266.7 - X0 - half - rBend);
+  // A bracket's foot (under the heater, pointing away from its middle as on her
+  // NTS / SPL models) reaches past the outer end of the U: it too stops short.
+  const footPast = BR ? Math.max(0, BR.len - BR.fromBend) * s : 0;
+  // The OUTSIDE dimension then goes right of the foot, still short of the table.
+  const LEG_MAX = Math.min(217.9, 266.7 - X0 - half - rBend, 271.6 - X0 - half - r - footPast);
   const legPaper = geo.straight * s;
   const broken = legPaper > LEG_MAX + 0.01;
   const Xb = X0 + Math.min(legPaper, LEG_MAX);
@@ -402,18 +406,40 @@ function renderUTypeSheet(spec) {
   };
   out.push(K.viewTitle(150, 32, `ELEVATION (SCALE 1:${scaleN})`, broken ? 'Terminal end on the left · as bent · legs broken, true length dimensioned' : 'Terminal end on the left · as bent'));
   const uPath = `M${K.f(X0)},${K.f(yT)} L${K.f(Xb)},${K.f(yT)} A${K.f(half)},${K.f(half)} 0 0 1 ${K.f(Xb)},${K.f(yB)} L${K.f(X0)},${K.f(yB)}`;
-  // Brackets on the elevation: the U lies in the paper, so a bracket shows as
-  // its strip across both legs (over the tubes) with its two screw heads. Its
-  // foot (under the heater) is not drawn until she rules which way it points;
-  // the notes say so (review, 16 Nov 2026).
+  // Brackets on the elevation, as her bracket drawing's top view (BKT-FMH-H788 /
+  // -H1250): the U lies in the paper, so a bracket shows as its foot — a plate
+  // 75.2 × 55 under the heater with four Ø7.9 holes and a 21.5 × 9.2 slot near
+  // its far end — the upright (the plate's 1.2 edge, where the legs sit in its
+  // slots) and, over the legs, its 10.8 clamp strip with two M3.5 cross-head
+  // screws at 36.1 c/c. Both feet point away from the heater's middle, as on her
+  // NTS (d114) and SPL (d157) models (owner, 16 Nov 2026: "even the bracket does
+  // not look like bracket").
   // xUpE / xUpB: the upright at the terminal end / near the bend.
   const xUpE = BR ? X0 + BR.fromEnd * s : null, xUpB = BR ? xOuter - BR.fromBend * s : null;
   const brHalf = BR ? (BR.w / 2) * s : 0;
-  // Fins: a light layer under the tube — their OD as an envelope round each
-  // leg (and round the bend when they go round it), one line per turn of the
-  // helical strip at the pitch (no closer than 1.5 on paper: closer is drawn
-  // at 1.5 and marked schematic), stopping short of the tube end, with a bare
-  // gap at the bracket near the bend.
+  const BR_INK = '#3a3f45', BR_PLATE = '#e2e6ea';
+  if (BR) {
+    for (const [xu, dir] of [[xUpE, -1], [xUpB, 1]]) {
+      const L = BR.len * s, xFar = xu + dir * L, xa = Math.min(xu, xFar);
+      out.push(K.rect(xa, Yc - brHalf, L, 2 * brHalf, { fill: BR_PLATE, stroke: BR_INK, sw: 0.22 }));
+      // Holes and slot, measured from the upright on her drawing: hole columns
+      // 8.1 and 20.4 in from the foot's end, 7.85 in from each side; the slot
+      // between them on the middle.
+      const hx = [BR.len - 8.1, BR.len - 8.1 - 12.3].map(d => xu + dir * d * s), hy = (BR.w / 2 - 7.85) * s;
+      for (const x of hx) for (const sy of [-1, 1]) out.push(K.circle(x, Yc + sy * hy, (7.9 / 2) * s, { fill: '#fff', stroke: BR_INK, sw: 0.15 }));
+      const sc = xu + dir * (BR.len - 8.1 - 12.3 / 2) * s, sl = 21.5 * s, sw2 = 9.2 * s;
+      out.push(K.rect(sc - sl / 2, Yc - sw2 / 2, sl, sw2, { fill: '#fff', stroke: BR_INK, sw: 0.15, rx: sw2 / 2 }));
+      // The upright: the plate turned up, seen on its edge.
+      out.push(K.rect(Math.min(xu, xu + dir * BR.thk * s), Yc - brHalf, Math.max(0.35, BR.thk * s), 2 * brHalf, { fill: '#9aa1a8', stroke: BR_INK, sw: 0.15 }));
+    }
+  }
+  // Fins, drawn as her fin drawing (FIN-MS-08 / FIN-SS-08-VE) draws them: the
+  // helical strip's outer edge seen from the side — one narrow loop a turn
+  // above and below each leg, the near half crossing the tube, the far half
+  // hidden behind it — fanning out round the bend when they go round it. Loops
+  // no closer than 1.5 on paper (closer is drawn at 1.5 and marked schematic);
+  // they start short of the tube end and leave a bare gap at the bracket near
+  // the bend.
   const finStep = FN ? Math.max(FN.pitch * s, 1.5) : 0;
   const finSchematic = FN ? FN.pitch * s < 1.5 - 1e-9 : false;
   const xFs = FN ? X0 + FN.stop * s : null;            // where the fins start on each leg
@@ -422,8 +448,9 @@ function renderUTypeSheet(spec) {
   const finGap = FN && BR ? (FN.bareTo ? [xOuter - FN.bareTo * s, Xb + 1]
     : (() => { const c = xUpB + (BR.strip * s) / 2, g = Math.max(FN.gap, BR.strip + BR.thk); return [c - (g * s) / 2, c + (g * s) / 2]; })()) : null;
   let finEndX = null;                                  // where the last straight run ends (a bare bend)
+  const finEls = [];                                   // drawn over the tube, under the brackets' strips
   if (FN) {
-    const FIN_FILL = '#f3f5f7', FIN_EDGE = '#7d848c', FIN_RING = '#a7adb4';
+    const FIN_INK = '#2c3136';
     const segs = [];                                    // straight finned runs on paper, each leg
     if (Xb > xFs + 0.2) {
       if (finGap && finGap[1] > xFs && finGap[0] < Xb) {
@@ -434,40 +461,37 @@ function renderUTypeSheet(spec) {
     // A stub shorter than two turns between the bracket's gap and a bare bend is not wound.
     for (let i = segs.length - 1; i >= 0; i--) if (!(FN.onBend && Math.abs(segs[i][1] - Xb) < 1e-6) && segs[i][1] - segs[i][0] < 2 * FN.pitch * s) segs.splice(i, 1);
     finEndX = segs.length ? Math.max(...segs.map(g => g[1])) : null;
-    const legs = [[yT, yT - rE, Math.min(yT + rE, Yc - 0.2)], [yB, Math.max(yB - rE, Yc + 0.2), yB + rE]];
-    for (const [, y1, y2] of legs) for (const [a, b] of segs) out.push(K.rect(a, y1, b - a, y2 - y1, { fill: FIN_FILL, stroke: 'none', sw: 0 }));
-    const ri = Math.max(0, half - rE), ro = half + rE;
-    if (FN.onBend) {
-      out.push(K.path(`M${K.f(Xb)},${K.f(Yc - ro)} A${K.f(ro)},${K.f(ro)} 0 0 1 ${K.f(Xb)},${K.f(Yc + ro)} L${K.f(Xb)},${K.f(Yc + ri)}${ri > 0 ? ` A${K.f(ri)},${K.f(ri)} 0 0 0 ${K.f(Xb)},${K.f(Yc - ri)}` : ''} Z`, { fill: FIN_FILL, stroke: 'none', sw: 0 }));
-    }
-    // One line per turn: the near half of the helix, leaning by half a pitch.
-    const lean = Math.min(finStep * 0.5, 1);
-    for (const [, y1, y2] of legs) {
-      for (const [a, b] of segs) {
-        for (let x = xFs + Math.ceil((a - xFs) / finStep - 1e-9) * finStep; x + lean <= b + 1e-9; x += finStep) {
-          const top = y1, bot = y2;
-          out.push(K.line(x, top, x + lean * ((bot - top) / (2 * rE)), bot, { w: 0.12, color: FIN_RING }));
-        }
+    // One running position t along the tube (top leg → bend → bottom leg) keeps
+    // the turns in step; at t the tube's centre and its outward normal.
+    const tTop = Xb - xFs, tBend = Math.PI * half;
+    const at = (t) => {
+      if (t <= tTop) return [xFs + t, yT, 0, -1];
+      if (t <= tTop + tBend) { const ph = -Math.PI / 2 + (t - tTop) / half; return [Xb + half * Math.cos(ph), Yc + half * Math.sin(ph), Math.cos(ph), Math.sin(ph)]; }
+      return [Xb - (t - tTop - tBend), yB, 0, 1];
+    };
+    // The strip's outer edge over [t0, t1]: near half (sin θ ≥ 0) always seen,
+    // far half only where it shows past the tube. Reach is clamped short of the
+    // other leg's loops so the two never touch on paper.
+    const reach = Math.min(rE, half - 0.15);
+    const helix = (t0, t1, skip) => {
+      const dt = finStep / 16;
+      let d = '', pen = false;
+      for (let t = t0; t <= t1 + 1e-9; t += dt) {
+        const th = (2 * Math.PI * t) / finStep, cth = Math.cos(th);
+        const [cx, cy, nx, ny] = at(t);
+        const seen = Math.sin(th) >= 0 || Math.abs(reach * cth) >= r - 0.02;
+        if (!seen || (skip && skip(cx))) { pen = false; continue; }
+        const x = cx + nx * reach * cth, y = cy + ny * reach * cth;
+        d += `${pen ? 'L' : 'M'}${K.f(x)},${K.f(y)}`;
+        pen = true;
       }
+      if (d) finEls.push(K.path(d, { stroke: FIN_INK, sw: finSchematic ? 0.1 : 0.12, fill: 'none' }));
+    };
+    for (const [a, b] of segs) {
+      helix(a - xFs, b - xFs);                                   // top leg
+      helix(tTop + tBend + (Xb - b), tTop + tBend + (Xb - a));   // bottom leg
     }
-    if (FN.onBend) {
-      const n = Math.max(1, Math.floor((Math.PI * half) / finStep));
-      const dA = Math.PI / n;
-      for (let k = 0; k < n; k++) {
-        const a = -Math.PI / 2 + (k + 0.5) * dA, xc = Xb + half * Math.cos(a);
-        if (finGap && xc >= finGap[0] && xc <= finGap[1]) continue;
-        out.push(K.line(Xb + ri * Math.cos(a), Yc + ri * Math.sin(a), Xb + ro * Math.cos(a), Yc + ro * Math.sin(a), { w: 0.12, color: FIN_RING }));
-      }
-      out.push(K.path(`M${K.f(Xb)},${K.f(Yc - ro)} A${K.f(ro)},${K.f(ro)} 0 0 1 ${K.f(Xb)},${K.f(Yc + ro)}`, { stroke: FIN_EDGE, sw: 0.18 }));
-      if (ri > 0) out.push(K.path(`M${K.f(Xb)},${K.f(Yc - ri)} A${K.f(ri)},${K.f(ri)} 0 0 1 ${K.f(Xb)},${K.f(Yc + ri)}`, { stroke: FIN_EDGE, sw: 0.18 }));
-    }
-    for (const [, y1, y2] of legs) {
-      for (const [a, b] of segs) {
-        out.push(K.line(a, y1, b, y1, { w: 0.18, color: FIN_EDGE }), K.line(a, y2, b, y2, { w: 0.18, color: FIN_EDGE }));
-        out.push(K.line(a, y1, a, y2, { w: 0.18, color: FIN_EDGE }));
-        if (!(FN.onBend && Math.abs(b - Xb) < 1e-6)) out.push(K.line(b, y1, b, y2, { w: 0.18, color: FIN_EDGE }));
-      }
-    }
+    if (FN.onBend) helix(tTop, tTop + tBend, finGap ? (x) => x >= finGap[0] && x <= finGap[1] : null);
   }
   out.push(K.path(uPath, { stroke: C.sheath, sw: tube.diaMm * s, cap: 'butt' }));
   out.push(K.path(uPath, { stroke: C.heated, sw: tube.diaMm * s - 0.55, cap: 'butt' }));
@@ -475,6 +499,7 @@ function renderUTypeSheet(spec) {
   out.push(K.line(X0, yB, X0 + czSmall, yB, { w: tube.diaMm * s - 0.55, color: C.cold }));
   for (const [x, y] of [[X0 + czBig, yT], [X0 + czSmall, yB]]) { out.push(K.line(x, y - r - 0.8, x, y + r + 0.8, { w: 0.3 })); noteSeg(x, y - r - 0.8, x, y + r + 0.8); }
   noteBox(X0, yT - r, Xb, yT + r, true); noteBox(X0, yB - r, Xb, yB + r, true);
+  out.push(...finEls);
   if (broken) {
     // A gap in both legs inside the heated zone, closed by the usual S-breaks.
     const xg = X0 + czMax + heatedPaper * 0.66;
@@ -515,7 +540,12 @@ function renderUTypeSheet(spec) {
       const xa = Math.min(xu, xu + dir * BR.strip * s), xm2 = xu + (dir * BR.strip * s) / 2;
       out.push(K.rect(xa, Yc - brHalf, BR.strip * s, 2 * brHalf, { fill: '#d3d7dc', stroke: '#3a3f45', sw: 0.2 }));
       out.push(K.line(xu, Yc - brHalf, xu, Yc + brHalf, { w: Math.max(0.3, BR.thk * s), color: '#3a3f45' }));
-      for (const dy of [-1, 1]) out.push(K.circle(xm2, Yc + (dy * BR.screwCC * s) / 2, (BR.screw * s) / 2, { fill: C.ss, stroke: '#3a3f45', sw: 0.15 }));
+      // Its two M3.5 pan heads, Ø6.3, with the cross recess (her drawing).
+      for (const dy of [-1, 1]) {
+        const cy = Yc + (dy * BR.screwCC * s) / 2, rr = (BR.screw * s) / 2, k = rr * 0.55;
+        out.push(K.circle(xm2, cy, rr, { fill: C.ss, stroke: '#3a3f45', sw: 0.15 }));
+        out.push(K.line(xm2 - k, cy, xm2 + k, cy, { w: 0.15, color: '#3a3f45' }), K.line(xm2, cy - k, xm2, cy + k, { w: 0.15, color: '#3a3f45' }));
+      }
       // Its line in the parts table, on the strip between the legs.
       out.push(K.balloon(xm2, Yc, no('bracket'), { r: 2.2 }));
     }
@@ -551,7 +581,10 @@ function renderUTypeSheet(spec) {
   out.push(K.dimH(X0, X0 + czBig, yCZ, czLabel, { fromY1: yT - r, fromY2: yT - r, size: Math.round(czSize * 100) / 100 }));
   noteSeg(X0 + czBig, yT - r - 0.8, X0 + czBig, yCZ + 1.2);
   out.push(K.dimH(X0 - pinOut, X0, yPin, '25.4 (1") PIN OUT', { fromY1: yB + 1, fromY2: yB + r, above: false, size: 2.5 }));
-  out.push(K.dimV(yT - r, yB + r, xOE + 4.5, `${fmt(outsideMm)} OUTSIDE`, { fromX1: Xb, fromX2: Xb, size: 2.6 }));
+  // Right of the bend: past the bracket's foot when there is one (callouts keep clear of it).
+  const xClr = BR ? Math.max(xOE, xOuter + footPast) : xOE;
+  const xOutDim = BR ? Math.max(xOE + 4.5, xOuter + footPast + 3.4) : xOE + 4.5;
+  out.push(K.dimV(yT - r, yB + r, xOutDim, `${fmt(outsideMm)} OUTSIDE`, { fromX1: Xb, fromX2: Xb, size: 2.6 }));
   // Inches beside a figure only when it is a plain fraction of an inch (1.5" = 38.1).
   const inchOf = (mm) => { const v = Math.round((mm / 25.4) * 8) / 8; return v > 0 && Math.abs(v * 25.4 - mm) < 0.05 ? ` (${fmt(v)}")` : ''; };
   // Where the fins start and the terminal-end bracket sits, chained on from
@@ -648,10 +681,10 @@ function renderUTypeSheet(spec) {
     const lx = sheathFit(sheathShort);
     out.push(K.leader(Math.min(xt + 30, lx - 6), yT - r, lx, ySh, sheathShort, { size: 2.4 }));
     noteSeg(Math.min(xt + 30, lx - 6), yT - r, lx, ySh);
-  } else if (xOE + 9 + textW(sheathShort) <= RIGHT) {
-    const txt = xOE + 9 + textW(sheathLong) <= RIGHT ? sheathLong : sheathShort;
-    out.push(K.leader(Xb + half * Math.cos(-Math.PI / 3), Yc + half * Math.sin(-Math.PI / 3), xOE + 9, yCZ, txt, { size: 2.4 }));
-    noteSeg(Xb + half * Math.cos(-Math.PI / 3), Yc + half * Math.sin(-Math.PI / 3), xOE + 9, yCZ);
+  } else if (xClr + 9 + textW(sheathShort) <= RIGHT) {
+    const txt = xClr + 9 + textW(sheathLong) <= RIGHT ? sheathLong : sheathShort;
+    out.push(K.leader(Xb + half * Math.cos(-Math.PI / 3), Yc + half * Math.sin(-Math.PI / 3), xClr + 9, yCZ, txt, { size: 2.4 }));
+    noteSeg(Xb + half * Math.cos(-Math.PI / 3), Yc + half * Math.sin(-Math.PI / 3), xClr + 9, yCZ);
   } else {
     // Right of a straight-up leader, inside the U length's extension lines; left
     // of it when only that side has room.
@@ -694,12 +727,12 @@ function renderUTypeSheet(spec) {
   // bend one row up, clear of the two leaders that cross that row.
   const rW = textW(rTxt), rLeftEdge = Xb - 10 - rW;
   const atRow = (x1, y1, x2, y2, y) => x1 + ((x2 - x1) * (y - y1)) / (y2 - y1);   // a leader's x at height y
-  let rAt = [xOE + 9, yR1];
+  let rAt = [xClr + 9, yR1];
   if (rLeftEdge > czTxtEnd && rLeftEdge > xh + (xhl - xh) * 0.683 + 2) rAt = [Xb - 10, yR2];
-  else if (xOE + 9 + rW > RIGHT && rLeftEdge > 2 + Math.max(atRow(xh, yB + r, xhl, yH, yR1), atRow(X0 + czSmall * 0.55, yB + r, X0 + czSmall + 8, yR2, yR1))) rAt = [Xb - 10, yR1];
+  else if (xClr + 9 + rW > RIGHT && rLeftEdge > 2 + Math.max(atRow(xh, yB + r, xhl, yH, yR1), atRow(X0 + czSmall * 0.55, yB + r, X0 + czSmall + 8, yR2, yR1))) rAt = [Xb - 10, yR1];
   // Still right of the bend and running into the table at x 276 (a wide bend, a
   // NEW roller's longer label): set smaller to stop short of it.
-  const rSize = rAt[0] === xOE + 9 && xOE + 9 + rW > 275.5 ? K.fitSize(rTxt, RIGHT - xOE - 9 - 3.3, 2.4) : 2.4;
+  const rSize = rAt[0] === xClr + 9 && xClr + 9 + rW > 275.5 ? K.fitSize(rTxt, RIGHT - xOE - 9 - 3.3, 2.4) : 2.4;
   // Run left past a bracket's figure under the bend, it leaves the bend steeper.
   const raL = BR && rAt[0] < Xb ? (Math.PI * 5) / 12 : ra;
   out.push(K.leader(Xb + half * Math.cos(raL), Yc + half * Math.sin(raL), rAt[0], rAt[1], rTxt, { size: rSize }));

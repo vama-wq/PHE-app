@@ -741,8 +741,9 @@ if (fs.existsSync(path.join(FIX, 'u_gen_cards.json'))) {
   const a8 = finned(8, 18, 43, true), b8 = finned(8, 18, 43, false), a11 = finned(11, 21, 49, true);
   const good = (o, label) => o.out.html.includes(`${label} · OD `) && (o.out.html.match(/&gt;38\.1 \(1\.5&quot;\)<|>38\.1 \(1\.5&quot;\)</g) || []).length >= 2
     && /SECTION T–T, ONE LEG/.test(o.out.html) && /FINS [0-9.]+ APART/.test(o.out.html) && !/NaN|null SWG|undefined/.test(o.out.html) && o.out.notesFit && o.out.tablesFit !== false
-    && /clamped in its slots/.test(o.out.html) && !/before the ESB/.test(o.out.html) && !/stroke-dasharray="1\.2 0\.8"/.test(o.out.html);
-  ok('11f. the finned sheet renders (pure): 18U Ø8 round the bend with 2 brackets — the fin row "MS FINS (FIN-MS-08) · OD 28.44", both 1.5" bracket figures, Section T–T one leg with the fins\' clearance, the bracket "clamped in its slots" (not "before the ESB"), no bracket foot drawn, no NaN / null; the same with the bend bare (no GAP AT THE BRACKET) and on Ø11 (FIN-MS-11, 21U at 49)',
+    && /clamped in its slots/.test(o.out.html) && !/before the ESB/.test(o.out.html) && !/stroke-dasharray="1\.2 0\.8"/.test(o.out.html)
+    && (o.out.html.match(/fill="#e2e6ea"/g) || []).length === 2 && !o.out.html.includes("#f3f5f7");
+  ok('11f. the finned sheet renders (pure): 18U Ø8 round the bend with 2 brackets — the fin row "MS FINS (FIN-MS-08) · OD 28.44", both 1.5" bracket figures, Section T–T one leg with the fins\' clearance, the bracket "clamped in its slots" (not "before the ESB"), each bracket foot drawn as her top view (one plate each, pointing away from the middle — no dashed foot), the fins as loops (no grey envelope), no NaN / null; the same with the bend bare (no GAP AT THE BRACKET) and on Ø11 (FIN-MS-11, 21U at 49)',
     good(a8, 'MS FINS (FIN-MS-08)') && a8.out.html.includes('GAP AT THE BRACKET') && good(b8, 'MS FINS (FIN-MS-08)') && !b8.out.html.includes('GAP AT THE BRACKET')
     && b8.out.html.includes('STRAIGHT LEGS ONLY, BEND BARE') && good(a11, 'MS FINS (FIN-MS-11)'),
     [a8, b8, a11].map(o => `${o.out.notesFit}/${o.out.tablesFit}/${(o.out.html.match(/>38\.1 \(1\.5&quot;\)</g) || []).length}`).join(' '));

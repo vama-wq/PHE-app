@@ -603,8 +603,9 @@ function bracketFitChecks({ code, size, diaMm, cc }) {
 // (the bend bare, the stub too short to wind: fin.bracketGapMm null, the leg
 // bare to fin.bareToMm) it is where the fins end — never "both sides"
 // (review, 16 Nov 2026). Without a fin line (refused until design adds it) the
-// sheet draws no fins: no fin words. Its foot is not drawn until she says
-// which way it points. → { row: [2 lines], note }.
+// sheet draws no fins: no fin words. Its foot is drawn pointing away from the
+// heater's middle, as on her NTS / SPL models (16 Nov 2026), TO CONFIRM on the
+// preview. → { row: [2 lines], note }.
 function bracketWords({ brk, fin = null, production = false }) {
   const tn = (v) => (v == null ? '—' : trimNum(v));
   const bs = brk.size;
@@ -613,7 +614,7 @@ function bracketWords({ brk, fin = null, production = false }) {
   const row = [`${tn(brk.perHeater)} × ${brk.code || '—'}${brk.onList ? '' : ' (not on the list)'}`,
     !fin ? `${bendEnd} · ${tn(brk.fromEndMm)} from the tube end`
       : `${bendEnd} (${gapAt ? 'gap in the fins' : 'fins end past it'}) · ${tn(brk.fromEndMm)} from the tube end (fins stop)`];
-  const foot = `their ${tn(bs?.lenMm ?? 75.2)} foot is not drawn — which way it points is ${production ? 'as fitted' : 'TO CONFIRM by Ms. Vama'}`;
+  const foot = `their ${tn(bs?.lenMm ?? 75.2)} foot is under the heater, pointing away from its middle ${production ? '(as fitted)' : 'as on your NTS and SPL drawings — TO CONFIRM by Ms. Vama'}`;
   const note = `Brackets: ${tn(brk.perHeater)} per heater (${brk.code || '—'}${bs && bs.hMm ? `, ${tn(bs.hMm)} high × ${tn(bs.wMm)} wide, ${tn(bs.thkMm)} sheet` : ''}), clamped in their slots at St 26 — `
     + (!fin ? `one ${tn(brk.fromBendMm)} mm from the outer end of the U, one ${tn(brk.fromEndMm)} mm from the tube end (${FIN_RULED}: "1.5" from both ends"); ${foot}.`
       : (gapAt
