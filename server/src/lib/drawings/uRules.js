@@ -435,8 +435,9 @@ function dispatchDefault({ orderDispatchDate, orderType, todayIso }) {
 // of that tube: 18U on Ø8 with 43 outside measures ≈ 451.2 mm end to end (still
 // labelled 18U), because the bend takes (π/2 − 1)·R − d/2 off each leg.
 //
-// R-e, a PROPOSAL to put to her (14 Nov 2026), switchable here: her ruling drops
-// the standard bend's extra centreline (≈ 0.47" on Ø8 / 43 outside). A WIDER U
+// R-e, the owner's ruling (16 Nov 2026): "obviously the length will increase if
+// the U Gap increases, you have to compute that". Her 2U drops the standard
+// bend's extra centreline (≈ 0.47" on Ø8 / 43 outside). A WIDER U
 // takes more tube in its bend (a 4" gap ≈ 1.7" more), so 'bend_extra' adds only
 // the DIFFERENCE from that Ø's standard width:
 //   extra = [(−W + π(W − d)/2) − (−W_std + π(W_std − d)/2)] / 25.4
