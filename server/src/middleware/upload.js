@@ -234,5 +234,6 @@ module.exports = {
   downloadFromStorage,
   getPublicUrl,
   copyInStorage,
+  storageFilename,
   BUCKET,
 };

@@ -8,8 +8,8 @@
 // here — the spec handed in already holds the order as typed, the shape, the
 // job card engine's figures and the parts; this file only lays them out.
 //
-// Used only by the drawing agent on the owner's Mac (phe-claude-code/scripts/
-// drawings). No route loads this file.
+// Used by the in-app drawing agent (lib/drawings/agent.js, the Drawings to make
+// page): the sheet she approves there is the one stored on the order item.
 const K = require('./svgKit');
 
 // U shape from the numbers design gives: U length L ("18U" = 18", from the end
@@ -79,15 +79,22 @@ function partSizes(dia, nipple) {
 }
 
 // The set the spec names, with its parts; an unknown set draws the ESB only.
+// `nuts` (two list codes, from the ESB outward) says which nut line sits at
+// each of a two-nut stack's places: the second place is drawn as role 'nut2'
+// so it can carry its own part — an SS nut and a brass nut on one pin end.
 function resolveFitting(spec) {
   const f = spec.fitting || {};
   const base = FITTING_SETS[f.set] || (f.set ? { label: f.set, pin: [], tube: [] } : FITTING_SETS.nut_washer);
+  let pin = Array.isArray(f.pin) ? f.pin : base.pin;
+  const nuts = Array.isArray(f.nuts) && f.nuts.length === 2 && f.nuts.every(Boolean) && pin.filter(rl => rl === 'nut').length === 2 ? f.nuts : null;
+  if (nuts) pin = pin.map((rl, i) => (rl === 'nut' && i === pin.lastIndexOf('nut') ? 'nut2' : rl));
   return {
     set: f.set || 'nut_washer',
     label: f.label || base.label,
-    pin: Array.isArray(f.pin) ? f.pin : base.pin,
+    pin,
     tube: Array.isArray(f.tube) ? f.tube : base.tube,
     nipple: f.nipple || null,
+    nuts,
     // A sheet without a fitting block is the original nut-washer sample.
     confirmed: spec.fitting ? f.confirmed === true : true,
   };
@@ -99,21 +106,40 @@ function renderUTypeSheet(spec) {
   const W = 420, H = 297;
   const fit = resolveFitting(spec);
   const sz = partSizes(tube.diaMm, fit.nipple);
+  sz.nut2 = sz.nut;
   const stud = /M5/i.test(String(card.studLabel || '')) || Number(tube.diaMm) === 11 ? 'M5' : 'M4';
   const pinThread = stud === 'M5' ? 5 : 4;
   const totalStr = spec.r1?.totalLengthStr != null ? String(spec.r1.totalLengthStr) : n2(geo.drawingTotalIn);
   const r1Mode = spec.r1?.mode || null;
   // Which list line each fitting is (its balloon number) and how it is named.
   const roleOf = (p) => p.role || ({ ssnut: 'nut' }[p.key] || p.key);
-  const partFor = (role) => parts.find(p => roleOf(p) === role);
+  // A two-nut stack names the line at each place (fit.nuts, from the ESB
+  // outward — the agent works it out from the list and her answer, owner
+  // 14 Nov 2026), so an SS and a brass nut each point at their own line. A
+  // sheet without it draws the SS line at both places when the list has one:
+  // her order names SS nuts ("ESB → SS nut → washer → washer → SS nut").
+  const ssNutStack = fit.pin.filter(rl => rl === 'nut').length === 2;
+  const partFor = (role) => {
+    if (fit.nuts && (role === 'nut' || role === 'nut2')) {
+      const want = String(fit.nuts[role === 'nut' ? 0 : 1]).toUpperCase();
+      return parts.find(p => roleOf(p) === 'nut' && String(p.code || '').toUpperCase() === want);
+    }
+    const all = parts.filter(p => roleOf(p) === role);
+    return (role === 'nut' && ssNutStack && all.find(p => /^NUT-SS-/i.test(String(p.code || '')))) || all[0];
+  };
   const no = (role) => partFor(role)?.no ?? '–';
-  const codeOf = (role) => String(partFor(role)?.code || '');
-  const nutFill = /-BR-/i.test(codeOf('nut')) ? C.brass : C.ss;
+  // An order on the old pin rule takes its pins from the item's list (role
+  // 'listpin'); a newer one from the job card (pinwh / pinwo).
+  const listPinNos = (parts || []).filter(p => roleOf(p) === 'listpin').map(p => p.no);
+  const pinNos = listPinNos.length ? listPinNos : [no('pinwh'), no('pinwo')];
+  const codeOf = (role) => String(partFor(role)?.code || (fit.nuts && role === 'nut2' ? fit.nuts[1] : fit.nuts && role === 'nut' ? fit.nuts[0] : ''));
+  const nutFill = (role) => (/-BR-/i.test(codeOf(role)) ? C.brass : C.ss);
+  const nutName = (role) => (/-BR-/i.test(codeOf(role)) ? (fit.nuts ? 'brass nut' : 'nut') : 'SS nut');
   const washerFill = /WSH-SS/i.test(codeOf('washer')) ? C.ss : C.brass;
-  const FILL = { nut: nutFill, washer: washerFill, ceramic: C.ceramic, hvpin: C.ss, hvwasher: C.ss, hvnut: C.ss,
+  const FILL = { nut: nutFill('nut'), nut2: nutFill('nut2'), washer: washerFill, ceramic: C.ceramic, hvpin: C.ss, hvwasher: C.ss, hvnut: C.ss,
     bracket: C.ms, nipple: C.brass, nipnut: C.brass, nipwasher: /SIL/i.test(codeOf('nipwasher')) ? C.silicone : C.fibre };
   const NAME = {
-    nut: /-BR-/i.test(codeOf('nut')) ? 'nut' : 'SS nut', washer: 'washer', ceramic: 'ceramic', hvpin: 'heavy pin',
+    nut: nutName('nut'), nut2: nutName('nut2'), washer: 'washer', ceramic: 'ceramic', hvpin: 'heavy pin',
     hvwasher: 'washer', hvnut: 'M6 nut', bracket: 'bracket', nipple: `${fit.nipple || ''} nipple`.trim(),
     nipnut: 'nipple nut', nipwasher: /SIL/i.test(codeOf('nipwasher')) ? 'silicone washer' : 'fibre washer',
   };
@@ -166,11 +192,12 @@ function renderUTypeSheet(spec) {
 
   // Assembled positions (left edges) along the pin, outward from the ESB face.
   // A heavy pin sits on the pin's end; what follows it goes on its M6 stud.
+  // A heavy pin's `mid` is its hex body: its stud is under the washers and nut.
   const layoutPin = (xFace, pinEndX, sc) => {
     let cursor = xFace;
     return fit.pin.map((role) => {
       const p = sz[role] || { t: 2 };
-      if (role === 'hvpin') { cursor = pinEndX; return { role, x: pinEndX, mid: pinEndX - (p.studT * sc) / 2 + (p.t * sc) / 2 }; }
+      if (role === 'hvpin') { cursor = pinEndX; return { role, x: pinEndX, mid: pinEndX + (p.t * sc) / 2 }; }
       const x = cursor - p.t * sc; cursor = x;
       return { role, x, mid: x + (p.t * sc) / 2 };
     });
@@ -201,12 +228,41 @@ function renderUTypeSheet(spec) {
     out.push(K.text(12 + i * 99 + 49.5, 24, t, { size: 2.2, anchor: 'middle', color: '#333' }));
   });
 
-  // ── Elevation, scale 1:2 (legs broken when they would not fit) ──
-  const s = 0.5;
-  const X0 = 36, Yc = 79;
-  const half = (geo.cc / 2) * s, r = (tube.diaMm / 2) * s;
+  // ── Elevation, scale 1:2 or smaller (legs broken when they would not fit) ──
+  // The client's inside gap can vary (owner, 14 Nov 2026: "there are times when
+  // the u inner dia can varying"): her sheets go from 24 to 42 inside, and a 4"
+  // gap. Every row above and below the U keeps its place on a standard sheet and
+  // is pushed out by the legs of a wider one; the U is then centred between the
+  // view's subtitle and the Detail D title, and when it does not fit there the
+  // view is drawn smaller: 1:2 holds up to about 81 outside, 1:3 about 122, 1:4
+  // about 162. The title prints the scale used.
+  const dia = Number(tube.diaMm);
+  const X0 = 36;
+  const ELEV_TOP = 37, ELEV_BOTTOM = 131;            // under the subtitle; 1.6 above the Detail D title's letters (132.6)
+  // Each row where today's 1:2 sheet has it (U centreline at 79), moved with
+  // the U, and pushed out to keep its distance from the leg it labels.
+  const rowsAt = (sc, yc) => {
+    const hf = (geo.cc / 2) * sc, rr = (dia / 2) * sc;
+    const tE = yc - hf - rr, bE = yc + hf + rr;          // the legs' outer edges
+    const up = (y, off) => Math.min(yc + (y - 79), tE - off), down = (y, off) => Math.max(yc + (y - 79), bE + off);
+    return { yU: up(51, 15.75), yCZ: up(61, 5.75), ySh: up(64.5, 2.25), ySh56: up(56, 10.75), yD: up(66.5, 0.25),
+      yPin: down(99, 7.75), yR1: down(103, 11.75), yR2: down(109, 17.75), yH: down(117, 25.75), yDD: down(125, 33.75) };
+  };
+  let scaleN = 10, Yc = 79;
+  for (const n of [2, 3, 4, 5, 6, 8, 10]) {
+    const a = rowsAt(1 / n, 79);
+    const lo = ELEV_TOP - (a.yU - 2.85 - 79), hi = ELEV_BOTTOM - (a.yDD + 1 - 79);   // U-length figure's top, Detail D label's foot
+    const pushed = a.yU < 51 - 1e-9 || a.yDD > 125 + 1e-9;   // the legs moved a row: not a standard sheet
+    if (lo <= hi + 1e-9) { scaleN = n; Yc = pushed || !(lo <= 79 && 79 <= hi) ? (lo + hi) / 2 : 79; break; }
+  }
+  const s = 1 / scaleN, k2 = s / 0.5;                 // k2: a paper size drawn for 1:2, at this scale
+  const { yU, yCZ, ySh, ySh56, yD, yPin, yR1, yR2, yH, yDD } = rowsAt(s, Yc);
+  const half = (geo.cc / 2) * s, r = (dia / 2) * s;
   const yT = Yc - half, yB = Yc + half;
-  const LEG_MAX = 217.9;                              // an 18U leg at 1:2 just fits
+  const ringFits = half + r + 2.75 <= 15.5 + 0.01;   // Detail D's usual circle holds both terminal ends
+  // An 18U leg at 1:2 just fits; a wider bend takes more room, and the OUTSIDE
+  // dimension right of it must still stop short of the element table (x 276).
+  const LEG_MAX = Math.min(217.9, 266.7 - X0 - half - r);
   const legPaper = geo.straight * s;
   const broken = legPaper > LEG_MAX + 0.01;
   const Xb = X0 + Math.min(legPaper, LEG_MAX);
@@ -215,13 +271,29 @@ function renderUTypeSheet(spec) {
   const czMax = Math.max(czBig, czSmall);
   const heatedPaper = Math.max(4, Xb - X0 - czMax);
   const pinOut = 25.4 * s;
-  out.push(K.viewTitle(150, 32, 'ELEVATION (SCALE 1:2)', broken ? 'Terminal end on the left · as bent · legs broken, true length dimensioned' : 'Terminal end on the left · as bent'));
+  // The inside and outside as made (the roller's inside — agent.js), without float tails.
+  const fmt = (v) => String(Math.round(Number(v) * 100) / 100);
+  const outsideMm = Number(shape.outsideWidthMm);
+  const insideMm = shape.insideMm != null && shape.insideMm !== '' ? Number(shape.insideMm) : outsideMm - 2 * dia;
+  const rollerKnown = shape.rollerMm != null && shape.rollerMm !== '';
+  const rollerTxt = rollerKnown ? `${fmt(shape.rollerMm)}${shape.rollerIsNew ? ' (NEW)' : ''}` : '?';
+  // What the tube Ø at the bend must keep clear of, noted as it is drawn:
+  // boxes [x1, y1, x2, y2] and segments (leaders, marks, the centreline).
+  const nearBend = [];
+  const noteBox = (x1, y1, x2, y2, leg = false) => nearBend.push({ b: [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)], leg });
+  const noteSeg = (x1, y1, x2, y2) => nearBend.push({ s: [x1, y1, x2, y2] });
+  const noteText = (x, y, str, size, anchor = 'start', weight = 400) => {
+    const w = K.textWidth(str, size, weight), x1 = anchor === 'middle' ? x - w / 2 : anchor === 'end' ? x - w : x;
+    noteBox(x1, y - 0.72 * size, x1 + w, y + 0.2 * size);
+  };
+  out.push(K.viewTitle(150, 32, `ELEVATION (SCALE 1:${scaleN})`, broken ? 'Terminal end on the left · as bent · legs broken, true length dimensioned' : 'Terminal end on the left · as bent'));
   const uPath = `M${K.f(X0)},${K.f(yT)} L${K.f(Xb)},${K.f(yT)} A${K.f(half)},${K.f(half)} 0 0 1 ${K.f(Xb)},${K.f(yB)} L${K.f(X0)},${K.f(yB)}`;
   out.push(K.path(uPath, { stroke: C.sheath, sw: tube.diaMm * s, cap: 'butt' }));
   out.push(K.path(uPath, { stroke: C.heated, sw: tube.diaMm * s - 0.55, cap: 'butt' }));
   out.push(K.line(X0, yT, X0 + czBig, yT, { w: tube.diaMm * s - 0.55, color: C.cold }));
   out.push(K.line(X0, yB, X0 + czSmall, yB, { w: tube.diaMm * s - 0.55, color: C.cold }));
-  for (const [x, y] of [[X0 + czBig, yT], [X0 + czSmall, yB]]) out.push(K.line(x, y - r - 0.8, x, y + r + 0.8, { w: 0.3 }));
+  for (const [x, y] of [[X0 + czBig, yT], [X0 + czSmall, yB]]) { out.push(K.line(x, y - r - 0.8, x, y + r + 0.8, { w: 0.3 })); noteSeg(x, y - r - 0.8, x, y + r + 0.8); }
+  noteBox(X0, yT - r, Xb, yT + r, true); noteBox(X0, yB - r, Xb, yB + r, true);
   if (broken) {
     // A gap in both legs inside the heated zone, closed by the usual S-breaks.
     const xg = X0 + czMax + heatedPaper * 0.66;
@@ -231,44 +303,74 @@ function renderUTypeSheet(spec) {
     }
   }
   out.push(K.line(Xb + half + r + 2, Yc, X0 - 16, Yc, { w: 0.15, dash: '4 1 1 1', color: '#777' }));
+  noteSeg(Xb + half + r + 2, Yc, X0 - 16, Yc);
   // Pins, the sealing bush (its spigot hidden in the tube) and the fittings, as
-  // Detail D draws them, at 1:2.
+  // Detail D draws them, at the view's scale.
   const esbH = (tube.diaMm + 2) * s;
   for (const y of [yT, yB]) {
     out.push(K.rect(X0 - pinOut, y - (pinThread * s) / 2, pinOut, pinThread * s, { fill: C.pin, stroke: '#555', sw: 0.15 }));
-    out.push(K.rect(X0 - 1.2, y - esbH / 2, 1.2, esbH, { fill: C.esb, stroke: 'none' }));
-    out.push(K.rect(X0, y - 1.4, 2.2, 2.8, { fill: 'none', stroke: '#555', sw: 0.12, dash: '0.5 0.35' }));
+    out.push(K.rect(X0 - 1.2 * k2, y - esbH / 2, 1.2 * k2, esbH, { fill: C.esb, stroke: 'none' }));
+    out.push(K.rect(X0, y - 1.4 * k2, 2.2 * k2, 2.8 * k2, { fill: 'none', stroke: '#555', sw: 0.12, dash: '0.5 0.35' }));
     for (const p of layoutTube(X0, s)) out.push(drawPart(p.role, p.x, y, s));
-    for (const p of layoutPin(X0 - 1.2, X0 - pinOut, s)) out.push(drawPart(p.role, p.x, y, s));
+    for (const p of layoutPin(X0 - 1.2 * k2, X0 - pinOut, s)) out.push(drawPart(p.role, p.x, y, s));
   }
   // Which end takes which pin (the app's rule: W/H at the big end, W/O at the small).
   out.push(K.text(X0 + czBig + 3, yT - r - 1.3, 'BIG END · PIN W/H', { size: 2.2, weight: 700, color: C.blue }));
   out.push(K.text(X0 + czSmall + 3, yB + r + 3.3, 'SMALL END · PIN W/O', { size: 2.2, weight: 700, color: C.blue }));
+  noteText(X0 + czBig + 3, yT - r - 1.3, 'BIG END · PIN W/H', 2.2, 'start', 700);
+  noteText(X0 + czSmall + 3, yB + r + 3.3, 'SMALL END · PIN W/O', 2.2, 'start', 700);
   // Dimensions. The U length always gives the true figure, broken view or not.
-  const uLabel = r1Mode === 'b'
-    ? `${n1(shape.uLengthMm)} U LENGTH — "${shape.uLabel}" ORDERED, TUBE CUT TO 2U = ${totalStr}" (RULING R1 b)`
+  // Total length = 2 × U (owner's ruling R1, 14 Nov 2026): the U is drawn as it
+  // comes out of that tube, so its true end-to-end length is dimensioned here.
+  // A short U (7U and under) has room only for the figure and its label; the
+  // rest is in the element table and the notes.
+  // A wider U's total is 2U plus its bend's extra centreline (ruling R-e, worked
+  // out in uRules.totalLength): the label then says how much was added — the
+  // agent's own wording (r1.formula), else read off the total.
+  const extraIn = Math.round((Number(totalStr) - 2 * Number(shape.uLengthIn)) * 100) / 100;
+  const tubeSum = typeof spec.r1?.formula === 'string' && spec.r1.formula ? spec.r1.formula
+    : Math.abs(extraIn) >= 0.01 ? `2 × ${String(shape.uLengthIn)}" ${extraIn > 0 ? '+' : '−'} ${fmt(Math.abs(extraIn))}"` : `2 × ${String(shape.uLengthIn)}"`;
+  let uLabel = r1Mode === 'b' || r1Mode === '2u'
+    ? `${n1(shape.uLengthMm)} U LENGTH "${shape.uLabel}" — AS IT COMES OUT OF THE ${totalStr}" (${tubeSum}) TUBE`
     : `${n1(shape.uLengthMm)} (${String(shape.uLengthIn)}") U LENGTH "${shape.uLabel}" — END OF THE TUBE TO THE FAR END OF THE U`;
-  out.push(K.dimH(X0, xOuter, 51, uLabel, { fromY1: yT - r, fromY2: Yc, size: 2.7 }));
-  out.push(K.dimH(X0, X0 + czBig, 61, `${n1(card.coldZoneBigIn * 25.4)} (${card.coldZoneBigIn}") COLD ZONE`, { fromY1: yT - r, fromY2: yT - r, size: 2.6 }));
-  out.push(K.dimH(X0 - pinOut, X0, 99, '25.4 (1") PIN OUT', { fromY1: yB + 1, fromY2: yB + r, above: false, size: 2.5 }));
-  out.push(K.dimV(yT - r, yB + r, xOuter + 4.5, `${shape.outsideWidthMm} OUTSIDE`, { fromX1: Xb, fromX2: Xb, size: 2.6 }));
+  if (K.textWidth(uLabel, 2.7) > xOuter - X0 - 3) uLabel = `${n1(shape.uLengthMm)} U LENGTH "${shape.uLabel}"`;
+  out.push(K.dimH(X0, xOuter, yU, uLabel, { fromY1: yT - r, fromY2: Yc, size: 2.7 }));
+  // A short cold zone (2" is 25.4 at 1:2) gets a smaller label, so the words
+  // stay between its extension lines (≈ 0.56 × size per character); at 1:3 and
+  // smaller, one that still does not fit drops its millimetres, then its words
+  // (the cold-zone callout below the U still says COLD ZONE).
+  let czLabel = `${n1(card.coldZoneBigIn * 25.4)} (${card.coldZoneBigIn}") COLD ZONE`;
+  if (s < 0.5) czLabel = [czLabel, `${card.coldZoneBigIn}" COLD ZONE`, `${card.coldZoneBigIn}"`].find(t => t.length * 0.56 * 1.9 <= czBig - 1.5) || `${card.coldZoneBigIn}"`;
+  const czSize = Math.max(1.9, Math.min(2.6, (czBig - 1.5) / (czLabel.length * 0.56)));
+  out.push(K.dimH(X0, X0 + czBig, yCZ, czLabel, { fromY1: yT - r, fromY2: yT - r, size: Math.round(czSize * 100) / 100 }));
+  noteSeg(X0 + czBig, yT - r - 0.8, X0 + czBig, yCZ + 1.2);
+  out.push(K.dimH(X0 - pinOut, X0, yPin, '25.4 (1") PIN OUT', { fromY1: yB + 1, fromY2: yB + r, above: false, size: 2.5 }));
+  out.push(K.dimV(yT - r, yB + r, xOuter + 4.5, `${fmt(outsideMm)} OUTSIDE`, { fromX1: Xb, fromX2: Xb, size: 2.6 }));
   // Section mark T–T in the heated zone of the top leg, clear of the BIG END
   // label on a short U; the INSIDE dimension keeps clear of it.
   let xt = X0 + czMax + heatedPaper * 0.33;
   if (xt < X0 + czBig + 31 && X0 + czBig + 31 < Xb - 10) xt = X0 + czBig + 31;
   let xg = Xb - 20;
+  if (!ringFits) xg = Math.min(Math.max(xg, X0 + 13.5), Xb - 6);   // right of Detail D's ellipse (it reaches X0 + 9.5)
   if (Math.abs(xg - xt) < 8) xg = Math.min(Xb - 6, xt + 10);
-  out.push(K.dimV(yT + r, yB - r, xg, `${geo.insideMm} INSIDE`, { size: 2.2 }));
+  const insideLabel = `${fmt(insideMm)} INSIDE`;
+  out.push(K.dimV(yT + r, yB - r, xg, insideLabel, { size: 2.2 }));
+  noteSeg(xg, yT + r, xg, yB - r);
+  { const w = K.textWidth(insideLabel, 2.2); noteBox(xg - 0.9 - 0.72 * 2.2, Yc - w / 2, xg - 0.9 + 0.2 * 2.2, Yc + w / 2); }
   for (const y of [yT - r - 3.2, yT + r + 3.2]) {
     out.push(K.line(xt, y - 1.6, xt, y + 1.6, { w: 0.35 }));
     out.push(K.line(xt, y, xt - 3, y, { w: 0.25 }), K.arrowhead(xt - 3, y, Math.PI, { len: 1.4, half: 0.5, color: '#111' }));
     out.push(K.text(xt + 1.2, y + (y < yT ? -0.6 : 2.4), 'T', { size: 2.5, weight: 700 }));
+    noteSeg(xt, y - 1.6, xt, y + 1.6); noteSeg(xt, y, xt - 3, y); noteText(xt + 1.2, y + (y < yT ? -0.6 : 2.4), 'T', 2.5, 'start', 700);
   }
-  // Callouts.
+  // Callouts. None may run into the element table (it starts at x 276).
   // The sheath callout ends short of the U length's extension line. A short U
   // gets the short form, and when even that will not fit left of the bend it
-  // goes right of the OUTSIDE dimension.
-  const textW = (str) => String(str).length * 2.4 * 0.6 + 3.3;
+  // goes right of the OUTSIDE dimension — or, when that would run into the
+  // table too (a mid-length U with a big cold zone), above the top leg, between
+  // the U length and the cold zone dimensions.
+  const RIGHT = 272;
+  const textW = (str) => K.textWidth(str, 2.4) + 3.3;          // a 2.4 label and its leader's shoulder
   const finishUp = String(item.finish || '').toUpperCase();
   const sheathLong = `Ø${tube.diaMm} SHEATH — ${tube.label} · ${finishUp}`;
   const sheathShort = `Ø${tube.diaMm} SHEATH — ${String(tube.material || '').toUpperCase()} · ${tube.wallMm} WALL · ${finishUp}`;
@@ -276,33 +378,108 @@ function renderUTypeSheet(spec) {
   const sheathFit = (txt) => Math.min(xt + 36, sheathRight - textW(txt));
   if (sheathFit(sheathLong) >= sheathMin) {
     const lx = sheathFit(sheathLong);
-    out.push(K.leader(Math.min(xt + 30, lx - 6), yT - r, lx, 64.5, sheathLong, { size: 2.4 }));
+    out.push(K.leader(Math.min(xt + 30, lx - 6), yT - r, lx, ySh, sheathLong, { size: 2.4 }));
+    noteSeg(Math.min(xt + 30, lx - 6), yT - r, lx, ySh);
   } else if (sheathFit(sheathShort) >= sheathMin) {
     const lx = sheathFit(sheathShort);
-    out.push(K.leader(Math.min(xt + 30, lx - 6), yT - r, lx, 64.5, sheathShort, { size: 2.4 }));
+    out.push(K.leader(Math.min(xt + 30, lx - 6), yT - r, lx, ySh, sheathShort, { size: 2.4 }));
+    noteSeg(Math.min(xt + 30, lx - 6), yT - r, lx, ySh);
+  } else if (xOuter + 9 + textW(sheathShort) <= RIGHT) {
+    const txt = xOuter + 9 + textW(sheathLong) <= RIGHT ? sheathLong : sheathShort;
+    out.push(K.leader(Xb + half * Math.cos(-Math.PI / 3), Yc + half * Math.sin(-Math.PI / 3), xOuter + 9, yCZ, txt, { size: 2.4 }));
+    noteSeg(Xb + half * Math.cos(-Math.PI / 3), Yc + half * Math.sin(-Math.PI / 3), xOuter + 9, yCZ);
   } else {
-    const txt = xOuter + 9 + textW(sheathLong) <= 272 ? sheathLong : sheathShort;
-    out.push(K.leader(Xb + half * Math.cos(-Math.PI / 3), Yc + half * Math.sin(-Math.PI / 3), xOuter + 9, 61, txt, { size: 2.4 }));
+    // Right of a straight-up leader, inside the U length's extension lines; left
+    // of it when only that side has room.
+    const fx = Math.min(Math.max(X0 + czBig + 30, xt + 6), Xb - 2);   // clear of BIG END and the T–T mark
+    const roomR = xOuter - 2 - fx, roomL = fx - X0 - 2;
+    const txt = [sheathLong, sheathShort].find(t => textW(t) <= roomR) || [sheathLong, sheathShort].find(t => textW(t) <= roomL) || sheathShort;
+    const side = textW(txt) > roomR && textW(txt) <= roomL ? 'left' : 'right';
+    out.push(K.leader(fx, yT - r, fx, ySh56, txt, { size: side === 'right' ? K.fitSize(txt, roomR - 3.3, 2.4) : 2.4, side }));
+    noteSeg(fx, yT - r, fx, ySh56);
   }
   const czLines = [`COLD ZONE ${card.coldZoneBigIn}" (${n1(card.coldZoneBigIn * 25.4)}) EACH LEG — NO COIL`, `PIN ${card.pinStudsIn}": ${card.pinStudsIn - 1}" IN THE TUBE + 1" OUT`];
   const czTxtEnd = X0 + czSmall + 8 + Math.max(...czLines.map(textW));
-  out.push(K.leader(X0 + czSmall * 0.55, yB + r, X0 + czSmall + 8, 109, czLines, { size: 2.4 }));
+  out.push(K.leader(X0 + czSmall * 0.55, yB + r, X0 + czSmall + 8, yR2, czLines, { size: 2.4 }));
+  noteSeg(X0 + czSmall * 0.55, yB + r, X0 + czSmall + 8, yR2);
   // The heated-zone leader must not cut through the cold-zone label on a short U.
   let xh = X0 + czMax + heatedPaper * 0.485, xhl = xh + 6;
   if (xh < X0 + czSmall + 30 && X0 + czSmall + 30 < Xb - 4) { xh = X0 + czSmall + 30; xhl = xh + 6; }   // clear of SMALL END
   if (xh < czTxtEnd + 4) {
     if (czTxtEnd + 4 < Xb - 4) { xh = czTxtEnd + 4; xhl = xh + 6; } else xhl = xh + (czTxtEnd + 2 - xh) / 0.683;
   }
-  out.push(K.leader(xh, yB + r, xhl, 117, [`HEATED ZONE ≈ ${n1(card.heatedMm)} (${n2(card.heatedMm / 25.4)}") ALONG THE TUBE`, 'COIL INSIDE — SEE SECTION T–T'], { size: 2.4 }));
+  // A big cold zone pushes it so far right that it would run into the element
+  // table (44U with 8" cold zones, 14 Nov 2026): a leader already clear of the
+  // cold-zone label then drops straight down, and the label goes left of the
+  // leader's end, under the cold-zone label, when it still does not fit right.
+  const hTxt = [`HEATED ZONE ≈ ${n1(card.heatedMm)} (${n2(card.heatedMm / 25.4)}") ALONG THE TUBE`, 'COIL INSIDE — SEE SECTION T–T'];
+  const hW = Math.max(...hTxt.map(textW));
+  let hSide = 'right';
+  if (xhl + hW > RIGHT) {
+    if (xh >= czTxtEnd + 2) xhl = xh;
+    if (xhl + hW > RIGHT && xhl - hW > X0 + 22) hSide = 'left';
+  }
+  out.push(K.leader(xh, yB + r, xhl, yH, hTxt, { size: 2.4, side: hSide }));
+  noteSeg(xh, yB + r, xhl, yH);
   const ra = Math.PI / 6;
-  const rTxt = `R${n1(geo.rCL)} CL · ROLLER ${shape.rollerMm}`;
-  // A short U leaves no room left of the bend for this label; put it right of it.
-  const rLeftEdge = Xb - 10 - textW(rTxt);
-  const rLeft = rLeftEdge > czTxtEnd && rLeftEdge > xh + (xhl - xh) * 0.683 + 2;
-  out.push(K.leader(Xb + half * Math.cos(ra), Yc + half * Math.sin(ra), rLeft ? Xb - 10 : xOuter + 9, rLeft ? 109 : 103, rTxt, { size: 2.4 }));
-  out.push(K.circle(X0 - 6, Yc, 15.5, { stroke: C.blue, sw: 0.3, dash: '1.6 0.9' }));
-  out.push(K.text(X0 + 8, Yc - 12.5, 'D', { size: 3.3, weight: 700, color: C.blue }));
-  out.push(K.leader(X0 - 6 + 15.5 * Math.cos(0.95), Yc + 15.5 * Math.sin(0.95), X0 + 20, 125, 'TERMINAL END AND FITTING ORDER — SEE DETAIL D', { size: 2.4, color: C.blue }));
+  const rTxt = `R${n1(geo.rCL)} CL · ROLLER ${rollerTxt}`;
+  // Left of the bend, beside the cold-zone label; a short U leaves no room there,
+  // so right of the bend — unless that runs into the table, then left of the
+  // bend one row up, clear of the two leaders that cross that row.
+  const rW = textW(rTxt), rLeftEdge = Xb - 10 - rW;
+  const atRow = (x1, y1, x2, y2, y) => x1 + ((x2 - x1) * (y - y1)) / (y2 - y1);   // a leader's x at height y
+  let rAt = [xOuter + 9, yR1];
+  if (rLeftEdge > czTxtEnd && rLeftEdge > xh + (xhl - xh) * 0.683 + 2) rAt = [Xb - 10, yR2];
+  else if (xOuter + 9 + rW > RIGHT && rLeftEdge > 2 + Math.max(atRow(xh, yB + r, xhl, yH, yR1), atRow(X0 + czSmall * 0.55, yB + r, X0 + czSmall + 8, yR2, yR1))) rAt = [Xb - 10, yR1];
+  // Still right of the bend and running into the table at x 276 (a wide bend, a
+  // NEW roller's longer label): set smaller to stop short of it.
+  const rSize = rAt[0] === xOuter + 9 && xOuter + 9 + rW > 275.5 ? K.fitSize(rTxt, RIGHT - xOuter - 9 - 3.3, 2.4) : 2.4;
+  out.push(K.leader(Xb + half * Math.cos(ra), Yc + half * Math.sin(ra), rAt[0], rAt[1], rTxt, { size: rSize }));
+  noteSeg(Xb + half * Math.cos(ra), Yc + half * Math.sin(ra), rAt[0], rAt[1]);
+  // The tube Ø at the bend (owner, 14 Nov 2026: "on the heater drawing could
+  // you also show the tube dia"): across the bottom leg just before the bend,
+  // label inside the U, ≥ 4.5 right of the INSIDE dimension; on the top leg
+  // (label under it) when the bottom one is crowded — a short heated leg; left
+  // off only when neither is clear, as Section T–T, the sheath callout and
+  // DIAMETER = still give it.
+  {
+    // Between the INSIDE (2.2) and OUTSIDE (2.6) figures beside it, so it reads at a glance.
+    const DIA_LABEL = 2.4;
+    const xDia = Math.max(Xb - 3, xg + 4.5), label = `Ø${tube.diaMm}`, lw = K.textWidth(label, DIA_LABEL) / 2, pad = 0.4;
+    const hitsBox = ([a1, b1, a2, b2], [c1, d1, c2, d2]) => a1 < c2 && c1 < a2 && b1 < d2 && d1 < b2;
+    const hitsSeg = ([x1, y1, x2, y2], [c1, d1, c2, d2]) => {      // a segment through a box (Liang–Barsky)
+      let t0 = 0, t1 = 1;
+      for (const [p, q] of [[x1 - x2, x1 - c1], [x2 - x1, c2 - x1], [y1 - y2, y1 - d1], [y2 - y1, d2 - y1]]) {
+        if (p === 0) { if (q < 0) return false; continue; }
+        const t = q / p;
+        if (p < 0) { if (t > t1) return false; t0 = Math.max(t0, t); } else { if (t < t0) return false; t1 = Math.min(t1, t); }
+      }
+      return true;
+    };
+    const clear = (y1, y2, below) => {
+      const across = [xDia - 0.6 - pad, y1 - 1.8 - pad, xDia + 0.6 + pad, y2 + 1.8 + pad];
+      const by = below ? y2 + 1.8 + 0.6 + 0.72 * DIA_LABEL : y1 - 1.8 - 0.6;
+      const lab = [xDia - lw - pad, by - 0.72 * DIA_LABEL - pad, xDia + lw + pad, by + 0.2 * DIA_LABEL + pad];
+      return nearBend.every(o => (o.b ? (o.leg ? !hitsBox(lab, o.b) : !hitsBox(across, o.b) && !hitsBox(lab, o.b)) : !hitsSeg(o.s, across) && !hitsSeg(o.s, lab)));
+    };
+    if (clear(yB - r, yB + r, false)) out.push(K.dimAcross(xDia, yB - r, yB + r, label, { size: DIA_LABEL }));
+    else if (clear(yT - r, yT + r, true)) out.push(K.dimAcross(xDia, yT - r, yT + r, label, { size: DIA_LABEL, below: true }));
+  }
+  // Detail D's ring takes in both terminal ends: a circle on the usual U; on a
+  // wider one an ellipse as tall as the U and its fittings, lettered above its
+  // top, its leader leaving its lower left and dropping clear of the pins and
+  // the PIN OUT figure to the label row.
+  const partsOut = Math.max(r, ...[...fit.pin, ...fit.tube].map(rl => partHalfH(rl, s)));   // the fittings, from a leg's centre
+  const ringRy = half + partsOut + 2.75;
+  if (ringFits) out.push(K.circle(X0 - 6, Yc, 15.5, { stroke: C.blue, sw: 0.3, dash: '1.6 0.9' }));
+  else out.push(K.ellipse(X0 - 6, Yc, 15.5, ringRy, { stroke: C.blue, sw: 0.3, dash: '1.6 0.9' }));
+  // The letter goes right of anything on the tube (a nipple set reaches past it).
+  const tubeEnd = Math.max(X0, ...layoutTube(X0, s).map(p => p.x + (p.role === 'nipple' ? sz.nipple.t + sz.nipple.threadT : (sz[p.role] || { t: 2 }).t) * s));
+  if (ringFits) out.push(K.text(Math.max(X0 + 8, tubeEnd + 1.5), yD, 'D', { size: 3.3, weight: 700, color: C.blue }));
+  else out.push(K.text(X0 - 6, Yc - ringRy - 1, 'D', { size: 3.3, weight: 700, color: C.blue, anchor: 'middle' }));
+  const ddTxt = 'TERMINAL END AND FITTING ORDER — SEE DETAIL D';
+  if (ringFits) out.push(K.leader(X0 - 6 + 15.5 * Math.cos(0.95), Yc + 15.5 * Math.sin(0.95), X0 + 20, yDD, ddTxt, { size: 2.4, color: C.blue }));
+  else out.push(K.leader(X0 - 6 - 15.5 * 0.84, Yc + ringRy * Math.sqrt(1 - 0.84 ** 2), X0 - 22, yDD, ddTxt, { size: 2.4, color: C.blue, side: 'right' }));
 
   // ── Detail D: terminal end, one leg, scale 2:1 (3:2 with a nipple) ──
   // A nipple is too big for 2:1: 3:2 for M12, 5:4 for M16.
@@ -332,11 +509,17 @@ function renderUTypeSheet(spec) {
   out.push(drawLeg(ya));
   const pinLay = layoutPin(xm - esbW, pinEndX, sD);
   // Each leader lands on its own part's top edge.
+  // Right to left from the ESB's, each balloon as close above its part as the
+  // spacing allows: a heavy pin's parts sit at the pin's end, far from the ESB,
+  // and leaders run from there would cross the other balloons (14 Nov 2026).
   const ballooned = [[xm - esbW / 2, 'esb', tubeR + 1], ...pinLay.map(p => [p.mid, p.role, p.role === 'hvpin' ? sz.hvpin.h * sD / 2 : partHalfH(p.role, sD)])].sort((a, b) => b[0] - a[0]);
-  ballooned.forEach(([x, role, hh], i) => out.push(K.balloonLeader(x, ya - hh - 0.5, 123 - i * 8.2, balloonY, no(role))));
+  let bx = 131.2;
+  ballooned.forEach(([x, role, hh]) => { bx = Math.min(bx - 8.2, x + 8); out.push(K.balloonLeader(x, ya - hh - 0.5, bx, balloonY, no(role))); });
   tubeParts.forEach((p, i) => out.push(K.balloonLeader(p.mid, ya - partHalfH(p.role, sD) - 0.5, Math.max(131.2 + i * 8.2, p.mid + 3), balloonY, no(p.role))));
   const pinLow = Math.max(0, ...pinLay.map(p => (p.role === 'hvpin' ? sz.hvpin.h * sD / 2 : partHalfH(p.role, sD)))) > 9.5;
-  out.push(K.leader(pinEndX + (pinLow ? 4 : 9), ya + pinR, pinEndX - 6, pinLow ? 178 : 171, [`${stud} SS PIN ${card.pinStudsIn}" — W/H: BIG END,`, `W/O: SMALL END (PARTS ${[no('pinwh'), no('pinwo')].join(', ')})`], { size: 2.2 }));
+  // On the M4 / M5 thread itself — past a heavy pin's hex body, which covers the pin's end.
+  const pinFoot = fit.pin.includes('hvpin') ? pinEndX + sz.hvpin.t * sD + 14 : pinEndX + (pinLow ? 4 : 9);
+  out.push(K.leader(pinFoot, ya + pinR, pinEndX - 6, pinLow ? 178 : 171, [`${stud} SS PIN ${card.pinStudsIn}" — W/H: BIG END,`, `W/O: SMALL END (PARTS ${pinNos.join(', ')})`], { size: 2.2 }));
   out.push(K.dimH(pinEndX, xm, 172, '25.4 (1")', { fromY1: ya + pinR, fromY2: ya + tubeR, above: false, size: 2.3 }));
   out.push(K.leader(tubeParts.length ? xEnd - 4 : 150, ya + pinR, 146, 187, [`PIN ${card.pinStudsIn - 1}" (${n1((card.pinStudsIn - 1) * 25.4)}) IN THE TUBE, SPOT WELDED`, 'TO THE COIL AT St 4 · ESB SPIGOT SHOWN DASHED'], { size: 2.2 }));
   // Exploded, in fitting order — lettered so the steps are not read as part numbers.
@@ -402,9 +585,22 @@ function renderUTypeSheet(spec) {
   out.push(K.text(177, 205, `TOTAL LENGTH = ${totalStr} INCH`, { size: 4.4, weight: 700 }));
   out.push(K.text(267, 205, `(${n1(geo.clMm)} mm)`, { size: 2.4, anchor: 'end' }));
   out.push(K.text(177, 213, `DIAMETER = ${tube.diaMm} MM`, { size: 4.0, weight: 700 }));
-  out.push(K.text(177, 221, `ROLLER = ${shape.rollerMm} MM`, { size: 4.0, weight: 700 }));
+  // The roller (owner, 14 Nov 2026: "a roller is basically a tool on which the
+  // heater is bend to a u"): a roller not in her list is marked NEW, in red; when
+  // the roller gives an inside other than the client's, one short line says so.
+  const rollerLine = rollerKnown ? `ROLLER = ${fmt(shape.rollerMm)} MM` : 'ROLLER = TO CHOOSE';
+  const rollerNew = rollerKnown && shape.rollerIsNew;
+  if (rollerNew) out.push(`<text x="177" y="221" font-size="4" text-anchor="start" font-weight="700" fill="#1a1a1a">${K.esc(rollerLine)} <tspan fill="${C.red}">NEW</tspan></text>`);
+  else out.push(K.text(177, 221, rollerLine, { size: 4.0, weight: 700, color: rollerKnown ? '#1a1a1a' : C.red }));
+  const rollerEnd = 177 + K.textWidth(rollerNew ? `${rollerLine} NEW` : rollerLine, 4.0, 700);
+  if (shape.clientInsideMm != null && shape.clientInsideMm !== '' && Number(shape.clientInsideMm) !== insideMm) {
+    const ci = rollerKnown ? `client's inside ${fmt(shape.clientInsideMm)} · roller ${fmt(shape.rollerMm)} gives ${fmt(insideMm)}` : `client's inside ${fmt(shape.clientInsideMm)}`;
+    const room = 267 - rollerEnd - 2;
+    out.push(K.text(267, 221, ci, { size: K.fitSize(ci, room, 2.2, 400, 1.5), anchor: 'end', color: C.blue }));
+  }
+  // A long fitting name is set smaller to stay inside the box.
   const tn = String(spec.terminalNote || '');
-  out.push(K.text(177, 228, tn, { size: tn.length > 40 ? 2.3 : 2.8, weight: 700, color: toConfirm ? C.red : '#1a1a1a' }));
+  out.push(K.text(177, 228, tn, { size: K.fitSize(tn, 90, tn.length > 40 ? 2.3 : 2.8, 700), weight: 700, color: toConfirm ? C.red : '#1a1a1a' }));
   out.push(K.text(177, 233.5, `Job card adds 0.7" (${n2(card.totalLengthIn)}") and cuts ${n2(card.cuttingLengthIn)}" (${n1(card.cuttingLengthMm)} mm) before draw.`, { size: 2.0, color: '#444' }));
 
   // ── Right column: element table, then parts and material by stage ──
@@ -418,24 +614,58 @@ function renderUTypeSheet(spec) {
   for (const lines of [3, 2, 1]) { T2 = K.table(276, y2, [6.5, 21, 67.5, 18.5, 18.5], rowsFor(lines), t2opts); if (y2 + T2.height <= 236) break; }
   out.push(T2.svg);
 
-  // ── Notes ── (wrapped to the box; a long set is set smaller)
+  // ── Notes ── wrapped by measured width, and set smaller (line spacing with
+  // it) until the whole set fits the box: 238 × 45 at (12, 240), first line at
+  // 250.5. Her answers can be long (an answer or a note up to 400 letters), so
+  // when even the smallest size will not hold them, notesFit says so and the
+  // agent refuses the sheet rather than lose the end of a note (review, 14 Nov 2026).
   out.push(K.rect(12, 240, 238, 45, { sw: 0.35 }));
   out.push(K.text(16, 245.5, 'NOTES', { size: 2.8, weight: 700, color: K.NAVY }));
-  const wrap = (str, max) => {
-    const words = String(str).split(' '); const lines = []; let cur = '';
-    for (const w of words) { if ((cur + ' ' + w).trim().length > max && cur) { lines.push(cur); cur = w; } else cur = (cur + ' ' + w).trim(); }
+  const NOTE_X = 16, NOTE_X2 = 19.5, NOTE_RIGHT = 248.5, NOTE_TOP = 250.5, NOTE_FLOOR = 284.4;
+  const wrapTo = (str, first, rest, size) => {
+    const lines = []; let cur = '';
+    const room = () => (lines.length ? rest : first);
+    for (const w of String(str).split(' ').filter(Boolean)) {
+      const next = cur ? `${cur} ${w}` : w;
+      if (K.textWidth(next, size) <= room()) { cur = next; continue; }
+      if (cur) { lines.push(cur); cur = ''; }
+      // A word longer than the line (a long code) is broken where it reaches the edge.
+      let word = w;
+      while (K.textWidth(word, size) > room()) {
+        let k = word.length - 1;
+        while (k > 1 && K.textWidth(word.slice(0, k), size) > room()) k--;
+        lines.push(word.slice(0, k)); word = word.slice(k);
+      }
+      cur = word;
+    }
     if (cur) lines.push(cur);
-    return lines;
+    return lines.length ? lines : [''];
   };
-  const noteLines = notes.map(nt => (Array.isArray(nt) ? nt : [nt]).flatMap(l => wrap(l, 200)));
-  const nLines = noteLines.reduce((a, l) => a + l.length, 0);
-  const nSize = nLines > 11 ? 1.85 : 2.1, nStep = nLines > 11 ? 2.5 : 2.9;
-  let ny = 250.5;
-  noteLines.forEach((lines, i) => {
+  const layNotes = (size, lead, gapF) => {
+    const step = size * lead, gap = size * gapF;
+    const noteLines = notes.map((nt, i) => (Array.isArray(nt) ? nt : [nt]).flatMap((l, k) => (k === 0
+      ? wrapTo(l, NOTE_RIGHT - NOTE_X - K.textWidth(`${i + 1}. `, size), NOTE_RIGHT - NOTE_X2, size)
+      : wrapTo(l, NOTE_RIGHT - NOTE_X2, NOTE_RIGHT - NOTE_X2, size))));
+    const nLines = noteLines.reduce((a, l) => a + l.length, 0);
+    const lastBaseline = NOTE_TOP + (nLines - 1) * step + (noteLines.length - 1) * gap;
+    return { size, step, gap, noteLines, fits: lastBaseline + size * 0.25 <= NOTE_FLOOR };
+  };
+  // Largest letters first; at each size the usual spacing, then lines set
+  // closer (1.25, as svgKit sets a block of lines) before going a size down.
+  const NOTE_SIZES = [2.1, 2.0, 1.9, 1.8, 1.7, 1.6, 1.5];
+  let lay = null;
+  for (const size of NOTE_SIZES) {
+    lay = layNotes(size, 1.38, 0.4);
+    if (lay.fits) break;
+    lay = layNotes(size, 1.25, 0.2);
+    if (lay.fits) break;
+  }
+  let ny = NOTE_TOP;
+  lay.noteLines.forEach((lines, i) => {
     const red = /TO CONFIRM/.test(lines.join(' '));
-    out.push(K.text(16, ny, `${i + 1}. ${lines[0]}`, { size: nSize, color: red ? C.red : '#1a1a1a' }));
-    lines.slice(1).forEach((l, k) => out.push(K.text(19.5, ny + (k + 1) * nStep, l, { size: nSize, color: red ? C.red : '#1a1a1a' })));
-    ny += lines.length * nStep + (nLines > 11 ? 0.5 : 0.9);
+    out.push(K.text(NOTE_X, ny, `${i + 1}. ${lines[0]}`, { size: lay.size, color: red ? C.red : '#1a1a1a' }));
+    lines.slice(1).forEach((l, k) => out.push(K.text(NOTE_X2, ny + (k + 1) * lay.step, l, { size: lay.size, color: red ? C.red : '#1a1a1a' })));
+    ny += lines.length * lay.step + lay.gap;
   });
 
   // ── Title block: the fields PHE's SolidWorks block carries ──
@@ -461,7 +691,7 @@ function renderUTypeSheet(spec) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}mm" height="${H}mm" font-family="Arial, Helvetica, 'Noto Sans Gujarati', 'Noto Sans Devanagari', sans-serif">${out.join('')}</svg>`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${K.esc(item.drawingNumber)} — drawing</title>
 <style>@page { size: A3 landscape; margin: 0 } html, body { margin: 0; background: #fff } svg { display: block; width: 420mm; height: 297mm }</style></head><body>${svg}</body></html>`;
-  return { svg, html };
+  return { svg, html, notesFit: lay.fits, notesSize: lay.size };
 }
 
 module.exports = { deriveUShape, uLengthForCentreline, renderUTypeSheet, FITTING_SETS };

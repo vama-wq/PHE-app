@@ -88,6 +88,7 @@ app.use('/api/orders',          require('./routes/orders'));
 app.use('/api/job-cards',       require('./routes/jobCards'));
 app.use('/api/inventory',       require('./routes/inventory'));
 app.use('/api/drawings',        require('./routes/drawings'));
+app.use('/api/drawing-agent',   require('./routes/drawingAgent'));
 app.use('/api/production',      require('./routes/production'));
 app.use('/api/dispatch',        require('./routes/dispatch'));
 app.use('/api/activity',        require('./routes/activity'));

@@ -2559,6 +2559,21 @@ async function initDB(retries = 20, delayMs = 10000) {
     )`);
     await pool.query(`CREATE INDEX IF NOT EXISTS user_sessions_device_idx ON user_sessions (device_row_id)`);
 
+    // Drawings to make (owner, 14 Nov 2026; lib/drawings/agent.js). A drawing the
+    // app drew and the owner approved keeps its frozen spec on its row: her
+    // answers, the figures and the sheet exactly as approved, so it can be shown
+    // or re-drawn without recomputing. NULL on every uploaded drawing.
+    await pool.query(`ALTER TABLE order_drawings ADD COLUMN IF NOT EXISTS agent_spec JSONB`);
+    // Her standing answers to the drawing agent, one row per ruling — e.g.
+    // 'fitting:ceramic_nut' once she has confirmed that set's fitting order, so
+    // later sheets for it no longer print TO CONFIRM.
+    await pool.query(`CREATE TABLE IF NOT EXISTS drawing_rulings (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      set_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      set_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
       if (parseInt(rows[0].c, 10) === 0) {

@@ -30,6 +30,7 @@ import FinishedGoodsList from './pages/finishedGoods/FinishedGoodsList';
 import FinishedGoodsDetail from './pages/finishedGoods/FinishedGoodsDetail';
 import FinishedGoodsLog from './pages/finishedGoods/FinishedGoodsLog';
 import DrawingsList from './pages/drawings/DrawingsList';
+import DrawingsToMake from './pages/drawings/DrawingsToMake';
 import CustomerQueryList from './pages/customerQueries/CustomerQueryList';
 import CustomerQueryDetail from './pages/customerQueries/CustomerQueryDetail';
 import OrderTimeline from './pages/customerQueries/OrderTimeline';
@@ -209,6 +210,12 @@ export default function App() {
           <Route path="drawings" element={
             <ProtectedRoute roles={['owner','admin','design']}>
               <DrawingsList />
+            </ProtectedRoute>
+          } />
+          {/* U type drawings the app draws itself — only the owner answers and approves (14 Nov 2026). */}
+          <Route path="drawings-to-make" element={
+            <ProtectedRoute roles={['owner']}>
+              <DrawingsToMake />
             </ProtectedRoute>
           } />
 

@@ -152,6 +152,14 @@ router.get('/pending', authenticate, async (req, res) => {
       if (n > 0) { counts[nav] = (counts[nav] || 0) + n; (detail[nav] ||= []).push([it.label, n]); }
     }
   }
+  // Plain U type drawings the app has worked out, waiting for the owner (Drawings
+  // to make, 14 Nov 2026). The queue rule is the agent's own, not one query.
+  if (role === 'owner') {
+    try {
+      const n = await require('../lib/drawings/agent').dueCount(db);
+      if (n > 0) { counts['drawings-to-make'] = n; detail['drawings-to-make'] = [['U type drawings to check and approve', n]]; }
+    } catch (e) { console.error('[work] drawings to make: ' + e.message); }
+  }
   if (['owner', 'accounts'].includes(role)) {
     try {
       const n = await missingPayrollMonths(db);

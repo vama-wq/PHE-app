@@ -8,12 +8,14 @@ import {
   LayoutDashboard, ClipboardList, FileText, Package,
   Users, Box, Wrench, Truck, LogOut, FlaskConical,
   Settings, UserCog, ShoppingCart, Building2, BarChart2, Warehouse, PenLine, HelpCircle, Bell, BookOpen, Calendar, Target
-, Wallet, Banknote } from 'lucide-react';
+, Wallet, Banknote, DraftingCompass } from 'lucide-react';
 
 export const NAV_ITEMS = [
   { id: 'dashboard',     to: '/',              icon: LayoutDashboard, label: 'Dashboard',      roles: null, badge: 'dashboard' },
   { id: 'orders',        to: '/orders',        icon: ClipboardList,   label: 'Orders',          roles: null, badge: 'orders' },
   { id: 'drawings',      to: '/drawings',      icon: PenLine,         label: 'Drawings',        roles: ['owner','admin','design'], badge: 'drawings' },
+  // U type drawings the app draws itself, waiting for the owner (14 Nov 2026) — shown under Drawings.
+  { id: 'drawings-to-make', to: '/drawings-to-make', icon: DraftingCompass, label: 'Drawings to make', roles: ['owner'], badge: 'drawings-to-make', sub: true },
   { id: 'job-cards',     to: '/job-cards',     icon: FileText,        label: 'Job Cards',       roles: null, badge: 'job-cards' },
   { id: 'production',    to: '/production',    icon: Wrench,          label: 'Production',      roles: null, badge: 'production' },
   { id: 'manufacturing-plan', to: '/manufacturing-plan', icon: Calendar, label: 'Mfg Plan', roles: ['owner','production'], badge: 'manufacturing-plan' },
@@ -97,7 +99,7 @@ export default function Sidebar() {
             } catch (e) {}
           }
           return true;
-        }).map(({ id, to, icon: Icon, label, badge }) => {
+        }).map(({ id, to, icon: Icon, label, badge, sub }) => {
           const badgeCount = badge ? (badges[badge] || 0) : 0;
           return (
             <NavLink
@@ -105,7 +107,7 @@ export default function Sidebar() {
               to={to}
               end={to === '/'}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-100 ${
+                `flex items-center gap-3 ${sub ? 'pl-8 pr-3 py-2 text-[13px]' : 'px-3 py-2.5 text-sm'} rounded-lg font-medium transition-all duration-100 ${
                   isActive
                     ? 'sidebar-link-active text-white'
                     : 'text-slate-400 hover:text-white hover:bg-white/8'
@@ -114,7 +116,7 @@ export default function Sidebar() {
             >
               {({ isActive }) => (
                 <>
-                  <Icon size={17} className={isActive ? 'text-phe-400' : ''} />
+                  <Icon size={sub ? 15 : 17} className={isActive ? 'text-phe-400' : ''} />
                   <span className="flex-1">{label}</span>
                   {badgeCount > 0 && (
                     <span className="ml-auto text-xs font-bold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center leading-none" title={badgeTitle(id)}>
