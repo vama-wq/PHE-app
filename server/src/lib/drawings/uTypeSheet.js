@@ -870,28 +870,38 @@ function renderUTypeSheet(spec) {
   if (toConfirm) out.push(redTag(44, 198, 'TO CONFIRM', 2.2));
   out.push(drawLeg(ye, { stack: false }));
   out.push(K.line(12.5, ye, pinEndX, ye, { w: 0.15, dash: '4 1 1 1', color: '#777' }));
-  // Pin parts float left of the pin end, evenly spaced, at least 10 apart.
+  // Pin parts float left of the pin end, evenly spaced, at least 10 apart. A
+  // stack too long for the room at the view's scale (a heavy terminal pin at
+  // its true 26.9, 16 Nov 2026) is drawn smaller — the row says so — and never
+  // with one part over another.
   const exp = [];
+  const right = pinEndX - 6;
+  const stackFits = (sc) => fit.pin.map(rl => partWidth(rl, sc)).reduce((a, b) => a + b, 0) + 2 * Math.max(0, fit.pin.length - 1) <= right - 12.5;
+  const sE = [sD, sD * 0.75, sD / 2, sD / 3].find(stackFits) || sD / 3;
   {
-    const right = pinEndX - 6, left = 18.8;
-    const widths = fit.pin.map(rl => partWidth(rl, sD));
+    const left = 18.8;
+    const widths = fit.pin.map(rl => partWidth(rl, sE));
     const total = widths.reduce((a, b) => a + b, 0);
     const gap = fit.pin.length > 1 ? Math.max(2, Math.min(12, (right - left - total) / (fit.pin.length - 1))) : 0;
-    let edge = right, prevMid = Infinity;
-    fit.pin.forEach((role, i) => {
-      let mid = Math.min(edge - widths[i] / 2, prevMid - 10);
-      exp.push({ role, mid, x: role === 'hvpin' ? mid - widths[i] / 2 + (sz.hvpin.studT * sD) : mid - widths[i] / 2 });
-      edge = mid - widths[i] / 2 - gap; prevMid = mid;
-    });
-    // A long stack (a nut under a heavy pin, 16 Nov 2026) would run off the
-    // sheet's left edge: draw it closer together, in the same order.
-    const last = exp[exp.length - 1], lastLeft = last ? last.mid - widths[exp.length - 1] / 2 : left;
-    if (last && lastLeft < 12.5 && exp.length > 1) {
-      const m0 = exp[0].mid, k = (m0 - (12.5 + widths[exp.length - 1] / 2)) / (m0 - last.mid);
-      exp.forEach((p, i) => { const mid = m0 - (m0 - p.mid) * k; p.x += mid - p.mid; p.mid = mid; });
-    }
+    const place = (g, spread) => {
+      exp.length = 0;
+      let edge = right, prevMid = Infinity;
+      fit.pin.forEach((role, i) => {
+        const mid = spread ? Math.min(edge - widths[i] / 2, prevMid - 10) : edge - widths[i] / 2;
+        exp.push({ role, mid, x: role === 'hvpin' ? mid - widths[i] / 2 + (sz.hvpin.studT * sE) : mid - widths[i] / 2 });
+        edge = mid - widths[i] / 2 - g; prevMid = mid;
+      });
+    };
+    place(gap, true);
+    // Off the sheet's left edge: packed edge to edge, the gaps shared out.
+    const last = exp[exp.length - 1];
+    if (last && last.mid - widths[exp.length - 1] / 2 < 12.5 && exp.length > 1) place(Math.max(1, (right - 12.5 - total) / (exp.length - 1)), false);
   }
-  for (const p of exp) out.push(drawPart(p.role, p.x, ye, sD));
+  if (sE !== sD) {
+    const nx = toConfirm ? 44 + K.textWidth('TO CONFIRM', 2.2, 700) + 5 : 16 + K.textWidth('FITTING ORDER', 2.3, 700) + 3;
+    out.push(K.text(nx, 198, `(parts at ${sE >= 1 ? `${fmt(sE)}:1` : `1:${fmt(1 / sE)}`} to fit)`, { size: 2.0, color: '#555' }));
+  }
+  for (const p of exp) out.push(drawPart(p.role, p.x, ye, sE));
   const arrowX = pinEndX + 3;
   out.push(K.line(arrowX, ye - 9, arrowX + 22, ye - 9, { w: 0.25, color: C.blue }), K.arrowhead(arrowX + 22, ye - 9, 0, { color: C.blue }));
   out.push(K.text(arrowX + 11, ye - 10.5, 'slide on in this order', { size: 2.0, anchor: 'middle', color: C.blue }));
@@ -909,12 +919,30 @@ function renderUTypeSheet(spec) {
       out.push(K.text(xm + 7, yl + 2.9, `at ${fmt(BR.fromEnd)}${inchOf(BR.fromEnd)} from the tube end${brInView ? '' : ', past this view'}`, { size: 1.9, color: C.blue }));
     } else out.push(K.text(xm + 7, yl, `${letters[li++]} · ${what} · ${stageOf(fit.tube[0])}${isNipple ? '' : ' (before the ESB)'}`, { size: 2.1, weight: 700, color: C.blue }));
   }
-  const steps = [{ x: xm - esbW / 2, role: 'esb', name: esbName }, ...exp.map(p => ({ x: p.mid, role: p.role, name: NAME[p.role] || p.role }))];
-  const yL = ye + Math.max(13.5, tubeR + 1 + 3.2, ...fit.pin.map(rl => (rl === 'hvpin' ? sz.hvpin.h * sD / 2 : partHalfH(rl, sD)) + 3.2));
+  const halfOf = (rl) => (rl === 'hvpin' ? sz.hvpin.h * sE / 2 : partHalfH(rl, sE));
+  const steps = [{ x: xm - esbW / 2, role: 'esb', name: esbName, hh: esbG ? (esbG.h * sD) / 2 : tubeR + 1 },
+    ...exp.map(p => ({ x: p.mid, role: p.role, name: NAME[p.role] || p.role, hh: halfOf(p.role) }))];
+  const yL = ye + Math.max(13.5, tubeR + 1 + 3.2, ...fit.pin.map(rl => halfOf(rl) + 3.2));
+  // Each label as wide as its words; neighbours never overlap — a label moved
+  // off its part gets a short leader back to it.
+  {
+    const lw = (st) => Math.max(K.textWidth(st.name, 2.0), K.textWidth(stageOf(st.role), 2.0), 2.6) / 2 + 0.7;
+    const pins = steps.slice(1);
+    pins.forEach(st => { st.lx = st.x; st.hw = lw(st); });
+    for (let i = 1; i < pins.length; i++) pins[i].lx = Math.min(pins[i].lx, pins[i - 1].lx - pins[i - 1].hw - pins[i].hw);
+    const lastP = pins[pins.length - 1];
+    if (lastP && lastP.lx - lastP.hw < 13) {
+      lastP.lx = 13 + lastP.hw;
+      for (let i = pins.length - 2; i >= 0; i--) pins[i].lx = Math.max(pins[i].lx, pins[i + 1].lx + pins[i + 1].hw + pins[i].hw);
+    }
+    steps[0].lx = steps[0].x;
+  }
   for (const st of steps) {
-    out.push(K.text(st.x, yL, letters[li++] || '?', { size: 2.6, anchor: 'middle', weight: 700, color: C.blue }));
-    out.push(K.text(st.x, yL + 3.1, [st.name, stageOf(st.role)], { size: 2.0, anchor: 'middle', color: '#333' }));
-    out.push(K.balloon(st.x, ye - 15.5, no(st.role), { r: 2.3 }));
+    out.push(K.text(st.lx, yL, letters[li++] || '?', { size: 2.6, anchor: 'middle', weight: 700, color: C.blue }));
+    out.push(K.text(st.lx, yL + 3.1, [st.name, stageOf(st.role)], { size: 2.0, anchor: 'middle', color: '#333' }));
+    if (Math.abs(st.lx - st.x) > 0.8) out.push(K.line(st.x, ye + st.hh + 0.4, st.lx, yL - 2.6, { w: 0.15, color: '#777' }));
+    if (Math.abs(st.lx - st.x) > 0.8) out.push(K.balloonLeader(st.x, ye - st.hh - 0.5, st.lx, ye - 15.5, no(st.role)));
+    else out.push(K.balloon(st.x, ye - 15.5, no(st.role), { r: 2.3 }));
   }
 
   // ── Section T–T, scale 4:1 (3:1 on Ø11) ──

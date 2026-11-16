@@ -502,9 +502,9 @@ if (fs.existsSync(path.join(FIX, 'u_gen_cards.json'))) {
     { code: 'TP-HV-M6XM4', notes: null }, { code: 'IWS-FIB-M12-RD', notes: null }, { code: 'NUT-SS-M4-08', notes: 'M4 SS Nut - 8mm OD=8mm,ID=4mm,Thickness-2.88' }];
   const stub = { all: async (q, prm) => stubRows.filter(r => prm[0].includes(r.code)) };
   P.partSizesFor(stub, ['ESB-08', 'NIP-BR-M12-HEX', 'IWS-FIB-M12-RD', 'FIN-SS-08-VE', 'SPR-KD-36', 'TUB-SS304-038-T06', 'TP-HV-M6XM4', 'esb-08', 'NUT-SS-M4-08']).then(r => {
-    ok('9e. a sheet\'s sizes: coil and tube are not asked for; ESB-08 by notes + drawing; the M12 nipple from the seed (its own notes describe the nut — reported); the fins from the seed; the fibre washer and the heavy pin (no size anywhere) listed as "size not in inventory"; the heavy pin\'s M6 stud on M4 from its code',
-      Object.keys(r.sizes).sort().join() === 'ESB-08,FIN-SS-08-VE,NIP-BR-M12-HEX,NUT-SS-M4-08' && r.sizes['ESB-08'].lenMm === 4.3 && r.sizes['NIP-BR-M12-HEX'].lenMm === 26.5
-      && r.sizes['NUT-SS-M4-08'].thread === 'M4' && r.sizes['FIN-SS-08-VE'].odMm === 28.5 && r.missing.sort().join() === 'IWS-FIB-M12-RD,TP-HV-M6XM4'
+    ok('9e. a sheet\'s sizes: coil and tube are not asked for; ESB-08 by notes + drawing; the M12 nipple from the seed (its own notes describe the nut — reported); the fins from the seed; the fibre washer (no size anywhere) listed as "size not in inventory"; the heavy pin from her drawing (16 Nov 2026: hex 14 long, M6 stud on M4 from its code)',
+      Object.keys(r.sizes).sort().join() === 'ESB-08,FIN-SS-08-VE,NIP-BR-M12-HEX,NUT-SS-M4-08,TP-HV-M6XM4' && r.sizes['TP-HV-M6XM4'].headLenMm === 14 && r.sizes['TP-HV-M6XM4'].pinThread === 'M4' && r.sizes['ESB-08'].lenMm === 4.3 && r.sizes['NIP-BR-M12-HEX'].lenMm === 26.5
+      && r.sizes['NUT-SS-M4-08'].thread === 'M4' && r.sizes['FIN-SS-08-VE'].odMm === 28.5 && r.missing.sort().join() === 'IWS-FIB-M12-RD'
       && r.ignored.length === 1 && /describe the nipple nut/.test(r.ignored[0].why) && r.conflicts.length === 1
       && R.stable(P.threadOf('TP-HV-M6XM4')) === R.stable({ thread: 'M6', pinThread: 'M4' }), JSON.stringify(r).slice(0, 400));
   });
@@ -756,6 +756,34 @@ if (fs.existsSync(path.join(FIX, 'u_gen_cards.json'))) {
   const plainSpec = base(8, 18, 43).spec; delete plainSpec.partSizes;
   ok('11g. the parts table: 15 lines under a finned + bracketed element table (18 rows) are set one line a cell, smaller, and fit (tablesFit); 50 lines cannot (tablesFit false — the agent refuses the sheet); a plain sheet is not touched',
     fits14.tablesFit === true && fits14.html.includes('>St 26 Nut Washer</text>') && over.tablesFit === false && renderUTypeSheet(plainSpec).tablesFit === true, `${fits14.tablesFit} ${over.tablesFit}`);
+}
+
+// 12. The heavy terminal pin set (owner, 16 Nov 2026): 2 heavy pins, 2 heavy nuts, 4 heavy washers per element.
+{
+  const L2 = (...xs) => xs.map(([code, qty]) => ({ code, qty }));
+  const rem = R.parseRemark('FINNS + HEAVY TERMINAL PIN');
+  const good = R.fittingSetFor(rem, L2(['ESB-08', 50], ['TP-HV-M6XM4', 50], ['NUT-HV-M6-07', 50], ['WSH-HV-07', 100], ['FIN-MS-08', 0]), 25);
+  const short = R.fittingSetFor(rem, L2(['ESB-08', 50], ['TP-HV-M6XM4', 50], ['NUT-HV-M6-07', 25], ['WSH-HV-07', 50]), 25);
+  const m4 = R.fittingSetFor(rem, L2(['ESB-08', 40], ['TP-HV-M6XM4', 40], ['NUT-HV-M6-07', 40], ['WSH-HV-07', 80], ['NUT-SS-M4-08', 24], ['NUT-BR-M4-08', 2]), 20);
+  const PS = require(S + '/src/lib/drawings/partSizes.js').SEED;
+  ok('12a. heavy terminal pin set: 2 pins + 2 heavy nuts + 4 heavy washers per heater raises nothing; 1 nut / 2 washers per heater are flagged; M4 nuts on a heavy list (item 1922: 1.2 SS + 0.1 brass) are flagged; the heavy parts have their sizes from her drawings (pin hex 6.9 AF × 14 + M6 stud 5.8 × 12.9, nut 9.5 AF × 4.3, washer 12.5 / 6.1 × 0.9)',
+    good.set === 'heavy_pin' && good.notes.length === 0
+    && short.notes.some(x => /takes 2 heavy terminal nuts per heater .*the list has 1$/.test(x)) && short.notes.some(x => /takes 4 heavy terminal washers per heater .*the list has 2$/.test(x))
+    && m4.notes.some(x => /also has 1\.3 M4 \/ M5 nut/.test(x))
+    && PS['TP-HV-M6XM4'].headLenMm === 14 && PS['TP-HV-M6XM4'].spigotLenMm === 12.9 && PS['NUT-HV-M6-07'].afMm === 9.5 && PS['WSH-HV-07'].odMm === 12.5,
+    JSON.stringify([good.notes, short.notes, m4.notes]));
+}
+
+// 12b. 8 mm and 11 mm heavy sets differ (owner, 16 Nov 2026): the 8 mm set on an Ø11 list is refused, and the reverse.
+{
+  const L2 = (...xs) => xs.map(([code, qty]) => ({ code, qty }));
+  const on11 = R.partsForOtherTube(L2(['ESB-11', 2], ['TP-HV-M6XM4', 2], ['NUT-HV-M6-07', 2], ['WSH-HV-07', 4]), 11);
+  const on8 = R.partsForOtherTube(L2(['ESB-08', 2], ['TP-HV-M6XM4', 2], ['NUT-HV-M6-07', 2], ['WSH-HV-07', 4]), 8);
+  const m5on8 = R.partsForOtherTube(L2(['TP-HV-M6XM5', 2]), 8);
+  const PS = require(S + '/src/lib/drawings/partSizes.js').SEED;
+  ok('12b. heavy sets by tube: TP-HV-M6XM4 + NUT-HV-M6-07 + WSH-HV-07 are the 8 mm set — fine on Ø8, all three refused on Ø11; TP-HV-M6XM5 (M5 pin) refused on Ø8; the M5 pin has no seed size (its drawing is a copy of the M3 sheet)',
+    on8.length === 0 && on11.map(x => x.code).join() === 'TP-HV-M6XM4,NUT-HV-M6-07,WSH-HV-07' && m5on8.length === 1 && !PS['TP-HV-M6XM5'] && PS['NUT-HV-M6-07'].tubeMm === 8,
+    JSON.stringify([on11, m5on8]));
 }
 
 // 9e runs on a promise: the summary waits for it.

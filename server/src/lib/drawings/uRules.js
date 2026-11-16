@@ -341,6 +341,8 @@ const FITTING_ORDER = {
   nipple: ['brass nipple (with washer, washer, nipple nut on its thread)', 'ESB', 'SS nut', 'washer', 'washer', 'SS nut'],
   nipple_ceramic_nut: ['brass nipple', 'ESB', 'ceramic', 'nut'],
 };
+// The heavy terminal pin set, per heater (owner, 16 Nov 2026).
+const HEAVY_SET = { hvpin: 2, hvnut: 2, hvwasher: 4 };
 const RULED_SETS = { nut_washer: { words: 'ESB, then SS nut, washer, washer, SS nut — there is no wire lug in the middle', at: '2026-11-14' } };
 
 // The distinct codes of a list's lines that match re, upper case, in list order.
@@ -402,6 +404,14 @@ function fittingSetFor(rem, lines, qty) {
     }
     if (set === 'ceramic_only') n(ls.nut > 0 || ls.washer > 0, `"One Ceramic only" takes no nuts or washers; the list has ${round(ls.nut, 2)} nuts, ${round(ls.washer, 2)} washers per heater`);
     if (set === 'heavy_pin') n(!(ls.hvpin > 0), 'the remark says heavy terminal pin but the list has no heavy terminal pin');
+    // The heavy terminal pin set (owner, 16 Nov 2026): "Heavy Terminal Pin 2 per
+    // element, Heavy Terminal Nut 2 per Element, Heavy terminal Washer 4 per Element".
+    if (set === 'heavy_pin' && ls.hvpin > 0) {
+      for (const [k, want, what] of [['hvpin', HEAVY_SET.hvpin, 'heavy terminal pins'], ['hvnut', HEAVY_SET.hvnut, 'heavy terminal nuts'], ['hvwasher', HEAVY_SET.hvwasher, 'heavy terminal washers']]) {
+        n(Math.abs(ls[k] - want) >= 0.01, `"Heavy Terminal Pin" takes ${want} ${what} per heater (Ms. Vama, 16 Nov 2026); the list has ${round(ls[k], 2)}`);
+      }
+      n(ls.nut > 0, `"Heavy Terminal Pin" is 2 heavy pins, 2 heavy nuts and 4 heavy washers per heater (Ms. Vama, 16 Nov 2026); the list also has ${round(ls.nut, 2)} M4 / M5 nut(s) per heater — drawn under the heavy pin as the list says`);
+    }
     if (set === 'nut_washer_brackets') n(!(ls.bracket > 0), 'the remark says clamps / brackets but the list has no bracket');
     if (set.startsWith('nipple')) n(!(ls.nipple > 0), 'the remark says nipple but the list has no nipple');
     if (set.startsWith('nipple') && rem.nipple && rem.nipple !== 'unknown' && ls.nippleSize && ls.nippleSize !== rem.nipple) notes.push(`the remark says ${rem.nipple} nipple, the list has ${ls.nippleSize}`);
@@ -800,8 +810,16 @@ function widthHistoryFlag({ rows, customerCode, diaMm, set, itemId, madeInsideMm
 // wrong parts. → [{ code, sizeMm }] for the lines that do not fit diaMm.
 // The fin line too (16 Nov 2026): FIN-MS-08 / FIN-SS-08-VE are for Ø8, FIN-MS-11 / FIN-SS-11-VE for Ø11.
 const PART_SIZE_RE = /^(?:ESB|NUT-(?:SS|BR)-M\d+|WSH-(?:SS|BR)|FIN-(?:MS|SS))-(08|11)(?![0-9])|^PVC-FB(08|11)-/;
+// The heavy terminal pin set (owner, 16 Nov 2026: "11mm size and 8mm have
+// different sizes"): every heavy set on the app's lists so far is the 8 mm one —
+// TP-HV-M6XM4 (on the Ø8's M4 pin), NUT-HV-M6-07, WSH-HV-07. TP-HV-M6XM5 sits on
+// the Ø11's M5 pin. The 11 mm set's own nut and washer are not in Inventory yet,
+// so an Ø11 list carrying the 8 mm ones is refused like any other-size part.
+const HEAVY_SIZE = { 'TP-HV-M6XM4': 8, 'NUT-HV-M6-07': 8, 'WSH-HV-07': 8, 'TP-HV-M6XM5': 11 };
 function partSizeOf(code) {
-  const m = String(code || '').trim().toUpperCase().match(PART_SIZE_RE);
+  const c = String(code || '').trim().toUpperCase();
+  if (HEAVY_SIZE[c]) return HEAVY_SIZE[c];
+  const m = c.match(PART_SIZE_RE);
   return m ? Number(m[1] || m[2]) : null;
 }
 function partsForOtherTube(lines, diaMm) {
