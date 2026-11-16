@@ -30,11 +30,11 @@ const PHASE1_DIAMETERS = [8, 11];
 // dia requirement … you can suggest the closest roller that is feasible with
 // +- 2mm tolerance and if accepted we can use that" — the ±2 mm is on the
 // inside gap. Her roller list (drawing_rulings 'rollers') replaces the three on
-// her drawings; she sends it on Monday 16 Nov 2026.
+// her drawings; she sends it on 17 Nov 2026.
 const OPENING_MM = 2;
 const ROLLER_TOL_MM = 2;
 const DEFAULT_ROLLERS = [22, 25, 40];
-const DEFAULT_ROLLERS_SOURCE = 'from your drawings — your list on Monday replaces it';
+const DEFAULT_ROLLERS_SOURCE = 'from your drawings — your roller list replaces it';
 // The widths on her drawings run 24 – 100 inside (the 4" gap, 101.6, drawn as 100).
 const INSIDE_SEEN_MM = { min: 24, max: 101.6 };
 

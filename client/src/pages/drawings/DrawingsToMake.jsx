@@ -432,7 +432,7 @@ function ItemSheet({ itemId, onBack }) {
                     ['Job card' + (cardCount > 1 ? 's' : ''), (f.names || []).map((n, i) => `${n} (${f.quantities[i]})`).join(', ')],
                     // Finned U (owner, 16 Nov 2026): where the fins run and what St 29 takes.
                     ...(f.fins ? [['Fins', `${f.fins.label} · ${f.fins.onBend ? 'round the bend' : 'legs only'} · ${f.fins.stopBeforeEndMm} mm bare each end${f.fins.kgForOrder != null ? ` · ${f.fins.kgForOrder} kg at St 29` : ''}`]] : []),
-                    ...(f.brackets ? [['Brackets', `${f.brackets.perHeater} × ${f.brackets.code || '—'} · ${f.brackets.fromBendMm} from the bend · ${f.brackets.fromEndMm} from the tube end`]] : []),
+                    ...(f.brackets ? [['Brackets', `${f.brackets.perHeater} × ${f.brackets.code || '—'} · ${f.brackets.fromBendMm} from the outer end of the U · ${f.brackets.fromEndMm} from the tube end`]] : []),
                   ].map(([k, v]) => (
                     <div key={k} className="flex gap-3 px-3 py-1.5">
                       <span className="w-28 flex-shrink-0 text-gray-500">{k}</span>

@@ -41,7 +41,7 @@ router.get('/queue', authenticate, authorize('owner'), async (req, res) => {
 
 // Her rollers (owner, 14 Nov 2026: "a roller is basically a tool on which the
 // heater is bend to a u"): the list the agent picks a roller from for the
-// client's inside gap. Until she saves hers (Monday 16 Nov), the three on her drawings.
+// client's inside gap. Until she saves hers (her roller list, 17 Nov), the three on her drawings.
 router.get('/rollers', authenticate, authorize('owner'), async (req, res) => {
   try {
     res.json(await agent.rollerList(getDB()));
