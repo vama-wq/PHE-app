@@ -184,8 +184,11 @@ function renderUTypeSheet(spec) {
   // beads that sit on the tube end (OD ≈ the tube's, wider than its bore); a
   // bush whose spigot fits the bore gets the spigot drawn dashed in the tube.
   // ESB-11's ends are chamfered 45° from Ø10.9 to Ø9.9 (her drawing).
+  // No ESB line on the list: the agent names the Ø's usual one (spec.esbStd),
+  // drawn at its size and marked not on the list (review, 16 Nov 2026).
+  const esbStdCode = !partFor('esb') && spec.esbStd ? String(spec.esbStd).trim().toUpperCase() : null;
   const esbG = (() => {
-    const t = trueOf('esb');
+    const t = trueOf('esb') || (esbStdCode ? PS[esbStdCode] || null : null);
     const od = num(t?.headOdMm) || num(t?.odMm), len = num(t?.lenMm), hLen = num(t?.headLenMm);
     if (!od || !(len || hLen)) return null;
     const bore = Number(tube.diaMm) - 2 * (Number(tube.wallMm) || 0);
@@ -320,6 +323,8 @@ function renderUTypeSheet(spec) {
     if (!(od > 0)) return null;
     return { od, id: numOr(fn.idMm, null), pitch: numOr(fn.pitchMm, 0) > 0 ? Number(fn.pitchMm) : 3, onBend: fn.onBend !== false,
       stop: Math.max(0, numOr(fn.stopBeforeEndMm, 25)), gap: Math.max(0, numOr(fn.bracketGapMm, 0)),
+      // The bend side of the bend-end bracket bare: the leg's fins end this far from the outer end of the U.
+      bareTo: numOr(fn.bareToMm, 0) > 0 ? Number(fn.bareToMm) : null, clear: numOr(fn.clearMm, null),
       code: String(fn.code || ''), material: String(fn.material || '').toUpperCase(),
       label: String(fn.label || `${String(fn.material || '').toUpperCase()} FINS${fn.code ? ` (${fn.code})` : ''}`.trim()) };
   })();
@@ -369,10 +374,8 @@ function renderUTypeSheet(spec) {
   const rE = legEnvMm * s, rBend = FN && FN.onBend ? rE : r;
   const ringFits = half + r + 2.75 <= 15.5 + 0.01;   // Detail D's usual circle holds both terminal ends
   // An 18U leg at 1:2 just fits; a wider bend takes more room, and the OUTSIDE
-  // dimension right of it must still stop short of the element table (x 276),
-  // as must a bracket's foot reaching out past the bend.
-  const footOver = BR ? Math.max(0, BR.len - BR.fromBend) * s : 0;
-  const LEG_MAX = Math.min(217.9, 266.7 - X0 - half - rBend, BR ? 274 - X0 - half - r - footOver : Infinity);
+  // dimension right of it must still stop short of the element table (x 276).
+  const LEG_MAX = Math.min(217.9, 266.7 - X0 - half - rBend);
   const legPaper = geo.straight * s;
   const broken = legPaper > LEG_MAX + 0.01;
   const Xb = X0 + Math.min(legPaper, LEG_MAX);
@@ -400,17 +403,12 @@ function renderUTypeSheet(spec) {
   out.push(K.viewTitle(150, 32, `ELEVATION (SCALE 1:${scaleN})`, broken ? 'Terminal end on the left · as bent · legs broken, true length dimensioned' : 'Terminal end on the left · as bent'));
   const uPath = `M${K.f(X0)},${K.f(yT)} L${K.f(Xb)},${K.f(yT)} A${K.f(half)},${K.f(half)} 0 0 1 ${K.f(Xb)},${K.f(yB)} L${K.f(X0)},${K.f(yB)}`;
   // Brackets on the elevation: the U lies in the paper, so a bracket shows as
-  // its strip across both legs (over the tubes) with its two screw heads, and
-  // its foot — under the heater — dashed, pointing away from the middle.
+  // its strip across both legs (over the tubes) with its two screw heads. Its
+  // foot (under the heater) is not drawn until she rules which way it points;
+  // the notes say so (review, 16 Nov 2026).
   // xUpE / xUpB: the upright at the terminal end / near the bend.
   const xUpE = BR ? X0 + BR.fromEnd * s : null, xUpB = BR ? xOuter - BR.fromBend * s : null;
   const brHalf = BR ? (BR.w / 2) * s : 0;
-  if (BR) {
-    for (const [xu, dir] of [[xUpE, -1], [xUpB, 1]]) {
-      const xf = xu + dir * BR.len * s;
-      out.push(K.rect(Math.min(xu, xf), Yc - brHalf, Math.abs(xf - xu), 2 * brHalf, { stroke: '#7a8189', sw: 0.18, dash: '1.2 0.8' }));
-    }
-  }
   // Fins: a light layer under the tube — their OD as an envelope round each
   // leg (and round the bend when they go round it), one line per turn of the
   // helical strip at the pitch (no closer than 1.5 on paper: closer is drawn
@@ -420,7 +418,9 @@ function renderUTypeSheet(spec) {
   const finSchematic = FN ? FN.pitch * s < 1.5 - 1e-9 : false;
   const xFs = FN ? X0 + FN.stop * s : null;            // where the fins start on each leg
   // The gap is never narrower than the bracket itself (its strip and upright).
-  const finGap = FN && BR ? (() => { const c = xUpB + (BR.strip * s) / 2, g = Math.max(FN.gap, BR.strip + BR.thk); return [c - (g * s) / 2, c + (g * s) / 2]; })() : null;
+  // With nothing finned on its bend side (FN.bareTo), the leg is bare from there to the bend.
+  const finGap = FN && BR ? (FN.bareTo ? [xOuter - FN.bareTo * s, Xb + 1]
+    : (() => { const c = xUpB + (BR.strip * s) / 2, g = Math.max(FN.gap, BR.strip + BR.thk); return [c - (g * s) / 2, c + (g * s) / 2]; })()) : null;
   let finEndX = null;                                  // where the last straight run ends (a bare bend)
   if (FN) {
     const FIN_FILL = '#f3f5f7', FIN_EDGE = '#7d848c', FIN_RING = '#a7adb4';
@@ -822,7 +822,7 @@ function renderUTypeSheet(spec) {
   // what lies past the view's break: the bracket, where the fins start.
   const pinTxt = [`PIN ${card.pinStudsIn - 1}" (${n1((card.pinStudsIn - 1) * 25.4)}) IN THE TUBE, SPOT WELDED`,
     !esbG ? 'TO THE COIL AT St 4 · ESB SPIGOT SHOWN DASHED'
-      : `TO THE COIL AT St 4 · ESB: CERAMIC BEAD ${fmt(esbG.t + (esbG.spigot ? esbG.spigot.t : 0))} LONG, Ø${fmt(esbG.h)}${esbG.spigot ? ' (SPIGOT DASHED)' : ''}`];
+      : `TO THE COIL AT St 4 · ${esbStdCode && PS[esbStdCode] ? `${esbStdCode} (NOT ON THE LIST)` : 'ESB'}: CERAMIC BEAD ${fmt(esbG.t + (esbG.spigot ? esbG.spigot.t : 0))} LONG, Ø${fmt(esbG.h)}${esbG.spigot ? ' (SPIGOT DASHED)' : ''}`];
   {
     const finsAtBr = FN && BR && Math.abs(FN.stop - BR.fromEnd) < 0.5;
     if (BR && !brInView) pinTxt.push(`BRACKET${no('bracket') === '–' ? '' : ` ${no('bracket')}`} AT ${fmt(BR.fromEnd)}${inchOf(BR.fromEnd)} FROM THE TUBE END${finsAtBr ? ', FINS FROM IT' : ''} — PAST THIS VIEW`);
@@ -869,8 +869,12 @@ function renderUTypeSheet(spec) {
     const isNipple = fit.tube.includes('nipple');
     const yl = ye + (tubeParts.length ? Math.max(...fit.tube.map(rl => partHalfH(rl, sD))) : tubeR) + 3.4;
     const what = isNipple ? (fit.tube.length > 1 ? `${NAME.nipple} set` : NAME.nipple) : 'bracket';
-    out.push(K.text(xm + 7, yl, `${letters[li++]} · ${what} · ${stageOf(fit.tube[0])}${isNipple ? '' : ' (before the ESB)'}`, { size: 2.1, weight: 700, color: C.blue }));
-    if (BR && !brInView) out.push(K.text(xm + 7, yl + 2.9, `${fmt(BR.fromEnd)} from the tube end, past this view`, { size: 1.9, color: C.blue }));
+    // A bracket placed by her answers is clamped in its slots 1.5" in, not slid
+    // on first: no step letter, and where it sits (review, 16 Nov 2026).
+    if (BR && !isNipple) {
+      out.push(K.text(xm + 7, yl, `bracket · ${stageOf('bracket')} · clamped in its slots`, { size: 2.1, weight: 700, color: C.blue }));
+      out.push(K.text(xm + 7, yl + 2.9, `at ${fmt(BR.fromEnd)}${inchOf(BR.fromEnd)} from the tube end${brInView ? '' : ', past this view'}`, { size: 1.9, color: C.blue }));
+    } else out.push(K.text(xm + 7, yl, `${letters[li++]} · ${what} · ${stageOf(fit.tube[0])}${isNipple ? '' : ' (before the ESB)'}`, { size: 2.1, weight: 700, color: C.blue }));
   }
   const steps = [{ x: xm - esbW / 2, role: 'esb', name: esbName }, ...exp.map(p => ({ x: p.mid, role: p.role, name: NAME[p.role] || p.role }))];
   const yL = ye + Math.max(13.5, tubeR + 1 + 3.2, ...fit.pin.map(rl => (rl === 'hvpin' ? sz.hvpin.h * sD / 2 : partHalfH(rl, sD)) + 3.2));
@@ -885,7 +889,8 @@ function renderUTypeSheet(spec) {
   // cut, at the largest scale that keeps it inside the view (3:2 for a 28.5 OD,
   // 5:4 for 31.6), the cut then going through both legs.
   const sT = FN ? [4, 3, 2, 1.5, 1.25, 1].find(k => Math.max(dia, FN.od) * k <= 44) || 1 : Number(tube.diaMm) === 11 ? 3 : 4;
-  out.push(K.viewTitle(221, 135, `SECTION T–T (SCALE ${({ 1.5: '3:2', 1.25: '5:4' })[sT] || `${sT}:1`})`));
+  // The cut goes through both legs (fins); one is drawn, the other alike (review, 16 Nov 2026).
+  out.push(K.viewTitle(221, 135, `SECTION T–T${FN ? ', ONE LEG' : ''} (SCALE ${({ 1.5: '3:2', 1.25: '5:4' })[sT] || `${sT}:1`})`));
   const cx = FN ? 194 : 196, cy = 160, R = (tube.diaMm / 2) * sT, Ri = R - tube.wallMm * sT;
   const Rf = FN ? (FN.od / 2) * sT : R;
   out.push(`<defs><pattern id="mgo" width="1.6" height="1.6" patternUnits="userSpaceOnUse"><circle cx="0.8" cy="0.8" r="0.22" fill="#9a8f7a"/></pattern></defs>`);
@@ -902,7 +907,8 @@ function renderUTypeSheet(spec) {
   const coilKnown = Number(card.mandrelMm) > 0 && Number(card.wireDiaMm) > 0;
   const coilR = coilKnown ? (card.mandrelMm / 2 + card.wireDiaMm / 2) * sT : Ri * 0.55;
   if (coilKnown) out.push(K.circle(cx, cy, coilR, { stroke: '#9c5a1c', sw: card.wireDiaMm * sT }));
-  out.push(K.line(cx - Rf - 3, cy, cx + Rf + 3, cy, { w: 0.15, dash: '3 1 1 1', color: '#777' }), K.line(cx, cy - Rf - 3, cx, cy + Rf + 3, { w: 0.15, dash: '3 1 1 1', color: '#777' }));
+  // On a finned heater the centreline stops short of Detail D's break, on its left.
+  out.push(K.line(cx - Rf - (FN ? 1 : 3), cy, cx + Rf + 3, cy, { w: 0.15, dash: '3 1 1 1', color: '#777' }), K.line(cx, cy - Rf - 3, cx, cy + Rf + 3, { w: 0.15, dash: '3 1 1 1', color: '#777' }));
   out.push(K.leader(cx + R * Math.cos(-0.7), cy + R * Math.sin(-0.7), 218, 145, `SHEATH — ${tube.material.toUpperCase()}, Ø${tube.diaMm}`, { size: 2.3 }));
   if (FN) {
     const rm = (coilR + (coilKnown ? card.wireDiaMm : 0) * sT / 2 + Ri) / 2;
@@ -910,7 +916,8 @@ function renderUTypeSheet(spec) {
   } else out.push(K.leader(cx + 9, cy - 5, 218, 154, 'MgO — COMPACTED (MGO-65A)', { size: 2.3 }));
   out.push(K.leader(cx + coilR * Math.cos(0.35), cy + coilR * Math.sin(0.35), 218, 167, coilKnown ? [`COIL — ${card.gauge} SWG FeCrAl (${card.wireCode})`, `ON ${card.mandrelMm} MM MANDREL`] : ['COIL — NO WIRE ON THE GAUGE SHEET', 'MADE BY HAND ON THE ORDER'], { size: 2.3 }));
   if (FN) {
-    out.push(K.leader(cx + Rf * Math.cos(0.75), cy + Rf * Math.sin(0.75), 218, 177, [FN.label, `OD ${fmt(FN.od)}${FN.id ? ` · ID ${fmt(FN.id)}` : ''} · PITCH ${fmt(FN.pitch)}`], { size: 2.3 }));
+    out.push(K.leader(cx + Rf * Math.cos(0.75), cy + Rf * Math.sin(0.75), 218, 177, [FN.label, `OD ${fmt(FN.od)}${FN.id ? ` · ID ${fmt(FN.id)}` : ''} · PITCH ${fmt(FN.pitch)}`,
+      ...(FN.clear != null ? [`OTHER LEG ALIKE · FINS ${fmt(FN.clear)} APART`] : [])], { size: 2.3 }));
     out.push(K.dimH(cx - R, cx + R, cy + Rf + 4, `Ø${tube.diaMm}`, { fromY1: cy, fromY2: cy, above: false, size: 2.4 }));
   } else out.push(K.dimH(cx - R, cx + R, cy + R + 6, `Ø${tube.diaMm}`, { fromY1: cy, fromY2: cy, above: false, size: 2.4 }));
 
@@ -947,6 +954,21 @@ function renderUTypeSheet(spec) {
   const t2opts = { title: `PARTS AND MATERIAL BY STAGE — FOR ${item.qty} NOS`, head: ['#', 'Used at', 'Part (inventory)', 'Per pc', `For ${item.qty}`], size: 2.2, rowH: 5, boldFirstLine: true, align: ['middle', 'start', 'start', 'end', 'end'] };
   let T2 = null;
   for (const lines of [3, 2, 1]) { T2 = K.table(276, y2, [6.5, 21, 67.5, 18.5, 18.5], rowsFor(lines), t2opts); if (y2 + T2.height <= 236) break; }
+  // Still too long (fins, brackets and a heavy pin or a nipple set): one line a
+  // cell, then smaller letters; if even that runs into the title block,
+  // tablesFit says so and the agent refuses the sheet (review, 16 Nov 2026).
+  let tablesFit = y2 + T2.height <= 236;
+  for (const size of tablesFit ? [] : [2.0, 1.9]) {
+    T2 = K.table(276, y2, [6.5, 21, 67.5, 18.5, 18.5], rowsFor(1), { ...t2opts, size });
+    if (y2 + T2.height <= 236) { tablesFit = true; break; }
+  }
+  if (!tablesFit) {
+    const flat = parts.map(p => [String(p.no), [].concat(p.stage).filter(Boolean).join(' '), p.line1, [].concat(p.perPc).filter(Boolean).join(' · '), p.forOrder]);
+    for (const [size, rowH] of [[2.2, 5], [2.0, 4.4], [1.9, 4.1]]) {
+      T2 = K.table(276, y2, [6.5, 21, 67.5, 18.5, 18.5], flat, { ...t2opts, size, rowH, headH: Math.min(5.5, rowH + 0.5), titleH: Math.min(5.5, rowH + 0.5) });
+      if (y2 + T2.height <= 236) { tablesFit = true; break; }
+    }
+  }
   out.push(T2.svg);
 
   // ── Notes ── wrapped by measured width, and set smaller (line spacing with
@@ -1026,7 +1048,7 @@ function renderUTypeSheet(spec) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}mm" height="${H}mm" font-family="Arial, Helvetica, 'Noto Sans Gujarati', 'Noto Sans Devanagari', sans-serif">${out.join('')}</svg>`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${K.esc(item.drawingNumber)} — drawing</title>
 <style>@page { size: A3 landscape; margin: 0 } html, body { margin: 0; background: #fff } svg { display: block; width: 420mm; height: 297mm }</style></head><body>${svg}</body></html>`;
-  return { svg, html, notesFit: lay.fits, notesSize: lay.size };
+  return { svg, html, notesFit: lay.fits, notesSize: lay.size, tablesFit };
 }
 
 module.exports = { deriveUShape, uLengthForCentreline, renderUTypeSheet, FITTING_SETS };

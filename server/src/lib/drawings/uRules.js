@@ -211,6 +211,8 @@ function normaliseRemark(r) {
   return String(r || '').toUpperCase()
     .replace(/[“”″]/g, '"').replace(/[‘’]/g, "'").replace(/''/g, '"')
     .replace(/NIPP?L+E/g, 'NIPPLE').replace(/BRAS+D?S/g, 'BRASS').replace(/\bNUTE\b/g, 'NUT')
+    // "SS-Finns", "SSFinns" → "SS FINS" (review, 16 Nov 2026), as the drawing number reads them.
+    .replace(/\b(SS|MS)\s*-?\s*FINN?S?\b/g, '$1 FINS')
     .replace(/\bFINN?S?\b/g, 'FINS').replace(/\bCERAMICS\b/g, 'CERAMIC')
     .replace(/\s+/g, ' ').trim();
 }
@@ -294,9 +296,11 @@ function parseRemark(remark) {
   const groove = t.match(/WITHOUT\s*GROO?VE/);
   if (groove) { instr('nipple without groove', 'WITHOUT GROOVE'); read.push(groove[0]); }
   // Fitting words.
-  res.fins = /\bFINS\b/.test(t);
+  // "Without fins" / "No fins" is not a finned U: its words stay unread, so she
+  // is asked about them (review, 16 Nov 2026).
+  res.fins = /\bFINS\b/.test(t) && !/\b(WITHOUT|NO)\s+((MS|SS)\s+)?FINS\b/.test(t);
   // "MS Finns" / "SS Finns" (owner's remarks, Sep–Nov 2026): checked against the list's fin line.
-  const finMat = t.match(/\b(MS|SS)\s*FINS\b/);
+  const finMat = res.fins ? t.match(/\b(MS|SS)\s*-?\s*FINS\b/) : null;
   if (finMat) res.finMaterial = finMat[1];
   const nip = t.match(/\bM\s?(12|14|16)\b[^/]*NIPPLE|NIPPLE[^/]*\bM\s?(12|14|16)\b/);
   if (/NIPPLE/.test(t)) res.nipple = nip ? `M${nip[1] || nip[2]}` : 'unknown';
@@ -561,33 +565,93 @@ function finListChecks(f) {
   return { blocks, flags };
 }
 
-// Brackets on a finned U: from the list (BKT-) or the remark (CLAMPS /
-// BRACKETS). → null, or { code, onList, perHeater (the list's, else 2) }.
-function bracketsFor({ rem, ls, diaMm }) {
+// Brackets on a finned U: the list (BKT-) always; otherwise the fitting set on
+// the page — her answer, else the one read from the remark — so "or we add
+// finns + brackets" is hers per order (review, 16 Nov 2026). With no set given
+// the remark's CLAMPS / BRACKETS decide. → null, or { code, onList, perHeater
+// (the list's, else 2) }.
+function bracketsFor({ rem, ls, diaMm, set }) {
   const w = (rem && rem.words) || {};
-  if (!(ls && ls.bracket > 0) && !w.clamps) return null;
+  const wanted = (ls && ls.bracket > 0) || (set == null ? !!w.clamps : set === 'nut_washer_brackets');
+  if (!wanted) return null;
   const onList = !!(ls && ls.bracketCode);
   return { code: onList ? ls.bracketCode : (USUAL_BRACKET[diaMm] || null), onList, perHeater: onList ? round(ls.bracket, 2) : BRACKETS_PER_HEATER };
+}
+
+// Does the bracket hold this U's legs? Her BKT-FMH-H788 / -H1250 drawings: the
+// legs sit in U-slots (slotWMm wide) whose outer pair is slotCcMm apart. A
+// slot narrower than the tube is refused; a leg off its slot's centre by more
+// than the slot's play is flagged (the legs would not both sit in), and by
+// more than half a slot refused; a slot much wider than the tube is flagged.
+// size: the bracket's partSizes entry (null: nothing to check).
+function bracketFitChecks({ code, size, diaMm, cc }) {
+  const blocks = [], flags = [];
+  const sw = Number(size && size.slotWMm), sc = Number(size && size.slotCcMm), d = Number(diaMm);
+  if (!(sw > 0)) return { blocks, flags };
+  if (sw < d) blocks.push(`the bracket ${code} has ${trimNum(sw)} mm slots — an Ø${trimNum(d)} tube does not go in; design to choose the bracket for this tube`);
+  else if (sw > d + 2) flags.push(`the bracket ${code} has ${trimNum(sw)} mm slots for an Ø${trimNum(d)} tube — it is the bracket for another tube; check it holds the legs`);
+  if (sc > 0 && sw >= d) {
+    const off = Math.abs(Number(cc) - sc);
+    if (off > sw) blocks.push(`the bracket ${code} does not fit this U width: its slots are ${trimNum(sc)} c/c, the legs ${trimNum(cc)} c/c — design to check the bracket or the U width`);
+    else if (off > sw - d + 1e-9) flags.push(`the bracket ${code} does not fit this U width: its slots are ${trimNum(sc)} c/c (${trimNum(sw)} wide), the legs ${trimNum(cc)} c/c — the legs fit between ${trimNum(round(sc - (sw - d), 2))} and ${trimNum(round(sc + (sw - d), 2))} c/c`);
+  }
+  return { blocks, flags };
+}
+
+// The brackets' element-table row and note (finned U, F3). The bend-end
+// bracket with fins on its bend side is a gap in the fins; with none there
+// (the bend bare, the stub too short to wind: fin.bracketGapMm null, the leg
+// bare to fin.bareToMm) it is where the fins end — never "both sides"
+// (review, 16 Nov 2026). Without a fin line (refused until design adds it) the
+// sheet draws no fins: no fin words. Its foot is not drawn until she says
+// which way it points. → { row: [2 lines], note }.
+function bracketWords({ brk, fin = null, production = false }) {
+  const tn = (v) => (v == null ? '—' : trimNum(v));
+  const bs = brk.size;
+  const gapAt = !!(fin && fin.bracketGapMm);
+  const bendEnd = `${tn(brk.fromBendMm)} from the outer end of the U`;
+  const row = [`${tn(brk.perHeater)} × ${brk.code || '—'}${brk.onList ? '' : ' (not on the list)'}`,
+    !fin ? `${bendEnd} · ${tn(brk.fromEndMm)} from the tube end`
+      : `${bendEnd} (${gapAt ? 'gap in the fins' : 'fins end past it'}) · ${tn(brk.fromEndMm)} from the tube end (fins stop)`];
+  const foot = `their ${tn(bs?.lenMm ?? 75.2)} foot is not drawn — which way it points is ${production ? 'as fitted' : 'TO CONFIRM by Ms. Vama'}`;
+  const note = `Brackets: ${tn(brk.perHeater)} per heater (${brk.code || '—'}${bs && bs.hMm ? `, ${tn(bs.hMm)} high × ${tn(bs.wMm)} wide, ${tn(bs.thkMm)} sheet` : ''}), clamped in their slots at St 26 — `
+    + (!fin ? `one ${tn(brk.fromBendMm)} mm from the outer end of the U, one ${tn(brk.fromEndMm)} mm from the tube end (${FIN_RULED}: "1.5" from both ends"); ${foot}.`
+      : (gapAt
+        ? `one ${tn(brk.fromBendMm)} mm from the outer end of the U with a gap of ${tn(fin.bracketGapMm)} mm in the fins at it (its sheet, its lip and a pitch each side; fins on both sides${fin.onBend ? ' and round the bend' : ''}); `
+        : `one ${tn(brk.fromBendMm)} mm from the outer end of the U, where the fins end: each leg is bare from the outer end of the U to ${tn(fin.bareToMm)} mm in (the bend, the bracket's sheet and lip, and a pitch), the fins starting past the bracket; `)
+      + `one ${tn(brk.fromEndMm)} mm from the tube end, where the fins stop — "after the bracket is fit the finns will not be added again" (${FIN_RULED}); ${foot}.`);
+  return { row, note };
 }
 
 // Her answers on the page, or the rulings (F1–F3). The numbers come in already
 // read (a blank is null); fins on the bend is 'yes' / 'no'. → the figures, the
 // source of each in her words, and what is wrong with an answer.
-function finDefaults({ onBendAns = null, stopAns = null, pitchAns = null, fromBendAns = null, fromEndAns = null, hasBrackets = false }) {
+// pitchInv: a pitch typed in the fin item's inventory notes (used before the 3 mm
+// read off her drawing). clearOf: { mm, what } — a nipple set on the tube end
+// reaching that far (the fins start one pitch past it, never over it).
+function finDefaults({ onBendAns = null, stopAns = null, pitchAns = null, pitchInv = null, fromBendAns = null, fromEndAns = null, hasBrackets = false, clearOf = null }) {
   const errors = [];
   if (onBendAns != null && !['yes', 'no'].includes(onBendAns)) errors.push(`Fins on the bend must be Yes or No (got "${onBendAns}")`);
   const onBend = onBendAns !== 'no';
   const fromBendMm = hasBrackets ? fromBendAns ?? BRACKET_AT_MM : null;
   const fromEndMm = hasBrackets ? fromEndAns ?? BRACKET_AT_MM : null;
-  // F1: 25 mm bare at each end; F3: with brackets the fins stop at the terminal-end bracket.
-  const stopMm = stopAns ?? (hasBrackets ? fromEndMm : FIN_STOP_MM);
-  const pitchMm = pitchAns ?? FIN_PITCH_MM;
+  const pitchMm = pitchAns ?? (Number(pitchInv) > 0 ? round(Number(pitchInv), 2) : null) ?? FIN_PITCH_MM;
+  // F1: 25 mm bare at each end; F3: with brackets the fins stop at the terminal-end bracket;
+  // and never over a nipple set on the tube end (review, 16 Nov 2026).
+  const ruledStop = hasBrackets ? fromEndMm : FIN_STOP_MM;
+  const clearMm = clearOf && Number(clearOf.mm) > 0 ? Math.ceil(Number(clearOf.mm) + pitchMm) : null;
+  const stopMm = stopAns ?? (clearMm != null && clearMm > ruledStop ? clearMm : ruledStop);
+  if (stopAns != null && clearOf && Number(clearOf.mm) > 0 && stopAns < Number(clearOf.mm)) {
+    errors.push(`the fins would start ${trimNum(stopAns)} mm from the tube end, over the ${clearOf.what} (it reaches ${trimNum(round(clearOf.mm, 1))} mm) — give a stop of at least ${trimNum(clearMm)}`);
+  }
   return {
     onBend, stopMm, pitchMm, fromBendMm, fromEndMm, errors,
     sources: {
       onBend: onBendAns ? 'your answer' : `${FIN_RULED}: "yes, go round the bend" — No when the bend stays bare`,
-      stop: stopAns != null ? 'your answer' : hasBrackets ? `the terminal-end bracket, ${trimNum(fromEndMm)} from the tube end — the fins stop at it (${FIN_RULED})` : `${FIN_RULED}: "stop 25mm"`,
-      pitch: pitchAns != null ? 'your answer' : FIN_PITCH_SOURCE,
+      stop: stopAns != null ? 'your answer'
+        : clearMm != null && clearMm > ruledStop ? `clear of the ${clearOf.what} (it reaches ${trimNum(round(clearOf.mm, 1))} mm from the tube end) + a pitch — "stop ${hasBrackets ? `at the bracket` : '25mm'}" would run over it`
+          : hasBrackets ? `the terminal-end bracket, ${trimNum(fromEndMm)} from the tube end — the fins stop at it (${FIN_RULED})` : `${FIN_RULED}: "stop 25mm"`,
+      pitch: pitchAns != null ? 'your answer' : Number(pitchInv) > 0 ? 'the fin item\'s inventory notes' : FIN_PITCH_SOURCE,
       fromBend: fromBendAns != null ? 'your answer' : `1.5" — ${FIN_RULED}: "1.5" from both ends with a gap" (a gap in the fins at it)`,
       fromEnd: fromEndAns != null ? 'your answer' : `1.5" — ${FIN_RULED}: the fins stop at it`,
     },
@@ -641,7 +705,15 @@ function finLayout({ geo, diaMm, drawnULengthMm, finOdMm, pitchMm, onBend, stopM
   // fins too, on each side of it.
   const bendLost = onBend && gapMm ? Math.max(0, bendReachMm - Math.max(gapFrom, 0)) * (gapFrom < bendReachMm ? 1 : 0) : 0;
   const finnedLengthMm = round(2 * runs.reduce((t, [a, b]) => t + (b - a), 0) + (onBend ? Math.max(0, bendMm - 2 * bendLost) : 0), 1);
-  return { blocks, flags, clearMm, bendReachMm: round(bendReachMm, 2), legFinnedMm: round(legFinnedMm, 2), bendMm: round(bendMm, 1), gapMm, finnedLengthMm };
+  // Is anything finned on the bend side of the bend-end bracket (the bend's
+  // fins, or a leg run between the bend and the gap)? When not — the bend bare
+  // and the stub too short to wind — the bracket is where the fins END, not a
+  // gap with fins on both sides (review, 16 Nov 2026): the leg is bare from the
+  // outer end of the U to gapTo.
+  const bendSideFinned = gapMm ? onBend || runs.some(([, b]) => b <= gapFrom + 1e-9) : null;
+  return { blocks, flags, clearMm, bendReachMm: round(bendReachMm, 2), legFinnedMm: round(legFinnedMm, 2), bendMm: round(bendMm, 1), gapMm,
+    gapFromMm: gapMm ? round(gapFrom, 2) : null, gapToMm: gapMm ? round(gapTo, 2) : null, bendSideFinned,
+    runs: runs.map(([a, b]) => [round(a, 2), round(b, 2)]), finnedLengthMm };
 }
 
 // F5: the fin stock as the app takes it today (lib/inventoryDeduction.js
@@ -804,6 +876,6 @@ module.exports = {
   fixtureText, asmblyDefault, isIsoDate, weekday, dispatchDefault, totalLength, coldZoneDefault, pinDefault,
   shapeChecks, MAX_SURFACE_LOAD_SEEN_W_CM2, filteredForResend, partSizeOf, partsForOtherTube, CLOSED, statusClass,
   FIN_STOP_MM, FIN_PITCH_MM, FIN_PITCH_SOURCE, BRACKET_AT_MM, BRACKET_LIP_MM, BRACKETS_PER_HEATER, FIN_CLEAR_MM, FIN_RULED, USUAL_BRACKET, FINS_MM_BASE,
-  finCodeInfo, finsFor, finListChecks, bracketsFor, finDefaults, finLayout, finKg,
+  finCodeInfo, finsFor, finListChecks, bracketsFor, bracketFitChecks, bracketWords, finDefaults, finLayout, finKg,
   stable, sha256Hex, sheetCode, codeChanges, itemSnapshot, snapshotDiff,
 };

@@ -79,6 +79,8 @@ const roleFor = (code) => {
   if (/^TP-/.test(c)) return 'listpin';
   return 'other';
 };
+// Where Detail D draws a nipple's head, in from the tube end (uTypeSheet layoutTube).
+const NIPPLE_AT_MM = 3;
 const STAGE_FOR = { listpin: ['St 4 Spot', 'from the list'], esb: ['St 23', 'Sealing'], nipple: ['St 21', 'Nipple Press'], nipnut: ['St 21', 'Nipple Press'], nipwasher: ['St 21', 'Nipple Press'] };
 const ORDER_OF = { listpin: 0, nipple: 1, nipwasher: 2, nipnut: 3, bracket: 4, esb: 5, nut: 6, washer: 7, hvpin: 8, hvwasher: 9, hvnut: 10, other: 11, fins: 12 };
 
@@ -592,7 +594,7 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   if (histFlag) p.flags.push(histFlag);
 
   // ── Parts: the stages' material by the card, then the item's list unchanged ──
-  const codes = [`SPR-KD-${card.gauge}`, draft.pins?.big, draft.pins?.small, d === 11 ? 'PVC-FB11-M5' : 'PVC-FB08-M4', 'MGO-65A', item.tube_material].filter(Boolean);
+  const codes = [card.gauge != null ? `SPR-KD-${card.gauge}` : null, draft.pins?.big, draft.pins?.small, d === 11 ? 'PVC-FB11-M5' : 'PVC-FB08-M4', 'MGO-65A', item.tube_material].filter(Boolean);
   const inv = Object.fromEntries((await db.all('SELECT item_code, name, name_gu FROM inventory_items WHERE upper(item_code) = ANY($1)',
     [codes.map(c => String(c).toUpperCase())])).map(r => [r.item_code.toUpperCase(), r]));
   // The Gujarati follows the English name, as the job card does; the stored
@@ -616,8 +618,12 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   // The fin line (qty 0 on the list): kg by the card's tube length at St 29,
   // exactly as lib/inventoryDeduction.js takes it (F5, owner 16 Nov 2026).
   const finKgOf = (code) => R.finKg({ code, weights: FINS_WEIGHT_PER_BASE, totalLengthMm: card.totalLengthMm, elements: card.elements, quantities: draft.split.quantities });
+  // No gauge (blocked: made by hand on the order): no "SPR-KD-null" line (review, 16 Nov 2026).
+  const coilPart = card.gauge == null
+    ? { key: 'coil', role: 'coil', code: null, stage: ['St 1 Coil', '(weighed St 3)'], line1: 'coil wire — none on the gauge sheet (made by hand)', gu: '', hi: '', perPc: '1 coil', forOrder: `${q0} coils` }
+    : { key: 'coil', role: 'coil', code: `SPR-KD-${card.gauge}`, stage: ['St 1 Coil', '(weighed St 3)'], ...tri(`SPR-KD-${card.gauge}`), perPc: '1 coil', forOrder: `${q0} coils` };
   const parts = [
-    { key: 'coil', role: 'coil', code: `SPR-KD-${card.gauge}`, stage: ['St 1 Coil', '(weighed St 3)'], ...tri(`SPR-KD-${card.gauge}`), perPc: '1 coil', forOrder: `${q0} coils` },
+    coilPart,
     ...(pinsFromList ? [] : [{ key: 'pinwh', role: 'pinwh', code: pinCode('big'), stage: ['St 4 Spot', 'big end'], ...tri(pinCode('big'), draft.pins?.big ? null : 'no item in inventory'), perPc: '1', forOrder: String(q0) },
       { key: 'pinwo', role: 'pinwo', code: pinCode('small'), stage: ['St 4 Spot', 'small end'], ...tri(pinCode('small'), draft.pins?.small ? null : 'no item in inventory'), perPc: '1', forOrder: String(q0) }]),
     { key: 'tube', role: 'tube', code: item.tube_material, stage: ['St 5', 'Tube cutting'], ...tri(item.tube_material), perPc: [`${fx(ftPc)} ft`, `${fx(card.cuttingLengthMm, 1)} mm`], forOrder: `${fx(ftPc * q0, 1)} ft` },
@@ -627,7 +633,8 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
       const role = roleFor(l.code);
       if (role === 'fins') {
         const k = finKgOf(l.code);
-        return { key: role, role, code: l.code, stage: ['St 29', 'by tube length'], ...tri(l.code, l.name, l.name_gu),
+        // St 29 only takes the stock; the fins go on earlier (review, 16 Nov 2026 — the winding stage is in the notes).
+        return { key: role, role, code: l.code, stage: ['Stock St 29', 'by tube length'], ...tri(l.code, l.name, l.name_gu),
           perPc: k ? `${fx(k.kgPerPc, 3)} kg` : '—', forOrder: k ? `${fx(k.kgForOrder, 3)} kg` : '—' };
       }
       const per = Number(l.qty) / (q0 || 1);
@@ -646,21 +653,35 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
     const w = Math.min(2, Math.round(ls.nipwasher / 2));
     tubeRoles = ['nipple', ...Array(w).fill('nipwasher'), ...(ls.nipnut > 0 ? ['nipnut'] : [])];
   }
+  // ── Brackets on a finned U (F3): the list's, else her fitting set's (the Ø's usual one) ──
+  const brk = fins.finned ? R.bracketsFor({ rem, ls, diaMm: d, set }) : null;
   // `order` is the set's fitting order (what she confirms once per set);
   // `stack` is this sheet's, with each nut named as the line drawn there.
   const stack = [...(R.FITTING_ORDER[set] || [])];
   if (nutC?.nuts) { let k = 0; stack.forEach((s, i) => { if (s === 'SS nut') stack[i] = nutWord(nutC.nuts[k++]); }); }
+  // A nut under a heavy pin is drawn in Detail D (the list's first nut line):
+  // the note names it too (review, 16 Nov 2026).
+  if (set === 'heavy_pin' && pinRoles[0] === 'nut' && stack[0] === 'ESB') {
+    const n1 = parts.find(x => x.role === 'nut');
+    stack.splice(1, 0, n1 && /^NUT-BR-/i.test(String(n1.code)) ? 'brass nut' : 'nut');
+  }
+  // A finned U's brackets sit where her answers put them (1.5" in), clamped in
+  // their slots — not first on the terminal end: the notes say where.
+  if (brk) { const i = stack.indexOf('bracket (clamp) on the legs'); if (i >= 0) stack.splice(i, 1); }
   p.fitting = { set: set || null, label: R.SET_LABEL[set] || '—', confirmed, nipple: nipple || null, pin: pinRoles, tube: tubeRoles,
     order: R.FITTING_ORDER[set] || [], stack, nuts: nutC?.nuts || null, nutsAnswer: nutC?.answer || null, ruled: !!R.RULED_SETS[set] };
 
-  // ── Brackets on a finned U (F3): the list's, else the Ø's usual one ──
-  const brk = fins.finned ? R.bracketsFor({ rem, ls, diaMm: d }) : null;
   // ── True sizes (owner, 16 Nov 2026): every coded part on the sheet, from her
   // item drawings (partSizes.json) and the current inventory notes ──
   const sizeCodes = [...parts.filter(x => !['coil', 'tube', 'mgo'].includes(x.role)
     && !((x.role === 'pinwh' && !draft.pins?.big) || (x.role === 'pinwo' && !draft.pins?.small))).map(x => x.code),
   ...(brk && !brk.onList && brk.code ? [brk.code] : [])];
+  // No ESB line: Detail D still shows the ESB — the Ø's ceramic bead at its
+  // true size, marked not on the list (review, 16 Nov 2026).
+  const esbStd = parts.some(x => x.role === 'esb') ? null : (d === 11 ? 'ESB-11' : 'ESB-08');
+  if (esbStd) sizeCodes.push(esbStd);
   const ps = await PS.partSizesFor(db, sizeCodes);
+  if (esbStd && ps.sizes[esbStd]) p.flags.push(`the list has no ESB line — Detail D shows ${esbStd}, the Ø${d} ceramic bead, marked not on the list; design to add it if it is fitted`);
   const FIELD_WORD = { odMm: 'OD', lenMm: 'length', hMm: 'height', wMm: 'width', footLenMm: 'foot length', headOdMm: 'head OD', spigotOdMm: 'spigot OD' };
   for (const c of ps.conflicts) {
     p.flags.push(`Part size: ${c.code} ${FIELD_WORD[c.field] || c.field} — the inventory notes say ${R.trimNum(c.notes)}, ${c.seedSource} says ${R.trimNum(c.seed)}; the sheet draws the notes' figure — correct the wrong one in Inventory`);
@@ -671,26 +692,29 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   let finSheet = null;
   if (fins.finned) {
     p.flags.push(...R.finListChecks(fins).flags);
-    // F1–F3: her answers, else her rulings.
+    const finSize = fins.code ? ps.sizes[fins.code] || null : null;
+    const brkSize = brk && brk.code ? ps.sizes[brk.code] || null : null;
+    // A nipple set sits on the tube at the terminal end (St 21): the fins start
+    // a pitch past it, never over it (review, 16 Nov 2026). Detail D draws the
+    // nipple's head NIPPLE_AT_MM in from the tube end.
+    const nipLine = set && set.startsWith('nipple') ? lines.find(l => roleFor(l.code) === 'nipple') : null;
+    const nipLen = nipLine ? ps.sizes[nipLine.code]?.lenMm ?? (nipple === 'M16' ? 23 : 20) : null;
+    const clearOf = nipLine ? { mm: NIPPLE_AT_MM + Number(nipLen), what: `${nipLine.code} nipple set${ps.sizes[nipLine.code]?.lenMm ? '' : ' (usual size)'}` } : null;
+    // F1–F3: her answers, else her rulings; a pitch in the fin item's notes before the 3 mm off her drawing.
     const fd = R.finDefaults({ onBendAns: answers.fins_on_bend != null ? String(answers.fins_on_bend).trim().toLowerCase() : null, stopAns: num('fin_stop_mm'), pitchAns: num('fin_pitch_mm'),
-      fromBendAns: brk ? num('bracket_from_bend_mm') : null, fromEndAns: brk ? num('bracket_from_end_mm') : null, hasBrackets: !!brk });
+      pitchInv: finSize?.pitchMm ?? null, fromBendAns: brk ? num('bracket_from_bend_mm') : null, fromEndAns: brk ? num('bracket_from_end_mm') : null, hasBrackets: !!brk, clearOf });
     p.blocks.push(...fd.errors);
     const { onBend, stopMm: stop, pitchMm: pitch, fromBendMm: fromBend, fromEndMm: fromEnd } = fd;
-    const finSize = fins.code ? ps.sizes[fins.code] || null : null;
-    if (fins.code && !(finSize && finSize.odMm > 0)) p.blocks.push(`no size for the fin line ${fins.code} in inventory — design to add its OD and ID to the item's notes`);
-    const brkSize = brk && brk.code ? ps.sizes[brk.code] || null : null;
-    if (brk && !brk.onList && set !== 'nut_washer_brackets') p.flags.push(`the remark says clamps / brackets but the list has no bracket line — the sheet draws ${brk.code}, the usual one on Ø${d}; design to add it to the list`);
+    if (fins.code && !(finSize && finSize.odMm > 0)) p.blocks.push(`no size for the fin line ${fins.code} in inventory — design to add its OD and ID to the item's notes (typed as "OD-28.5, ID-8.78")`);
+    if (rem.words?.clamps && !brk) p.flags.push(`the remark says clamps / brackets, but the fitting set "${R.SET_LABEL[set] || set || '—'}" has none and the list has no bracket line — the sheet draws no brackets`);
+    if (brk && !brk.onList) p.flags.push(`the list has no bracket line — the sheet draws ${brk.code}, the usual one on Ø${d}; design to add it to the list`);
     if (brk && brk.onList && brk.perHeater !== R.BRACKETS_PER_HEATER) p.flags.push(`the list has ${R.trimNum(brk.perHeater)} brackets per heater; a finned U with brackets takes ${R.BRACKETS_PER_HEATER} — one 1.5" from the bend, one 1.5" from the tube end (${R.FIN_RULED})`);
+    // The bracket's slots against the tube and the legs' c/c (her bracket drawings).
+    if (brk) { const bf = R.bracketFitChecks({ code: brk.code, size: brkSize, diaMm: d, cc: geo.cc }); p.blocks.push(...bf.blocks); p.flags.push(...bf.flags); }
     const lay = R.finLayout({ geo, diaMm: d, drawnULengthMm: TL.drawnULengthMm, finOdMm: finSize?.odMm || 0, pitchMm: pitch, onBend, stopMm: stop,
       brackets: brk ? { fromBendMm: fromBend, fromEndMm: fromEnd, thkMm: brkSize?.thkMm ?? 0, lipMm: brkSize?.lipMm ?? null } : null });
     p.blocks.push(...lay.blocks);
     p.flags.push(...lay.flags);
-    // A nipple sits on the tube at the terminal end (St 21): fins stopping
-    // short of its length would run into it (STP's finned sheet stops them ≈ 28 mm
-    // short of the nipple — a flag, the stop is hers).
-    const nipLine = set && set.startsWith('nipple') ? lines.find(l => roleFor(l.code) === 'nipple') : null;
-    const nipLen = nipLine ? ps.sizes[nipLine.code]?.lenMm : null;
-    if (nipLen && stop <= nipLen) p.flags.push(`the fins stop ${R.trimNum(stop)} mm from the tube end and the nipple ${nipLine.code} is ${R.trimNum(nipLen)} mm long — check the fins clear the nipple and its nut (fin stop)`);
     const kg = fins.code ? finKgOf(fins.code) : null;
     if (fins.code && !kg) p.flags.push(`St 29 takes no fin stock for ${fins.code} — the app knows the weight of ${Object.keys(FINS_WEIGHT_PER_BASE).join(', ')} only`);
     // The questions (F1–F3): her answers per order; the defaults are her rulings.
@@ -704,9 +728,19 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
       q({ key: 'bracket_from_end_mm', type: 'number', label: 'Bracket from the tube end (mm)', value: R.trimNum(fromEnd), source: fd.sources.fromEnd });
     }
     const material = fins.material || finSize?.material || null;
+    const od = finSize?.odMm ?? null;
+    // With nothing finned on the bend side of the bend-end bracket, it is where
+    // the fins end: no gap (review, 16 Nov 2026) — the leg is bare to bareToMm.
+    const gapAtBracket = lay.gapMm && lay.bendSideFinned;
     const finFig = {
-      code: fins.code, material, odMm: finSize?.odMm ?? null, idMm: finSize?.idMm ?? null, pitchMm: pitch, pitchSource: fd.sources.pitch === 'your answer' ? 'Ms. Vama' : R.FIN_PITCH_SOURCE,
-      onBend, stopBeforeEndMm: stop, bracketGapMm: lay.gapMm, finnedLengthMm: lay.finnedLengthMm, clearMm: lay.clearMm,
+      code: fins.code, material, odMm: od, idMm: finSize?.idMm ?? null, pitchMm: pitch,
+      pitchSource: fd.sources.pitch === 'your answer' ? 'Ms. Vama' : fd.sources.pitch === R.FIN_PITCH_SOURCE ? R.FIN_PITCH_SOURCE : 'inventory notes',
+      onBend, stopBeforeEndMm: stop, bracketGapMm: gapAtBracket ? lay.gapMm : null, bareToMm: lay.gapMm && !lay.bendSideFinned ? lay.gapToMm : null,
+      finnedLengthMm: lay.finnedLengthMm, clearMm: lay.clearMm,
+      // Over the fins (review, 16 Nov 2026): across both legs, and end to end
+      // (the fins stand out past the sheath at the bend when they go round it).
+      overWidthMm: od ? R.round(geo.cc + od, 2) : null,
+      overLengthMm: od ? R.round(TL.drawnULengthMm + (onBend ? Math.max(0, (od - d) / 2) : 0), 1) : null,
       kgPerPc: kg ? kg.kgPerPc : null, kgForOrder: kg ? kg.kgForOrder : null,
       label: `${material ? `${material} ` : ''}FINS${fins.code ? ` (${fins.code})` : ''}`,
     };
@@ -723,7 +757,7 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   const shape = { uLabel, uLengthIn: uIn, uLengthMm: TL.drawnULengthMm, nominalULengthMm: TL.nominalULengthMm, outsideWidthMm: W, insideMm: madeInside,
     rollerMm: roller, rollerIsNew, clientInsideMm, insideSource: insideSrc.short };
   const ctx = { st, p, card, geo, TL, uIn, uLabel, shape, insideSrc, rollerAnswered: !!rollerChosen, std, d, cz, pin, fixture, stud, parts, group, shownGroup, pinsFromList, rem, inv, approver, today,
-    ps, finSheet };
+    ps, finSheet, esbStd: esbStd && ps.sizes[esbStd] ? esbStd : null };
   const preview = U.renderUTypeSheet(buildSheetSpec(ctx, { production: false, confirmed }));
   p.html = preview.html;
   // Her approval covers the order item as she saw it, her answers, and exactly
@@ -731,8 +765,14 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   // (The approver's name in the title block is left out: it is whoever presses approve.)
   const production = buildSheetSpec(ctx, { production: true, confirmed: true });
   // A note cut off at the box edge would be lost on the floor: refused instead.
-  if (!preview.notesFit || !U.renderUTypeSheet(production).notesFit) {
+  const prodOut = U.renderUTypeSheet(production);
+  if (!preview.notesFit || !prodOut.notesFit) {
     p.blocks.push('the notes do not fit on the sheet even in the smallest letters — shorten your answers or the note');
+  }
+  // The element and parts tables would run into the title block (fins, brackets
+  // and a heavy pin or a nipple set): refused rather than drawn over it (review, 16 Nov 2026).
+  if (preview.tablesFit === false || prodOut.tablesFit === false) {
+    p.blocks.push('the element and parts tables do not fit above the title block even in the smallest letters — design to shorten the list');
   }
   const sheetForCode = { ...production, tb: { ...production.tb, approved: null } };
   p.sheetCode = R.sheetCode({ snapshot: p.snapshot, answers, spec: { body: p.body, figures: p.figures, sheet: sheetForCode } });
@@ -748,7 +788,7 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
 // says FOR APPROVAL; the production copy — the one stored on the order item —
 // FOR PRODUCTION, with the fitting order no longer TO CONFIRM once she approved it.
 function buildSheetSpec(c, { production, confirmed }) {
-  const { st, p, card, geo, TL, uIn, uLabel, shape, insideSrc, rollerAnswered, std, d, cz, pin, fixture, stud, parts, group, shownGroup, pinsFromList, rem, inv, approver, today, ps, finSheet } = c;
+  const { st, p, card, geo, TL, uIn, uLabel, shape, insideSrc, rollerAnswered, std, d, cz, pin, fixture, stud, parts, group, shownGroup, pinsFromList, rem, inv, approver, today, ps, finSheet, esbStd } = c;
   const { item, order } = st;
   const q0 = Number(item.quantity);
   const matShort = MAT(item.tube_material);
@@ -783,23 +823,22 @@ function buildSheetSpec(c, { production, confirmed }) {
   const finRows = [], finNotes = [];
   if (fin) {
     finRows.push(['Fins', [`${fin.label} · OD ${tn(fin.odMm)} / ID ${tn(fin.idMm)} · pitch ${tn(fin.pitchMm)}`,
-      `${fin.onBend ? 'round the bend' : 'legs only, bend bare'} · bare ${tn(fin.stopBeforeEndMm)} at each end · ${fx(fin.finnedLengthMm, 1)} finned`]]);
+      `${fin.onBend ? 'round the bend' : 'legs only, bend bare'} · bare ${tn(fin.stopBeforeEndMm)} at each end · ${fx(fin.finnedLengthMm, 1)} finned`,
+      ...(fin.overWidthMm ? [`over the fins ${tn(fin.overWidthMm)} wide × ${fx(fin.overLengthMm, 1)} long`] : [])]]);
     // The source without its date in brackets: "item drawing FIN-MS-08.pdf".
     const src = String(finSheet.odSource || 'inventory').replace(/ \([^()]*\)(?= \+|$)/g, '');
     finNotes.push(`Fins: ${fin.label}, a helical strip OD ${tn(fin.odMm)} / ID ${tn(fin.idMm)} (${src}), pitch ${tn(fin.pitchMm)} mm`
-      + `${fin.pitchSource === 'Ms. Vama' ? ' (Ms. Vama)' : ` — about ${R.FIN_PITCH_MM} mm off the fin drawing, not dimensioned`}; `
-      + `${fin.onBend ? 'round the bend' : 'on the straight legs only, the bend bare'}, stopping ${tn(fin.stopBeforeEndMm)} mm before each tube end${brk ? ', at the terminal-end bracket' : ''} (${R.FIN_RULED}). `
-      + (fin.kgPerPc != null ? `Stock: ${fx(fin.kgPerPc, 3)} kg per heater, ${fx(fin.kgForOrder, 3)} kg for ${q0}, at St 29 by the job card's tube length (${fx(finSheet.totalLengthMm, 2)} mm), as the app takes it.` : 'St 29 takes no stock for this fin code.'));
+      + `${fin.pitchSource === 'Ms. Vama' ? ' (Ms. Vama)' : fin.pitchSource === 'inventory notes' ? ' (the fin item\'s inventory notes)' : ` — about ${R.FIN_PITCH_MM} mm off the fin drawing, not dimensioned`}; `
+      + `${fin.onBend ? 'round the bend' : 'on the straight legs only, the bend bare'}, stopping ${tn(fin.stopBeforeEndMm)} mm before each tube end${brk ? ', at the terminal-end bracket' : ''} (${R.FIN_RULED}); `
+      + `over the fins ${tn(fin.overWidthMm)} wide × ${fx(fin.overLengthMm, 1)} long. `
+      + (fin.kgPerPc != null ? `Stock: ${fx(fin.kgPerPc, 3)} kg per heater, ${fx(fin.kgForOrder, 3)} kg for ${q0}, taken at St 29 by the job card's tube length (${fx(finSheet.totalLengthMm, 2)} mm), as the app takes it.` : 'St 29 takes no stock for this fin code.'));
+    // Fins round the bend go on before it is bent; no stage of the 30 is the fins' (review, 16 Nov 2026).
+    finNotes.push(`Fin winding: ${fin.onBend ? 'before bending (they go round the bend)' : 'on the straight legs'}${production ? '' : ' — the stage is TO CONFIRM by Ms. Vama'}; St 29 only takes the stock.`);
   }
   if (brk) {
-    const bs = brk.size;
-    finRows.push(['Brackets', [`${tn(brk.perHeater)} × ${brk.code || '—'}${brk.onList ? '' : ' (not on the list)'}`,
-      fin ? `${tn(brk.fromBendMm)} from the bend (gap in the fins) · ${tn(brk.fromEndMm)} from the tube end (fins stop)` : `${tn(brk.fromBendMm)} from the bend · ${tn(brk.fromEndMm)} from the tube end`]]);
-    // With no fin line (refused until design adds it) the sheet draws no fins: no fin words here.
-    finNotes.push(`Brackets: ${tn(brk.perHeater)} per heater (${brk.code || '—'}${bs && bs.hMm ? `, ${tn(bs.hMm)} high × ${tn(bs.wMm)} wide, ${tn(bs.thkMm)} sheet` : ''}) — `
-      + (fin ? `one ${tn(brk.fromBendMm)} mm from the outer end of the U with a gap of ${tn(fin.bracketGapMm ?? 0)} mm in the fins at it (its sheet, its lip and a pitch each side; fins on both sides${fin.onBend ? ' and round the bend' : ''}); `
-        + `one ${tn(brk.fromEndMm)} mm from the tube end, where the fins stop — "after the bracket is fit the finns will not be added again" (${R.FIN_RULED}).`
-        : `one ${tn(brk.fromBendMm)} mm from the outer end of the U, one ${tn(brk.fromEndMm)} mm from the tube end (${R.FIN_RULED}: "1.5" from both ends").`));
+    const bw = R.bracketWords({ brk, fin, production });
+    finRows.push(['Brackets', bw.row]);
+    finNotes.push(bw.note);
   }
   const sizeNote = ps && ps.missing.length ? [`Size not in inventory, drawn at the usual size: ${ps.missing.join(', ')}.`] : [];
   return {
@@ -854,6 +893,8 @@ function buildSheetSpec(c, { production, confirmed }) {
     ],
     // True part sizes (owner, 16 Nov 2026), by code; a part with none is absent.
     partSizes: ps ? ps.sizes : {},
+    // No ESB line on the list: the Ø's usual ESB, drawn at its size and marked not on the list.
+    ...(esbStd ? { esbStd } : {}),
     fins: fin,
     brackets: brk ? { code: brk.code, perHeater: brk.perHeater, fromBendMm: brk.fromBendMm, fromEndMm: brk.fromEndMm, size: brk.size } : null,
     tb: {
@@ -989,7 +1030,7 @@ async function approve(db, itemId, { answers = {}, sheetCode, fittingConfirmed =
       const storagePath = await uploadToStorage('order-drawings', filename, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
       written.push(storagePath);
       const fz = p.figures.fins, bz = p.figures.brackets;
-      const finWords = fz ? ` ${fz.label}: ${fz.onBend ? 'round the bend' : 'legs only'}, ${R.trimNum(fz.stopBeforeEndMm)} mm bare at each end, pitch ${R.trimNum(fz.pitchMm)}${bz ? `; brackets ${R.trimNum(bz.fromBendMm)} from the bend, ${R.trimNum(bz.fromEndMm)} from the tube end` : ''}.` : '';
+      const finWords = fz ? ` ${fz.label}: ${fz.onBend ? 'round the bend' : 'legs only'}, ${R.trimNum(fz.stopBeforeEndMm)} mm bare at each end, pitch ${R.trimNum(fz.pitchMm)}${bz ? `; brackets ${R.trimNum(bz.fromBendMm)} from the outer end of the U, ${R.trimNum(bz.fromEndMm)} from the tube end` : ''}.` : '';
       const notes = `Drawn in the app (Drawings to make) and approved by ${user.name || 'the owner'} on ${today} — sheet ${p.sheetCode}. Total length ${p.figures.totalLengthIn}" = ${p.figures.totalFormula}; ${R.trimNum(p.figures.insideMm)} inside, roller ${R.trimNum(p.figures.rollerMm)}${p.figures.rollerIsNew ? ' (NEW)' : ''}.${finWords}`;
       const drawingId = await orderRoutes.recordOrderDrawing(t, { orderId: p.orderId, itemId: id, file: { storagePath, filename, originalname }, notes, userId: user.id, log });
       const approvedAt = new Date().toISOString();

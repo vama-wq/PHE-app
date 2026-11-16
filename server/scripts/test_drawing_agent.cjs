@@ -572,10 +572,10 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
         const pf = (await call('GET', `/api/drawing-agent/items/${iF}`)).body;
         const want = R.finKg({ code: 'FIN-MS-08', weights: W, totalLengthMm: Math.round(Number(pf.figures?.cardTotalIn) * 25.4 * 100) / 100, elements: 1, quantities: pf.figures?.quantities || [] });
         const finPart = (pf.parts || []).find(x => x.code === 'FIN-MS-08');
-        ok('R1. a finned U is drawn (no longer "phase 2"): fixture "MS Finns + Nut Washer", fins round the bend 25 mm short of each end at pitch 3 (her rulings as answers), the fin line at St 29 by tube length with the kg St 29 will take, the fin OD from her drawing (28.44)',
+        ok('R1. a finned U is drawn (no longer "phase 2"): fixture "MS Finns + Nut Washer", fins round the bend 25 mm short of each end at pitch 3 (her rulings as answers), the fin line "Stock St 29 by tube length" with the kg St 29 will take, the fin OD from her drawing (28.44)',
           pf.status === 'ready' && pf.body.fixture === 'MS Finns + Nut Washer' && qOf(pf, 'fins_on_bend')?.value === 'yes' && qOf(pf, 'fin_stop_mm')?.value === '25'
           && qOf(pf, 'fin_pitch_mm')?.value === '3' && !qOf(pf, 'bracket_from_bend_mm') && !!want && pf.figures.fins.kgForOrder === want.kgForOrder
-          && finPart?.stage === 'St 29 by tube length' && finPart.perPc === `${want.kgPerPc.toFixed(3)} kg` && pf.figures.fins.odMm === 28.44 && pf.figures.fins.onBend === true
+          && finPart?.stage === 'Stock St 29 by tube length' && finPart.perPc === `${want.kgPerPc.toFixed(3)} kg` && pf.figures.fins.odMm === 28.44 && pf.figures.fins.onBend === true
           && pf.html.includes('MS FINS (FIN-MS-08)'), `${pf.status} ${pf.statusLine} ${JSON.stringify(pf.figures?.fins)} ${JSON.stringify(finPart)}`);
         const pfNo = (await call('POST', `/api/drawing-agent/items/${iF}/preview`, { answers: { fins_on_bend: 'no' } })).body;
         ok('R2. "Fins on the bend: No" (F2): the bend stays bare — the finned length drops by the bend, a new sheet code, still ready',

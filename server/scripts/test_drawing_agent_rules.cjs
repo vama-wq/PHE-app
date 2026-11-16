@@ -645,6 +645,118 @@ if (fs.existsSync(path.join(FIX, 'u_gen_cards.json'))) {
     JSON.stringify([v.scope, lb164, lb11, lbOk]));
 }
 
+// ── 11. Finned U, review fixes (16 Nov 2026) ──
+// The bare-bend bracket wording, her fitting set deciding the brackets, the
+// bracket's slots against the legs, a pitch from the fin's notes, a nipple set
+// clear of the fins, the remark's fin wordings, and the finned sheet rendered.
+{
+  const L = (...x) => x.map(([code, qty]) => ({ code, qty }));
+  const t139 = R.totalLength({ uIn: 18, diaMm: 8 });
+  const lay = (o) => R.finLayout({ geo: t139.geo, diaMm: 8, drawnULengthMm: t139.drawnULengthMm, finOdMm: 28.44, pitchMm: 3, onBend: true, stopMm: 38.1,
+    brackets: { fromBendMm: 38.1, fromEndMm: 38.1, thkMm: 1.25 }, ...o });
+  const on = lay({}), bare = lay({ onBend: false }), farBare = lay({ onBend: false, brackets: { fromBendMm: 70, fromEndMm: 38.1, thkMm: 1.25 } });
+  const brk = { code: 'BKT-FMH-H788-MS', onList: true, perHeater: 2, fromBendMm: 38.1, fromEndMm: 38.1, size: { lenMm: 75.2, hMm: 36, wMm: 55, thkMm: 1.25 } };
+  const finOf = (l, onBend) => ({ onBend, bracketGapMm: l.bendSideFinned ? l.gapMm : null, bareToMm: l.bendSideFinned ? null : l.gapToMm });
+  const wOn = R.bracketWords({ brk, fin: finOf(on, true) }), wBare = R.bracketWords({ brk, fin: finOf(bare, false) }), wProd = R.bracketWords({ brk, fin: finOf(bare, false), production: true });
+  const wNoFin = R.bracketWords({ brk: { ...brk, onList: false }, fin: null });
+  ok('11a. 139 with the bend bare (Fins on the bend: No): the 2.2 mm stub between the bend and the bracket is not wound, so nothing is finned on the bend side — the bend-end bracket is where the fins END (bare to 41.73 from the outer end of the U), never "gap" or "fins on both sides"; round the bend it is a gap of 18.05 with fins on both sides; a bracket 70 in leaves a leg run on the bend side (a gap again); the row says "from the outer end of the U"; the foot is TO CONFIRM on the preview only',
+    on.bendSideFinned === true && bare.bendSideFinned === false && bare.gapToMm === 41.73 && farBare.bendSideFinned === true
+    && /gap of 18\.05 mm in the fins at it .*fins on both sides and round the bend/.test(wOn.note) && wOn.row[1] === '38.1 from the outer end of the U (gap in the fins) · 38.1 from the tube end (fins stop)'
+    && !/both sides|gap/.test(wBare.note) && /where the fins end: each leg is bare from the outer end of the U to 41\.73 mm in/.test(wBare.note)
+    && wBare.row[1] === '38.1 from the outer end of the U (fins end past it) · 38.1 from the tube end (fins stop)'
+    && /TO CONFIRM by Ms\. Vama/.test(wBare.note) && !/TO CONFIRM/.test(wProd.note) && /as fitted/.test(wProd.note)
+    && !/fins/i.test(wNoFin.note.replace(/finns/g, '')) && wNoFin.row[0] === '2 × BKT-FMH-H788-MS (not on the list)',
+    JSON.stringify([bare, wBare]));
+  // Her fitting set decides (the list's BKT- line always counts).
+  const clamps = R.parseRemark('FINNS + CLAMPS');
+  const lsNone = R.listShape(L(['FIN-MS-08', 0]), 12), lsBkt = R.listShape(L(['FIN-MS-08', 0], ['BKT-FMH-H788-MS', 24]), 12);
+  const bSetNo = R.bracketsFor({ rem: clamps, ls: lsNone, diaMm: 8, set: 'nut_washer' });
+  const bSetYes = R.bracketsFor({ rem: R.parseRemark('MS Finns'), ls: lsNone, diaMm: 11, set: 'nut_washer_brackets' });
+  const bListWins = R.bracketsFor({ rem: R.parseRemark('MS Finns'), ls: lsBkt, diaMm: 8, set: 'nut_washer' });
+  const bRemark = R.bracketsFor({ rem: clamps, ls: lsNone, diaMm: 8, set: 'nut_washer_brackets' });
+  ok('11b. brackets follow her fitting set: "FINNS + CLAMPS" answered as Nut Washer → none; "Nut washer + MS Brackets" with no bracket anywhere → the Ø11 usual BKT-FMH-H1250, not on the list; a BKT- line on the list always counts',
+    bSetNo === null && bSetYes && bSetYes.code === 'BKT-FMH-H1250' && !bSetYes.onList && bListWins && bListWins.onList && bRemark && bRemark.code === 'BKT-FMH-H788-MS',
+    JSON.stringify([bSetNo, bSetYes, bListWins]));
+  // The bracket's slots (her drawings): H788 9.6 slots 35.7 c/c, H1250 12.3 slots 36.1 c/c.
+  const P = require(S + '/src/lib/drawings/partSizes.js');
+  const h788 = P.SEED['BKT-FMH-H788-MS'], h1250 = P.SEED['BKT-FMH-H1250'];
+  const fit = (size, d, outside) => R.bracketFitChecks({ code: 'B', size, diaMm: d, cc: outside - d });
+  const std8 = fit(h788, 8, 43), therm = fit(h788, 8, 40), std11 = fit(h1250, 11, 49), small = fit(h788, 11, 49), wide = fit(h1250, 8, 43), gap4 = fit(h788, 8, 117.6);
+  ok('11c. the bracket against the U: H788 on the Ø8 standard (35 c/c in 35.7 ± 1.6) fits; at 40 outside (32 c/c) flagged "does not fit this U width"; H1250 on the Ø11 standard (38 c/c vs 36.1 ± 1.3) flagged; the Ø8 bracket on an Ø11 tube refused (9.6 slots); the Ø11 one on Ø8 flagged (slots 4.3 wider); a 4" gap U (109.6 c/c) refused',
+    h788.slotCcMm === 35.7 && h1250.slotCcMm === 36.1 && std8.blocks.length + std8.flags.length === 0
+    && therm.blocks.length === 0 && therm.flags.length === 1 && /does not fit this U width: its slots are 35\.7 c\/c \(9\.6 wide\), the legs 32 c\/c/.test(therm.flags[0])
+    && std11.blocks.length === 0 && std11.flags.length === 1 && small.blocks.length === 1 && /does not go in/.test(small.blocks[0])
+    && wide.blocks.length === 0 && wide.flags.some(f => /bracket for another tube/.test(f)) && gap4.blocks.some(b => /does not fit this U width/.test(b)),
+    JSON.stringify([therm, std11, small, wide, gap4]));
+  // A pitch typed in the fin item's notes, and a nipple set at the terminal end.
+  const pInv = R.finDefaults({ pitchInv: 2.8 }), pAns = R.finDefaults({ pitchInv: 2.8, pitchAns: 4 });
+  const notePitch = P.parseSizeNotes('MS Finns 8mm OD-28.44, ID-8.35, Pitch-2.9', 'fin').fields;
+  const nip = R.finDefaults({ clearOf: { mm: 33.1, what: 'NIP-BR-M16-HEX nipple set' } }), nipAns = R.finDefaults({ stopAns: 30, clearOf: { mm: 33.1, what: 'NIP-BR-M16-HEX nipple set' } });
+  const nipBr = R.finDefaults({ hasBrackets: true, clearOf: { mm: 23, what: 'M12 nipple set' } });
+  ok('11d. the pitch: her answer, else the fin item\'s inventory notes ("Pitch-2.9" is read), else 3; a nipple set reaching 33.1 mm moves the default stop to 37 (a pitch past it, said why), her stop of 30 is refused; with brackets the stop stays at the bracket when the nipple is shorter',
+    pInv.pitchMm === 2.8 && /inventory notes/.test(pInv.sources.pitch) && pAns.pitchMm === 4 && notePitch.pitchMm === 2.9
+    && nip.stopMm === 37 && /clear of the NIP-BR-M16-HEX nipple set \(it reaches 33\.1 mm/.test(nip.sources.stop) && !nip.errors.length
+    && nipAns.errors.length === 1 && /over the NIP-BR-M16-HEX nipple set/.test(nipAns.errors[0]) && nipBr.stopMm === 38.1,
+    JSON.stringify([pInv, nip.sources.stop, nipAns.errors]));
+  // The remark's fin wordings.
+  const rH = R.parseRemark('SS-Finns + Nut Washer'), rG = R.parseRemark('SSFinns, nut washer'), rNo = R.parseRemark('Without Finns, Nut Washer'), rNo2 = R.parseRemark('No fins');
+  ok('11e. the remark: "SS-Finns" and "SSFinns" are SS fins; "Without Finns" / "No fins" is not finned (its words are asked about)',
+    rH.fins && rH.finMaterial === 'SS' && rG.fins && rG.finMaterial === 'SS' && !rNo.fins && !rNo2.fins && rNo.unread.includes('WITHOUT') && rNo2.unread.includes('NO'),
+    JSON.stringify([rH.fins, rG.fins, rNo.unread, rNo2.unread]));
+  // The finned sheet itself: fins, brackets and true sizes rendered (no database).
+  const SZ = (...codes) => Object.fromEntries(codes.map(c => [c, { ...P.SEED[c], kind: P.kindOf(c) }]));
+  const base = (d, uIn, outside) => {
+    const t = R.totalLength({ uIn, diaMm: d, outsideWidthMm: outside });
+    const m5 = d === 11;
+    return { t, spec: {
+      banner: 'U TYPE HEATER | TEST', title: 'U TYPE HEATER — 1000 W / 230 V', subtitle: 'test', terminalNote: 'M4 SS PIN 3" + MS FINNS + BRACKETS',
+      item: { drawingNumber: `PT-UType-${uIn}U-1kw`, qty: 12, finish: 'No Plating' },
+      tube: { code: 'TUB-SS304-038-T06', diaMm: d, wallMm: 0.6, material: 'SS304', label: `SS304 TUBE, DRAWN TO Ø${d}` },
+      shape: { uLabel: `${uIn}U`, uLengthIn: uIn, uLengthMm: t.drawnULengthMm, nominalULengthMm: uIn * 25.4, outsideWidthMm: outside, insideMm: outside - 2 * d, rollerMm: outside - 2 * d - 2 },
+      geo: t.geo, r1: { mode: '2u', totalLengthStr: t.str, formula: t.formula },
+      fitting: { set: 'nut_washer_brackets', confirmed: false, pin: ['nut', 'washer', 'washer', 'nut'], tube: ['bracket'] },
+      card: { totalLengthIn: t.num + 0.7, cuttingLengthIn: 29.5, cuttingLengthMm: 749.3, coldZoneBigIn: 2, coldZoneSmallIn: 2, pinStudsIn: 3, studLabel: m5 ? 'M5' : 'M4', gauge: 29,
+        wireDiaMm: 0.35, mandrelMm: 2, wireCode: 'SPR-KD-29', heatedMm: 812.8, rows: [['Rating', '1000 W'], ['Fins', ['MS FINS', 'round the bend', 'over the fins']], ['Brackets', ['2 × B', '38.1 from the outer end of the U']]] },
+      parts: [
+        { no: 1, key: 'bracket', role: 'bracket', code: 'BKT-FMH-H788-MS', stage: ['St 26', 'Nut Washer'], line1: 'BKT-FMH-H788-MS · Bracket', gu: '', hi: '', perPc: '2', forOrder: '24' },
+        { no: 2, key: 'esb', role: 'esb', code: m5 ? 'ESB-11' : 'ESB-08', stage: ['St 23', 'Sealing'], line1: 'ESB', gu: '', hi: '', perPc: '2', forOrder: '24' },
+        { no: 3, key: 'nut', role: 'nut', code: m5 ? 'NUT-SS-M5-11' : 'NUT-SS-M4-08', stage: ['St 26', 'Nut Washer'], line1: 'NUT', gu: '', hi: '', perPc: '4', forOrder: '48' },
+        { no: 4, key: 'washer', role: 'washer', code: m5 ? 'WSH-SS-11' : 'WSH-BR-08', stage: ['St 26', 'Nut Washer'], line1: 'WSH', gu: '', hi: '', perPc: '4', forOrder: '48' },
+        { no: 5, key: 'fins', role: 'fins', code: m5 ? 'FIN-MS-11' : 'FIN-MS-08', stage: ['Stock St 29', 'by tube length'], line1: 'FIN', gu: '', hi: '', perPc: '0.202 kg', forOrder: '2.422 kg' }],
+      notes: ['test'],
+      partSizes: SZ(m5 ? 'ESB-11' : 'ESB-08', m5 ? 'NUT-SS-M5-11' : 'NUT-SS-M4-08', m5 ? 'WSH-SS-11' : 'WSH-BR-08', 'BKT-FMH-H788-MS', m5 ? 'FIN-MS-11' : 'FIN-MS-08'),
+      tb: { status: 'FOR APPROVAL', material: 'SS304', wattVolt: '1000 W · 230 V', qty: '12 NOS', client: 'X', product: 'PT-UType', dwgNo: 'X', rev: '00', date: '16.11.2026', order: 'ORD-X', drawn: 'PHE APP', checked: '—', approved: 'OWNER' },
+    } };
+  };
+  const finned = (d, uIn, outside, onBend) => {
+    const { t, spec } = base(d, uIn, outside);
+    const od = d === 11 ? 31.55 : 28.44;
+    const l = R.finLayout({ geo: t.geo, diaMm: d, drawnULengthMm: t.drawnULengthMm, finOdMm: od, pitchMm: 3, onBend, stopMm: 38.1, brackets: { fromBendMm: 38.1, fromEndMm: 38.1, thkMm: 1.2 } });
+    spec.fins = { code: d === 11 ? 'FIN-MS-11' : 'FIN-MS-08', material: 'MS', odMm: od, idMm: 8.35, pitchMm: 3, onBend, stopBeforeEndMm: 38.1,
+      bracketGapMm: l.bendSideFinned ? l.gapMm : null, bareToMm: l.bendSideFinned ? null : l.gapToMm, finnedLengthMm: l.finnedLengthMm, clearMm: l.clearMm,
+      label: `MS FINS (${d === 11 ? 'FIN-MS-11' : 'FIN-MS-08'})` };
+    spec.brackets = { code: 'BKT-FMH-H788-MS', perHeater: 2, fromBendMm: 38.1, fromEndMm: 38.1, size: { lenMm: 75.2, hMm: 36, wMm: 55, thkMm: 1.2, slotWMm: 9.6, lipMm: 10.8 } };
+    return { spec, out: renderUTypeSheet(spec), l };
+  };
+  const a8 = finned(8, 18, 43, true), b8 = finned(8, 18, 43, false), a11 = finned(11, 21, 49, true);
+  const good = (o, label) => o.out.html.includes(`${label} · OD `) && (o.out.html.match(/&gt;38\.1 \(1\.5&quot;\)<|>38\.1 \(1\.5&quot;\)</g) || []).length >= 2
+    && /SECTION T–T, ONE LEG/.test(o.out.html) && /FINS [0-9.]+ APART/.test(o.out.html) && !/NaN|null SWG|undefined/.test(o.out.html) && o.out.notesFit && o.out.tablesFit !== false
+    && /clamped in its slots/.test(o.out.html) && !/before the ESB/.test(o.out.html) && !/stroke-dasharray="1\.2 0\.8"/.test(o.out.html);
+  ok('11f. the finned sheet renders (pure): 18U Ø8 round the bend with 2 brackets — the fin row "MS FINS (FIN-MS-08) · OD 28.44", both 1.5" bracket figures, Section T–T one leg with the fins\' clearance, the bracket "clamped in its slots" (not "before the ESB"), no bracket foot drawn, no NaN / null; the same with the bend bare (no GAP AT THE BRACKET) and on Ø11 (FIN-MS-11, 21U at 49)',
+    good(a8, 'MS FINS (FIN-MS-08)') && a8.out.html.includes('GAP AT THE BRACKET') && good(b8, 'MS FINS (FIN-MS-08)') && !b8.out.html.includes('GAP AT THE BRACKET')
+    && b8.out.html.includes('STRAIGHT LEGS ONLY, BEND BARE') && good(a11, 'MS FINS (FIN-MS-11)'),
+    [a8, b8, a11].map(o => `${o.out.notesFit}/${o.out.tablesFit}/${(o.out.html.match(/>38\.1 \(1\.5&quot;\)</g) || []).length}`).join(' '));
+  // The tables never run into the title block: a long list is set smaller, and one too long is refused.
+  // The real element table: 16 one-line rows, the Fins row (3 lines) and the Brackets row (2).
+  const longP = (n) => { const { spec } = finned(8, 18, 43, true);
+    spec.card.rows = [...Array.from({ length: 16 }, (_, i) => [`Row ${i}`, 'x']), ['Fins', ['a', 'b', 'c']], ['Brackets', ['a', 'b']]];
+    spec.parts = Array.from({ length: n }, (_, i) => ({ no: i + 1, key: 'nut', role: 'nut', code: `NUT-${i}`, stage: ['St 26', 'Nut Washer'], line1: `NUT-${i} · a nut`, gu: 'ગુ', hi: 'हि', perPc: '1', forOrder: '12' })); return renderUTypeSheet(spec); };
+  const fits14 = longP(15), over = longP(50);
+  const plainSpec = base(8, 18, 43).spec; delete plainSpec.partSizes;
+  ok('11g. the parts table: 15 lines under a finned + bracketed element table (18 rows) are set one line a cell, smaller, and fit (tablesFit); 50 lines cannot (tablesFit false — the agent refuses the sheet); a plain sheet is not touched',
+    fits14.tablesFit === true && fits14.html.includes('>St 26 Nut Washer</text>') && over.tablesFit === false && renderUTypeSheet(plainSpec).tablesFit === true, `${fits14.tablesFit} ${over.tablesFit}`);
+}
+
 // 9e runs on a promise: the summary waits for it.
 setImmediate(() => setTimeout(() => {
   console.log(failed ? `\n${failed} CHECK(S) FAILED` : '\nALL PASS');
