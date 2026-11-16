@@ -83,15 +83,23 @@ const REMARKS = ['NUT WASHER + 2 CLAMPS', 'NUT WASHER+ 2 CLAMPS', 'M12 BRASS NIP
   const badS = samples.filter(([dn, u]) => { const p = R.parseULabel(dn, 'PT-UType'); return !p.ok || p.uIn !== u; });
   ok('2a. inch marks, decimals, the HE prefix, spaces and a spaced repeat suffix all read as plain U', badS.length === 0, badS.map(s => s[0]).join(', '));
   const outs = [['PT-UType-1238U-1.75Kw', 'PT-UType'], ['PT-ULType-44U7L-1.75Kw', 'PT-ULType'], ['PT-QU-12U3Q-1Kw', 'PT-QU'], ['PT_Utype-Bank450-1.1kw', 'PT-UType'],
-    ['PT-UType-800mm-1.25Kw', 'PT-UType'], ['PT-UType-10U-500W-FINNS', 'PT-UType'], ['PT-UType-30U-12Kw-3in1', 'PT-UType'], ['PT-FlangeHe-30U-12Kw', 'PT-FlangeHe'], ['PT-QUL-3.5KW', 'PT-QUL']];
+    ['PT-UType-800mm-1.25Kw', 'PT-UType'], ['PT-UType-30U-12Kw-3in1', 'PT-UType'], ['PT-FlangeHe-30U-12Kw', 'PT-FlangeHe'], ['PT-QUL-3.5KW', 'PT-QUL']];
   const inScope = outs.filter(([dn, pc]) => R.parseULabel(dn, pc).ok);
-  ok('2b. 1238U (mm), UL, QU, Bank, mm, fins, 3in1, flange and QUL are out of phase 1', inScope.length === 0, inScope.map(s => s[0]).join(', '));
+  ok('2b. 1238U (mm), UL, QU, Bank, mm, 3in1, flange and QUL are out of phase 1 (fins no longer are — 16 Nov 2026)', inScope.length === 0, inScope.map(s => s[0]).join(', '));
   ok('2c. normalising: "PT-UType-12"U-COP-1.5KW - 2" = "PT-Utype-12U-1.5KW"; "PT-U TYPE-16U-750W" = "PT-UType-16U-750W"; -INC / -PLAIN ignored',
     R.normaliseDwgNo('PT-UType-12"U-COP-1.5KW - 2') === R.normaliseDwgNo('PT-Utype-12U-1.5KW')
     && R.normaliseDwgNo('PT-U TYPE-16U-750W') === R.normaliseDwgNo('PT-UType-16U-750W')
     && R.normaliseDwgNo('PT-UType-24U-750w-INC') === R.normaliseDwgNo('PT-UType-24U-750W')
     && R.normaliseDwgNo('PT-Utype-10U-500W-Plain') === R.normaliseDwgNo('PT_Utype-10U-500W')
     && R.normaliseDwgNo('PT-UType-18U-1KW') !== R.normaliseDwgNo('PT-UType-18U-1.5KW'));
+  // Finned U (owner, 16 Nov 2026): the fins token is taken out like the gap token.
+  const f1 = R.parseULabel('PT-UType-10U-500W-FINNS', 'PT-UType'), f2 = R.parseULabel('PT-UType-10U-500W-Finns ', 'PT-UType');
+  const f3 = R.parseULabel('PT-UType-24U-1Kw-SSFinns', 'PT-UType'), f4 = R.parseULabel('PT-ULType-48U7L-2.5KW-FINNS', 'PT-ULType');
+  const plainKeys = samples.map(([dn]) => Object.keys(R.parseULabel(dn, 'PT-UType')).join()).filter(k => k !== 'ok,uIn,label');
+  ok('2d. fins in the drawing number: "-FINNS" / "-Finns " → 10U, fins true; "-SSFinns" → 24U, SS; a finned UL stays out; a plain number carries no fins key',
+    f1.ok && f1.uIn === 10 && f1.fins === true && f1.finMaterial === null && f2.ok && f2.uIn === 10 && f2.fins
+    && f3.ok && f3.uIn === 24 && f3.finMaterial === 'SS' && !f4.ok && plainKeys.length === 0,
+    JSON.stringify([f1, f2, f3, f4.reason, plainKeys]));
 }
 
 // ── 3. Remarks ──
@@ -193,6 +201,20 @@ if (fs.existsSync(path.join(FIX, 'u_gen_cards.json'))) {
   const unexpected = disagree.filter(x => !x.scope && !EXPECTED.includes(x.item));
   ok(`4b. the defaults (cold zone, pin, fixture, ASMBLY) agree with her ${firstCards.length} app-made U cards except the known cases`, unexpected.length === 0,
     unexpected.map(x => `${x.item} ${x.dwg}: ${x.why.join('; ')}`).join(' | '));
+  // F7 (owner, 16 Nov 2026): her finned U cards' fixture, fins first.
+  const finned = firstCards.map(c => {
+    const it = byItem.get(c.item);
+    const label = R.parseULabel(c.drawing_number, c.product_code);
+    const rem = R.parseRemark(c.remark);
+    const lines = (it?.inv || []).map(l => ({ code: l.code, qty: l.qty }));
+    const fins = R.finsFor({ label, rem, lines });
+    if (!label.ok || !fins.finned) return null;
+    const fit = R.fittingSetFor(rem, lines, it?.qty || c.qty);
+    return { item: c.item, card: c.fixture, app: R.fixtureText(fit.set, rem, fit.nipple, lines, fins) };
+  }).filter(Boolean);
+  const finOff = finned.filter(x => fixNorm(x.card) !== fixNorm(x.app));
+  ok(`4c. F7: on her ${finned.length} app-made finned U cards the fixture is hers, fins first ("SS Finns + Heavy Terminal Pin", "MS Finns+ Nut Washer", "SS Finns, Nut Washer")`,
+    finned.length >= 3 && finOff.length === 0, [...finOff, ...(VERBOSE ? finned : [])].map(x => `${x.item}: "${x.app}" vs "${x.card}"`).join(' | '));
   const plain = firstCards.filter(c => R.parseULabel(c.drawing_number, c.product_code).ok && !R.parseRemark(c.remark).instructions.length);
   const twoU = plain.filter(c => Number(c.input.drawingTotalLengthIn) === Number(R.totalLength({ uIn: R.parseULabel(c.drawing_number, c.product_code).uIn, diaMm: c.td }).str));
   info(`R1: ${twoU.length} of ${plain.length} of her plain U cards were typed exactly the 2U the app now sends`);
@@ -406,14 +428,366 @@ if (fs.existsSync(path.join(FIX, 'u_gen_cards.json'))) {
 {
   const L = (...codes) => codes.map(code => ({ code }));
   const o198 = R.partsForOtherTube(L('NUT-SS-M4-08', 'WSH-BR-08', 'ESB-08'), 11);
-  ok('8a. parts for another tube: ORD-198-26 (Ø11 with ESB-08 / NUT-SS-M4-08 / WSH-BR-08) → all three; the same on Ø8 → none; Ø11 with ESB-11 / NUT-SS-M5-11 / WSH-SS-11 / PVC-FB11-M5 → none; WSH-BR-08 among M5-11 parts (ORD-199) → just it; nipples, pins, fins and coils are not size-coded',
+  ok('8a. parts for another tube: ORD-198-26 (Ø11 with ESB-08 / NUT-SS-M4-08 / WSH-BR-08) → all three; the same on Ø8 → none; Ø11 with ESB-11 / NUT-SS-M5-11 / WSH-SS-11 / PVC-FB11-M5 → none; WSH-BR-08 among M5-11 parts (ORD-199) → just it; nipples, pins and coils are not size-coded; fins are (16 Nov 2026): FIN-SS-08-VE / FIN-MS-08 on Ø11 and FIN-MS-11 / FIN-SS-11-VE on Ø8 are flagged, each on its own tube is not',
     o198.map(x => x.code).join() === 'NUT-SS-M4-08,WSH-BR-08,ESB-08' && o198.every(x => x.sizeMm === 8)
     && R.partsForOtherTube(L('NUT-SS-M4-08', 'WSH-BR-08', 'ESB-08', 'PVC-FB08-M4'), 8).length === 0
     && R.partsForOtherTube(L('ESB-11', 'NUT-SS-M5-11', 'WSH-SS-11', 'PVC-FB11-M5'), 11).length === 0
     && R.partsForOtherTube(L('ESB-11', 'WSH-BR-08', 'NUT-SS-M5-11'), 11).map(x => x.code).join() === 'WSH-BR-08'
-    && R.partsForOtherTube(L('NIP-BR-M12-ROUND', 'TP-SS-M4-03-WH', 'FIN-SS-08', 'SPR-KD-36', 'ESB-110'), 11).length === 0,
+    && R.partsForOtherTube(L('NIP-BR-M12-ROUND', 'TP-SS-M4-03-WH', 'SPR-KD-36', 'ESB-110'), 11).length === 0
+    && R.partsForOtherTube(L('FIN-SS-08-VE', 'FIN-MS-08', 'ESB-11'), 11).map(x => `${x.code}:${x.sizeMm}`).join() === 'FIN-SS-08-VE:8,FIN-MS-08:8'
+    && R.partsForOtherTube(L('FIN-MS-11', 'FIN-SS-11-VE'), 8).map(x => `${x.code}:${x.sizeMm}`).join() === 'FIN-MS-11:11,FIN-SS-11-VE:11'
+    && R.partsForOtherTube(L('FIN-SS-08-VE', 'FIN-MS-08'), 8).length === 0 && R.partsForOtherTube(L('FIN-MS-11', 'FIN-SS-11-VE'), 11).length === 0,
     JSON.stringify(o198));
 }
 
-console.log(failed ? `\n${failed} CHECK(S) FAILED` : '\nALL PASS');
-process.exit(failed ? 1 : 0);
+// ── 9. True part sizes (owner, 16 Nov 2026) ──
+// "you can also get the inventory's like finns and esb that is the ceramic bead …
+// from the inventory for its dia and dimensions for accurate drawings".
+{
+  const P = require(S + '/src/lib/drawings/partSizes.js');
+  const f = (notes, kind) => R.stable(P.parseSizeNotes(notes, kind).fields);
+  const want = (o) => R.stable(o);
+  const NOTES = [
+    ['ESB 8mm OD-7.93, Height: 4.3, Hole: 4.2', 'esb', { odMm: 7.93, idMm: 4.2, lenMm: 4.3 }],
+    ['ESB 90 Od-8.40,ID-4.13,Head-2.92', 'esb', { odMm: 8.4, idMm: 4.13, headLenMm: 2.92 }],
+    ['M4 Nut - 8mmOD=8mm,ID=4mm,Thickness-2.88', 'nut', { odMm: 8, idMm: 4, lenMm: 2.88 }],
+    ['Washer - 8mmOd-9mm,ID-4.45 Thickness-0.60', 'washer', { odMm: 9, idMm: 4.45, lenMm: 0.6 }],
+    ['Washer -11mm SSOD-10.29,ID-5.49,Thickness-0.80', 'washer', { odMm: 10.29, idMm: 5.49, lenMm: 0.8 }],
+    ['FB 8mm - M4 PVC Bush Top ( OD: 9.2, ID: 3.8) Back  OD: 7.2 Height: 6.8', 'fbush', { headOdMm: 9.2, idMm: 3.8, spigotOdMm: 7.2, lenMm: 6.8, odMm: 9.2 }],
+    ['Bracket - Full Mid Hole 11 MM Thickness-1.25, Length-75.63,Hight-37.06,Hole-12.5,Mid Hole-10.51', 'bracket',
+      { thkMm: 1.25, lenMm: 1.25, footLenMm: 75.63, hMm: 37.06, holeMm: 12.5, midHoleMm: 10.51 }],
+    ['M16 Brass Nipple _HexL-30.1, HOLE (OD-16MM,ID-11MM), GROVE(2.55)', 'nipple', { lenMm: 30.1, holeOdMm: 16, idMm: 11, grooveMm: 2.55 }],
+    ['M14 Brass Nipple-Hex L-27MM,Hole(OD-13.90,ID-8MM)Grove(1.9) (Refer Drawing)', 'nipple', { lenMm: 27, holeOdMm: 13.9, idMm: 8, grooveMm: 1.9 }],
+    ['M12 Brass Nipple - Hex L-26.5MM, HOLE 9( OD-13MM,ID-8MM), Grove(2.2)', 'nipple', { lenMm: 26.5, holeOdMm: 13, idMm: 8, grooveMm: 2.2 }],
+    ['M16 Brass Nipple - Double Coil M16 in 8mm L 33.2 Inch,Hole( OD-15.89,ID-11.01) Grove (2.1)', 'nipple', { holeOdMm: 15.89, idMm: 11.01, grooveMm: 2.1 }],
+    ['Thickness=4.49,Thread=2.15,Head=1.38,Coil Head=2.20 Len :- 90mm', 'pin', { odMm: 4.49, lenMm: 90 }],
+    ['Thickness=4.63,Thread Thickness=2.15', 'pin', { odMm: 4.63 }],
+    ['No Thread - Plain', 'pin', {}], ['', 'esb', {}], [null, 'nut', {}],
+  ];
+  const bad9 = NOTES.filter(([n, k, w]) => f(n, k) !== want(w)).map(([n, k, w]) => `${n} (${k}): ${f(n, k)} want ${want(w)}`);
+  const pinRaw = P.parseSizeNotes('Thickness=4.49,Thread=2.15,Head=1.38,Coil Head=2.20 Len :- 90mm', 'pin').raw;
+  ok('9a. her notes are read as typed: OD-/OD=/Od-, "8mmOD", "SSOD", Hole: (bore), Height (along the axis), the bush\'s Top ( OD, ID ) and Back OD, the bracket\'s Hight / Length / Mid Hole (not the "Mid Hole 11 MM" in its name), the nipple\'s HexL- / HOLE 9( / Grove(, a pin\'s Thickness as its Ø; "L 33.2 Inch" with no mark is not read',
+    bad9.length === 0 && R.stable(pinRaw) === R.stable({ thread: 2.15, head: 1.38, coilHead: 2.2 }), [...bad9, R.stable(pinRaw)].join(' | '));
+  const swapNut = P.parseSizeNotes('M12 Brass Nipple Nut - Hex,OD=18.98,ID=10.50,Thickness=5.02', 'nipple');
+  const swapNip = P.parseSizeNotes('M12 Brass Nipple - Hex L-26.5MM, HOLE 9( OD-13MM,ID-8MM), Grove(2.2)', 'nipnut');
+  const oak = P.parseSizeNotes('SS Nipple - OAK - Nipple Nut ,OD=22.22,ID=120.10,Thickness=4.80', 'nipnut');
+  const m16n = P.parseSizeNotes('M16 Brass Nipple Nut_Hex OD=24.04,ID=14.50,Thickness=5.05', 'nipnut');
+  ok('9b. a note that describes the other part (the M12 nipple\'s and nut\'s notes typed on each other\'s line) is not used; a bore bigger than the part (OAK nut "ID=120.10") is dropped; "Nut_Hex" is still a nut',
+    swapNut.describesOther === 'the nipple nut' && R.stable(swapNut.fields) === '{}' && swapNip.describesOther === 'the nipple'
+    && R.stable(oak.fields) === want({ odMm: 22.22, lenMm: 4.8 }) && oak.ignored.length === 1 && !m16n.describesOther && m16n.fields.odMm === 24.04,
+    JSON.stringify([swapNut, swapNip, oak.ignored]));
+  const sd = P.SEED;
+  const about = require(S + '/src/lib/drawings/partSizes.json').about;
+  ok('9c. the seed (snapshot 16 Nov 2026) holds her drawings\' sizes: fins 8 mm MS 28.44/8.35, SS 28.50/8.78, 11 mm MS 31.55/11.40, SS 31.59/11.35; ESB-08 ceramic 7.9/4.2 × 6.0; ESB-11 10.9/5.1 × 5.0 chamfered 45° (no head, no spigot); the brackets\' slots 9.6 (Ø8) / 12.3 (Ø11); the filling bushes\' heads',
+    /16 Nov 2026/.test(about) && /SNAPSHOT/.test(about)
+    && sd['FIN-MS-08'].odMm === 28.44 && sd['FIN-MS-08'].idMm === 8.35 && sd['FIN-SS-08-VE'].odMm === 28.5 && sd['FIN-SS-08-VE'].idMm === 8.78
+    && sd['FIN-MS-11'].odMm === 31.55 && sd['FIN-MS-11'].idMm === 11.4 && sd['FIN-SS-11-VE'].odMm === 31.59 && sd['FIN-SS-11-VE'].idMm === 11.35
+    && sd['ESB-08'].material === 'CERAMIC' && sd['ESB-08'].odMm === 7.9 && sd['ESB-08'].idMm === 4.2 && sd['ESB-08'].lenMm === 6
+    && sd['ESB-11'].odMm === 10.9 && sd['ESB-11'].idMm === 5.1 && sd['ESB-11'].lenMm === 5 && sd['ESB-11'].chamferDeg === 45 && sd['ESB-11'].headOdMm == null
+    && sd['BKT-FMH-H788-MS'].slotWMm === 9.6 && sd['BKT-FMH-H1250'].slotWMm === 12.3 && sd['PVC-FB08-M4'].headOdMm === 9.2 && sd['PVC-FB11-M5'].spigotOdMm === 10.1
+    && Object.values(sd).every(e => e.kind === P.kindOf(Object.keys(sd).find(k => sd[k] === e)) && e.source));
+  // Notes win over the seed only for the same field.
+  const esb = P.mergeSizes('ESB-08', { ...sd['ESB-08'] }, P.parseSizeNotes('ESB 8mm OD-7.93, Height: 4.3, Hole: 4.2', 'esb'));
+  const pinOnly = P.mergeSizes('TP-SS-M4-03-WH', null, P.parseSizeNotes('Thickness=3.48,Thread=2.17,Head=1.36', 'pin'));
+  const seedOnly = P.mergeSizes('FIN-SS-08-VE', { ...sd['FIN-SS-08-VE'] }, P.parseSizeNotes(null, 'fin'));
+  const nothing = P.mergeSizes('IWS-FIB-M12-RD', null, P.parseSizeNotes(null, 'nipwasher'));
+  ok('9d. merging: ESB-08 takes the notes\' OD 7.93 and length 4.3, keeps the drawing\'s bore and R0.2, says both sources, and reports the length (4.3 vs the drawing\'s 6.0 — one is wrong); a part with notes only, the seed only, or neither',
+    esb.entry.odMm === 7.93 && esb.entry.lenMm === 4.3 && esb.entry.idMm === 4.2 && esb.entry.edgeRMm === 0.2
+    && /ESB 8MM\.pdf.*\+ inventory notes \(od, len\)/.test(esb.entry.source)
+    && esb.conflicts.length === 1 && esb.conflicts[0].field === 'lenMm' && esb.conflicts[0].notes === 4.3 && esb.conflicts[0].seed === 6
+    && pinOnly.entry.odMm === 3.48 && pinOnly.entry.source === 'inventory notes' && seedOnly.entry.odMm === 28.5 && /FIN-MS-08\.pdf/.test(seedOnly.entry.source)
+    && nothing.entry === null, JSON.stringify([esb, pinOnly.entry.source]));
+  // partSizesFor over a stub of the inventory (no database).
+  const stubRows = [{ code: 'ESB-08', notes: 'ESB 8mm OD-7.93, Height: 4.3, Hole: 4.2' }, { code: 'NIP-BR-M12-HEX', notes: 'M12 Brass Nipple Nut - Hex,OD=18.98,ID=10.50,Thickness=5.02' },
+    { code: 'TP-HV-M6XM4', notes: null }, { code: 'IWS-FIB-M12-RD', notes: null }, { code: 'NUT-SS-M4-08', notes: 'M4 SS Nut - 8mm OD=8mm,ID=4mm,Thickness-2.88' }];
+  const stub = { all: async (q, prm) => stubRows.filter(r => prm[0].includes(r.code)) };
+  P.partSizesFor(stub, ['ESB-08', 'NIP-BR-M12-HEX', 'IWS-FIB-M12-RD', 'FIN-SS-08-VE', 'SPR-KD-36', 'TUB-SS304-038-T06', 'TP-HV-M6XM4', 'esb-08', 'NUT-SS-M4-08']).then(r => {
+    ok('9e. a sheet\'s sizes: coil and tube are not asked for; ESB-08 by notes + drawing; the M12 nipple from the seed (its own notes describe the nut — reported); the fins from the seed; the fibre washer (no size anywhere) listed as "size not in inventory"; the heavy pin from her drawing (16 Nov 2026: hex 14 long, M6 stud on M4 from its code)',
+      Object.keys(r.sizes).sort().join() === 'ESB-08,FIN-SS-08-VE,NIP-BR-M12-HEX,NUT-SS-M4-08,TP-HV-M6XM4' && r.sizes['TP-HV-M6XM4'].headLenMm === 14 && r.sizes['TP-HV-M6XM4'].pinThread === 'M4' && r.sizes['ESB-08'].lenMm === 4.3 && r.sizes['NIP-BR-M12-HEX'].lenMm === 26.5
+      && r.sizes['NUT-SS-M4-08'].thread === 'M4' && r.sizes['FIN-SS-08-VE'].odMm === 28.5 && r.missing.sort().join() === 'IWS-FIB-M12-RD'
+      && r.ignored.length === 1 && /describe the nipple nut/.test(r.ignored[0].why) && r.conflicts.length === 1
+      && R.stable(P.threadOf('TP-HV-M6XM4')) === R.stable({ thread: 'M6', pinThread: 'M4' }), JSON.stringify(r).slice(0, 400));
+  });
+}
+
+// ── 10. Finned U (owner, 16 Nov 2026) ──
+// F1 "yes, go round the bend and stop 25mm"; F2 "there are sometimes when we dont
+// add the finns to the U bend part"; F3 "the finns will not come ahead of the
+// terminal end brackets" · "yes, 1.5" from both ends with a gap"; F5 the fin
+// stock as the app takes it; F6 the checks; F7 the fixture.
+{
+  const W = require(S + '/src/lib/inventoryDeduction.js').FINS_WEIGHT_PER_BASE;
+  const L = (...x) => x.map(([code, qty]) => ({ code, qty }));
+  const lab = (dn) => R.parseULabel(dn, 'PT-UType');
+  const f1922 = R.finsFor({ label: lab('PT-UType-10U-500W-FINNS'), rem: R.parseRemark('FINNS + HEAVY TERMINAL PIN'), lines: L(['FIN-SS-08-VE', 0], ['TP-HV-M6XM4', 40]) });
+  const fDwg = R.finsFor({ label: lab('PT-UType-10U-500W-Finns'), rem: R.parseRemark('HEAVY TERMINAL PIN'), lines: L(['TP-HV-M6XM4', 40]) });
+  const fList = R.finsFor({ label: lab('PT-UType-48U-2Kw'), rem: R.parseRemark('NUT WASHER'), lines: L(['FIN-MS-08', 0]) });
+  const fPlain = R.finsFor({ label: lab('PT-UType-18U-700W'), rem: R.parseRemark('NUT WASHER'), lines: L(['ESB-08', 20], ['NUT-SS-M4-08', 40]) });
+  const r279 = R.parseRemark('SS Finns, Nut Washer');
+  ok('10a. fins are read from the remark, the drawing number or the list: 1922 (remark + number + FIN-SS-08-VE) → SS, Ø8; a number alone says fins; a list alone has them; "SS Finns, Nut Washer" → SS, no other words; a plain U is not finned',
+    f1922.finned && f1922.code === 'FIN-SS-08-VE' && f1922.material === 'SS' && f1922.sizeMm === 8 && f1922.said.join() === 'the remark,the drawing number'
+    && fDwg.finned && fDwg.said.join() === 'the drawing number' && !fDwg.code && fList.finned && fList.said.length === 0 && fList.material === 'MS'
+    && r279.fins && r279.finMaterial === 'SS' && !r279.instructions.length && !fPlain.finned && R.parseRemark('MS Finns + Brackets').finMaterial === 'MS',
+    JSON.stringify([f1922, fDwg.said, fList.said]));
+  const c = (o) => R.finListChecks(R.finsFor(o));
+  const noLine = c({ label: lab('PT-UType-25U-1.5KW'), rem: R.parseRemark('m16 brass nipple with ss finns- 24U above Nipple'), lines: L(['NIP-BR-M16-HEX', 24]) });
+  const noLineDwg = c({ label: lab('PT-UType-10U-500W-FINNS'), rem: R.parseRemark('HEAVY TERMINAL PIN'), lines: L(['TP-HV-M6XM4', 40]) });
+  const two = c({ label: lab('PT-UType-10U-500W'), rem: R.parseRemark('MS FINS'), lines: L(['FIN-MS-08', 0], ['FIN-SS-08-VE', 0]) });
+  const msSs = c({ label: lab('PT-UType-48U-2Kw'), rem: R.parseRemark('MS Finns + Nut Washer'), lines: L(['FIN-SS-08-VE', 0]) });
+  const listOnly = c({ label: lab('PT-UType-48U-2Kw'), rem: R.parseRemark('NUT WASHER'), lines: L(['FIN-MS-08', 0]) });
+  const good = c({ label: lab('PT-UType-48U-2Kw'), rem: R.parseRemark('MS Finns + Nut Washer'), lines: L(['FIN-MS-08', 0]) });
+  const plainC = c({ label: lab('PT-UType-18U-700W'), rem: R.parseRemark('NUT WASHER'), lines: L(['ESB-08', 20]) });
+  ok('10b. F6: the remark (or the drawing number) says fins and the list has no fin line → refused, "design to add the fin line"; two fin lines → refused; the remark\'s MS against the list\'s SS → flagged; fins on the list only → flagged; a matching or a plain list → nothing',
+    noLine.blocks.length === 1 && /the remark says fins but the list has no fin line — design to add the fin line/.test(noLine.blocks[0])
+    && /the drawing number says fins/.test(noLineDwg.blocks[0] || '') && two.blocks.some(b => /2 fin lines/.test(b))
+    && msSs.blocks.length === 0 && msSs.flags.length === 1 && /the remark says MS fins, the list has SS \(FIN-SS-08-VE\)/.test(msSs.flags[0])
+    && listOnly.blocks.length === 0 && listOnly.flags.length === 1 && good.blocks.length + good.flags.length === 0 && plainC.blocks.length + plainC.flags.length === 0,
+    JSON.stringify([noLine, noLineDwg, two, msSs, listOnly]));
+  // F7: the fins first, as on her cards.
+  const fx = (set, remark, lines, fins, nip) => R.fixtureText(set, R.parseRemark(remark), nip || null, lines, fins);
+  const OLD = { nut_washer: 'Nut Washer', ceramic_nut: 'One Ceramic + One Nut', ceramic_only: 'One Ceramic only', heavy_pin: 'Heavy Terminal Pin',
+    nut_washer_brackets: 'Nut washer + MS Brackets', nipple: 'M12 Brass Nipple', nipple_ceramic_nut: 'M12 Brass Nipple + One Ceramic + One Nut' };
+  const plainSame = Object.entries(OLD).filter(([set, want]) => R.fixtureText(set, R.parseRemark(''), null, []) !== want || fx(set, '', [], { finned: false }) !== want);
+  ok('10c. F7 fixture: "SS Finns + Heavy Terminal Pin" (1922), "MS Finns + Nut Washer" (1404), "MS Finns + Brackets" (139), "SS Finns + M16 Brass Nipple", "Finns + Brackets" with no material named; every plain fixture unchanged',
+    fx('heavy_pin', 'FINNS + HEAVY TERMINAL PIN', [], f1922) === 'SS Finns + Heavy Terminal Pin'
+    && fx('nut_washer', 'MS Finns + Nut Washer', [], { finned: true, material: 'MS' }) === 'MS Finns + Nut Washer'
+    && fx('nut_washer_brackets', 'MS Finns + Brackets', [], { finned: true, material: 'MS' }) === 'MS Finns + Brackets'
+    && fx('nipple', 'm16 brass nipple with ss finns', [], { finned: true, material: 'SS' }, 'M16') === 'SS Finns + M16 Brass Nipple'
+    && fx('nut_washer_brackets', 'FINNS + CLAMPS', [], { finned: true, material: null }) === 'Finns + Brackets' && plainSame.length === 0,
+    plainSame.map(p => p[0]).join());
+  // F1–F3 defaults and her answers.
+  const d0 = R.finDefaults({}), dB = R.finDefaults({ hasBrackets: true });
+  const dA = R.finDefaults({ onBendAns: 'no', stopAns: 30, pitchAns: 4 });
+  const dBA = R.finDefaults({ hasBrackets: true, fromEndAns: 40, fromBendAns: 45 });
+  const dBad = R.finDefaults({ onBendAns: 'maybe' });
+  ok('10d. defaults: round the bend, 25 mm bare at each end, pitch 3 ("about 3 mm off your fin drawing"); with brackets 38.1 / 38.1 and the fins stop at the terminal-end bracket (38.1, then her 40 when she moves the bracket); her answers win; "maybe" is refused',
+    R.FIN_STOP_MM === 25 && R.FIN_PITCH_MM === 3 && R.BRACKET_AT_MM === 38.1 && R.BRACKETS_PER_HEATER === 2
+    && d0.onBend && d0.stopMm === 25 && d0.pitchMm === 3 && d0.fromBendMm === null && /"stop 25mm"/.test(d0.sources.stop) && d0.sources.pitch === 'about 3 mm off your fin drawing (not dimensioned)'
+    && /Ms\. Vama, 16 Nov 2026: "yes, go round the bend"/.test(d0.sources.onBend)
+    && dB.stopMm === 38.1 && dB.fromBendMm === 38.1 && dB.fromEndMm === 38.1 && /terminal-end bracket, 38\.1 from the tube end — the fins stop at it/.test(dB.sources.stop)
+    && !dA.onBend && dA.stopMm === 30 && dA.pitchMm === 4 && dA.sources.stop === 'your answer'
+    && dBA.stopMm === 40 && dBA.fromBendMm === 45 && dBad.errors.length === 1 && d0.errors.length === 0,
+    JSON.stringify([d0, dB.sources]));
+  // Where the fins run (F1 / F2 / F3) and the checks (F6).
+  const t1922 = R.totalLength({ uIn: 10, diaMm: 8, outsideWidthMm: 40 });
+  const lay = (o) => R.finLayout({ geo: t1922.geo, diaMm: 8, drawnULengthMm: t1922.drawnULengthMm, finOdMm: 28.5, pitchMm: 3, onBend: true, stopMm: 25, ...o });
+  const a = lay({}), aNo = lay({ onBend: false });
+  const legs = 2 * (t1922.geo.straight - 25), bend = Math.PI * 16;
+  ok('10e. F1 / F2 on 1922 (10U at 40 outside, legs 32 c/c, SS fins OD 28.5): round the bend 25 mm short of each end = 2 × (228.9 − 25) + π × 16 = 458.0 mm; bend bare = 407.7; 3.5 mm between the legs\' fins, no flag',
+    a.finnedLengthMm === R.round(legs + bend, 1) && a.finnedLengthMm === 458 && aNo.finnedLengthMm === R.round(legs, 1) && aNo.finnedLengthMm === 407.7
+    && a.clearMm === 3.5 && !a.blocks.length && !a.flags.length && a.gapMm === null, JSON.stringify([a, aNo.finnedLengthMm]));
+  const t139 = R.totalLength({ uIn: 18, diaMm: 8 });
+  const lay139 = (o) => R.finLayout({ geo: t139.geo, diaMm: 8, drawnULengthMm: t139.drawnULengthMm, finOdMm: 28.44, pitchMm: 3, onBend: true, stopMm: 38.1,
+    brackets: { fromBendMm: 38.1, fromEndMm: 38.1, thkMm: 1.25 }, ...o });
+  const b = lay139({}), bLip = lay139({ brackets: { fromBendMm: 38.1, fromEndMm: 38.1, thkMm: 1.25, lipMm: 12 } }), bBare = lay139({ onBend: false });
+  ok('10f. F3 on 139 (18U, MS fins + 2 brackets of 1.25 sheet): the fins stop at the terminal-end bracket (38.1) and leave a gap at the bend-end bracket on each leg of its sheet + its 10.8 lip (the screws\' strip, fins cannot pass under it) + 2 × pitch = 18.05: 2 × (straight − 38.1) + π × 17.5 − 2 × 18.05 = 802.1; a lip from the inventory is used',
+    b.gapMm === 18.05 && b.finnedLengthMm === R.round(2 * (t139.geo.straight - 38.1) + Math.PI * 17.5 - 36.1, 1) && b.finnedLengthMm === 802.1 && !b.blocks.length && b.bendReachMm === 21.5
+    && bLip.gapMm === 19.25 && R.BRACKET_LIP_MM === 10.8
+    // F2 + F3, the bend bare: the 2.2 mm between the gap and the bend is too short to wind (as the sheet draws it): 2 × (413.1 − 41.7) = 742.8
+    && bBare.finnedLengthMm === 742.8,
+    JSON.stringify([b, bLip.gapMm, bBare.finnedLengthMm]));
+  const past = lay139({ stopMm: 25 }), onBend = lay139({ brackets: { fromBendMm: 20, fromEndMm: 38.1, thkMm: 1.25 } });
+  const wide = R.totalLength({ uIn: 16, diaMm: 8, outsideWidthMm: 117.6 });
+  const wideB = R.finLayout({ geo: wide.geo, diaMm: 8, drawnULengthMm: wide.drawnULengthMm, finOdMm: 28.44, pitchMm: 3, onBend: true, stopMm: 38.1, brackets: { fromBendMm: 38.1, fromEndMm: 38.1, thkMm: 1.25 } });
+  const tShort = R.totalLength({ uIn: 3, diaMm: 8 });
+  const shortB = R.finLayout({ geo: tShort.geo, diaMm: 8, drawnULengthMm: tShort.drawnULengthMm, finOdMm: 28.44, pitchMm: 3, onBend: true, stopMm: 38.1, brackets: { fromBendMm: 38.1, fromEndMm: 38.1, thkMm: 1.25 } });
+  const tight = R.totalLength({ uIn: 10, diaMm: 8, outsideWidthMm: 36 }), close = R.totalLength({ uIn: 10, diaMm: 8, outsideWidthMm: 38 });
+  const over = R.finLayout({ geo: tight.geo, diaMm: 8, drawnULengthMm: tight.drawnULengthMm, finOdMm: 28.5, pitchMm: 3, onBend: true, stopMm: 25 });
+  const near = R.finLayout({ geo: close.geo, diaMm: 8, drawnULengthMm: close.drawnULengthMm, finOdMm: 28.5, pitchMm: 3, onBend: true, stopMm: 25 });
+  const long = lay({ stopMm: 240 });
+  ok('10g. refused: fins running past the terminal-end bracket (her words quoted); a bend-end bracket on the bend (20 mm, the bend reaches 21.5; 38.1 on a 4" gap U); brackets that do not fit a 3U; fins of OD 28.5 on legs 28 c/c (36 outside); a stop longer than the leg. Flagged: 1.5 mm between the fins (38 outside)',
+    past.blocks.length === 1 && /"the finns will not come ahead of the terminal end brackets" \(Ms\. Vama, 16 Nov 2026\)/.test(past.blocks[0])
+    && onBend.blocks.length === 1 && /would sit on the bend \(the bend reaches 21\.5 mm\)/.test(onBend.blocks[0]) && wideB.blocks.some(x => /on the bend/.test(x))
+    && shortB.blocks.some(x => /do not fit/.test(x)) && over.blocks.length === 1 && /would overlap/.test(over.blocks[0])
+    && near.blocks.length === 0 && near.flags.length === 1 && /only 1\.5 mm between the two legs' fins/.test(near.flags[0])
+    && long.blocks.some(x => /each straight leg is only/.test(x)),
+    JSON.stringify([past.blocks, onBend.blocks, over.blocks, near.flags]));
+  // F5: kg exactly as inventoryDeduction.deductFinsByLength takes it.
+  const k1922 = R.finKg({ code: 'FIN-SS-08-VE', weights: W, totalLengthMm: 525.78, elements: 1, quantities: [20] });
+  const k1404 = R.finKg({ code: 'FIN-MS-08', weights: W, totalLengthMm: 2456.18, elements: 1, quantities: [6] });
+  const k279 = R.finKg({ code: 'FIN-SS-11-VE', weights: W, totalLengthMm: 3472.18, elements: 1, quantities: [4] });
+  const kSplit = R.finKg({ code: 'FIN-MS-11', weights: W, totalLengthMm: 1000, elements: 1, quantities: [50, 50, 20] });
+  const perCard = [50, 50, 20].reduce((s, q) => s + Math.round((1000 / 50.8) * W['FIN-MS-11'] * q * 1000) / 1000, 0);
+  ok('10h. F5 fin stock = the card\'s tube length / 50.8 × inventoryDeduction\'s own kg per 50.8 mm × pieces: 1922 (525.78 mm, FIN-SS-08-VE, 20) → 0.145 kg per piece, 2.898 kg — her card; 1404 → 3.191; 279 → 5.468; a 50/50/20 split rounds per card; a code the app has no weight for → none',
+    k1922.kgPerPc === 0.145 && k1922.kgForOrder === 2.898 && k1404.kgForOrder === 3.191 && k279.kgForOrder === 5.468
+    && kSplit.kgForOrder === R.round(perCard, 3) && R.FINS_MM_BASE === 50.8 && k1922.perBase === W['FIN-SS-08-VE']
+    && R.finKg({ code: 'FIN-SS-08', weights: W, totalLengthMm: 525.78, quantities: [20] }) === null,
+    JSON.stringify([k1922, k1404.kgForOrder, k279.kgForOrder, kSplit.kgForOrder, perCard]));
+  const ls139 = R.listShape(L(['FIN-MS-08', 0], ['BKT-FMH-H788-MS', 24], ['ESB-08', 24], ['NUT-SS-M4-08', 48], ['WSH-BR-08', 48]), 12);
+  const bList = R.bracketsFor({ rem: R.parseRemark('MS Finns + Brackets'), ls: ls139, diaMm: 8 });
+  const bRem = R.bracketsFor({ rem: R.parseRemark('FINNS + CLAMPS'), ls: R.listShape(L(['TP-SS-M4-03-WH', 12]), 12), diaMm: 8 });
+  const bRem11 = R.bracketsFor({ rem: R.parseRemark('SS FINS WITH 2 CLAMPS'), ls: R.listShape([], 1), diaMm: 11 });
+  const bNone = R.bracketsFor({ rem: R.parseRemark('MS Finns + Nut Washer'), ls: R.listShape(L(['FIN-MS-08', 0]), 6), diaMm: 8 });
+  ok('10i. the list\'s fins and brackets: 139 → FIN-MS-08 (MS, Ø8), BKT-FMH-H788-MS × 2 per heater on the list; "FINNS + CLAMPS" with no bracket line → the usual BKT-FMH-H788-MS (Ø8) / BKT-FMH-H1250 (Ø11), not on the list; no brackets → none',
+    ls139.finCode === 'FIN-MS-08' && ls139.finMaterial === 'MS' && ls139.finSizeMm === 8 && ls139.bracketCode === 'BKT-FMH-H788-MS'
+    && bList.code === 'BKT-FMH-H788-MS' && bList.onList && bList.perHeater === 2 && bRem.code === 'BKT-FMH-H788-MS' && !bRem.onList && bRem.perHeater === 2
+    && bRem11.code === 'BKT-FMH-H1250' && bNone === null, JSON.stringify([bList, bRem, bRem11]));
+  // The plain U is as it was: the list's reading, the set, the checks.
+  const lsPlain = R.listShape(L(['ESB-08', 20], ['NUT-SS-M4-08', 40], ['WSH-BR-08', 40]), 10);
+  ok('10j. a plain U is unchanged: its list reads 2 ESB / 4 nuts / 4 washers, no fins, no fin or bracket code; the set from it is still nut washer; finsFor says not finned',
+    lsPlain.esb === 2 && lsPlain.nut === 4 && lsPlain.washer === 4 && lsPlain.fins === false && lsPlain.finCode === null && lsPlain.bracketCode === null
+    && R.setFromList(lsPlain) === 'nut_washer' && !R.finsFor({ label: lab('PT-UType-18U-700W'), rem: R.parseRemark(''), lines: L(['ESB-08', 20]) }).finned);
+  // The agent's own list checks and answers (no database touched).
+  const A = require(S + '/src/lib/drawings/agent.js');
+  const st = (dwg, remark, lines) => ({ item: { drawing_number: dwg, product_code: 'PT-UType', remark, quantity: 12, tube_diameter: 8, bom_review: null, inventory_deducted: false },
+    order: { id: 999999 }, lines: lines.map(([code, qty, category]) => ({ code, qty, category: category || '' })) });
+  const lb164 = A.listBlocks(st('PT-UType-25U-1.5KW', 'm16 brass nipple with ss finns- 24U above Nipple', [['NIP-BR-M16-HEX', 12, 'Nipple Fastner'], ['ESB-08', 24, 'End Sealing Bush']]));
+  const lbOk = A.listBlocks(st('PT-UType-18U-1kw', 'MS Finns + Brackets', [['FIN-MS-08', 0, 'Finns'], ['ESB-08', 24, 'End Sealing Bush']]));
+  const lb11 = A.listBlocks({ ...st('PT-UType-18U-1kw', 'SS Finns', [['FIN-SS-08-VE', 0, 'Finns'], ['ESB-11', 24, 'End Sealing Bush']]), item: { drawing_number: 'PT-UType-18U-1kw', product_code: 'PT-UType', remark: 'SS Finns', quantity: 12, tube_diameter: 11 } });
+  const ca = A.cleanAnswers({ fins_on_bend: 'no', fin_stop_mm: '30', fin_pitch_mm: '4', bracket_from_bend_mm: '40', bracket_from_end_mm: '40', fin_od: '9' });
+  const v = A.verdict({ item: { drawing_number: 'PT-UType-10U-500W-FINNS', product_code: 'PT-UType', tube_diameter: 8, remark: 'FINNS + HEAVY TERMINAL PIN' },
+    order: { status: 'approved', order_type: 'local_he' }, lines: [{ code: 'FIN-SS-08-VE', qty: 0 }], drawings: [], cards: [], legacyCards: [], orderLevelSame: [], sameFiled: [] });
+  ok('10k. the agent: a finned U is due (no "phase 2" skip); the remark\'s fins with no fin line stop the list (164); an SS 8 mm fin line on an Ø11 tube is refused as a part for another tube; a good finned list passes; her five fin answers are kept, an unknown key dropped',
+    v.due && !v.scope && v.label.fins === true
+    && lb164.some(x => /the remark says fins but the list has no fin line — design to add the fin line/.test(x))
+    && lb11.some(x => /parts for a Ø8 tube on this Ø11 tube \(FIN-SS-08-VE\)/.test(x)) && lbOk.length === 0
+    && R.stable(ca) === R.stable({ fins_on_bend: 'no', fin_stop_mm: '30', fin_pitch_mm: '4', bracket_from_bend_mm: '40', bracket_from_end_mm: '40' }),
+    JSON.stringify([v.scope, lb164, lb11, lbOk]));
+}
+
+// ── 11. Finned U, review fixes (16 Nov 2026) ──
+// The bare-bend bracket wording, her fitting set deciding the brackets, the
+// bracket's slots against the legs, a pitch from the fin's notes, a nipple set
+// clear of the fins, the remark's fin wordings, and the finned sheet rendered.
+{
+  const L = (...x) => x.map(([code, qty]) => ({ code, qty }));
+  const t139 = R.totalLength({ uIn: 18, diaMm: 8 });
+  const lay = (o) => R.finLayout({ geo: t139.geo, diaMm: 8, drawnULengthMm: t139.drawnULengthMm, finOdMm: 28.44, pitchMm: 3, onBend: true, stopMm: 38.1,
+    brackets: { fromBendMm: 38.1, fromEndMm: 38.1, thkMm: 1.25 }, ...o });
+  const on = lay({}), bare = lay({ onBend: false }), farBare = lay({ onBend: false, brackets: { fromBendMm: 70, fromEndMm: 38.1, thkMm: 1.25 } });
+  const brk = { code: 'BKT-FMH-H788-MS', onList: true, perHeater: 2, fromBendMm: 38.1, fromEndMm: 38.1, size: { lenMm: 75.2, hMm: 36, wMm: 55, thkMm: 1.25 } };
+  const finOf = (l, onBend) => ({ onBend, bracketGapMm: l.bendSideFinned ? l.gapMm : null, bareToMm: l.bendSideFinned ? null : l.gapToMm });
+  const wOn = R.bracketWords({ brk, fin: finOf(on, true) }), wBare = R.bracketWords({ brk, fin: finOf(bare, false) }), wProd = R.bracketWords({ brk, fin: finOf(bare, false), production: true });
+  const wNoFin = R.bracketWords({ brk: { ...brk, onList: false }, fin: null });
+  ok('11a. 139 with the bend bare (Fins on the bend: No): the 2.2 mm stub between the bend and the bracket is not wound, so nothing is finned on the bend side — the bend-end bracket is where the fins END (bare to 41.73 from the outer end of the U), never "gap" or "fins on both sides"; round the bend it is a gap of 18.05 with fins on both sides; a bracket 70 in leaves a leg run on the bend side (a gap again); the row says "from the outer end of the U"; the foot is TO CONFIRM on the preview only',
+    on.bendSideFinned === true && bare.bendSideFinned === false && bare.gapToMm === 41.73 && farBare.bendSideFinned === true
+    && /gap of 18\.05 mm in the fins at it .*fins on both sides and round the bend/.test(wOn.note) && wOn.row[1] === '38.1 from the outer end of the U (gap in the fins) · 38.1 from the tube end (fins stop)'
+    && !/both sides|gap/.test(wBare.note) && /where the fins end: each leg is bare from the outer end of the U to 41\.73 mm in/.test(wBare.note)
+    && wBare.row[1] === '38.1 from the outer end of the U (fins end past it) · 38.1 from the tube end (fins stop)'
+    && /TO CONFIRM by Ms\. Vama/.test(wBare.note) && !/TO CONFIRM/.test(wProd.note) && /as fitted/.test(wProd.note)
+    && !/fins/i.test(wNoFin.note.replace(/finns/g, '')) && wNoFin.row[0] === '2 × BKT-FMH-H788-MS (not on the list)',
+    JSON.stringify([bare, wBare]));
+  // Her fitting set decides (the list's BKT- line always counts).
+  const clamps = R.parseRemark('FINNS + CLAMPS');
+  const lsNone = R.listShape(L(['FIN-MS-08', 0]), 12), lsBkt = R.listShape(L(['FIN-MS-08', 0], ['BKT-FMH-H788-MS', 24]), 12);
+  const bSetNo = R.bracketsFor({ rem: clamps, ls: lsNone, diaMm: 8, set: 'nut_washer' });
+  const bSetYes = R.bracketsFor({ rem: R.parseRemark('MS Finns'), ls: lsNone, diaMm: 11, set: 'nut_washer_brackets' });
+  const bListWins = R.bracketsFor({ rem: R.parseRemark('MS Finns'), ls: lsBkt, diaMm: 8, set: 'nut_washer' });
+  const bRemark = R.bracketsFor({ rem: clamps, ls: lsNone, diaMm: 8, set: 'nut_washer_brackets' });
+  ok('11b. brackets follow her fitting set: "FINNS + CLAMPS" answered as Nut Washer → none; "Nut washer + MS Brackets" with no bracket anywhere → the Ø11 usual BKT-FMH-H1250, not on the list; a BKT- line on the list always counts',
+    bSetNo === null && bSetYes && bSetYes.code === 'BKT-FMH-H1250' && !bSetYes.onList && bListWins && bListWins.onList && bRemark && bRemark.code === 'BKT-FMH-H788-MS',
+    JSON.stringify([bSetNo, bSetYes, bListWins]));
+  // The bracket's slots (her drawings): H788 9.6 slots 35.7 c/c, H1250 12.3 slots 36.1 c/c.
+  const P = require(S + '/src/lib/drawings/partSizes.js');
+  const h788 = P.SEED['BKT-FMH-H788-MS'], h1250 = P.SEED['BKT-FMH-H1250'];
+  const fit = (size, d, outside) => R.bracketFitChecks({ code: 'B', size, diaMm: d, cc: outside - d });
+  const std8 = fit(h788, 8, 43), therm = fit(h788, 8, 40), std11 = fit(h1250, 11, 49), small = fit(h788, 11, 49), wide = fit(h1250, 8, 43), gap4 = fit(h788, 8, 117.6);
+  ok('11c. the bracket against the U: H788 on the Ø8 standard (35 c/c in 35.7 ± 1.6) fits; at 40 outside (32 c/c) flagged "does not fit this U width"; H1250 on the Ø11 standard (38 c/c vs 36.1 ± 1.3) flagged; the Ø8 bracket on an Ø11 tube refused (9.6 slots); the Ø11 one on Ø8 flagged (slots 4.3 wider); a 4" gap U (109.6 c/c) refused',
+    h788.slotCcMm === 35.7 && h1250.slotCcMm === 36.1 && std8.blocks.length + std8.flags.length === 0
+    && therm.blocks.length === 0 && therm.flags.length === 1 && /does not fit this U width: its slots are 35\.7 c\/c \(9\.6 wide\), the legs 32 c\/c/.test(therm.flags[0])
+    && std11.blocks.length === 0 && std11.flags.length === 1 && small.blocks.length === 1 && /does not go in/.test(small.blocks[0])
+    && wide.blocks.length === 0 && wide.flags.some(f => /bracket for another tube/.test(f)) && gap4.blocks.some(b => /does not fit this U width/.test(b)),
+    JSON.stringify([therm, std11, small, wide, gap4]));
+  // A pitch typed in the fin item's notes, and a nipple set at the terminal end.
+  const pInv = R.finDefaults({ pitchInv: 2.8 }), pAns = R.finDefaults({ pitchInv: 2.8, pitchAns: 4 });
+  const notePitch = P.parseSizeNotes('MS Finns 8mm OD-28.44, ID-8.35, Pitch-2.9', 'fin').fields;
+  const nip = R.finDefaults({ clearOf: { mm: 33.1, what: 'NIP-BR-M16-HEX nipple set' } }), nipAns = R.finDefaults({ stopAns: 30, clearOf: { mm: 33.1, what: 'NIP-BR-M16-HEX nipple set' } });
+  const nipBr = R.finDefaults({ hasBrackets: true, clearOf: { mm: 23, what: 'M12 nipple set' } });
+  ok('11d. the pitch: her answer, else the fin item\'s inventory notes ("Pitch-2.9" is read), else 3; a nipple set reaching 33.1 mm moves the default stop to 37 (a pitch past it, said why), her stop of 30 is refused; with brackets the stop stays at the bracket when the nipple is shorter',
+    pInv.pitchMm === 2.8 && /inventory notes/.test(pInv.sources.pitch) && pAns.pitchMm === 4 && notePitch.pitchMm === 2.9
+    && nip.stopMm === 37 && /clear of the NIP-BR-M16-HEX nipple set \(it reaches 33\.1 mm/.test(nip.sources.stop) && !nip.errors.length
+    && nipAns.errors.length === 1 && /over the NIP-BR-M16-HEX nipple set/.test(nipAns.errors[0]) && nipBr.stopMm === 38.1,
+    JSON.stringify([pInv, nip.sources.stop, nipAns.errors]));
+  // The remark's fin wordings.
+  const rH = R.parseRemark('SS-Finns + Nut Washer'), rG = R.parseRemark('SSFinns, nut washer'), rNo = R.parseRemark('Without Finns, Nut Washer'), rNo2 = R.parseRemark('No fins');
+  ok('11e. the remark: "SS-Finns" and "SSFinns" are SS fins; "Without Finns" / "No fins" is not finned (its words are asked about)',
+    rH.fins && rH.finMaterial === 'SS' && rG.fins && rG.finMaterial === 'SS' && !rNo.fins && !rNo2.fins && rNo.unread.includes('WITHOUT') && rNo2.unread.includes('NO'),
+    JSON.stringify([rH.fins, rG.fins, rNo.unread, rNo2.unread]));
+  // The finned sheet itself: fins, brackets and true sizes rendered (no database).
+  const SZ = (...codes) => Object.fromEntries(codes.map(c => [c, { ...P.SEED[c], kind: P.kindOf(c) }]));
+  const base = (d, uIn, outside) => {
+    const t = R.totalLength({ uIn, diaMm: d, outsideWidthMm: outside });
+    const m5 = d === 11;
+    return { t, spec: {
+      banner: 'U TYPE HEATER | TEST', title: 'U TYPE HEATER — 1000 W / 230 V', subtitle: 'test', terminalNote: 'M4 SS PIN 3" + MS FINNS + BRACKETS',
+      item: { drawingNumber: `PT-UType-${uIn}U-1kw`, qty: 12, finish: 'No Plating' },
+      tube: { code: 'TUB-SS304-038-T06', diaMm: d, wallMm: 0.6, material: 'SS304', label: `SS304 TUBE, DRAWN TO Ø${d}` },
+      shape: { uLabel: `${uIn}U`, uLengthIn: uIn, uLengthMm: t.drawnULengthMm, nominalULengthMm: uIn * 25.4, outsideWidthMm: outside, insideMm: outside - 2 * d, rollerMm: outside - 2 * d - 2 },
+      geo: t.geo, r1: { mode: '2u', totalLengthStr: t.str, formula: t.formula },
+      fitting: { set: 'nut_washer_brackets', confirmed: false, pin: ['nut', 'washer', 'washer', 'nut'], tube: ['bracket'] },
+      card: { totalLengthIn: t.num + 0.7, cuttingLengthIn: 29.5, cuttingLengthMm: 749.3, coldZoneBigIn: 2, coldZoneSmallIn: 2, pinStudsIn: 3, studLabel: m5 ? 'M5' : 'M4', gauge: 29,
+        wireDiaMm: 0.35, mandrelMm: 2, wireCode: 'SPR-KD-29', heatedMm: 812.8, rows: [['Rating', '1000 W'], ['Fins', ['MS FINS', 'round the bend', 'over the fins']], ['Brackets', ['2 × B', '38.1 from the outer end of the U']]] },
+      parts: [
+        { no: 1, key: 'bracket', role: 'bracket', code: 'BKT-FMH-H788-MS', stage: ['St 26', 'Nut Washer'], line1: 'BKT-FMH-H788-MS · Bracket', gu: '', hi: '', perPc: '2', forOrder: '24' },
+        { no: 2, key: 'esb', role: 'esb', code: m5 ? 'ESB-11' : 'ESB-08', stage: ['St 23', 'Sealing'], line1: 'ESB', gu: '', hi: '', perPc: '2', forOrder: '24' },
+        { no: 3, key: 'nut', role: 'nut', code: m5 ? 'NUT-SS-M5-11' : 'NUT-SS-M4-08', stage: ['St 26', 'Nut Washer'], line1: 'NUT', gu: '', hi: '', perPc: '4', forOrder: '48' },
+        { no: 4, key: 'washer', role: 'washer', code: m5 ? 'WSH-SS-11' : 'WSH-BR-08', stage: ['St 26', 'Nut Washer'], line1: 'WSH', gu: '', hi: '', perPc: '4', forOrder: '48' },
+        { no: 5, key: 'fins', role: 'fins', code: m5 ? 'FIN-MS-11' : 'FIN-MS-08', stage: ['Stock St 29', 'by tube length'], line1: 'FIN', gu: '', hi: '', perPc: '0.202 kg', forOrder: '2.422 kg' }],
+      notes: ['test'],
+      partSizes: SZ(m5 ? 'ESB-11' : 'ESB-08', m5 ? 'NUT-SS-M5-11' : 'NUT-SS-M4-08', m5 ? 'WSH-SS-11' : 'WSH-BR-08', 'BKT-FMH-H788-MS', m5 ? 'FIN-MS-11' : 'FIN-MS-08'),
+      tb: { status: 'FOR APPROVAL', material: 'SS304', wattVolt: '1000 W · 230 V', qty: '12 NOS', client: 'X', product: 'PT-UType', dwgNo: 'X', rev: '00', date: '16.11.2026', order: 'ORD-X', drawn: 'PHE APP', checked: '—', approved: 'OWNER' },
+    } };
+  };
+  const finned = (d, uIn, outside, onBend) => {
+    const { t, spec } = base(d, uIn, outside);
+    const od = d === 11 ? 31.55 : 28.44;
+    const l = R.finLayout({ geo: t.geo, diaMm: d, drawnULengthMm: t.drawnULengthMm, finOdMm: od, pitchMm: 3, onBend, stopMm: 38.1, brackets: { fromBendMm: 38.1, fromEndMm: 38.1, thkMm: 1.2 } });
+    spec.fins = { code: d === 11 ? 'FIN-MS-11' : 'FIN-MS-08', material: 'MS', odMm: od, idMm: 8.35, pitchMm: 3, onBend, stopBeforeEndMm: 38.1,
+      bracketGapMm: l.bendSideFinned ? l.gapMm : null, bareToMm: l.bendSideFinned ? null : l.gapToMm, finnedLengthMm: l.finnedLengthMm, clearMm: l.clearMm,
+      label: `MS FINS (${d === 11 ? 'FIN-MS-11' : 'FIN-MS-08'})` };
+    spec.brackets = { code: 'BKT-FMH-H788-MS', perHeater: 2, fromBendMm: 38.1, fromEndMm: 38.1, size: { lenMm: 75.2, hMm: 36, wMm: 55, thkMm: 1.2, slotWMm: 9.6, lipMm: 10.8 } };
+    return { spec, out: renderUTypeSheet(spec), l };
+  };
+  const a8 = finned(8, 18, 43, true), b8 = finned(8, 18, 43, false), a11 = finned(11, 21, 49, true);
+  const good = (o, label) => o.out.html.includes(`${label} · OD `) && (o.out.html.match(/&gt;38\.1 \(1\.5&quot;\)<|>38\.1 \(1\.5&quot;\)</g) || []).length >= 2
+    && /SECTION T–T, ONE LEG/.test(o.out.html) && /FINS [0-9.]+ APART/.test(o.out.html) && !/NaN|null SWG|undefined/.test(o.out.html) && o.out.notesFit && o.out.tablesFit !== false
+    && /clamped in its slots/.test(o.out.html) && !/before the ESB/.test(o.out.html) && !/stroke-dasharray="1\.2 0\.8"/.test(o.out.html)
+    && (o.out.html.match(/fill="#e2e6ea"/g) || []).length === 2 && !o.out.html.includes("#f3f5f7");
+  ok('11f. the finned sheet renders (pure): 18U Ø8 round the bend with 2 brackets — the fin row "MS FINS (FIN-MS-08) · OD 28.44", both 1.5" bracket figures, Section T–T one leg with the fins\' clearance, the bracket "clamped in its slots" (not "before the ESB"), each bracket foot drawn as her top view (one plate each, pointing away from the middle — no dashed foot), the fins as loops (no grey envelope), no NaN / null; the same with the bend bare (no GAP AT THE BRACKET) and on Ø11 (FIN-MS-11, 21U at 49)',
+    good(a8, 'MS FINS (FIN-MS-08)') && a8.out.html.includes('GAP AT THE BRACKET') && good(b8, 'MS FINS (FIN-MS-08)') && !b8.out.html.includes('GAP AT THE BRACKET')
+    && b8.out.html.includes('STRAIGHT LEGS ONLY, BEND BARE') && good(a11, 'MS FINS (FIN-MS-11)'),
+    [a8, b8, a11].map(o => `${o.out.notesFit}/${o.out.tablesFit}/${(o.out.html.match(/>38\.1 \(1\.5&quot;\)</g) || []).length}`).join(' '));
+  // The tables never run into the title block: a long list is set smaller, and one too long is refused.
+  // The real element table: 16 one-line rows, the Fins row (3 lines) and the Brackets row (2).
+  const longP = (n) => { const { spec } = finned(8, 18, 43, true);
+    spec.card.rows = [...Array.from({ length: 16 }, (_, i) => [`Row ${i}`, 'x']), ['Fins', ['a', 'b', 'c']], ['Brackets', ['a', 'b']]];
+    spec.parts = Array.from({ length: n }, (_, i) => ({ no: i + 1, key: 'nut', role: 'nut', code: `NUT-${i}`, stage: ['St 26', 'Nut Washer'], line1: `NUT-${i} · a nut`, gu: 'ગુ', hi: 'हि', perPc: '1', forOrder: '12' })); return renderUTypeSheet(spec); };
+  const fits14 = longP(15), over = longP(50);
+  const plainSpec = base(8, 18, 43).spec; delete plainSpec.partSizes;
+  ok('11g. the parts table: 15 lines under a finned + bracketed element table (18 rows) are set one line a cell, smaller, and fit (tablesFit); 50 lines cannot (tablesFit false — the agent refuses the sheet); a plain sheet is not touched',
+    fits14.tablesFit === true && fits14.html.includes('>St 26 Nut Washer</text>') && over.tablesFit === false && renderUTypeSheet(plainSpec).tablesFit === true, `${fits14.tablesFit} ${over.tablesFit}`);
+}
+
+// 12. The heavy terminal pin set (owner, 16 Nov 2026): 2 heavy pins, 2 heavy nuts, 4 heavy washers per element.
+{
+  const L2 = (...xs) => xs.map(([code, qty]) => ({ code, qty }));
+  const rem = R.parseRemark('FINNS + HEAVY TERMINAL PIN');
+  const good = R.fittingSetFor(rem, L2(['ESB-08', 50], ['TP-HV-M6XM4', 50], ['NUT-HV-M6-07', 50], ['WSH-HV-07', 100], ['FIN-MS-08', 0]), 25);
+  const short = R.fittingSetFor(rem, L2(['ESB-08', 50], ['TP-HV-M6XM4', 50], ['NUT-HV-M6-07', 25], ['WSH-HV-07', 50]), 25);
+  const m4 = R.fittingSetFor(rem, L2(['ESB-08', 40], ['TP-HV-M6XM4', 40], ['NUT-HV-M6-07', 40], ['WSH-HV-07', 80], ['NUT-SS-M4-08', 24], ['NUT-BR-M4-08', 2]), 20);
+  const PS = require(S + '/src/lib/drawings/partSizes.js').SEED;
+  ok('12a. heavy terminal pin set: 2 pins + 2 heavy nuts + 4 heavy washers per heater raises nothing; 1 nut / 2 washers per heater are flagged; M4 nuts on a heavy list (item 1922: 1.2 SS + 0.1 brass) are flagged; the heavy parts have their sizes from her drawings (pin hex 6.9 AF × 14 + M6 stud 5.8 × 12.9, nut 9.5 AF × 4.3, washer 12.5 / 6.1 × 0.9)',
+    good.set === 'heavy_pin' && good.notes.length === 0
+    && short.notes.some(x => /takes 2 heavy terminal nuts per heater .*the list has 1$/.test(x)) && short.notes.some(x => /takes 4 heavy terminal washers per heater .*the list has 2$/.test(x))
+    && m4.notes.some(x => /also has 1\.3 M4 \/ M5 nut/.test(x))
+    && PS['TP-HV-M6XM4'].headLenMm === 14 && PS['TP-HV-M6XM4'].spigotLenMm === 12.9 && PS['NUT-HV-M6-07'].afMm === 9.5 && PS['WSH-HV-07'].odMm === 12.5,
+    JSON.stringify([good.notes, short.notes, m4.notes]));
+}
+
+// 12b. 8 mm and 11 mm heavy sets differ (owner, 16 Nov 2026): the 8 mm set on an Ø11 list is refused, and the reverse.
+{
+  const L2 = (...xs) => xs.map(([code, qty]) => ({ code, qty }));
+  const on11 = R.partsForOtherTube(L2(['ESB-11', 2], ['TP-HV-M6XM4', 2], ['NUT-HV-M6-07', 2], ['WSH-HV-07', 4]), 11);
+  const on8 = R.partsForOtherTube(L2(['ESB-08', 2], ['TP-HV-M6XM4', 2], ['NUT-HV-M6-07', 2], ['WSH-HV-07', 4]), 8);
+  const m5on8 = R.partsForOtherTube(L2(['TP-HV-M6XM5', 2]), 8);
+  const PS = require(S + '/src/lib/drawings/partSizes.js').SEED;
+  ok('12b. heavy sets by tube: TP-HV-M6XM4 + NUT-HV-M6-07 + WSH-HV-07 are the 8 mm set — fine on Ø8, all three refused on Ø11; TP-HV-M6XM5 (M5 pin) refused on Ø8; the M5 pin has no seed size (its drawing is a copy of the M3 sheet)',
+    on8.length === 0 && on11.map(x => x.code).join() === 'TP-HV-M6XM4,NUT-HV-M6-07,WSH-HV-07' && m5on8.length === 1 && !PS['TP-HV-M6XM5'] && PS['NUT-HV-M6-07'].tubeMm === 8,
+    JSON.stringify([on11, m5on8]));
+}
+
+// 9e runs on a promise: the summary waits for it.
+setImmediate(() => setTimeout(() => {
+  console.log(failed ? `\n${failed} CHECK(S) FAILED` : '\nALL PASS');
+  process.exit(failed ? 1 : 0);
+}, 0));

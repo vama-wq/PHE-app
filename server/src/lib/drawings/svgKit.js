@@ -42,11 +42,14 @@ function fitSize(str, width, size, weight = 400, min = size * 0.6) {
 }
 
 // One line of text, or several when `str` is an array (line height = size × 1.25).
-function text(x, y, str, { size = 2.3, anchor = 'start', weight = 400, color = INK, rotate = 0, family = null, italic = false } = {}) {
+// `halo` (a width in mm) rings the letters in white so a label set over the
+// fins on a finned heater still reads (16 Nov 2026).
+function text(x, y, str, { size = 2.3, anchor = 'start', weight = 400, color = INK, rotate = 0, family = null, italic = false, halo = 0 } = {}) {
   const lines = Array.isArray(str) ? str : [str];
   const rot = rotate ? ` transform="rotate(${rotate} ${f(x)} ${f(y)})"` : '';
   const fam = family ? ` font-family="${family}"` : '';
-  return lines.map((s, i) => `<text x="${f(x)}" y="${f(y + i * size * 1.25)}" font-size="${size}" text-anchor="${anchor}" font-weight="${weight}" fill="${color}"${italic ? ' font-style="italic"' : ''}${fam}${rot}>${esc(s)}</text>`).join('');
+  const hal = halo ? ` stroke="#fff" stroke-width="${f(halo)}" stroke-linejoin="round" paint-order="stroke"` : '';
+  return lines.map((s, i) => `<text x="${f(x)}" y="${f(y + i * size * 1.25)}" font-size="${size}" text-anchor="${anchor}" font-weight="${weight}" fill="${color}"${italic ? ' font-style="italic"' : ''}${fam}${rot}${hal}>${esc(s)}</text>`).join('');
 }
 // A filled arrowhead with its tip at (x, y), pointing along `angle` (radians).
 function arrowhead(x, y, angle, { len = 2.2, half = 0.65, color = DIM } = {}) {
@@ -57,7 +60,7 @@ function arrowhead(x, y, angle, { len = 2.2, half = 0.65, color = DIM } = {}) {
 // Horizontal dimension: extension lines from the feature points (x1, fromY1)
 // and (x2, fromY2) to the dimension line at y, arrows at both ends, value above.
 // Too short for arrows inside → arrows outside pointing in.
-function dimH(x1, x2, y, label, { fromY1 = null, fromY2 = null, size = 2.4, above = true, color = DIM } = {}) {
+function dimH(x1, x2, y, label, { fromY1 = null, fromY2 = null, size = 2.4, above = true, color = DIM, halo = 0 } = {}) {
   const out = [];
   const gap = 0.8;
   for (const [x, fy] of [[x1, fromY1], [x2, fromY2]]) {
@@ -71,11 +74,11 @@ function dimH(x1, x2, y, label, { fromY1 = null, fromY2 = null, size = 2.4, abov
     out.push(line(x1 - 4, y, x1, y, { w: 0.18, color }), line(x2, y, x2 + 4, y, { w: 0.18, color }));
     out.push(arrowhead(x1, y, 0, { color }), arrowhead(x2, y, Math.PI, { color }));
   }
-  out.push(text((x1 + x2) / 2, above ? y - 0.9 : y + size + 0.4, label, { size, anchor: 'middle', color }));
+  out.push(text((x1 + x2) / 2, above ? y - 0.9 : y + size + 0.4, label, { size, anchor: 'middle', color, halo }));
   return out.join('');
 }
 // Vertical dimension at x between y1 and y2; value reads bottom-to-top.
-function dimV(y1, y2, x, label, { fromX1 = null, fromX2 = null, size = 2.4, color = DIM, left = true } = {}) {
+function dimV(y1, y2, x, label, { fromX1 = null, fromX2 = null, size = 2.4, color = DIM, left = true, halo = 0 } = {}) {
   const out = [];
   const gap = 0.8;
   for (const [y, fx] of [[y1, fromX1], [y2, fromX2]]) {
@@ -90,7 +93,7 @@ function dimV(y1, y2, x, label, { fromX1 = null, fromX2 = null, size = 2.4, colo
     out.push(arrowhead(x, y1, Math.PI / 2, { color }), arrowhead(x, y2, -Math.PI / 2, { color }));
   }
   const tx = left ? x - 0.9 : x + size + 0.2;
-  out.push(text(tx, (y1 + y2) / 2, label, { size, anchor: 'middle', color, rotate: -90 }));
+  out.push(text(tx, (y1 + y2) / 2, label, { size, anchor: 'middle', color, rotate: -90, halo }));
   return out.join('');
 }
 // A small dimension straight across a narrow feature (a tube seen side on, its
@@ -104,7 +107,7 @@ function dimAcross(x, y1, y2, label, { size = 2.2, tail = 1.8, color = DIM, belo
 }
 // Leader: a dot on the feature, a line to the label, a short shoulder, the label.
 // The label sits on the side the leader runs to, unless `side` says 'left' / 'right'.
-function leader(fx, fy, lx, ly, label, { size = 2.3, color = INK, dot = true, weight = 400, side = null } = {}) {
+function leader(fx, fy, lx, ly, label, { size = 2.3, color = INK, dot = true, weight = 400, side = null, halo = 0 } = {}) {
   const right = side ? side === 'right' : lx >= fx;
   const sx = lx + (right ? 2.5 : -2.5);
   const lines = Array.isArray(label) ? label : [label];
@@ -112,7 +115,7 @@ function leader(fx, fy, lx, ly, label, { size = 2.3, color = INK, dot = true, we
     dot ? circle(fx, fy, 0.45, { fill: color, stroke: 'none' }) : '',
     line(fx, fy, lx, ly, { w: 0.18, color }),
     line(lx, ly, sx, ly, { w: 0.18, color }),
-    text(sx + (right ? 0.8 : -0.8), ly + size * 0.35, lines, { size, anchor: right ? 'start' : 'end', color, weight }),
+    text(sx + (right ? 0.8 : -0.8), ly + size * 0.35, lines, { size, anchor: right ? 'start' : 'end', color, weight, halo }),
   ].join('');
 }
 // A numbered balloon (the part's line in the parts table).
