@@ -185,7 +185,10 @@ function Queue({ onOpen }) {
 // ── One item: the sheet, the questions, the card, the approval ────────────────
 // A question missing here is not shown, yet a required one still blocks the approval.
 const FIELD_ORDER = ['fitting_set', 'nipple', 'nuts', 'u_length_in', 'inside_mm', 'roller_mm', 'cold_zone_in', 'cold_zone_small_in',
-  'pin_in', 'pin_small_in', 'fixture', 'asmbly', 'dispatch_date', 'terminal_group'];
+  'pin_in', 'pin_small_in',
+  // Finned U (owner, 16 Nov 2026): round the bend, where the fins stop, the pitch, the two brackets.
+  'fins_on_bend', 'fin_stop_mm', 'fin_pitch_mm', 'bracket_from_bend_mm', 'bracket_from_end_mm',
+  'fixture', 'asmbly', 'dispatch_date', 'terminal_group'];
 
 function Field({ q, value, onChange, onReset }) {
   const missing = q.required && !String(value ?? '').trim();
@@ -427,6 +430,9 @@ function ItemSheet({ itemId, onBack }) {
                     ['Resistance', `${Number(f.ohms).toFixed(2)} Ω (${Number(f.ohmsMin).toFixed(2)} – ${Number(f.ohmsMax).toFixed(2)})`],
                     ['Terminal pins', `${f.stud} ${f.pinBig}" / ${f.pinSmall}"${f.pinOverridden ? ' (set by you)' : ''} — ${f.pins?.big || '?'} + ${f.pins?.small || '?'}`],
                     ['Job card' + (cardCount > 1 ? 's' : ''), (f.names || []).map((n, i) => `${n} (${f.quantities[i]})`).join(', ')],
+                    // Finned U (owner, 16 Nov 2026): where the fins run and what St 29 takes.
+                    ...(f.fins ? [['Fins', `${f.fins.label} · ${f.fins.onBend ? 'round the bend' : 'legs only'} · ${f.fins.stopBeforeEndMm} mm bare each end${f.fins.kgForOrder != null ? ` · ${f.fins.kgForOrder} kg at St 29` : ''}`]] : []),
+                    ...(f.brackets ? [['Brackets', `${f.brackets.perHeater} × ${f.brackets.code || '—'} · ${f.brackets.fromBendMm} from the bend · ${f.brackets.fromEndMm} from the tube end`]] : []),
                   ].map(([k, v]) => (
                     <div key={k} className="flex gap-3 px-3 py-1.5">
                       <span className="w-28 flex-shrink-0 text-gray-500">{k}</span>

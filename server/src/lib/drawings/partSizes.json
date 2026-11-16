@@ -1,0 +1,62 @@
+{
+  "about": "Sizes of the parts that go on a U heater, read on 16 Nov 2026 from her item drawings (Inventory → the item's drawing, as stored in the app) and from the inventory notes. A SNAPSHOT of 16 Nov 2026, never updated: on every sheet lib/drawings/partSizes.js reads the item's CURRENT inventory notes, and a size typed there wins over this file for that one field. All mm. lenMm = the part's length or thickness along the tube / pin axis (a bracket's: the 1.2 sheet of the upright the legs pass through; its foot is footLenMm). A note's own words are kept where the meaning is not stated. Owner, 16 Nov 2026: \"you can also get the inventory's like finns and esb that is the ceramic bead, or any other material that goes onto the heater from the inventory for its dia and dimensions for accurate drawings\".",
+  "parts": {
+    "ESB-08": { "kind": "esb", "odMm": 7.9, "idMm": 4.2, "lenMm": 6.0, "edgeRMm": 0.2, "material": "CERAMIC",
+      "source": "item drawing ESB 8MM.pdf (21.08.2026)", "shape": "a plain ceramic ring, edges R0.2" },
+    "ESB-11": { "kind": "esb", "odMm": 10.9, "idMm": 5.1, "lenMm": 5.0, "chamferDeg": 45, "chamferMm": 0.5, "chamferToOdMm": 9.9, "material": "CERAMIC",
+      "source": "item drawing ESB-11.pdf (29.05.25)",
+      "shape": "a plain ring chamfered 45° at BOTH ends to Ø9.9 — no head and no spigot; the sheet's material box says SS, the ESB is the ceramic bead (Ms. Vama, 16 Nov 2026)" },
+    "ESB-090": { "kind": "esb", "odMm": 8.4, "idMm": 4.13, "headLenMm": 2.92, "material": "CERAMIC", "source": "inventory notes (16 Nov 2026)",
+      "shape": "notes: \"Od-8.40,ID-4.13,Head-2.92\" — no length given" },
+    "ESB-260": { "kind": "esb", "odMm": 10.54, "idMm": 5.13, "headLenMm": 4.76, "material": "CERAMIC", "source": "inventory notes (16 Nov 2026)",
+      "shape": "notes: \"OD-10.54,ID-5.13,Head-4.76\" — no length given" },
+
+    "NUT-SS-M4-08": { "kind": "nut", "thread": "M4", "odMm": 7.9, "afMm": 6.8, "idMm": 3.3, "lenMm": 2.9, "material": "SS",
+      "source": "item drawing NUT-SS-M4-08.pdf (01.06.2026)", "shape": "hex nut: 7.9 across corners, 6.8 across flats, 2.9 thick" },
+    "NUT-BR-M4-08": { "kind": "nut", "thread": "M4", "odMm": 7.9, "afMm": 6.8, "idMm": 3.3, "lenMm": 2.9, "material": "BRASS",
+      "source": "item drawing NUT-BR-M4-08.pdf", "shape": "hex nut: 7.9 across corners, 6.8 across flats, 2.9 thick" },
+    "NUT-SS-M5-11": { "kind": "nut", "thread": "M5", "odMm": 11, "idMm": 5, "lenMm": 3.87, "material": "SS", "source": "inventory notes (16 Nov 2026)" },
+    "NUT-BR-M5-11": { "kind": "nut", "thread": "M5", "odMm": 11, "idMm": 5, "lenMm": 3.87, "material": "BRASS", "source": "inventory notes (16 Nov 2026)" },
+
+    "WSH-BR-08": { "kind": "washer", "odMm": 9.0, "idMm": 4.4, "lenMm": 0.6, "material": "BRASS", "source": "item drawing NUT-BR-M4-08.pdf (the M4 nut + washer sheet)" },
+    "WSH-BR-11": { "kind": "washer", "odMm": 10.29, "idMm": 5.49, "lenMm": 0.8, "material": "BRASS", "source": "inventory notes (16 Nov 2026)" },
+    "WSH-SS-11": { "kind": "washer", "odMm": 10.29, "idMm": 5.49, "lenMm": 0.8, "material": "SS", "source": "inventory notes (16 Nov 2026)" },
+
+    "PVC-FB08-M4": { "kind": "fbush", "odMm": 9.2, "headOdMm": 9.2, "headLenMm": 1.0, "spigotOdMm": 7.2, "spigotLenMm": 5.8, "tipOdMm": 5.3, "idMm": 3.8, "lenMm": 6.8, "material": "PVC",
+      "source": "item drawing PVC-FB08-M4.pdf (08.01.2026)", "shape": "Ø9.2 × 1.0 head, then a spigot tapering from Ø7.2 to Ø5.3 (R1.0), 6.8 overall, bore Ø3.8" },
+    "PVC-FB11-M5": { "kind": "fbush", "odMm": 12.9, "headOdMm": 12.9, "headLenMm": 0.8, "spigotOdMm": 10.1, "spigotLenMm": 5.9, "idMm": 4.8, "lenMm": 6.7, "material": "PVC",
+      "source": "item drawing PVC-FB11-M5.pdf (08.01.2026)", "shape": "Ø12.9 × 0.8 head, then a Ø10.1 spigot, 6.7 overall, bore Ø4.8" },
+
+    "BKT-FMH-H788-MS": { "kind": "bracket", "lenMm": 1.2, "thkMm": 1.2, "footLenMm": 75.2, "lipMm": 10.8, "hMm": 36.0, "wMm": 55.0, "slotWMm": 9.6, "slotRMm": 4.8, "slots": 3,
+      "screw": "M3.5", "screwCcMm": 36.1, "footHoleMm": 7.9, "material": "MS",
+      "source": "item drawing BKT-FMH-H788.pdf (29.05.25)",
+      "shape": "an L bracket: a 36 high × 55 wide upright with 3 U-slots 9.6 wide (R4.8) the legs sit in, clamped by two M3.5 screws at 36.1 c/c; a 75.2 foot; 1.2 sheet" },
+    "BKT-FMH-H788-SS": { "kind": "bracket", "lenMm": 1.2, "thkMm": 1.2, "footLenMm": 75.2, "lipMm": 10.8, "hMm": 36.0, "wMm": 55.0, "slotWMm": 9.6, "slotRMm": 4.8, "slots": 3,
+      "screw": "M3.5", "screwCcMm": 36.1, "footHoleMm": 7.9, "material": "SS",
+      "source": "item drawing BKT-FMH-H788.pdf (the MS bracket's sheet — the SS item has only a screenshot)",
+      "shape": "as BKT-FMH-H788-MS, in SS" },
+    "BKT-FMH-H1250": { "kind": "bracket", "lenMm": 1.2, "thkMm": 1.2, "footLenMm": 75.2, "lipMm": 10.8, "hMm": 36.0, "wMm": 55.0, "slotWMm": 12.3, "slotRMm": 6.15, "slots": 3,
+      "screw": "M3.5", "screwCcMm": 36.1, "footHoleMm": 7.9, "material": "SS",
+      "source": "item drawing BKT-FMH-H1250.pdf (BRACKET- 11MM, 25.06.2026)",
+      "shape": "an L bracket: a 36 high × 55 wide upright with 3 U-slots 12.3 wide the legs sit in, clamped by two M3.5 screws at 36.1 c/c; a 75.2 foot; 1.2 sheet" },
+
+    "FIN-MS-08": { "kind": "fin", "odMm": 28.44, "idMm": 8.35, "material": "MS", "helical": true,
+      "source": "item drawing FIN-MS-08.pdf (MS 8MM FINNS & SS 8MM FINNS, 19.11.2025)", "shape": "a continuous helical strip; pitch and thickness not dimensioned" },
+    "FIN-SS-08-VE": { "kind": "fin", "odMm": 28.5, "idMm": 8.78, "material": "SS", "helical": true,
+      "source": "item drawing FIN-MS-08.pdf (MS 8MM FINNS & SS 8MM FINNS, 19.11.2025)", "shape": "a continuous helical strip; pitch and thickness not dimensioned" },
+    "FIN-MS-11": { "kind": "fin", "odMm": 31.55, "idMm": 11.4, "material": "MS", "helical": true,
+      "source": "item drawing FIN-MS-11.pdf (MS 11MM FINNS & SS 11 MM FINNS, 19.11.2025)", "shape": "a continuous helical strip; pitch and thickness not dimensioned" },
+    "FIN-SS-11-VE": { "kind": "fin", "odMm": 31.59, "idMm": 11.35, "material": "SS", "helical": true,
+      "source": "item drawing FIN-MS-11.pdf (MS 11MM FINNS & SS 11 MM FINNS, 19.11.2025)", "shape": "a continuous helical strip; pitch and thickness not dimensioned" },
+
+    "NIP-BR-M12-HEX": { "kind": "nipple", "thread": "M12", "lenMm": 26.5, "holeOdMm": 13, "idMm": 8, "grooveMm": 2.2, "material": "BRASS",
+      "source": "inventory notes of NIP-BR-M12-HEX-N (16 Nov 2026) — the nipple's and the nut's notes are typed on each other's line" },
+    "NIP-BR-M12-HEX-N": { "kind": "nipnut", "thread": "M12", "odMm": 18.98, "idMm": 10.5, "lenMm": 5.02, "material": "BRASS",
+      "source": "inventory notes of NIP-BR-M12-HEX (16 Nov 2026) — the nipple's and the nut's notes are typed on each other's line" },
+    "NIP-BR-M14-HEX": { "kind": "nipple", "thread": "M14", "lenMm": 27, "holeOdMm": 13.9, "idMm": 8, "grooveMm": 1.9, "material": "BRASS", "source": "inventory notes (16 Nov 2026)" },
+    "NIP-BR-M14-HEX-N": { "kind": "nipnut", "thread": "M14", "odMm": 21.93, "idMm": 14.55, "lenMm": 6.22, "material": "BRASS", "source": "inventory notes (16 Nov 2026)" },
+    "NIP-BR-M16-HEX": { "kind": "nipple", "thread": "M16", "lenMm": 30.1, "holeOdMm": 16, "idMm": 11, "grooveMm": 2.55, "material": "BRASS", "source": "inventory notes (16 Nov 2026)" },
+    "NIP-BR-M16-HEX-N": { "kind": "nipnut", "thread": "M16", "odMm": 24.04, "idMm": 14.5, "lenMm": 5.05, "material": "BRASS", "source": "inventory notes (16 Nov 2026)" },
+    "NIP-BR-M16-8MM-N": { "kind": "nipnut", "thread": "M16", "odMm": 23.88, "idMm": 14.55, "lenMm": 13.21, "material": "BRASS", "source": "inventory notes (16 Nov 2026)" }
+  }
+}

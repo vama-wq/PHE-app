@@ -558,6 +558,52 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       } else ok('Q7. the customer TS exists to test the width history flag with', false);
     }
 
+    // ── R. Finned U (owner, 16 Nov 2026): round the bend, 25 mm bare at each end;
+    // with brackets 1.5" from both ends and the fins stop at the terminal-end one ──
+    {
+      const finInv = Object.fromEntries((await qa('SELECT id, item_code FROM inventory_items WHERE item_code = ANY($1)',
+        [['FIN-MS-08', 'BKT-FMH-H788-MS']])).map(x => [x.item_code, x.id]));
+      if (finInv['FIN-MS-08'] && finInv['BKT-FMH-H788-MS'] && inv['ESB-08'] && inv['NUT-SS-M4-08'] && inv['WSH-BR-08']) {
+        Object.assign(inv, finInv);
+        const W = require(S + '/src/lib/inventoryDeduction.js').FINS_WEIGHT_PER_BASE;
+        const qOf = (pp, k) => (pp.questions || []).find(x => x.key === k);
+        const oR = await mkOrder();
+        const iF = await mkItem(oR, { qty: 6, remark: 'MS Finns + Nut Washer', lines: [['ESB-08', 2], ['NUT-SS-M4-08', 4], ['WSH-BR-08', 4], ['FIN-MS-08', 0]] });
+        const pf = (await call('GET', `/api/drawing-agent/items/${iF}`)).body;
+        const want = R.finKg({ code: 'FIN-MS-08', weights: W, totalLengthMm: Math.round(Number(pf.figures?.cardTotalIn) * 25.4 * 100) / 100, elements: 1, quantities: pf.figures?.quantities || [] });
+        const finPart = (pf.parts || []).find(x => x.code === 'FIN-MS-08');
+        ok('R1. a finned U is drawn (no longer "phase 2"): fixture "MS Finns + Nut Washer", fins round the bend 25 mm short of each end at pitch 3 (her rulings as answers), the fin line at St 29 by tube length with the kg St 29 will take, the fin OD from her drawing (28.44)',
+          pf.status === 'ready' && pf.body.fixture === 'MS Finns + Nut Washer' && qOf(pf, 'fins_on_bend')?.value === 'yes' && qOf(pf, 'fin_stop_mm')?.value === '25'
+          && qOf(pf, 'fin_pitch_mm')?.value === '3' && !qOf(pf, 'bracket_from_bend_mm') && !!want && pf.figures.fins.kgForOrder === want.kgForOrder
+          && finPart?.stage === 'St 29 by tube length' && finPart.perPc === `${want.kgPerPc.toFixed(3)} kg` && pf.figures.fins.odMm === 28.44 && pf.figures.fins.onBend === true
+          && pf.html.includes('MS FINS (FIN-MS-08)'), `${pf.status} ${pf.statusLine} ${JSON.stringify(pf.figures?.fins)} ${JSON.stringify(finPart)}`);
+        const pfNo = (await call('POST', `/api/drawing-agent/items/${iF}/preview`, { answers: { fins_on_bend: 'no' } })).body;
+        ok('R2. "Fins on the bend: No" (F2): the bend stays bare — the finned length drops by the bend, a new sheet code, still ready',
+          pfNo.status === 'ready' && pfNo.figures.fins.onBend === false && pfNo.figures.fins.finnedLengthMm < pf.figures.fins.finnedLengthMm && pfNo.sheetCode !== pf.sheetCode,
+          `${pfNo.status} ${pfNo.figures?.fins?.finnedLengthMm} vs ${pf.figures?.fins?.finnedLengthMm}`);
+        r = await call('POST', `/api/drawing-agent/items/${iF}/approve`, { answers: {}, sheet_code: pf.sheetCode });
+        const specF = await q1('SELECT agent_spec FROM order_drawings WHERE item_id=$1', [iF]);
+        ok('R3. approved: one drawing and one card; the frozen spec carries the fins (round the bend, 25 mm, the kg)',
+          r.status === 201 && (await nDraw(iF)) === 1 && (await nCards(iF)) === 1 && specF?.agent_spec?.figures?.fins?.kgForOrder === want?.kgForOrder
+          && specF.agent_spec.figures.fins.stopBeforeEndMm === 25, `${r.status} ${r.body.error || ''}`);
+        const iB = await mkItem(oR, { qty: 6, remark: 'MS Finns + Brackets', lines: [['ESB-08', 2], ['NUT-SS-M4-08', 4], ['WSH-BR-08', 4], ['BKT-FMH-H788-MS', 2], ['FIN-MS-08', 0]] });
+        const pbk = (await call('GET', `/api/drawing-agent/items/${iB}`)).body;
+        ok('R4. fins + brackets (F3): "MS Finns + Brackets"; brackets 38.1 from the bend and from the tube end; the fins stop at the terminal-end bracket (38.1) with a gap at the bend-end one',
+          pbk.body?.fixture === 'MS Finns + Brackets' && qOf(pbk, 'bracket_from_bend_mm')?.value === '38.1' && qOf(pbk, 'bracket_from_end_mm')?.value === '38.1'
+          && qOf(pbk, 'fin_stop_mm')?.value === '38.1' && /terminal-end bracket/.test(qOf(pbk, 'fin_stop_mm')?.source || '') && pbk.figures.brackets?.perHeater === 2
+          && pbk.figures.fins.bracketGapMm > 0 && !pbk.blocks.length, `${pbk.status} ${JSON.stringify(pbk.blocks)} ${JSON.stringify(pbk.figures?.brackets)}`);
+        const pbk25 = (await call('POST', `/api/drawing-agent/items/${iB}/preview`, { answers: { fin_stop_mm: '25' } })).body;
+        ok('R5. fins asked to run past the terminal-end bracket are refused in her words',
+          pbk25.status === 'blocked' && pbk25.blocks.some(b => /"the finns will not come ahead of the terminal end brackets"/.test(b)), JSON.stringify(pbk25.blocks));
+        const iN = await mkItem(oR, { qty: 6, remark: 'MS Finns + Nut Washer', lines: [['ESB-08', 2], ['NUT-SS-M4-08', 4], ['WSH-BR-08', 4]] });
+        const qN = (await call('GET', '/api/drawing-agent/queue')).body;
+        const pN = (await call('GET', `/api/drawing-agent/items/${iN}`)).body;
+        ok('R6. the remark says fins and the list has no fin line: skipped in the queue and refused — "design to add the fin line"',
+          (qN.skipped || []).some(x => x.itemId === iN && /design to add the fin line/.test(x.reason)) && !(qN.due || []).some(x => x.itemId === iN)
+          && pN.status === 'blocked' && pN.blocks.some(b => /design to add the fin line/.test(b)), `${pN.status} ${JSON.stringify(pN.blocks)}`);
+      } else ok('R. the fin, bracket, ESB, nut and washer items exist to test with', false);
+    }
+
     ok('stubs: every storage write went to the stub; WhatsApp only through the stub', uploads.length > 0);
   } catch (e) { failed = true; console.error('ERROR', e); }
   finally {

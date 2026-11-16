@@ -174,11 +174,16 @@ const hasRepeatSuffix = (s) => /-\s*[1-9]\s*$/.test(String(s || '').trim());
 // ── Plain-U label (phase 1) ──────────────────────────────────────────────────
 // "NNU" or "NN"U", decimals allowed, N under 100 — "18U" = 18 inches from the
 // end of the tube to the far end of the U (owner, 14 Nov 2026). nL (UL), nQ (QU),
-// Bank, mm, a value of 100 or more (read as mm by the shop), fins, more than one
-// element or no U at all are out of phase 1.
+// Bank, mm, a value of 100 or more (read as mm by the shop), more than one
+// element or no U at all are out of phase 1. A fins token ("-FINNS", "-Finns",
+// "SSFinns") is a finned U (owner, 16 Nov 2026): taken out like the gap token,
+// and the label says fins: true (with MS / SS when the token names it).
+const DWG_FINS_RE = /(?:(SS|MS)\s*-?\s*)?FIN+S(?![A-Z])/gi;
 function parseULabel(drawingNumber, productCode) {
   // A gap token ("-4Gap", "-100MMGAP") is the inside gap (readDwgGap), not a length.
-  const dn = String(drawingNumber || '').replace(/[“”″]/g, '"').replace(new RegExp(DWG_GAP_RE.source, 'gi'), '');
+  let dn = String(drawingNumber || '').replace(/[“”″]/g, '"').replace(new RegExp(DWG_GAP_RE.source, 'gi'), '');
+  let fins = null;
+  dn = dn.replace(DWG_FINS_RE, (_, mat) => { fins = { material: fins?.material || (mat ? mat.toUpperCase() : null) }; return ''; });
   const pc = String(productCode || '').toUpperCase().replace(/[\s_]/g, '-');
   const up = dn.toUpperCase();
   const out = (reason) => ({ ok: false, reason });
@@ -187,7 +192,6 @@ function parseULabel(drawingNumber, productCode) {
   if (/BANK/.test(up)) return out('Bank heater (phase 2)');
   if (/\d\s*MM\b/.test(up)) return out('length given in mm (phase 2)');
   if (/(?:^|[^0-9a-z])\d{1,2}\s*[-_ ]?\s*IN\s*[-_ ]?\s*1(?![0-9])/i.test(dn)) return out('more than one element (phase 2)');
-  if (/FIN+S/.test(up)) return out('finned heater (phase 2)');
   // The U token: digits, an optional inch mark, then U, not followed by a digit (UL / QU).
   const m = up.match(/(?:^|[-_\s])(\d+(?:\.\d+)?)\s*"?\s*U(?![A-Z0-9])/);
   if (!m) {
@@ -197,7 +201,7 @@ function parseULabel(drawingNumber, productCode) {
   const v = Number(m[1]);
   if (!(v > 0)) return out('no U length in the drawing number');
   if (v >= 100) return out(`"${m[1]}U" reads as millimetres (phase 2)`);
-  return { ok: true, uIn: v, label: `${m[1]}U` };
+  return { ok: true, uIn: v, label: `${m[1]}U`, ...(fins ? { fins: true, finMaterial: fins.material } : {}) };
 }
 
 // ── Remarks ──────────────────────────────────────────────────────────────────
@@ -243,7 +247,7 @@ function unreadWords(t, read, { nipple, heavy }) {
 // "Nut Washer with thermostat" or "Buffing" must not come out as ready).
 function parseRemark(remark) {
   const t = normaliseRemark(remark);
-  const res = { text: t, coldZones: [], coldZoneIn: null, studOutside: false, studNamed: null, fins: false, nipple: null, gap: null, words: {}, unread: [], instructions: [] };
+  const res = { text: t, coldZones: [], coldZoneIn: null, studOutside: false, studNamed: null, fins: false, finMaterial: null, nipple: null, gap: null, words: {}, unread: [], instructions: [] };
   if (!t) return res;
   const read = [];                      // the parts of the remark a rule read or asked about
   const instr = (kind, text) => { res.instructions.push({ kind, text }); read.push(text); };
@@ -291,6 +295,9 @@ function parseRemark(remark) {
   if (groove) { instr('nipple without groove', 'WITHOUT GROOVE'); read.push(groove[0]); }
   // Fitting words.
   res.fins = /\bFINS\b/.test(t);
+  // "MS Finns" / "SS Finns" (owner's remarks, Sep–Nov 2026): checked against the list's fin line.
+  const finMat = t.match(/\b(MS|SS)\s*FINS\b/);
+  if (finMat) res.finMaterial = finMat[1];
   const nip = t.match(/\bM\s?(12|14|16)\b[^/]*NIPPLE|NIPPLE[^/]*\bM\s?(12|14|16)\b/);
   if (/NIPPLE/.test(t)) res.nipple = nip ? `M${nip[1] || nip[2]}` : 'unknown';
   res.words = {
@@ -332,6 +339,11 @@ const FITTING_ORDER = {
 };
 const RULED_SETS = { nut_washer: { words: 'ESB, then SS nut, washer, washer, SS nut — there is no wire lug in the middle', at: '2026-11-14' } };
 
+// The distinct codes of a list's lines that match re, upper case, in list order.
+const codesOf = (lines, re) => [...new Set((lines || []).map(l => String(l.code || '').trim().toUpperCase()).filter(c => re.test(c)))];
+// A fin code's material and the tube it is for: FIN-MS-08 → MS / 8, FIN-SS-11-VE → SS / 11.
+const finCodeInfo = (code) => { const m = String(code || '').trim().toUpperCase().match(/^FIN-(MS|SS)-(\d+)/); return m ? { material: m[1], sizeMm: Number(m[2]) } : null; };
+
 // What a parts list says per heater (lines: [{code, qty}], qty for the order).
 function listShape(lines, qty) {
   const per = (re) => (lines || []).filter(l => re.test(String(l.code || ''))).reduce((a, l) => a + Number(l.qty || 0), 0) / (Number(qty) || 1);
@@ -340,6 +352,10 @@ function listShape(lines, qty) {
     hvnut: per(/^NUT-HV-/), hvwasher: per(/^WSH-HV-/), bracket: per(/^BKT-/), nipple: per(/^NIP-BR-M\d+-(HEX|ROUND)(-LONG)?$/),
     nipnut: per(/^NIP-BR-M\d+-.*-N$|^NIP-BR-M\d+-HEX-LONG-NUT$/), nipwasher: per(/^IWS-/), fins: (lines || []).some(l => /^FIN-/.test(String(l.code || ''))),
     nippleSize: ((lines || []).map(l => String(l.code || '').match(/^NIP-BR-(M\d+)-/)).find(Boolean) || [])[1] || null,
+    // The fin line (finned U, owner 16 Nov 2026): its code, MS / SS and the tube it is for.
+    finCodes: codesOf(lines, /^FIN-/), finCode: codesOf(lines, /^FIN-/)[0] || null,
+    finMaterial: finCodeInfo(codesOf(lines, /^FIN-/)[0])?.material || null, finSizeMm: finCodeInfo(codesOf(lines, /^FIN-/)[0])?.sizeMm ?? null,
+    bracketCode: codesOf(lines, /^BKT-/)[0] || null,
   };
 }
 
@@ -392,20 +408,27 @@ function fittingSetFor(rem, lines, qty) {
 }
 
 // House wording for the card's fixture text (her app-made cards, Sep–Nov 2026).
-function fixtureText(set, rem, nipple, lines) {
+// A finned U (`fins`, from finsFor) puts the fins first, as on her cards: "SS
+// Finns + Heavy Terminal Pin", "MS Finns + Nut Washer", "MS Finns + Brackets".
+function fixtureText(set, rem, nipple, lines, fins = null) {
   const w = (rem && rem.words) || {};
   // A round nipple on the list is named, as her cards do ("M12 Brass Nipple Round").
   const rnd = (lines || []).some(l => /^NIP-BR-M\d+-ROUND/.test(String(l.code || ''))) ? ' Round' : '';
+  let text;
   switch (set) {
-    case 'nut_washer': return 'Nut Washer';
-    case 'ceramic_nut': return 'One Ceramic + One Nut';
-    case 'ceramic_only': return 'One Ceramic only';
-    case 'heavy_pin': return w.m6 ? 'M6 Heavy Terminal Pin' : 'Heavy Terminal Pin';
-    case 'nut_washer_brackets': return 'Nut washer + MS Brackets';
-    case 'nipple': return `${nipple || 'M12'} Brass Nipple${rnd}`;
-    case 'nipple_ceramic_nut': return `${nipple || 'M12'} Brass Nipple${rnd} + One Ceramic + One Nut`;
-    default: return '';
+    case 'nut_washer': text = 'Nut Washer'; break;
+    case 'ceramic_nut': text = 'One Ceramic + One Nut'; break;
+    case 'ceramic_only': text = 'One Ceramic only'; break;
+    case 'heavy_pin': text = w.m6 ? 'M6 Heavy Terminal Pin' : 'Heavy Terminal Pin'; break;
+    case 'nut_washer_brackets': text = 'Nut washer + MS Brackets'; break;
+    case 'nipple': text = `${nipple || 'M12'} Brass Nipple${rnd}`; break;
+    case 'nipple_ceramic_nut': text = `${nipple || 'M12'} Brass Nipple${rnd} + One Ceramic + One Nut`; break;
+    default: text = '';
   }
+  if (!fins || !fins.finned) return text;
+  const finWord = `${fins.material ? `${fins.material} ` : ''}Finns`;
+  if (set === 'nut_washer_brackets') return `${finWord} + Brackets`;
+  return text ? `${finWord} + ${text}` : finWord;
 }
 // ASMBLY: 2 on every nipple item since ORD-172, 1 on everything else.
 const asmblyDefault = (set) => (String(set || '').startsWith('nipple') ? '2' : '1');
@@ -484,6 +507,158 @@ function pinDefault({ rem, set, coldZone, enginePin }) {
   return { big: enginePin, small: null, override: false, source: 'the job card engine (from the cold zone)' };
 }
 
+// ── Finned U (owner, 16 Nov 2026) ────────────────────────────────────────────
+// F1 "yes, go round the bend and stop 25mm": the fins run round the U bend and
+//    stop 25 mm before each tube (terminal) end — the default on every finned U,
+//    shown as answers she can change per order.
+// F2 "there are sometimes when we dont add the finns to the U bend part": Fins on
+//    the bend Yes / No (default Yes); No = the straight legs only, the bend bare.
+// F3 "or we add finns + brackets" · "the finns will not come ahead of the
+//    terminal end brackets, that is after the bracket is fit the finns will not
+//    be added again" · "yes, 1.5" from both ends with a gap": 2 brackets per
+//    heater — one 1.5" (38.1) from the outer end of the U with a GAP in the fins
+//    at it (fins on both sides of it and round the bend), one 1.5" from the tube
+//    end where the fins STOP (bare tube from that bracket to the end).
+// F5: the fins never change the total length, the cold zone, the pins, the
+//    inside gap or the roller; the fin stock stays as the app takes it (finKg).
+const FIN_STOP_MM = 25;
+const FIN_PITCH_MM = 3;
+const FIN_PITCH_SOURCE = 'about 3 mm off your fin drawing (not dimensioned)';
+const BRACKET_AT_MM = 38.1;          // 1.5" from each end (F3)
+const BRACKETS_PER_HEATER = 2;
+const FIN_CLEAR_MM = 2;              // F6: under this between the two legs' fins is flagged
+const FIN_RULED = 'Ms. Vama, 16 Nov 2026';
+// The usual bracket on each tube when the remark asks for one the list lacks.
+const USUAL_BRACKET = { 8: 'BKT-FMH-H788-MS', 11: 'BKT-FMH-H1250' };
+
+// Is it finned, and with which fin line? Fins are said by the remark ("FINNS",
+// "MS Finns"), the drawing number ("-FINNS") or the list (a FIN- line). The
+// list's line is what St 29 takes, so its material wins; the words only check it.
+function finsFor({ label, rem, lines }) {
+  const codes = codesOf(lines, /^FIN-/);
+  const said = [...(rem && rem.fins ? ['the remark'] : []), ...(label && label.fins ? ['the drawing number'] : [])];
+  const info = finCodeInfo(codes[0]);
+  const statedMaterial = (rem && rem.finMaterial) || (label && label.finMaterial) || null;
+  return {
+    finned: said.length > 0 || codes.length > 0, said, codes, code: codes[0] || null,
+    material: info?.material || statedMaterial || null, sizeMm: info?.sizeMm ?? null,
+    statedMaterial, statedBy: rem && rem.finMaterial ? 'the remark' : label && label.finMaterial ? 'the drawing number' : null,
+  };
+}
+
+// F6, the list against the words. A fin line sized for the other tube is
+// refused with the other size-coded parts (partsForOtherTube).
+function finListChecks(f) {
+  const blocks = [], flags = [];
+  if (!f || !f.finned) return { blocks, flags };
+  if (f.said.length && !f.codes.length) blocks.push(`${f.said.join(' and ')} ${f.said.length > 1 ? 'say' : 'says'} fins but the list has no fin line — design to add the fin line`);
+  if (f.codes.length > 1) blocks.push(`the list has ${f.codes.length} fin lines (${f.codes.join(', ')}) — design to keep the one that is fitted`);
+  if (!f.said.length && f.codes.length) flags.push(`the list has fins (${f.code}) but the remark and the drawing number do not say so — the sheet draws them`);
+  const info = finCodeInfo(f.code);
+  if (info && f.statedMaterial && f.statedMaterial !== info.material) {
+    flags.push(`${f.statedBy} says ${f.statedMaterial} fins, the list has ${info.material} (${f.code}) — the sheet and St 29 go by the list`);
+  }
+  return { blocks, flags };
+}
+
+// Brackets on a finned U: from the list (BKT-) or the remark (CLAMPS /
+// BRACKETS). → null, or { code, onList, perHeater (the list's, else 2) }.
+function bracketsFor({ rem, ls, diaMm }) {
+  const w = (rem && rem.words) || {};
+  if (!(ls && ls.bracket > 0) && !w.clamps) return null;
+  const onList = !!(ls && ls.bracketCode);
+  return { code: onList ? ls.bracketCode : (USUAL_BRACKET[diaMm] || null), onList, perHeater: onList ? round(ls.bracket, 2) : BRACKETS_PER_HEATER };
+}
+
+// Her answers on the page, or the rulings (F1–F3). The numbers come in already
+// read (a blank is null); fins on the bend is 'yes' / 'no'. → the figures, the
+// source of each in her words, and what is wrong with an answer.
+function finDefaults({ onBendAns = null, stopAns = null, pitchAns = null, fromBendAns = null, fromEndAns = null, hasBrackets = false }) {
+  const errors = [];
+  if (onBendAns != null && !['yes', 'no'].includes(onBendAns)) errors.push(`Fins on the bend must be Yes or No (got "${onBendAns}")`);
+  const onBend = onBendAns !== 'no';
+  const fromBendMm = hasBrackets ? fromBendAns ?? BRACKET_AT_MM : null;
+  const fromEndMm = hasBrackets ? fromEndAns ?? BRACKET_AT_MM : null;
+  // F1: 25 mm bare at each end; F3: with brackets the fins stop at the terminal-end bracket.
+  const stopMm = stopAns ?? (hasBrackets ? fromEndMm : FIN_STOP_MM);
+  const pitchMm = pitchAns ?? FIN_PITCH_MM;
+  return {
+    onBend, stopMm, pitchMm, fromBendMm, fromEndMm, errors,
+    sources: {
+      onBend: onBendAns ? 'your answer' : `${FIN_RULED}: "yes, go round the bend" — No when the bend stays bare`,
+      stop: stopAns != null ? 'your answer' : hasBrackets ? `the terminal-end bracket, ${trimNum(fromEndMm)} from the tube end — the fins stop at it (${FIN_RULED})` : `${FIN_RULED}: "stop 25mm"`,
+      pitch: pitchAns != null ? 'your answer' : FIN_PITCH_SOURCE,
+      fromBend: fromBendAns != null ? 'your answer' : `1.5" — ${FIN_RULED}: "1.5" from both ends with a gap" (a gap in the fins at it)`,
+      fromEnd: fromEndAns != null ? 'your answer' : `1.5" — ${FIN_RULED}: the fins stop at it`,
+    },
+  };
+}
+
+// Where the fins run, along the tube centreline, and the checks on it.
+//   geo: the U's shape (deriveUShape) · drawnULengthMm: the U as drawn (end to
+//   far end) · finOdMm · pitchMm · onBend (F2) · stopMm: bare at each tube end
+//   (F1; with brackets, the terminal-end bracket — F3) · brackets: null or
+//   { fromBendMm, fromEndMm, thkMm, lipMm } (F3).
+// The bend-end bracket's gap in the fins is the bracket itself — its upright
+// sheet and the 10.8 lip over the legs that the two M3.5 screws go through
+// (her BKT-FMH-H788 / -H1250 drawings: fins cannot pass under the lip) — plus
+// one fin pitch each side, on each leg (the app's reading of "with a gap" —
+// the width is not ruled).
+const BRACKET_LIP_MM = 10.8;
+function finLayout({ geo, diaMm, drawnULengthMm, finOdMm, pitchMm, onBend, stopMm, brackets = null }) {
+  const blocks = [], flags = [];
+  const cc = geo.cc;
+  // F6: fins wider than the legs' centres would overlap; under 2 mm apart is flagged.
+  const clearMm = round(cc - finOdMm, 2);
+  if (finOdMm >= cc) blocks.push(`fins of OD ${trimNum(finOdMm)} on legs ${trimNum(cc)} c/c would overlap — design to check the fins or the U width`);
+  else if (clearMm < FIN_CLEAR_MM) flags.push(`only ${trimNum(clearMm)} mm between the two legs' fins (OD ${trimNum(finOdMm)} on legs ${trimNum(cc)} c/c) — under ${FIN_CLEAR_MM} mm`);
+  // The outer end of the U to the bend's start, along the legs.
+  const bendReachMm = geo.rCL + diaMm / 2;
+  const legFinnedMm = geo.straight - stopMm;
+  if (!(legFinnedMm > 0)) blocks.push(`the fins stop ${trimNum(stopMm)} mm from the tube end, but each straight leg is only ${round(geo.straight, 1)} mm`);
+  let gapMm = null, gapFrom = null, gapTo = null;
+  if (brackets) {
+    const { fromBendMm, fromEndMm, thkMm, lipMm } = brackets;
+    const lip = Number(lipMm) > 0 ? Number(lipMm) : BRACKET_LIP_MM;
+    if (stopMm < fromEndMm - 1e-9) blocks.push(`the fins would run past the terminal-end bracket (fins to ${trimNum(stopMm)} mm, the bracket at ${trimNum(fromEndMm)} mm from the tube end) — "the finns will not come ahead of the terminal end brackets" (${FIN_RULED})`);
+    if (!(fromBendMm > bendReachMm)) blocks.push(`the bend-end bracket at ${trimNum(fromBendMm)} mm from the outer end of the U would sit on the bend (the bend reaches ${round(bendReachMm, 1)} mm) — give a larger figure`);
+    if (fromBendMm + fromEndMm >= drawnULengthMm - 1e-9) blocks.push(`the two brackets (${trimNum(fromBendMm)} from the bend, ${trimNum(fromEndMm)} from the tube end) do not fit on a ${round(drawnULengthMm, 1)} mm U`);
+    gapMm = round((Number(thkMm) || 0) + lip + 2 * pitchMm, 2);
+    // Where it sits, from the outer end of the U: centred on the lip, which
+    // points from the upright towards the bend (as the sheet draws it).
+    gapFrom = fromBendMm - lip / 2 - gapMm / 2; gapTo = gapFrom + gapMm;
+  }
+  // The finned runs on each straight leg, from the outer end of the U: the
+  // bend's start to where the fins stop, less the bracket's gap. A run shorter
+  // than two turns is not wound (as the sheet draws it) — unless it carries on
+  // round the bend.
+  const legEnd = drawnULengthMm - stopMm;
+  let runs = legEnd > bendReachMm ? [[bendReachMm, legEnd]] : [];
+  if (gapMm) runs = runs.flatMap(([a, b]) => (gapTo <= a || gapFrom >= b ? [[a, b]] : [[a, Math.min(b, gapFrom)], [Math.max(a, gapTo), b]].filter(([x, y]) => y - x > 1e-9)));
+  runs = runs.filter(([a, b]) => b - a >= 2 * pitchMm || (onBend && Math.abs(a - bendReachMm) < 1e-9));
+  const bendMm = Math.PI * geo.rCL;
+  // A gap reaching past the bend's start takes about that much off the bend's
+  // fins too, on each side of it.
+  const bendLost = onBend && gapMm ? Math.max(0, bendReachMm - Math.max(gapFrom, 0)) * (gapFrom < bendReachMm ? 1 : 0) : 0;
+  const finnedLengthMm = round(2 * runs.reduce((t, [a, b]) => t + (b - a), 0) + (onBend ? Math.max(0, bendMm - 2 * bendLost) : 0), 1);
+  return { blocks, flags, clearMm, bendReachMm: round(bendReachMm, 2), legFinnedMm: round(legFinnedMm, 2), bendMm: round(bendMm, 1), gapMm, finnedLengthMm };
+}
+
+// F5: the fin stock as the app takes it today (lib/inventoryDeduction.js
+// deductFinsByLength, at the card's last stage, St 29): kg = the job card's
+// tube length / 50.8 × the code's kg per 50.8 mm × pieces (qty × elements),
+// rounded to the gram, once per card. `weights` is inventoryDeduction's own
+// FINS_WEIGHT_PER_BASE, passed in (this file stays free of the database).
+// The whole card length, not the finned length — as the app takes it.
+const FINS_MM_BASE = 2 * IN;         // inventoryDeduction.js FINS_MM_BASE (50.8 mm; not exported)
+function finKg({ code, weights, totalLengthMm, elements = 1, quantities }) {
+  const perBase = weights ? weights[String(code || '').trim().toUpperCase()] : null;
+  if (!(perBase > 0) || !(totalLengthMm > 0)) return null;
+  const el = Number(elements) || 1;
+  const kg = (pcs) => Math.round((totalLengthMm / FINS_MM_BASE) * perBase * pcs * 1000) / 1000;
+  return { perBase, baseMm: FINS_MM_BASE, kgPerPc: kg(el), kgForOrder: round((quantities || []).reduce((a, q) => a + kg(Number(q) * el), 0), 3) };
+}
+
 // ── Impossible shapes (refused) and flags ────────────────────────────────────
 // Highest surface load on her app-made plain U cards (item 1405, PT-Utype-10U-1.5Kw:
 // 14.69 W/cm²); above it the sheet is flagged, not refused.
@@ -544,13 +719,14 @@ function widthHistoryFlag({ rows, customerCode, diaMm, set, itemId, madeInsideMm
 }
 
 // ── Parts sized for another tube ─────────────────────────────────────────────
-// The ESB, the stud nuts / washers and the filling bush carry the tube they fit
-// in their code (ESB-08 / ESB-11, NUT-SS-M4-08 / NUT-SS-M5-11, WSH-BR-08 /
-// WSH-SS-11, PVC-FB08-M4 / PVC-FB11-M5). On 16 Nov 2026 four live items had the
+// The ESB, the stud nuts / washers, the filling bush and the fins carry the tube
+// they fit in their code (ESB-08 / ESB-11, NUT-SS-M4-08 / NUT-SS-M5-11, WSH-BR-08
+// / WSH-SS-11, PVC-FB08-M4 / PVC-FB11-M5, FIN-MS-08 / FIN-SS-11-VE). On 16 Nov 2026 four live items had the
 // other size (ORD-198-26: an Ø11 tube with ESB-08, NUT-SS-M4-08, WSH-BR-08) out
 // of 234 with such parts; a sheet drawn from that list would hand the floor the
 // wrong parts. → [{ code, sizeMm }] for the lines that do not fit diaMm.
-const PART_SIZE_RE = /^(?:ESB|NUT-(?:SS|BR)-M\d+|WSH-(?:SS|BR))-(08|11)(?![0-9])|^PVC-FB(08|11)-/;
+// The fin line too (16 Nov 2026): FIN-MS-08 / FIN-SS-08-VE are for Ø8, FIN-MS-11 / FIN-SS-11-VE for Ø11.
+const PART_SIZE_RE = /^(?:ESB|NUT-(?:SS|BR)-M\d+|WSH-(?:SS|BR)|FIN-(?:MS|SS))-(08|11)(?![0-9])|^PVC-FB(08|11)-/;
 function partSizeOf(code) {
   const m = String(code || '').trim().toUpperCase().match(PART_SIZE_RE);
   return m ? Number(m[1] || m[2]) : null;
@@ -627,5 +803,7 @@ module.exports = {
   normaliseRemark, parseRemark, listShape, setFromList, fittingSetFor, SET_LABEL, FITTING_ORDER, RULED_SETS,
   fixtureText, asmblyDefault, isIsoDate, weekday, dispatchDefault, totalLength, coldZoneDefault, pinDefault,
   shapeChecks, MAX_SURFACE_LOAD_SEEN_W_CM2, filteredForResend, partSizeOf, partsForOtherTube, CLOSED, statusClass,
+  FIN_STOP_MM, FIN_PITCH_MM, FIN_PITCH_SOURCE, BRACKET_AT_MM, BRACKET_LIP_MM, BRACKETS_PER_HEATER, FIN_CLEAR_MM, FIN_RULED, USUAL_BRACKET, FINS_MM_BASE,
+  finCodeInfo, finsFor, finListChecks, bracketsFor, finDefaults, finLayout, finKg,
   stable, sha256Hex, sheetCode, codeChanges, itemSnapshot, snapshotDiff,
 };
