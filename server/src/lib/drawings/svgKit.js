@@ -18,6 +18,9 @@ function rect(x, y, w, h, { fill = 'none', stroke = INK, sw = 0.25, rx = 0, dash
 function circle(cx, cy, r, { fill = 'none', stroke = INK, sw = 0.25, dash = null } = {}) {
   return `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(r)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
 }
+function ellipse(cx, cy, rx, ry, { fill = 'none', stroke = INK, sw = 0.25, dash = null } = {}) {
+  return `<ellipse cx="${f(cx)}" cy="${f(cy)}" rx="${f(rx)}" ry="${f(ry)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
+}
 function path(d, { fill = 'none', stroke = INK, sw = 0.25, dash = null, join = 'round', cap = 'butt' } = {}) {
   return `<path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="${join}" stroke-linecap="${cap}"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
 }
@@ -89,6 +92,15 @@ function dimV(y1, y2, x, label, { fromX1 = null, fromX2 = null, size = 2.4, colo
   const tx = left ? x - 0.9 : x + size + 0.2;
   out.push(text(tx, (y1 + y2) / 2, label, { size, anchor: 'middle', color, rotate: -90 }));
   return out.join('');
+}
+// A small dimension straight across a narrow feature (a tube seen side on, its
+// edges at y1 above and y2 below): arrows outside pointing in, short tails, the
+// value beyond the top tail — or beyond the bottom one when `below`. The tube Ø
+// at the U bend (owner, 14 Nov 2026: "show the tube dia on the drawing").
+function dimAcross(x, y1, y2, label, { size = 2.2, tail = 1.8, color = DIM, below = false } = {}) {
+  return [line(x, y1 - tail, x, y1, { w: 0.18, color }), line(x, y2, x, y2 + tail, { w: 0.18, color }),
+    arrowhead(x, y1, Math.PI / 2, { len: 1.4, half: 0.5, color }), arrowhead(x, y2, -Math.PI / 2, { len: 1.4, half: 0.5, color }),
+    text(x, below ? y2 + tail + 0.6 + 0.72 * size : y1 - tail - 0.6, label, { size, anchor: 'middle', color })].join('');
 }
 // Leader: a dot on the feature, a line to the label, a short shoulder, the label.
 // The label sits on the side the leader runs to, unless `side` says 'left' / 'right'.
@@ -167,4 +179,4 @@ function table(x, y, cols, rows, { head = null, rowH = 5, headH = 5.5, size = 2.
   return { svg: out.join(''), height: cy - y, width: W };
 }
 
-module.exports = { esc, f, INK, NAVY, DIM, textWidth, fitSize, line, rect, circle, path, text, arrowhead, dimH, dimV, leader, balloon, balloonLeader, breakMark, viewTitle, table };
+module.exports = { esc, f, INK, NAVY, DIM, textWidth, fitSize, line, rect, circle, ellipse, path, text, arrowhead, dimH, dimV, dimAcross, leader, balloon, balloonLeader, breakMark, viewTitle, table };

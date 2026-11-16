@@ -4,7 +4,7 @@ import api from '../../lib/api';
 import Modal from '../../components/ui/Modal';
 import { useWorkStore } from '../../store/workStore';
 import {
-  DraftingCompass, RefreshCw, ChevronLeft, ChevronRight, Maximize2, CheckCircle2, AlertTriangle, Ban, Info, RotateCcw,
+  DraftingCompass, RefreshCw, ChevronLeft, ChevronRight, Maximize2, CheckCircle2, AlertTriangle, Ban, Info, RotateCcw, Pencil,
 } from 'lucide-react';
 
 // ── Drawings to make (owner, 14 Nov 2026) ─────────────────────────────────────
@@ -44,6 +44,55 @@ function openFullSize(html) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+// ── Her rollers (owner, 14 Nov 2026) ─────────────────────────────────────────
+// "A roller is basically a tool on which the heater is bend to a u": the app
+// picks one for the client's inside gap (inside − 2 mm, as the tube opens
+// after bending; ±2 mm if she accepts, else a new roller). Until she saves her
+// list, the three on her drawings. Sizes go in typed with commas or spaces.
+function Rollers({ onSaved }) {
+  const [r, setR] = useState(null);
+  const [edit, setEdit] = useState(null);           // the text while editing
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    api.get('/drawing-agent/rollers')
+      .then(x => setR(x.data))
+      .catch(e => setError(e.response?.data?.error || 'Could not read the rollers'));
+  }, []);
+  const save = async () => {
+    setSaving(true); setError('');
+    try {
+      const x = await api.put('/drawing-agent/rollers', { mm: edit.split(/[\s,;]+/).filter(Boolean) });
+      setR(x.data); setEdit(null);
+      onSaved?.();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Could not save the rollers');
+    } finally { setSaving(false); }
+  };
+  return (
+    <div className="card px-3 py-2 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="text-xs uppercase tracking-wide text-gray-500 flex-shrink-0">Your rollers (mm)</span>
+        {edit == null ? (
+          <>
+            <span className="font-mono text-gray-800 flex-1 min-w-0 break-words">{r ? r.mm.join(', ') : '…'}</span>
+            <button type="button" className="btn-ghost btn-sm" disabled={!r} onClick={() => setEdit(r.mm.join(', '))}><Pencil size={12} /> Edit</button>
+          </>
+        ) : (
+          <>
+            <input className="input flex-1 min-w-0 py-1" value={edit} autoFocus placeholder="22, 25, 40"
+              onChange={e => setEdit(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} />
+            <button type="button" className="btn-primary btn-sm" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>
+            <button type="button" className="btn-ghost btn-sm" disabled={saving} onClick={() => { setEdit(null); setError(''); }}>Cancel</button>
+          </>
+        )}
+      </div>
+      {r && edit == null && <p className="text-[11px] text-gray-400 mt-0.5 leading-snug">{r.source} · the app picks the one that makes the client's inside (roller + 2 mm), or the closest within ±2 mm for you to accept</p>}
+      {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+    </div>
+  );
+}
+
 // ── The list ──────────────────────────────────────────────────────────────────
 function Queue({ onOpen }) {
   const [q, setQ] = useState(null);
@@ -74,6 +123,8 @@ function Queue({ onOpen }) {
       </div>
 
       {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg mb-4">{error}</p>}
+
+      <div className="mb-4 max-w-xl"><Rollers /></div>
 
       <div className="card overflow-hidden mb-4">
         {loading ? (
@@ -132,7 +183,8 @@ function Queue({ onOpen }) {
 }
 
 // ── One item: the sheet, the questions, the card, the approval ────────────────
-const FIELD_ORDER = ['fitting_set', 'nipple', 'nuts', 'u_length_in', 'outside_width_mm', 'cold_zone_in', 'cold_zone_small_in',
+// A question missing here is not shown, yet a required one still blocks the approval.
+const FIELD_ORDER = ['fitting_set', 'nipple', 'nuts', 'u_length_in', 'inside_mm', 'roller_mm', 'cold_zone_in', 'cold_zone_small_in',
   'pin_in', 'pin_small_in', 'fixture', 'asmbly', 'dispatch_date', 'terminal_group'];
 
 function Field({ q, value, onChange, onReset }) {
@@ -146,10 +198,17 @@ function Field({ q, value, onChange, onReset }) {
       </label>
       {q.text && <p className="text-xs text-gray-600 mb-1.5 leading-relaxed">{q.text}</p>}
       {q.type === 'select' ? (
-        <select {...common}>
-          {!value && <option value="">— choose —</option>}
-          {(q.options || []).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        <div className="flex gap-2 items-center">
+          <select {...common} className={`${common.className} flex-1 min-w-0`}>
+            {!value && <option value="">— choose —</option>}
+            {value && !(q.options || []).some(o => o.value === String(value)) && <option value={value}>{value} — not one of the choices now</option>}
+            {(q.options || []).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          {/* The app's suggestion (the roller), one click to accept it. */}
+          {q.suggest && String(value ?? '') !== q.suggest && (
+            <button type="button" onClick={() => onChange(q.suggest)} className="btn-secondary btn-sm whitespace-nowrap flex-shrink-0">{q.suggestLabel || `Use ${q.suggest}`}</button>
+          )}
+        </div>
       ) : q.type === 'textarea' ? (
         <textarea {...common} rows={2} />
       ) : (
@@ -205,8 +264,9 @@ function ItemSheet({ itemId, onBack }) {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => preview(next), 600);
   };
-  const setAnswer = (k, v) => change({ ...answers, [k]: v });
-  const resetAnswer = (k) => { const next = { ...answers }; delete next[k]; change(next); };
+  // A roller picked for one inside gap is no answer for another: it is asked again.
+  const setAnswer = (k, v) => { const next = { ...answers, [k]: v }; if (k === 'inside_mm') delete next.roller_mm; change(next); };
+  const resetAnswer = (k) => { const next = { ...answers }; delete next[k]; if (k === 'inside_mm') delete next.roller_mm; change(next); };
 
   const approve = async () => {
     setApproving(true); setError(''); setSavedUnknown(false);
@@ -359,7 +419,8 @@ function ItemSheet({ itemId, onBack }) {
                 <div className="card divide-y text-sm">
                   <div className="px-3 py-2 bg-gray-50 text-xs uppercase tracking-wide text-gray-500 rounded-t-xl">What the job card will say</div>
                   {[
-                    ['Total length', `${f.totalLengthIn}" (2 × ${p.questions.find(q => q.key === 'u_length_in')?.value}") → card ${f.cardTotalIn}"`],
+                    ['Total length', `${f.totalLengthIn}" (${f.totalFormula || `2 × ${p.questions.find(q => q.key === 'u_length_in')?.value}"`}) → card ${f.cardTotalIn}"`],
+                    ['Shape', `${f.insideMm} inside · ${f.outsideWidthMm} outside · roller ${f.rollerMm}${f.rollerIsNew ? ' NEW' : ''}${f.clientInsideMm != null ? ` (client's ${f.clientInsideMm})` : ''}`],
                     ['Cutting length', `${f.cuttingLengthIn}" · ${f.cuttingLengthMm} mm`],
                     ['Cold zone', `${f.coldZoneBigIn}" big · ${f.coldZoneSmallIn}" small`],
                     ['Wire', f.gauge == null ? 'no gauge fits' : `${f.gauge} SWG${f.doubleCoil ? ' · double coil' : ''}`],
@@ -374,6 +435,8 @@ function ItemSheet({ itemId, onBack }) {
                   ))}
                 </div>
               )}
+
+              <Rollers onSaved={() => { setDirty(true); preview(answers); }} />
 
               {p.blocks?.length > 0 && (
                 <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">

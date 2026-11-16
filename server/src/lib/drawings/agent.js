@@ -31,6 +31,15 @@ const jobCardRoutes = require('../../routes/jobCards');
 // Advisory-lock namespace (first key of pg_advisory_xact_lock(int, int)): one
 // approval at a time per order item.
 const LOCK_DRAWING_AGENT = 0x44574741;   // 'DWGA'
+// Her own SolidWorks U sheets, one row per order item (uWidthHistory.json):
+// built once on 14 Nov 2026 from the survey of her 152 U drawings (scratchpad
+// survey_uw/rows.json: inside / outside / roller as each sheet prints them,
+// the 4" gap sheet of items 23 / 24 as 100 inside) joined to the read-only
+// lists, each row's set being this agent's own fitting set for the item.
+// Item 6 (its file is an invoice) and item 1926 (Thermolab's PDF reused for
+// SHIV) are left out. A snapshot of 14 Nov 2026 — never updated; the sheets
+// approved here are added at runtime (agentSheetWidths).
+const WIDTH_HISTORY = require('./uWidthHistory.json').rows;
 const NOT_OPEN = [...R.CLOSED, 'pending_approval', 'rejected'];
 const HEAVY_PIN_REMARK_RE = /heavy[\s\-_.]*terminal[\s\-_.]*pin/i;   // as routes/orders.js
 
@@ -71,7 +80,7 @@ const ORDER_OF = { listpin: 0, nipple: 1, nipwasher: 2, nipnut: 3, bracket: 4, e
 // ── Her answers ───────────────────────────────────────────────────────────────
 // Only these keys, trimmed; a blank answer means "use the default". `ack:<kind>`
 // is her answer to a remark instruction the rules cannot apply.
-const ANSWER_KEYS = ['u_length_in', 'outside_width_mm', 'cold_zone_in', 'cold_zone_small_in', 'pin_in', 'pin_small_in',
+const ANSWER_KEYS = ['u_length_in', 'inside_mm', 'roller_mm', 'cold_zone_in', 'cold_zone_small_in', 'pin_in', 'pin_small_in',
   'fixture', 'asmbly', 'dispatch_date', 'terminal_group', 'fitting_set', 'nipple', 'nuts', 'note'];
 
 // ── Brass nuts on a two-nut stack ─────────────────────────────────────────────
@@ -278,6 +287,58 @@ async function confirmedSets(db) {
   return out;
 }
 
+// Her roller list (drawing_rulings 'rollers', saved on the page; owner, 14 Nov
+// 2026: "we can make as many roller as per client inner dia requirement").
+// Until she saves one, the three rollers on her drawings.
+async function rollerList(db) {
+  const def = { mm: [...R.DEFAULT_ROLLERS], source: R.DEFAULT_ROLLERS_SOURCE, saved: false, setAt: null, setBy: null };
+  const t = await db.get("SELECT to_regclass('drawing_rulings') IS NOT NULL AS ok");
+  if (!t?.ok) return def;
+  // The day she saved it, in IST (the shop's clock).
+  const r = await db.get(`SELECT r.value, r.set_at::text AS set_at, (r.set_at AT TIME ZONE 'Asia/Kolkata')::date::text AS set_on, u.name AS set_by
+    FROM drawing_rulings r LEFT JOIN users u ON u.id = r.set_by WHERE r.key = 'rollers'`);
+  const v = r && (typeof r.value === 'string' ? JSON.parse(r.value) : r.value);
+  const ok = v && R.validateRollers(v.mm);
+  if (!ok?.ok) return def;
+  const on = String(r.set_on || '');
+  return { mm: ok.mm, source: `your list${on ? `, saved ${on.slice(8, 10)}.${on.slice(5, 7)}.${on.slice(0, 4)}` : ''}${r.set_by ? ` by ${r.set_by}` : ''}`, saved: true, setAt: r.set_at, setBy: r.set_by };
+}
+// Her answer on the page (routes/drawingAgent.js PUT /rollers, owner only).
+// A roller choice on a sheet is per order and never stored here.
+async function saveRollers(db, raw, user) {
+  if (!user || user.role !== 'owner') return { status: 403, body: { error: 'Only the owner sets the rollers.' } };
+  const v = R.validateRollers(raw);
+  if (!v.ok) return { status: 400, body: { error: v.error } };
+  const t = await db.get("SELECT to_regclass('drawing_rulings') IS NOT NULL AS ok");
+  if (!t?.ok) return { status: 503, body: { error: 'The app is finishing an update — nothing was saved. Try again in a few minutes.', code: 'SCHEMA_NOT_READY' } };
+  await db.run(`INSERT INTO drawing_rulings (key, value, set_by, set_at) VALUES ('rollers', $1, $2, NOW())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, set_by = EXCLUDED.set_by, set_at = NOW()`,
+  [JSON.stringify({ mm: v.mm, words: 'Saved on Drawings to make' }), user.id]);
+  return { status: 200, body: await rollerList(db) };
+}
+
+// The U widths of the sheets approved here, for one customer (the history
+// flag, R-g): the frozen sheet's shape, or W − 2Ø on a sheet from before the
+// inside gap was a question.
+async function agentSheetWidths(db, customerCode) {
+  if (!customerCode) return [];
+  const t = await db.get(`SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('order_drawings')
+    AND attname = 'agent_spec' AND NOT attisdropped) AS ok`);
+  if (!t?.ok) return [];
+  const rows = await db.all(`SELECT d.item_id, o.order_code, c.customer_code, oi.tube_diameter, oi.drawing_number,
+      d.agent_spec->'fitting'->>'set' AS set, d.agent_spec->'sheet'->'shape' AS shape
+    FROM order_drawings d JOIN order_items oi ON oi.id = d.item_id JOIN orders o ON o.id = oi.order_id
+    JOIN customers c ON c.id = o.customer_id
+    WHERE d.agent_spec IS NOT NULL AND d.drawing_status = 'approved' AND c.customer_code = $1`, [customerCode]);
+  return rows.map(r => {
+    const sh = (typeof r.shape === 'string' ? JSON.parse(r.shape) : r.shape) || {};
+    const dia = Number(r.tube_diameter);
+    const inside = sh.insideMm != null ? Number(sh.insideMm) : Number(sh.outsideWidthMm) - 2 * dia;
+    return { item_id: r.item_id, order_code: r.order_code, customer_code: r.customer_code, dia, set: r.set || null,
+      inside: R.round(inside, 2), roller: sh.rollerMm != null ? Number(sh.rollerMm) : null, dwg: r.drawing_number };
+  }).filter(r => r.inside > 0);
+}
+
 // ── The proposal ──────────────────────────────────────────────────────────────
 // Everything she sees on the page for one item: the order as typed, the
 // questions with the defaults filled in (and where each came from), what stops
@@ -323,7 +384,7 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   }
 
   // Her number answers: a blank one means the default; anything else must be a number above 0.
-  const NUM_LABEL = { u_length_in: 'U length', outside_width_mm: 'Outside width', cold_zone_in: 'Cold zone (big end)',
+  const NUM_LABEL = { u_length_in: 'U length', inside_mm: 'Inside gap', cold_zone_in: 'Cold zone (big end)',
     cold_zone_small_in: 'Cold zone (small end)', pin_in: 'Terminal pin (big end)', pin_small_in: 'Terminal pin (small end)' };
   const num = (k) => {
     if (answers[k] == null) return null;
@@ -353,14 +414,35 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   const nutC = twoNuts ? nutChoice(lines, item.quantity, answers.nuts) : null;
   if (nutC?.block) p.blocks.push(nutC.block);
 
-  // ── Shape and total length (ruling R1: 2 × U) ──
+  // ── Shape: the client's inside gap, the roller, the total length ──
+  // (owner, 14 Nov 2026: "clients inner dia is more important"). The inside is
+  // her answer → the remark → the drawing number → the Ø standard (27); the
+  // roller makes it (inside − 2 mm opening, ±2 mm on the inside if she
+  // accepts, else a new roller); the sheet is drawn with the inside that roller
+  // MAKES, outside = made inside + 2 × Ø.
   const d = Number(item.tube_diameter);
   const std = R.SHAPE_STANDARD[d];
   const uAns = num('u_length_in');
   const uIn = uAns || v.label.uIn;
-  const wAns = num('outside_width_mm');
-  const W = wAns || std.outsideWidthMm;
   const uLabel = uAns && uAns !== v.label.uIn ? `${uIn}U` : v.label.label;
+  const insideSrc = R.insideDefault({ answerMm: num('inside_mm'), remarkGap: rem.gap, dwgGap: R.readDwgGap(item.drawing_number), diaMm: d });
+  const insChk = R.insideChecks({ insideMm: insideSrc.mm, diaMm: d });
+  p.blocks.push(...insChk.blocks);
+  p.flags.push(...insChk.flags);
+  // A gap the U cannot have is refused above; the sheet is still drawn, at the standard.
+  const clientInside = insChk.blocks.length ? std.insideMm : insideSrc.mm;
+  const rollers = await rollerList(db);
+  const pick = R.pickRoller({ insideMm: clientInside, rollers: rollers.mm });
+  const rollerAns = answers.roller_mm;
+  const rollerChosen = rollerAns != null ? pick.options.find(o => Math.abs(Number(o.value) - Number(rollerAns)) < 0.005) || null : null;
+  if (rollerAns != null && !rollerChosen) p.blocks.push(`Roller must be one of ${pick.options.map(o => o.value).join(', ')} mm (got "${rollerAns}")`);
+  const rollerOpt = rollerChosen || pick.options.find(o => o.mm === pick.suggestMm) || pick.options[0];
+  const roller = rollerOpt.mm, rollerIsNew = rollerOpt.isNew;
+  const madeInside = rollerOpt.madeInsideMm;
+  const W = R.round(madeInside + 2 * d, 2);
+  // The client's inside, kept only when the roller makes another one.
+  const clientInsideMm = Math.abs(madeInside - clientInside) > 0.01 ? clientInside : null;
+  if (rollerIsNew) p.flags.push(`New roller ${R.trimNum(roller)} mm to make before bending — not in your roller list`);
   const TL = R.totalLength({ uIn, diaMm: d, outsideWidthMm: W });
   const geo = TL.geo;
   const totalForCard = TL.num + E.TOTAL_LENGTH_ALLOWANCE_IN;
@@ -432,8 +514,18 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   }
   q({ key: 'u_length_in', type: 'number', label: 'U length (in)', value: String(uIn),
     source: uAns ? 'your answer' : `the drawing number ("${v.label.label}" = ${v.label.uIn}" from the end of the tube to the far end of the U)` });
-  q({ key: 'outside_width_mm', type: 'number', label: 'Outside width (mm)', value: String(W),
-    source: wAns ? 'your answer' : `the Ø${d} standard (${std.outsideWidthMm} outside / 27 inside / roller ${std.rollerMm})` });
+  q({ key: 'inside_mm', type: 'number', label: 'Inside gap (mm) — the client\'s', value: R.trimNum(insideSrc.mm), source: insideSrc.source });
+  // The roller (R-d): one that makes the client's inside is filled in; else she
+  // picks — the closest she has within ±2 mm, or a new one. Per order, never remembered.
+  const rollerWords = `your rollers ${pick.rollers.map(R.trimNum).join(', ')} mm (${rollers.source})`;
+  const ci = R.trimNum(clientInside);
+  q({ key: 'roller_mm', type: 'select', label: 'Roller (mm)', options: pick.options.map(o => ({ value: o.value, label: o.label })),
+    required: pick.kind !== 'exact', value: rollerChosen ? rollerChosen.value : pick.kind === 'exact' ? R.trimNum(pick.suggestMm) : '',
+    ...(pick.kind === 'exact' ? {} : { suggest: R.trimNum(pick.suggestMm), suggestLabel: pick.kind === 'new' ? `Use ${R.trimNum(pick.suggestMm)} — new roller` : `Use ${R.trimNum(pick.suggestMm)}` }),
+    text: pick.kind === 'suggest'
+      ? `Suggested: roller ${R.trimNum(pick.suggestMm)} — the closest you have within ±2 mm (gives ${R.trimNum(pick.suggestMm + R.OPENING_MM)} inside; the client's is ${ci}). Or a new ${R.trimNum(Math.round(pick.idealMm))} mm roller for ${R.trimNum(Math.round(pick.idealMm) + R.OPENING_MM)} inside.`
+      : pick.kind === 'new' ? `No roller you have is within ±2 mm of ${ci} inside — a new ${R.trimNum(pick.suggestMm)} mm roller is needed.` : undefined,
+    source: rollerChosen ? `your answer · ${rollerWords}` : pick.kind === 'exact' ? `roller ${R.trimNum(pick.suggestMm)} + ${R.OPENING_MM} mm opening = the client's ${ci} inside · ${rollerWords}` : rollerWords });
   q({ key: 'cold_zone_in', type: 'number', label: 'Cold zone, big end (in)', value: String(cz.big), source: cz.source });
   q({ key: 'cold_zone_small_in', type: 'number', label: 'Cold zone, small end (in)', value: String(cz.small), source: cz.source });
   q({ key: 'pin_in', type: 'number', label: 'Terminal pin, big end (in)', value: String(pin.big), source: pin.source });
@@ -462,7 +554,8 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
     tubeDrawPct: card.tubeDrawPct, wireDrawPct: card.wireDrawPct, doubleCoil: !!card.doubleCoil,
     quantities: draft.split.quantities, names: draft.split.names,
     pins: { big: draft.pins?.big || null, small: draft.pins?.small || null, missing: draft.pins?.missing || [], groupLabel: draft.pins?.groupLabel || null },
-    drawnULengthMm: R.round(TL.drawnULengthMm, 1), outsideWidthMm: W, uLabel,
+    drawnULengthMm: R.round(TL.drawnULengthMm, 1), uLabel, totalFormula: TL.formula,
+    insideMm: madeInside, outsideWidthMm: W, rollerMm: roller, rollerKind: pick.kind, rollerIsNew, clientInsideMm,
   };
 
   // ── Shape checks ──
@@ -473,6 +566,10 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   if (draft.pins?.missing?.length) p.flags.push(`no terminal pin in inventory for ${draft.pins.missing.join(' and ')} — the card's slip waits until design chooses the pin`);
   if (set && set.includes('ceramic')) p.flags.push('the ceramic is not an inventory item — Detail D shows it without a part number');
   if (fitRes.notes.length) p.flags.push(...fitRes.notes.map(nt => `list vs remark: ${nt}`));
+  // The customer's earlier U widths for this Ø and set: a flag only (R-g).
+  const histFlag = R.widthHistoryFlag({ rows: [...WIDTH_HISTORY, ...(await agentSheetWidths(db, order.customer_code))],
+    customerCode: order.customer_code, diaMm: d, set, itemId: item.id, madeInsideMm: madeInside, insideFrom: insideSrc.from });
+  if (histFlag) p.flags.push(histFlag);
 
   // ── Parts: the stages' material by the card, then the item's list unchanged ──
   const codes = [`SPR-KD-${card.gauge}`, draft.pins?.big, draft.pins?.small, d === 11 ? 'PVC-FB11-M5' : 'PVC-FB08-M4', 'MGO-65A', item.tube_material].filter(Boolean);
@@ -529,7 +626,9 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
     order: R.FITTING_ORDER[set] || [], stack, nuts: nutC?.nuts || null, nutsAnswer: nutC?.answer || null, ruled: !!R.RULED_SETS[set] };
 
   // ── The sheet ──
-  const ctx = { st, p, card, geo, TL, uIn, uLabel, W, wAns, std, d, cz, pin, fixture, stud, parts, group, shownGroup, pinsFromList, rem, inv, approver, today };
+  const shape = { uLabel, uLengthIn: uIn, uLengthMm: TL.drawnULengthMm, nominalULengthMm: TL.nominalULengthMm, outsideWidthMm: W, insideMm: madeInside,
+    rollerMm: roller, rollerIsNew, clientInsideMm, insideSource: insideSrc.short };
+  const ctx = { st, p, card, geo, TL, uIn, uLabel, shape, insideSrc, rollerAnswered: !!rollerChosen, std, d, cz, pin, fixture, stud, parts, group, shownGroup, pinsFromList, rem, inv, approver, today };
   const preview = U.renderUTypeSheet(buildSheetSpec(ctx, { production: false, confirmed }));
   p.html = preview.html;
   // Her approval covers the order item as she saw it, her answers, and exactly
@@ -547,14 +646,14 @@ async function propose(db, itemId, rawAnswers = {}, { today = todayIst(), approv
   const open = p.questions.filter(x => x.required && !x.answered);
   if (p.blocks.length) return finish('blocked', p.blocks[0]);
   if (open.length) return finish('needs_answer', `answer ${open.map(x => x.label).join(', ')}`);
-  return finish('ready', `${item.drawing_number}: total length ${TL.str}" (2 × ${uIn}"), cold zone ${card.coldZoneBigIn}" / ${card.coldZoneSmallIn}", ${card.gauge} SWG`);
+  return finish('ready', `${item.drawing_number}: total length ${TL.str}" (${TL.formula}), cold zone ${card.coldZoneBigIn}" / ${card.coldZoneSmallIn}", ${card.gauge} SWG`);
 }
 
 // The sheet's content (uTypeSheet.renderUTypeSheet lays it out). The preview
 // says FOR APPROVAL; the production copy — the one stored on the order item —
 // FOR PRODUCTION, with the fitting order no longer TO CONFIRM once she approved it.
 function buildSheetSpec(c, { production, confirmed }) {
-  const { st, p, card, geo, TL, uIn, uLabel, W, wAns, std, d, cz, pin, fixture, stud, parts, group, shownGroup, pinsFromList, rem, inv, approver, today } = c;
+  const { st, p, card, geo, TL, uIn, uLabel, shape, insideSrc, rollerAnswered, std, d, cz, pin, fixture, stud, parts, group, shownGroup, pinsFromList, rem, inv, approver, today } = c;
   const { item, order } = st;
   const q0 = Number(item.quantity);
   const matShort = MAT(item.tube_material);
@@ -568,6 +667,16 @@ function buildSheetSpec(c, { production, confirmed }) {
   const nominalMm = TL.nominalULengthMm, drawnMm = TL.drawnULengthMm;
   const czShort = cz.source.startsWith('the remark') ? 'from the remark' : cz.source.startsWith('the earlier') ? 'as the earlier card' : cz.source === 'your answer' ? 'Ms. Vama' : `the Ø${d} standard`;
   const tbDate = `${today.slice(8, 10)}.${today.slice(5, 7)}.${today.slice(0, 4)}`;
+  // The shape, with where the inside came from (R-a … R-e).
+  const t2 = R.trimNum;
+  const rollerTxt = `roller ${t2(shape.rollerMm)}${shape.rollerIsNew ? ' NEW' : ''}`;
+  const clientTxt = shape.clientInsideMm != null
+    ? ` Client's inside ${t2(shape.clientInsideMm)} (${insideSrc.note}); ${shape.rollerIsNew ? 'new roller' : 'roller'} ${t2(shape.rollerMm)} gives ${t2(shape.insideMm)} — within ±${R.ROLLER_TOL_MM} mm, ${rollerAnswered ? 'accepted by Ms. Vama' : 'to be accepted by Ms. Vama'}.`
+    : '';
+  const shapeNote = `Shape: ${t2(shape.insideMm)} inside${shape.clientInsideMm != null ? '' : ` (${insideSrc.note})`} / ${t2(shape.outsideWidthMm)} outside / roller ${t2(shape.rollerMm)}${shape.rollerIsNew ? ' NEW — to make before bending' : ''}, + ${R.OPENING_MM} mm opening after bending.${clientTxt}`;
+  const totalNote = TL.extraIn === 0
+    ? `TOTAL LENGTH ${TL.str}" = ${TL.formula} (Ms. Vama, 14 Nov 2026)`
+    : `TOTAL LENGTH ${TL.str}" = ${TL.formula} for the ${TL.extraIn > 0 ? 'wider' : 'narrower'} bend (${t2(shape.insideMm)} inside vs the standard ${std.insideMm})`;
   // Her answer to each remark instruction this remark has (an answer left over
   // from an earlier remark is not hers for this one, and is not printed).
   const instrNotes = [...new Map(rem.instructions.map(ins => [ins.kind, ins])).values()]
@@ -581,9 +690,9 @@ function buildSheetSpec(c, { production, confirmed }) {
     item: { drawingNumber: item.drawing_number, qty: q0, finish: item.plating_instructions || '' },
     tube: { code: item.tube_material, diaMm: d, wallMm: wallFor(item.tube_material), material: matShort === 'INCOLOY' ? 'Incoloy' : matShort === 'COPPER' ? 'Copper' : matShort,
       label: `${String(tubeName || '').toUpperCase()}, DRAWN TO Ø${d}` },
-    shape: { uLabel, uLengthIn: uIn, uLengthMm: drawnMm, nominalULengthMm: nominalMm, outsideWidthMm: W, rollerMm: std.rollerMm },
+    shape,
     geo,
-    r1: { mode: '2u', totalLengthStr: TL.str },
+    r1: { mode: '2u', totalLengthStr: TL.str, formula: TL.formula, extraIn: TL.extraIn },
     fitting: { ...p.fitting, confirmed },
     card: {
       totalLengthIn: card.totalLengthIn, cuttingLengthIn: card.cuttingLengthIn, cuttingLengthMm: card.cuttingLengthMm,
@@ -596,9 +705,9 @@ function buildSheetSpec(c, { production, confirmed }) {
         ['Coil ohms at St 3', card.ohmsRangeMid != null ? `${fx(card.ohmsRangeMin, 1)} – ${fx(card.ohmsRangeMid, 1)} – ${fx(card.ohmsRangeMax, 1)} Ω` : '—'],
         ['Coil', `${card.gauge} SWG FeCrAl on ${card.wire?.mandrel_mm} mm mandrel · spring ${fx(card.springWindowLowIn)} – ${fx(card.springWindowHighIn)}"${card.doubleCoil ? ' · DOUBLE COIL' : ''}`],
         ['Sheath', `${tubeName}, drawn to Ø${d}`],
-        ['Shape', `U · ${W} outside · ${geo.insideMm} inside · legs ${geo.cc} c/c · R${fx(geo.rCL, 1)} CL`],
-        [`U length "${uLabel}"`, `${fx(drawnMm, 1)} end to end, as it comes out of a 2U tube`],
-        ['Total length', `${TL.str}" (${fx(geo.clMm, 1)} mm) = 2 × ${uIn}"`],
+        ['Shape', `${t2(shape.insideMm)} inside (${shape.clientInsideMm != null ? `client ${t2(shape.clientInsideMm)}` : insideSrc.short.replace(/^the /, '')}) · ${t2(shape.outsideWidthMm)} outside · legs ${t2(geo.cc)} c/c · R${fx(geo.rCL, 1)} CL · ${rollerTxt}`],
+        [`U length "${uLabel}"`, `${fx(drawnMm, 1)} end to end, as it comes out of a ${TL.extraIn === 0 ? '2U' : `${TL.str}"`} tube`],
+        ['Total length', `${TL.str}" (${fx(geo.clMm, 1)} mm) = ${TL.formula}`],
         ['Job card', `+0.7" = ${fx(card.totalLengthIn)}" · cut ${fx(card.cuttingLengthIn)}" (${fx(card.cuttingLengthMm, 1)} mm) · draw ${Math.round(card.tubeDrawPct * 1000) / 10}%`],
         ['Cold zone', `${card.coldZoneBigIn}" (${fx(card.coldZoneBigIn * 25.4, 1)}) ${card.coldZoneSmallIn === card.coldZoneBigIn ? 'each leg' : `big / ${card.coldZoneSmallIn}" small`} — ${czShort}`],
         ['Heated length', `≈ ${fx(heatedMm, 1)} mm (${fx(heatedIn)}")`],
@@ -611,7 +720,7 @@ function buildSheetSpec(c, { production, confirmed }) {
     notes: [
       'All dimensions in mm; inches marked ". Do not scale. Tolerances as the title block; resistance ± 5%.',
       `The order as typed: ${order.order_code} · ${order.customer_code || ''} · ${item.drawing_number} · ${q0} Nos · ${card.statedWattage} W ${card.voltage} V · ${item.tube_material} · remark "${p.order.remark}" · ${item.plating_instructions || '—'}.`,
-      `Shape: ${W} outside / ${geo.insideMm} inside / roller ${std.rollerMm}${wAns ? '' : ` (the Ø${d} standard)`}. TOTAL LENGTH ${TL.str}" = 2 × ${uIn}" (Ms. Vama, 14 Nov 2026); the U is drawn as it comes out of that tube — ${fx(drawnMm, 1)} mm end to end, ${fx(nominalMm - drawnMm, 1)} mm short of ${fx(nominalMm, 1)}.`,
+      `${shapeNote} ${totalNote}; the U is drawn as it comes out of that tube — ${fx(drawnMm, 1)} mm end to end, ${fx(nominalMm - drawnMm, 1)} mm short of ${fx(nominalMm, 1)}.`,
       `Cold zone ${card.coldZoneBigIn}"${card.coldZoneSmallIn !== card.coldZoneBigIn ? ` / ${card.coldZoneSmallIn}"` : ''} from ${cz.source === 'your answer' ? 'Ms. Vama' : cz.source}; pins ${card.terminalPinBig.studs}" from ${pin.source === 'your answer' ? 'Ms. Vama' : pin.source}. The job card adds 0.7" and works out the cut, coil, wire length and spring from the spool picked on the machine.`,
       `Parts: lines ${parts.filter(x => !['coil', 'pinwh', 'pinwo', 'tube', 'fbush', 'mgo'].includes(x.role)).map(x => x.no).join(', ') || '—'} are the item's list in the app, unchanged; lines 1–${parts.filter(x => ['coil', 'pinwh', 'pinwo', 'tube', 'fbush', 'mgo'].includes(x.role)).length} are what the stages take by the job card.${p.fitting.set && p.fitting.set.includes('ceramic') ? ' The ceramic is not an inventory item.' : ''}`,
       ...(p.mismatches.length ? [`List vs remark: ${p.mismatches.join('; ')}.`] : []),
@@ -634,7 +743,8 @@ function buildSheetSpec(c, { production, confirmed }) {
 // production sheet in 'order-drawings', put the drawing on the item through the
 // app's own upload + approve code (approved, with its frozen spec), and make
 // the job card(s) through the app's own Make Job Card code with the sheet's
-// total length (2U) and her cold zones, pins, fixture, ASMBLY and dispatch date.
+// total length (2U; on a non-standard inside, 2U + the bend's difference — R-e)
+// and her cold zones, pins, fixture, ASMBLY and dispatch date.
 // Anything that fails rolls all of it back, and the stored files are removed.
 // A second approval finds the drawing and is refused.
 function refusal(status, body) { return Object.assign(new Error(body.error), { refusal: { status, body } }); }
@@ -751,7 +861,7 @@ async function approve(db, itemId, { answers = {}, sheetCode, fittingConfirmed =
       const filename = storageFilename(originalname);
       const storagePath = await uploadToStorage('order-drawings', filename, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
       written.push(storagePath);
-      const notes = `Drawn in the app (Drawings to make) and approved by ${user.name || 'the owner'} on ${today} — sheet ${p.sheetCode}. Total length ${p.figures.totalLengthIn}" = 2U.`;
+      const notes = `Drawn in the app (Drawings to make) and approved by ${user.name || 'the owner'} on ${today} — sheet ${p.sheetCode}. Total length ${p.figures.totalLengthIn}" = ${p.figures.totalFormula}; ${R.trimNum(p.figures.insideMm)} inside, roller ${R.trimNum(p.figures.rollerMm)}${p.figures.rollerIsNew ? ' (NEW)' : ''}.`;
       const drawingId = await orderRoutes.recordOrderDrawing(t, { orderId: p.orderId, itemId: id, file: { storagePath, filename, originalname }, notes, userId: user.id, log });
       const approvedAt = new Date().toISOString();
       await t.run('UPDATE order_drawings SET agent_spec = $1 WHERE id = $2', [JSON.stringify({
@@ -817,4 +927,4 @@ async function notifyDrawingsDue(db, orderId, actor, { itemIds = null } = {}) {
   return sent ? due.length : 0;
 }
 
-module.exports = { findDue, dueCount, propose, approve, notifyDrawingsDue, cleanAnswers, verdict, listBlocks, loadItem, LOCK_DRAWING_AGENT };
+module.exports = { findDue, dueCount, propose, approve, notifyDrawingsDue, cleanAnswers, verdict, listBlocks, loadItem, rollerList, saveRollers, LOCK_DRAWING_AGENT };

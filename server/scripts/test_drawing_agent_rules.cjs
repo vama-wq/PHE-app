@@ -307,5 +307,100 @@ if (fs.existsSync(path.join(FIX, 'u_gen_cards.json'))) {
     `with: ${bm.join(',')} · without: ${bl.join(',')}`);
 }
 
+// ── 7. The inside gap, the roller and the wide U (owner, 14 Nov 2026) ──
+// "clients inner dia is more important": the inside is the requirement; the
+// roller makes it (inside − 2 mm opening), ±2 mm if she accepts, else a new one.
+{
+  const RL = R.DEFAULT_ROLLERS;
+  const pr = (i) => R.pickRoller({ insideMm: i, rollers: RL });
+  const vals = (x) => x.options.map(o => `${o.value}${o.isNew ? 'N' : ''}`).join(',');
+  const p27 = pr(27), p24 = pr(24), p29 = pr(29), p44 = pr(44), p39 = pr(39), p1016 = pr(101.6);
+  ok('7a. rollers 22/25/40: 27 → 25 exact; 24 → 22 exact; 29 → suggest 25 (or a new 27); 44 → suggest 40 (or a new 42); 39 → a new 37; 101.6 → a new 100 (makes 102)',
+    RL.join() === '22,25,40' && R.OPENING_MM === 2 && R.ROLLER_TOL_MM === 2
+    && p27.kind === 'exact' && p27.suggestMm === 25 && p27.options[0].madeInsideMm === 27 && p24.kind === 'exact' && p24.suggestMm === 22
+    && p29.kind === 'suggest' && p29.suggestMm === 25 && vals(p29) === '25,27N' && p29.options[0].madeInsideMm === 27 && p29.options[1].madeInsideMm === 29
+    && /25 mm — you have it — gives 27 inside, 2 mm under the client's 29/.test(p29.options[0].label) && /27 mm — NEW roller to make — gives 29 inside$/.test(p29.options[1].label)
+    && p44.kind === 'suggest' && p44.suggestMm === 40 && vals(p44) === '40,42N'
+    && p39.kind === 'new' && vals(p39) === '37N' && p1016.kind === 'new' && vals(p1016) === '100N' && p1016.options[0].madeInsideMm === 102,
+    [p27, p24, p29, p44, p39, p1016].map(x => `${x.insideMm}: ${x.kind} ${vals(x)}`).join(' · '));
+  const tie = R.pickRoller({ insideMm: 30, rollers: [27, 29] });
+  ok('7b. two rollers equally close: the larger first (inside 30, rollers 27 / 29 → 29, then 27, then a new 28)', tie.kind === 'suggest' && vals(tie) === '29,27,28N', vals(tie));
+  const vr = R.validateRollers([40, '25', 22, ' 25 ']), vbad = R.validateRollers(['abc', 3]), vnone = R.validateRollers([]);
+  ok('7c. her roller list is checked: numbers 5–300 mm, repeats dropped, smallest first; "abc" or 3 refused, an empty list refused',
+    vr.ok && vr.mm.join() === '22,25,40' && !vbad.ok && /"abc", "3"/.test(vbad.error) && !vnone.ok, `${JSON.stringify(vr)} ${vbad.error}`);
+
+  // The inside gap's sources: her answer → the remark → the drawing number → the standard.
+  const g1 = R.readDwgGap('PT-UType-16U-1.5Kw-4Gap'), g2 = R.readDwgGap('PT-UType-16U-1.5Kw-100MMGAP'), g3 = R.readDwgGap('PT-UType-18U-700W');
+  const l1 = R.parseULabel('PT-UType-16U-1.5Kw-4Gap', 'PT-UType'), l2 = R.parseULabel('PT-UType-16U-1.5Kw-100MMGAP', 'PT-UType');
+  ok('7d. the drawing number\'s gap: "-4Gap" = 4" = 101.6 inside (no unit under 12 = inches, her "4” gap" chat); "-100MMGAP" = 100; still a 16U plain U; none on 18U-700W',
+    g1?.mm === 101.6 && g1.inches && g2?.mm === 100 && !g2.inches && g3 === null && l1.ok && l1.uIn === 16 && l2.ok && l2.uIn === 16, `${JSON.stringify(g1)} ${JSON.stringify(g2)} ${JSON.stringify(l2)}`);
+  const quiet = (t) => !R.parseRemark(t).instructions.some(i => ['other', 'width / pitch'].includes(i.kind));
+  const in29 = R.insideDefault({ remarkGap: R.parseRemark('Nut Washer, INSIDE 29MM').gap, diaMm: 8 });
+  const gap29 = R.insideDefault({ remarkGap: R.parseRemark('29 MM GAP').gap, diaMm: 8 });
+  const cc50 = R.insideDefault({ remarkGap: R.parseRemark('M16 brass nipple, C/C 50').gap, diaMm: 11 });
+  ok('7e. the remark\'s gap: "INSIDE 29MM" → 29, "29 MM GAP" → 29, Ø11 "C/C 50" → 39 (50 − 11) — and those words no longer ask "other" / "width / pitch"',
+    in29.mm === 29 && in29.from === 'remark' && /INSIDE 29MM/.test(in29.source) && gap29.mm === 29 && cc50.mm === 39 && /50 c\/c − Ø11 = 39/.test(cc50.source)
+    && quiet('Nut Washer, INSIDE 29MM') && quiet('29 MM GAP') && quiet('M16 brass nipple, C/C 50') && quiet('U inner dia 29'),
+    `${in29.source} | ${gap29.source} | ${cc50.source}`);
+  const asks = (t, kind) => R.parseRemark(t).instructions.some(i => i.kind === kind);
+  ok('7f. only words the reader understood are taken: "with gap" and "inside" with no figure still ask "other"; "40 MM CENTRES" still asks width / pitch; two different gaps ask "inside gap"',
+    asks('Nut washer with gap', 'other') && asks('Nut washer, inside', 'other') && asks('NUT WASHER, 40 MM CENTRES', 'width / pitch')
+    && asks('INSIDE 29 / C/C 40', 'inside gap') && R.parseRemark('INSIDE 29 / C/C 40').gap === null && !asks('INSIDE 29 / C/C 40', 'width / pitch'));
+  const order = [R.insideDefault({ answerMm: 33, remarkGap: R.parseRemark('INSIDE 29MM').gap, dwgGap: g1, diaMm: 8 }),
+    R.insideDefault({ remarkGap: R.parseRemark('INSIDE 29MM').gap, dwgGap: g1, diaMm: 8 }), R.insideDefault({ dwgGap: g1, diaMm: 8 }), R.insideDefault({ diaMm: 8 }), R.insideDefault({ diaMm: 11 })];
+  ok('7g. the order of the sources: her answer (33) → the remark (29) → the drawing number (101.6) → the Ø standard (27 on Ø8 and Ø11), each with its source',
+    order.map(x => `${x.mm}/${x.from}`).join() === '33/answer,29/remark,101.6/drawing number,27/standard,27/standard'
+    && order[0].source === 'your answer' && /4Gap/.test(order[2].source) && order[3].source === 'the Ø8 standard (27 inside)' && R.SHAPE_STANDARD[8].insideMm === 27 && R.SHAPE_STANDARD[11].insideMm === 27,
+    order.map(x => x.source).join(' | '));
+  const ic = (i, d = 8) => R.insideChecks({ insideMm: i, diaMm: d });
+  ok('7h. checks: an inside under the tube (6 on Ø8, 10 on Ø11) or over 300 is refused; under 24 or over 101.6 is flagged; 24 / 27 / 101.6 pass quietly',
+    ic(6).blocks.length === 1 && ic(10, 11).blocks.length === 1 && ic(301).blocks.length === 1 && ic(NaN).blocks.length === 1
+    && ic(20).flags.length === 1 && /24–100 inside/.test(ic(20).flags[0]) && ic(102).flags.length === 1 && ic(20).blocks.length === 0
+    && [24, 27, 101.6].every(i => !ic(i).blocks.length && !ic(i).flags.length));
+
+  // R-e (a proposal to put to her): 2U plus only the bend's difference from the standard width.
+  const offStd = [];
+  for (let u = 5; u <= 99; u += 0.5) for (const d of [8, 11]) {
+    const t = R.totalLength({ uIn: u, diaMm: d, outsideWidthMm: R.SHAPE_STANDARD[d].outsideWidthMm });
+    if (t.str !== String(2 * u) || t.extraIn !== 0 || t.formula !== `2 × ${u}"`) offStd.push(`${u}U Ø${d}: ${t.str} ${t.formula}`);
+  }
+  const w16 = R.totalLength({ uIn: 16, diaMm: 8, outsideWidthMm: 117.6 });
+  const w16p = R.totalLength({ uIn: 16, diaMm: 8, outsideWidthMm: 117.6, mode: 'plain_2u' });
+  const n7 = R.totalLength({ uIn: 7, diaMm: 8, outsideWidthMm: 40 });
+  ok('7i. total length: at the standard width exactly 2U (Ø8 and Ø11, 5–99U) — no standard sheet or card changes',
+    offStd.length === 0 && R.WIDE_U_TOTAL === 'bend_extra', offStd.slice(0, 4).join('; '));
+  const n45 = R.totalLength({ uIn: 8, diaMm: 8, outsideWidthMm: 45 });
+  ok('7j. 16U at 117.6 outside (the 4" gap) on Ø8: 33.68" = 2 × 16" + 1.68" for the wider bend; the drawn U adds up to it; \'plain_2u\' gives 32"; a NARROWER U stays 2U (7U at 40 outside: 14"); 8U at 45 outside: 16.04"',
+    w16.str === '33.68' && w16.formula === '2 × 16" + 1.68"' && w16.geo.drawingTotalIn === 33.68 && Math.abs(w16.geo.clMm - 33.68 * 25.4) < 1e-6
+    && w16p.str === '32' && w16p.formula === '2 × 16"' && n7.str === '14' && n7.formula === '2 × 7"' && n7.extraIn === 0
+    && n45.str === '16.04' && n45.formula === '2 × 8" + 0.04"',
+    `${w16.str} ${w16.formula} ${w16.geo.drawingTotalIn} · ${w16p.str} · ${n7.str} ${n7.formula} · ${n45.str} ${n45.formula}`);
+
+  // R-g: the customer's earlier widths are a flag, never a default.
+  const HIST = require(S + '/src/lib/drawings/uWidthHistory.json').rows;
+  const ids = new Set(HIST.map(r => r.item_id));
+  ok(`7k. the width history seed: ${HIST.length} items from her SolidWorks sheets (no item 6 invoice, no item 1926 reused PDF); the 4" gap items 23 / 24 at 100 inside`,
+    HIST.length === 150 && !ids.has(6) && !ids.has(1926) && HIST.filter(r => [23, 24].includes(r.item_id)).every(r => r.inside === 100 && r.outside === 116 && r.roller === null)
+    && HIST.filter(r => r.customer_code === 'TS' && r.set === 'nut_washer').map(r => r.inside).join() === '24,24,24');
+  const hf = (o) => R.widthHistoryFlag({ rows: HIST, customerCode: 'TS', diaMm: 8, set: 'nut_washer', itemId: 999999, madeInsideMm: 27, ...o });
+  const f27 = hf({});
+  ok('7l. a TS nut-washer sheet at 27 inside is flagged: their earlier ones used 24 (roller 22); at 24 it is not; a TS nipple sheet at 27 is not; an item is not compared with itself',
+    /^Earlier U drawings for TS at Ø8 with nut washer used 24 inside \(roller 22\): 7U-250W ORD-007-26, 8U-250W ORD-138-26, 8U-250W ORD-185-26 — this sheet uses 27\. Check the client's drawing\.$/.test(f27 || '')
+    && hf({ madeInsideMm: 24 }) === null && hf({ set: 'nipple' }) === null
+    && R.widthHistoryFlag({ rows: HIST, customerCode: 'SHIV', diaMm: 8, set: 'nut_washer', itemId: 226, madeInsideMm: 27 }) === null, f27);
+  // 15 Nov 2026: only when the inside is the standard by default; one vote per
+  // drawing; a drawing naming its own gap ("-4Gap") is not the customer's habit.
+  const itGap = HIST.find(r => r.customer_code === 'IT' && r.inside === 100);
+  const itFlag = itGap && R.widthHistoryFlag({ rows: HIST, customerCode: 'IT', diaMm: 8, set: itGap.set, itemId: 1924, madeInsideMm: 27 });
+  const twoTo1 = [{ customer_code: 'X', dia: 8, set: 'nut_washer', item_id: 1, inside: 24, dwg: 'PT-UType-7U-250W' },
+    { customer_code: 'X', dia: 8, set: 'nut_washer', item_id: 2, inside: 24, dwg: 'PT-UType-7U-250W-2' },
+    { customer_code: 'X', dia: 8, set: 'nut_washer', item_id: 3, inside: 27, dwg: 'PT-UType-10U-500W' }];
+  ok('7m. the history flag: none when the inside is her answer, the remark\'s or the drawing number\'s; IT\'s 4" gap drawing does not flag an IT nipple sheet at 27; two items of ONE drawing are one vote (1 of 2 drawings differ → no flag)',
+    hf({ insideFrom: 'answer' }) === null && hf({ insideFrom: 'remark' }) === null && hf({ insideFrom: 'drawing number' }) === null
+    && !!itGap && itFlag === null
+    && R.widthHistoryFlag({ rows: twoTo1, customerCode: 'X', diaMm: 8, set: 'nut_washer', itemId: 9, madeInsideMm: 27 }) === null,
+    `IT: ${itFlag}`);
+}
+
 console.log(failed ? `\n${failed} CHECK(S) FAILED` : '\nALL PASS');
 process.exit(failed ? 1 : 0);

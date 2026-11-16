@@ -39,6 +39,28 @@ router.get('/queue', authenticate, authorize('owner'), async (req, res) => {
   }
 });
 
+// Her rollers (owner, 14 Nov 2026: "a roller is basically a tool on which the
+// heater is bend to a u"): the list the agent picks a roller from for the
+// client's inside gap. Until she saves hers (Monday 16 Nov), the three on her drawings.
+router.get('/rollers', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    res.json(await agent.rollerList(getDB()));
+  } catch (e) {
+    console.error('[drawing-agent] rollers failed:', e);
+    res.status(500).json({ error: 'Could not read the rollers — please try again.' });
+  }
+});
+
+router.put('/rollers', authenticate, authorize('owner'), async (req, res) => {
+  try {
+    const r = await agent.saveRollers(getDB(), req.body?.mm, req.user);
+    res.status(r.status).json(r.body);
+  } catch (e) {
+    console.error('[drawing-agent] saving rollers failed:', e);
+    res.status(500).json({ error: 'Could not save the rollers — nothing was saved. Please try again.' });
+  }
+});
+
 router.get('/items/:id', authenticate, authorize('owner'), (req, res) => sendProposal(req, res, req.query.answers));
 
 router.post('/items/:id/preview', authenticate, authorize('owner'), (req, res) => sendProposal(req, res, req.body?.answers));

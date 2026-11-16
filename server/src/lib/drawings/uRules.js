@@ -14,12 +14,147 @@ const trimNum = (n) => String(round(n, 2));          // 36 → "36", 37.4 → "3
 // ── Shape standards ──────────────────────────────────────────────────────────
 // Ø8: 43 outside / 27 inside / roller 25 (115 of 150 PHE U drawings).
 // Ø11: 49 outside / 27 inside / roller 25 (64 outside seen on 2 old Ø11 sheets,
-// so the width stays a question she can change).
+// so the width stays a question she can change). Outside = inside + 2 × Ø.
 const SHAPE_STANDARD = {
-  8: { outsideWidthMm: 43, rollerMm: 25 },
-  11: { outsideWidthMm: 49, rollerMm: 25 },
+  8: { insideMm: 27, outsideWidthMm: 43, rollerMm: 25 },
+  11: { insideMm: 27, outsideWidthMm: 49, rollerMm: 25 },
 };
 const PHASE1_DIAMETERS = [8, 11];
+
+// ── The inside gap and the roller (owner, 14 Nov 2026) ───────────────────────
+// "there are times when the u inner dia can varying": the client's inside gap
+// is the requirement — "clients inner dia is more important". "A roller is
+// basically a tool on which the heater is bend to a u": the tube opens 2 mm
+// after bending (roller 22 → 24, 25 → 27, 40 → 42 inside on 129 of her 130
+// sheets that print a roller). "We can make as many roller as per client inner
+// dia requirement … you can suggest the closest roller that is feasible with
+// +- 2mm tolerance and if accepted we can use that" — the ±2 mm is on the
+// inside gap. Her roller list (drawing_rulings 'rollers') replaces the three on
+// her drawings; she sends it on Monday 16 Nov 2026.
+const OPENING_MM = 2;
+const ROLLER_TOL_MM = 2;
+const DEFAULT_ROLLERS = [22, 25, 40];
+const DEFAULT_ROLLERS_SOURCE = 'from your drawings — your list on Monday replaces it';
+// The widths on her drawings run 24 – 100 inside (the 4" gap, 101.6, drawn as 100).
+const INSIDE_SEEN_MM = { min: 24, max: 101.6 };
+
+// Her roller list as saved: positive numbers 5 – 300 mm, no repeats, smallest
+// first. → { ok, mm } or { ok: false, error }.
+function validateRollers(raw) {
+  if (!Array.isArray(raw) || !raw.length) return { ok: false, error: 'Give at least one roller size in mm.' };
+  if (raw.length > 60) return { ok: false, error: 'At most 60 roller sizes.' };
+  const bad = raw.filter(v => { const n = Number(String(v ?? '').trim()); return String(v ?? '').trim() === '' || !Number.isFinite(n) || n < 5 || n > 300; });
+  if (bad.length) return { ok: false, error: `Roller sizes must be numbers from 5 to 300 mm (not ${bad.map(v => `"${String(v ?? '').trim()}"`).join(', ')}).` };
+  return { ok: true, mm: [...new Set(raw.map(v => round(Number(String(v).trim()), 2)))].sort((a, b) => a - b) };
+}
+
+// R-d: which roller makes the client's inside. ideal = inside − 2 (the opening).
+//  'exact'   — a roller she has gives the client's inside: use it, nothing asked.
+//  'suggest' — none does, but one gives within ±2 mm of it: she picks one (the
+//              closest first, the larger on a tie) or a new roller of the ideal size.
+//  'new'     — none within ±2 mm: a new roller of the ideal size (whole mm).
+// Each option → { value, mm, isNew, madeInsideMm, label }; made inside = roller + 2.
+function pickRoller({ insideMm, rollers }) {
+  const inside = round(insideMm, 2);
+  const list = [...new Set((rollers || []).map(Number).filter(n => Number.isFinite(n) && n > 0))].sort((a, b) => a - b);
+  const ideal = round(inside - OPENING_MM, 2);
+  const gives = (r) => round(r + OPENING_MM, 2);
+  const vsClient = (r) => {
+    const dlt = round(gives(r) - inside, 2);
+    return dlt === 0 ? '' : `, ${trimNum(Math.abs(dlt))} mm ${dlt < 0 ? 'under' : 'over'} the client's ${trimNum(inside)}`;
+  };
+  const have = (r) => ({ value: trimNum(r), mm: r, isNew: false, madeInsideMm: gives(r), label: `${trimNum(r)} mm — you have it — gives ${trimNum(gives(r))} inside${vsClient(r)}` });
+  const newMm = Math.max(1, Math.round(ideal));
+  const fresh = { value: String(newMm), mm: newMm, isNew: true, madeInsideMm: gives(newMm), label: `${newMm} mm — NEW roller to make — gives ${trimNum(gives(newMm))} inside${vsClient(newMm)}` };
+  const within = list.filter(r => Math.abs(gives(r) - inside) <= ROLLER_TOL_MM + 1e-9)
+    .sort((a, b) => Math.abs(a - ideal) - Math.abs(b - ideal) || b - a);
+  const base = { insideMm: inside, idealMm: ideal, rollers: list };
+  const exact = list.find(r => Math.abs(r - ideal) <= 0.01 + 1e-9);
+  if (exact != null) return { ...base, kind: 'exact', suggestMm: exact, options: [exact, ...within.filter(r => r !== exact)].map(have) };
+  if (within.length) return { ...base, kind: 'suggest', suggestMm: within[0], options: [...within.map(have), ...(list.includes(newMm) ? [] : [fresh])] };
+  return { ...base, kind: 'new', suggestMm: newMm, options: [fresh] };
+}
+
+// A gap value with its unit: mm as written; " / IN / INCH × 25.4; no unit and
+// under 12 → inches (no U opens less than 12 mm; her "4Gap" is 4"), else mm.
+function gapToMm(n, unit) {
+  const u = String(unit || '').toUpperCase();
+  const inches = u === '"' || u.startsWith('IN') || (!u && n < 12);
+  return { mm: round(inches ? n * IN : n, 2), inches, unitGiven: !!u };
+}
+// The drawing number's gap token, e.g. "PT-UType-16U-1.5Kw-4Gap" — her chat on
+// ORD-071-26 (22 Jul 2026): "Please upload drawing of the heater with 4” gap";
+// her sheet for it (items 23 / 24) is 116 outside / 100 inside.
+const DWG_GAP_RE = /(\d+(?:\.\d+)?)\s*(MM|"|INCH|IN)?\s*-?\s*GAP/i;
+function readDwgGap(drawingNumber) {
+  const m = String(drawingNumber || '').replace(/[“”″]/g, '"').match(DWG_GAP_RE);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!(n > 0)) return null;
+  return { n, unit: m[2] ? m[2].toUpperCase() : null, text: m[0].trim(), ...gapToMm(n, m[2]) };
+}
+// The remark's inside gap: INSIDE / INNER / GAP n (either order), or C/C /
+// CENTRE TO CENTRE n (the legs' centres: inside = c/c − Ø, worked out by the
+// caller, who knows the tube). → [{ kind: 'inside'|'cc', n, unit, mm, inches, text }].
+const U_ = '(MM|"|INCH(?:ES)?\\b|IN\\b)?';
+const NUM_ = '(\\d+(?:\\.\\d+)?)';
+const REMARK_GAP_RES = [
+  ['inside', new RegExp(`(?:\\bU\\s+)?\\b(?:INSIDE|INNER|GAP)\\b(?:\\s*(?:(?:DIA(?:METER)?|GAP|WIDTH|DISTANCE|OF|IS)\\b|[=:-]))*\\s*${NUM_}\\s*${U_}`, 'g')],
+  ['inside', new RegExp(`${NUM_}\\s*${U_}\\s*(?:(?:INSIDE|INNER)\\s*)?(?:GAP|INSIDE|INNER)\\b`, 'g')],
+  ['cc', new RegExp(`(?:\\bC\\s*\\/\\s*C\\b|\\bCENT(?:RE|ER)\\s*TO\\s*CENT(?:RE|ER)\\b)(?:\\s*(?:(?:DISTANCE|OF|LEGS?|IS)\\b|[=:-]))*\\s*${NUM_}\\s*${U_}`, 'g')],
+  ['cc', new RegExp(`${NUM_}\\s*${U_}\\s*(?:C\\s*\\/\\s*C\\b|CENT(?:RE|ER)\\s*TO\\s*CENT(?:RE|ER)\\b)`, 'g')],
+];
+// Overlapping readings ("INSIDE 29 GAP" is read word-first and number-first)
+// are one statement; `agree` is false when they give different gaps.
+function readRemarkGaps(t) {
+  const found = [];
+  for (const [kind, re] of REMARK_GAP_RES) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(t))) {
+      const n = Number(m[1]);
+      if (n > 0) found.push({ kind, n, unit: m[2] || null, at: m.index, end: m.index + m[0].trimEnd().length, ...gapToMm(n, m[2]) });
+    }
+  }
+  const clusters = [];
+  for (const g of found.sort((a, b) => a.at - b.at || b.end - a.end)) {
+    const c = clusters[clusters.length - 1];
+    if (c && g.at < c.end) { c.end = Math.max(c.end, g.end); c.readings.push(g); } else clusters.push({ at: g.at, end: g.end, readings: [g] });
+  }
+  return clusters.map(c => ({ ...c.readings[0], end: c.end, text: t.slice(c.at, c.end).trim(),
+    agree: new Set(c.readings.map(g => `${g.kind}:${g.mm}`)).size === 1 }));
+}
+
+// R-a: the client's inside gap — her answer → the remark → the drawing number
+// → the Ø standard (27 inside on Ø8 and Ø11). → { mm, from, source (the page),
+// short (the element table), note (the sheet's notes) }.
+function insideDefault({ answerMm, remarkGap, dwgGap, diaMm }) {
+  const std = SHAPE_STANDARD[diaMm];
+  const asRead = (g) => (g.unitGiven ? (g.inches ? ` = ${trimNum(g.mm)} mm` : '') : g.inches ? ` — read as ${trimNum(g.n)}" = ${trimNum(g.mm)} mm` : ' — read as mm');
+  if (answerMm != null) return { mm: round(answerMm, 2), from: 'answer', source: 'your answer', short: 'Ms. Vama', note: 'Ms. Vama' };
+  if (remarkGap) {
+    if (remarkGap.kind === 'cc') {
+      const mm = round(remarkGap.mm - diaMm, 2);
+      const how = `"${remarkGap.text}"${remarkGap.inches ? asRead(remarkGap) : ''}: ${trimNum(remarkGap.mm)} c/c − Ø${diaMm} = ${trimNum(mm)} inside`;
+      return { mm, from: 'remark', source: `the remark (${how})`, short: 'the remark', note: `the remark, ${how}` };
+    }
+    return { mm: remarkGap.mm, from: 'remark', source: `the remark ("${remarkGap.text}"${asRead(remarkGap)})`, short: 'the remark', note: `the remark, "${remarkGap.text}"${asRead(remarkGap)}` };
+  }
+  if (dwgGap) return { mm: dwgGap.mm, from: 'drawing number', source: `the drawing number ("${dwgGap.text}"${asRead(dwgGap)})`, short: 'the drawing number', note: `the drawing number, "${dwgGap.text}"${asRead(dwgGap)}` };
+  return { mm: std.insideMm, from: 'standard', source: `the Ø${diaMm} standard (${std.insideMm} inside)`, short: `the Ø${diaMm} standard`, note: `the Ø${diaMm} standard` };
+}
+
+// R-f: an inside gap the bend cannot make is refused; one outside the widths
+// on her drawings is flagged.
+function insideChecks({ insideMm, diaMm }) {
+  const blocks = [], flags = [];
+  const v = Number(insideMm);
+  if (!Number.isFinite(v)) blocks.push(`the inside gap "${insideMm}" is not a number`);
+  else if (v < diaMm) blocks.push(`inside gap ${trimNum(v)} mm is less than the tube (Ø${diaMm}) — the U cannot be bent`);
+  else if (v > 300) blocks.push(`inside gap ${trimNum(v)} mm is over 300 mm — not a U the app draws`);
+  else if (v < INSIDE_SEEN_MM.min || v > INSIDE_SEEN_MM.max) flags.push(`inside gap ${trimNum(v)} mm is outside the widths on your drawings (24–100 inside) — check it`);
+  return { blocks, flags };
+}
 
 // ── Drawing numbers ──────────────────────────────────────────────────────────
 // Upper case; drop PT-, spaces, quotes and underscores; strip a trailing -1/-2/-3
@@ -42,7 +177,8 @@ const hasRepeatSuffix = (s) => /-\s*[1-9]\s*$/.test(String(s || '').trim());
 // Bank, mm, a value of 100 or more (read as mm by the shop), fins, more than one
 // element or no U at all are out of phase 1.
 function parseULabel(drawingNumber, productCode) {
-  const dn = String(drawingNumber || '').replace(/[“”″]/g, '"');
+  // A gap token ("-4Gap", "-100MMGAP") is the inside gap (readDwgGap), not a length.
+  const dn = String(drawingNumber || '').replace(/[“”″]/g, '"').replace(new RegExp(DWG_GAP_RE.source, 'gi'), '');
   const pc = String(productCode || '').toUpperCase().replace(/[\s_]/g, '-');
   const up = dn.toUpperCase();
   const out = (reason) => ({ ok: false, reason });
@@ -107,10 +243,18 @@ function unreadWords(t, read, { nipple, heavy }) {
 // "Nut Washer with thermostat" or "Buffing" must not come out as ready).
 function parseRemark(remark) {
   const t = normaliseRemark(remark);
-  const res = { text: t, coldZones: [], coldZoneIn: null, studOutside: false, studNamed: null, fins: false, nipple: null, words: {}, unread: [], instructions: [] };
+  const res = { text: t, coldZones: [], coldZoneIn: null, studOutside: false, studNamed: null, fins: false, nipple: null, gap: null, words: {}, unread: [], instructions: [] };
   if (!t) return res;
   const read = [];                      // the parts of the remark a rule read or asked about
   const instr = (kind, text) => { res.instructions.push({ kind, text }); read.push(text); };
+  // The inside gap (INSIDE / INNER / GAP n, C/C n): read when it says one thing,
+  // asked when it says two. Either way its words are no longer "other" words
+  // or a "width / pitch" question (owner, 14 Nov 2026).
+  const gaps = readRemarkGaps(t);
+  read.push(...gaps.map(g => g.text));
+  if (gaps.length && gaps.every(g => g.agree) && new Set(gaps.map(g => `${g.kind}:${g.mm}`)).size === 1) res.gap = gaps[0];
+  else if (gaps.length) instr('inside gap', gaps.map(g => g.text).join(' · '));
+  const tw = gaps.reduce((s, g) => s.split(g.text).join(' / '), t);
   // Bends are not cold zones: '7" COLD SIDE BEND'.
   if (/COLD\s*SIDE\s*BEND|\bBEND\b/.test(t)) instr('bend', (t.match(/[^/,]*BEND[^/,]*/) || [t])[0].trim());
   // Hot + cold given together, e.g. '12" HOT + 8" COLD. 8" STUD'.
@@ -139,7 +283,7 @@ function parseRemark(remark) {
   if (/LIKE\s*LAST\s*TIME|AS\s*(PER\s*)?LAST|SAME\s*AS/.test(t)) instr('like last time', (t.match(/[^/]*(LIKE LAST TIME|LAST|SAME AS)[^/]*/) || [t])[0].trim());
   if (/TOTAL\s*LENGTH/.test(t)) instr('total length stated', (t.match(/TOTAL\s*LENGTH[^/,]*/) || [t])[0].trim());
   if (/PRESSURE/.test(t)) instr('pressure', (t.match(/[^/,]*PRESSURE[^/,]*/) || [t])[0].trim());
-  if (/\b(WIDTH|PITCH|CENTRES?|CENTERS?|C\/C|CENTRE TO CENTRE|CENTER TO CENTER)\b/.test(t)) instr('width / pitch', (t.match(/[^/,]*(WIDTH|PITCH|CENT)[^/,]*/) || [t])[0].trim());
+  if (/\b(WIDTH|PITCH|CENTRES?|CENTERS?|C\/C|CENTRE TO CENTRE|CENTER TO CENTER)\b/.test(tw)) instr('width / pitch', (tw.match(/[^/,]*(WIDTH|PITCH|CENT|C\/C)[^/,]*/) || [tw])[0].trim());
   if (/STEATITE|CRIMP|FABRICATE|MALE\s*FEMALE/.test(t)) instr('special build', t);
   if (/\b\d+\s*DEGREE|\bDEG\b|°/.test(t)) instr('temperature', (t.match(/[^/,]*DEG[^/,]*/) || [t])[0].trim());
   if (/GAUGE|\bGEJ\b|\bSWG\b/.test(t)) instr('wire gauge stated', (t.match(/[^/,]*(GAUGE|GEJ|SWG)[^/,]*/) || [t])[0].trim());
@@ -290,12 +434,28 @@ function dispatchDefault({ orderDispatchDate, orderType, todayIso }) {
 // callout prints that same figure, and the U is drawn as it actually comes out
 // of that tube: 18U on Ø8 with 43 outside measures ≈ 451.2 mm end to end (still
 // labelled 18U), because the bend takes (π/2 − 1)·R − d/2 off each leg.
-function totalLength({ uIn, diaMm, outsideWidthMm }) {
-  const W = outsideWidthMm || SHAPE_STANDARD[diaMm].outsideWidthMm;
-  const num = round(2 * uIn, 2);
+//
+// R-e, a PROPOSAL to put to her (14 Nov 2026), switchable here: her ruling drops
+// the standard bend's extra centreline (≈ 0.47" on Ø8 / 43 outside). A WIDER U
+// takes more tube in its bend (a 4" gap ≈ 1.7" more), so 'bend_extra' adds only
+// the DIFFERENCE from that Ø's standard width:
+//   extra = [(−W + π(W − d)/2) − (−W_std + π(W_std − d)/2)] / 25.4
+// (centreline = 2L − W + π(W − d)/2). A narrower U stays 2U (24 inside would
+// take 0.07" off — less than the standard already drops), and at the standard
+// width it is exactly 2U, as every sheet and card so far. 'plain_2u' goes back
+// to 2U at every width.
+const WIDE_U_TOTAL = 'bend_extra';
+const bendExtraMm = (W, d) => -W + (Math.PI * (W - d)) / 2;
+function totalLength({ uIn, diaMm, outsideWidthMm, mode = WIDE_U_TOTAL }) {
+  const Wstd = SHAPE_STANDARD[diaMm].outsideWidthMm;
+  const W = outsideWidthMm || Wstd;
+  const extra = mode === 'bend_extra' && W > Wstd ? (bendExtraMm(W, diaMm) - bendExtraMm(Wstd, diaMm)) / IN : 0;
+  const num = round(2 * uIn + extra, 2);
+  const extraIn = round(num - 2 * uIn, 2);
+  const formula = extraIn === 0 ? `2 × ${trimNum(uIn)}"` : `2 × ${trimNum(uIn)}" ${extraIn > 0 ? '+' : '−'} ${trimNum(Math.abs(extraIn))}"`;
   const drawn = uLengthForCentreline({ clMm: num * IN, outsideWidthMm: W, tubeDiaMm: diaMm });
   const geo = deriveUShape({ uLengthMm: drawn, outsideWidthMm: W, tubeDiaMm: diaMm });
-  return { str: trimNum(num), num, drawnULengthMm: drawn, nominalULengthMm: uIn * IN, geo };
+  return { str: trimNum(num), num, extraIn, formula, mode, drawnULengthMm: drawn, nominalULengthMm: uIn * IN, geo };
 }
 
 // ── Cold zone and pin defaults ───────────────────────────────────────────────
@@ -339,6 +499,47 @@ function shapeChecks({ geo, outsideWidthMm, drawnULengthMm, czBigIn, czSmallIn, 
   const load = wattsPerElement / (Math.PI * (diaMm / 10) * (heatedMm / 10));
   if (heatedMm > 0 && load > MAX_SURFACE_LOAD_SEEN_W_CM2) flags.push(`surface load ≈ ${round(load, 1)} W/cm² is above the highest on her approved U cards (${MAX_SURFACE_LOAD_SEEN_W_CM2} W/cm²)`);
   return { blocks, flags, heatedMm, surfaceLoad: load };
+}
+
+// ── The customer's earlier U widths (R-g: a flag, never a default) ──────────
+// The survey of her sheets (14 Nov 2026) found history no safe default: TS is
+// 43 / 27 with an M12 nipple and 40 / 24 with nut washer or a heavy pin;
+// PT-971 has 64 / 42 and 49 / 27 at Ø11. So it only raises a flag: when, for
+// the same customer, Ø and fitting set (this item left out), the commonest
+// inside is not this sheet's. rows: [{ item_id, order_code, customer_code, dia,
+// set, inside, roller, dwg }].
+const shortDwg = (s) => String(s || '').replace(/^PT[-_\s]*U\s*type(?:HE)?[-_\s]*/i, '').trim();
+// Only when the inside is the Ø standard by default: an inside she gave, or one
+// the remark or the drawing number names, is the client's already. One vote per
+// DRAWING (the same number and Ø drawn again is one drawing), a drawing that
+// names its own gap ("-4Gap") is that design's and not the customer's habit, and
+// it flags only when more than half of the customer's drawings differ (15 Nov
+// 2026 — IT's one 4" gap drawing must not outvote their 27s).
+function widthHistoryFlag({ rows, customerCode, diaMm, set, itemId, madeInsideMm, insideFrom = 'standard' }) {
+  if (!customerCode || !set || insideFrom !== 'standard') return null;
+  const same = (rows || []).filter(r => r.customer_code === customerCode && Number(r.dia) === Number(diaMm) && r.set === set
+    && Number(r.item_id) !== Number(itemId) && Number(r.inside) > 0 && !readDwgGap(r.dwg));
+  if (!same.length) return null;
+  const drawings = new Map();     // normalised number → its latest row
+  for (const r of same) {
+    const k = normaliseDwgNo(r.dwg) || `item ${r.item_id}`;
+    if (!drawings.has(k) || Number(r.item_id) > Number(drawings.get(k).item_id)) drawings.set(k, r);
+  }
+  const by = new Map();
+  for (const r of drawings.values()) { const k = round(r.inside, 2); if (!by.has(k)) by.set(k, []); by.get(k).push(r); }
+  const differ = [...drawings.values()].filter(r => Math.abs(round(r.inside, 2) - madeInsideMm) >= 0.01).length;
+  if (differ * 2 <= drawings.size) return null;
+  const top = Math.max(...[...by.entries()].filter(([k]) => Math.abs(k - madeInsideMm) >= 0.01).map(([, a]) => a.length));
+  const modes = [...by.entries()].filter(([k, a]) => Math.abs(k - madeInsideMm) >= 0.01 && a.length === top);
+  // A tie: the width drawn most recently.
+  const [inside, drawn] = modes.sort((a, b) => Math.max(...b[1].map(r => r.item_id)) - Math.max(...a[1].map(r => r.item_id)))[0];
+  const list = same.filter(r => drawn.some(x => normaliseDwgNo(x.dwg) === normaliseDwgNo(r.dwg)));
+  const rc = new Map();
+  for (const r of list) if (r.roller != null) rc.set(r.roller, (rc.get(r.roller) || 0) + 1);
+  const roller = [...rc.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const names = [...new Set([...list].sort((a, b) => a.item_id - b.item_id).map(r => `${shortDwg(r.dwg)} ${r.order_code}`))];
+  return `Earlier U drawings for ${customerCode} at Ø${diaMm} with ${String(SET_LABEL[set] || set).toLowerCase()} used ${trimNum(inside)} inside${roller != null ? ` (roller ${trimNum(roller)})` : ''}: `
+    + `${names.slice(0, 3).join(', ')}${names.length > 3 ? ` and ${names.length - 3} more` : ''} — this sheet uses ${trimNum(madeInsideMm)}. Check the client's drawing.`;
 }
 
 // ── The list as the drawing upload would keep it (routes/orders.js) ─────────
@@ -403,6 +604,8 @@ function snapshotDiff(a, b, prefix = '') {
 
 module.exports = {
   IN, round, trimNum, SHAPE_STANDARD, PHASE1_DIAMETERS, normaliseDwgNo, hasRepeatSuffix, parseULabel,
+  OPENING_MM, ROLLER_TOL_MM, DEFAULT_ROLLERS, DEFAULT_ROLLERS_SOURCE, INSIDE_SEEN_MM, validateRollers, pickRoller,
+  gapToMm, readDwgGap, readRemarkGaps, insideDefault, insideChecks, WIDE_U_TOTAL, widthHistoryFlag, shortDwg,
   normaliseRemark, parseRemark, listShape, setFromList, fittingSetFor, SET_LABEL, FITTING_ORDER, RULED_SETS,
   fixtureText, asmblyDefault, isIsoDate, weekday, dispatchDefault, totalLength, coldZoneDefault, pinDefault,
   shapeChecks, MAX_SURFACE_LOAD_SEEN_W_CM2, filteredForResend, CLOSED, statusClass,

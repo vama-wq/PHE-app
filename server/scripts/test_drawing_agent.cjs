@@ -10,7 +10,12 @@
 // nut-washer list are asked, remark words no rule reads are asked, notes too
 // long for the box are refused, the owner hears when design's list save makes
 // an item drawable, a card refused at numbering leaves no file behind, and an
-// approval before the schema is in says so (503).
+// approval before the schema is in says so (503). The inside gap and the
+// roller (owner, 14 Nov 2026): her roller list saved through the page; a
+// clone at 33 inside asks the roller (a new one) and is refused until she
+// answers, then approved with everything but the shape-driven total as the
+// 27 case; ±2 mm suggests the roller she has; the remark and the drawing
+// number give the inside; a customer's earlier widths only raise a flag.
 //
 // Runs inside ONE transaction that is ROLLED BACK, on made-up orders with items
 // cloned from a real nut-washer U item and its list. Storage uploads and
@@ -128,9 +133,9 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       [['ESB-08', 'NUT-SS-M4-08', 'NUT-BR-M4-08', 'WSH-BR-08', 'ESB-11', 'NUT-SS-M5-11', 'WSH-BR-11']])).map(r => [r.item_code, r.id]));
     console.log(`      cloning item ${src.id} ${src.drawing_number} (${src.wattage} W, ${src.tube_material}, "${src.remark}", ${srcLines.length} list lines)`);
     let seq = 0, iseq = 0;
-    const mkOrder = async ({ status = 'approved', type = 'local_he' } = {}) => {
+    const mkOrder = async ({ status = 'approved', type = 'local_he', customerId = src.customer_id } = {}) => {
       const id = (await q1(`INSERT INTO orders (order_code, customer_id, order_date, order_type, status) VALUES ($1,$2,CURRENT_DATE,$3,$4) RETURNING id`,
-        [`ORD-ZDWG-${++seq}`, src.customer_id, type, status])).id;
+        [`ORD-ZDWG-${++seq}`, customerId, type, status])).id;
       testOrders.push(id);
       return id;
     };
@@ -460,6 +465,97 @@ require(S + '/node_modules/dotenv').config({ path: S + '/.env' });
       const ap = await fresh.approve(noSchemaDb, i1, { answers: {}, sheetCode: p.sheetCode }, owner);
       ok('P1. without agent_spec / drawing_rulings an approval is refused with "the app is finishing an update" (503), not a failed write',
         ap.status === 503 && ap.body.code === 'SCHEMA_NOT_READY' && /finishing an update/.test(ap.body.error), JSON.stringify(ap));
+    }
+
+    // ── Q. The inside gap and the roller (owner, 14 Nov 2026) ──
+    {
+      // Her roller list, through the page's route (rolled back with the rest).
+      const rr = await call('PUT', '/api/drawing-agent/rollers', { mm: [40, '25', 22, 25] });
+      const rg = await call('GET', '/api/drawing-agent/rollers');
+      const rbad = await call('PUT', '/api/drawing-agent/rollers', { mm: ['abc'] });
+      actor = design;
+      const rdes = await call('PUT', '/api/drawing-agent/rollers', { mm: [30] });
+      const rdesG = await call('GET', '/api/drawing-agent/rollers');
+      actor = owner;
+      ok('Q1. her roller list is saved through the page (22, 25, 40 — the repeat dropped, smallest first) and read back; "abc" refused; design can neither read nor set it',
+        rr.status === 200 && rr.body.mm?.join() === '22,25,40' && rr.body.saved === true && rg.status === 200 && rg.body.mm?.join() === '22,25,40'
+        && rbad.status === 400 && rdes.status === 403 && rdesG.status === 403, `${rr.status} ${JSON.stringify(rr.body)} ${rbad.status} ${rdes.status} ${rdesG.status}`);
+
+      const oQ = await mkOrder();
+      const iStd = await mkItem(oQ), i33 = await mkItem(oQ);
+      const pStd = (await call('GET', `/api/drawing-agent/items/${iStd}`)).body;
+      const ans33 = { inside_mm: '33' };
+      let p33 = (await call('POST', `/api/drawing-agent/items/${i33}/preview`, { answers: ans33 })).body;
+      const rq = qOf(p33, 'roller_mm');
+      r = await call('POST', `/api/drawing-agent/items/${i33}/approve`, { answers: ans33, sheet_code: p33.sheetCode });
+      ok('Q2. the standard clone asks no roller (27 inside → roller 25, filled in); inside 33 does: none within ±2 mm, a NEW 31 mm roller — approve refused NEEDS_ANSWER',
+        pStd.status === 'ready' && qOf(pStd, 'roller_mm')?.value === '25' && !qOf(pStd, 'roller_mm').required && qOf(pStd, 'inside_mm')?.value === '27'
+        && pStd.figures.insideMm === 27 && pStd.figures.rollerMm === 25 && pStd.figures.rollerKind === 'exact' && pStd.figures.clientInsideMm === null
+        && p33.status === 'needs_answer' && rq?.required && !rq.answered && rq.value === '' && rq.options.map(o => o.value).join() === '31' && rq.suggest === '31'
+        && r.status === 400 && r.body.code === 'NEEDS_ANSWER' && (await nDraw(i33)) === 0, `${pStd.status} ${pStd.statusLine} · ${p33.status} ${JSON.stringify(rq)} · ${r.status} ${r.body.code}`);
+      const ans33r = { inside_mm: '33', roller_mm: '31' };
+      p33 = (await call('POST', `/api/drawing-agent/items/${i33}/preview`, { answers: ans33r })).body;
+      // Everything but the shape-driven total is the 27 case's.
+      const bodyDiff = ['cold_zone_big_in', 'cold_zone_small_in', 'terminal_pin_big_in', 'terminal_pin_small_in', 'fixture', 'asmbly', 'dispatch_date', 'terminal_group', 'punching', 'notes']
+        .filter(k => p33.body[k] !== pStd.body[k]);
+      // (The card names carry each clone's own drawing number.)
+      const figDiff = ['coldZoneBigIn', 'coldZoneSmallIn', 'pinBig', 'pinSmall', 'pinOverridden', 'stud', 'quantities', 'pins', 'uLabel']
+        .filter(k => JSON.stringify(p33.figures[k]) !== JSON.stringify(pStd.figures[k]));
+      const want = R.totalLength({ uIn: label.uIn, diaMm: 8, outsideWidthMm: 49 }).str;
+      ok(`Q3. answered (roller 31, new): ready, drawn 33 inside / 49 outside, flagged "New roller 31 mm"; total ${want}" (2U + the wider bend) where the 27 case is ${twoU}"; cold zone, pins, fixture, cards as the 27 case`,
+        p33.status === 'ready' && p33.figures.insideMm === 33 && p33.figures.outsideWidthMm === 49 && p33.figures.rollerMm === 31 && p33.figures.rollerKind === 'new' && p33.figures.rollerIsNew === true
+        && p33.flags.some(f => /^New roller 31 mm to make before bending/.test(f)) && p33.body.drawing_total_length_in === want && want !== twoU && pStd.body.drawing_total_length_in === twoU
+        && bodyDiff.length === 0 && figDiff.length === 0, `${p33.status} ${p33.statusLine} · body differs: ${bodyDiff} · figures differ: ${figDiff} · total ${p33.body.drawing_total_length_in}`);
+      const upQ = uploads.length;
+      r = await call('POST', `/api/drawing-agent/items/${i33}/approve`, { answers: ans33r, sheet_code: p33.sheetCode });
+      const dq = await q1('SELECT agent_spec FROM order_drawings WHERE item_id=$1', [i33]);
+      const sq = dq && (typeof dq.agent_spec === 'string' ? JSON.parse(dq.agent_spec) : dq.agent_spec);
+      const cq = await q1('SELECT generated_spec FROM job_cards WHERE order_item_id=$1', [i33]);
+      const sheetQ = uploads.slice(upQ).find(u => u.folder === 'order-drawings');
+      ok('Q4. … approved: the frozen spec carries 33 inside / 49 outside / roller 31 NEW, the card takes the sheet\'s total, the notes name the new roller; no roller choice is remembered',
+        r.status === 201 && sq?.figures?.insideMm === 33 && sq?.figures?.rollerMm === 31 && sq?.sheet?.shape?.insideMm === 33 && sq?.sheet?.shape?.rollerIsNew === true
+        && sq?.sheet?.shape?.outsideWidthMm === 49 && sq?.sheet?.shape?.clientInsideMm === null && sq?.answers?.roller_mm === '31' && cq?.generated_spec?.input?.drawingTotalLengthIn === want
+        && (sq?.sheet?.notes || []).some(n => /roller 31 NEW — to make before bending/.test(n)) && !!sheetQ
+        && !(await q1("SELECT 1 AS x FROM drawing_rulings WHERE key LIKE 'roller%' AND key <> 'rollers'")), `${r.status} ${r.body.error || ''}`);
+      // ±2 mm on the inside: 29 → the 25 she has (gives 27), or a new 27.
+      const i29 = await mkItem(oQ);
+      const p29 = (await call('POST', `/api/drawing-agent/items/${i29}/preview`, { answers: { inside_mm: '29' } })).body;
+      const q29 = qOf(p29, 'roller_mm');
+      const p29b = (await call('POST', `/api/drawing-agent/items/${i29}/preview`, { answers: { inside_mm: '29', roller_mm: '30' } })).body;
+      const p29a = (await call('POST', `/api/drawing-agent/items/${i29}/preview`, { answers: { inside_mm: '29', roller_mm: '25' } })).body;
+      ok('Q5. inside 29: roller 25 suggested ("Use 25"), options 25 / a new 27; 30 refused ("Roller must be one of"); 25 accepted → drawn 27 inside at 2U, the sheet notes the client\'s 29',
+        p29.status === 'needs_answer' && q29?.suggest === '25' && q29.options.map(o => o.value).join() === '25,27' && /^Suggested: roller 25 — the closest you have within ±2 mm/.test(q29.text || '')
+        && p29b.status === 'blocked' && p29b.blocks.some(b => /^Roller must be one of 25, 27 mm/.test(b))
+        && p29a.status === 'ready' && p29a.figures.insideMm === 27 && p29a.figures.clientInsideMm === 29 && p29a.figures.rollerKind === 'suggest' && p29a.figures.rollerIsNew === false
+        && p29a.html.includes('Client&#39;s inside 29 (Ms. Vama); roller 25 gives 27 — within ±2 mm, accepted by Ms. Vama') && p29a.body.drawing_total_length_in === twoU,
+        `${p29.status} ${JSON.stringify(q29)} · ${p29b.status} ${p29b.blocks} · ${p29a.status} ${p29a.statusLine}`);
+      // The remark and the drawing number give the inside.
+      const iRem = await mkItem(oQ, { remark: 'Nut Washer, inside 29mm' });
+      const iGap = await mkItem(oQ, { dwg: `${src.drawing_number}-ZT${++iseq}-4Gap` });
+      const pRem = (await call('GET', `/api/drawing-agent/items/${iRem}`)).body;
+      const pGap = (await call('GET', `/api/drawing-agent/items/${iGap}`)).body;
+      const pGapA = (await call('POST', `/api/drawing-agent/items/${iGap}/preview`, { answers: { roller_mm: '100' } })).body;
+      // The wider bend takes more tube: on a short low-watt clone the engine may find
+      // no wire for it — the shape is still worked out, and nothing else stops it.
+      const gapOnlyWire = pGapA.status === 'ready' || (pGapA.status === 'blocked' && pGapA.blocks.every(b => /^no wire on the gauge sheet/.test(b)));
+      ok('Q6. "inside 29mm" in the remark is read (no "other words" question, the inside 29 from the remark); "-4Gap" in the drawing number is 101.6 → a new 100 roller, drawn 102 inside / 118 outside',
+        !pRem.questions.some(x => x.key.startsWith('ack:')) && qOf(pRem, 'inside_mm')?.value === '29' && /^the remark \("NUT WASHER, INSIDE 29MM"|^the remark \("INSIDE 29MM"/.test(qOf(pRem, 'inside_mm').source)
+        && qOf(pRem, 'roller_mm')?.suggest === '25'
+        && qOf(pGap, 'inside_mm')?.value === '101.6' && /^the drawing number \("4Gap"/.test(qOf(pGap, 'inside_mm').source) && qOf(pGap, 'roller_mm')?.options.map(o => o.value).join() === '100'
+        && gapOnlyWire && !pGapA.questions.some(x => x.required && !x.answered) && pGapA.figures.insideMm === 102 && pGapA.figures.outsideWidthMm === 118 && pGapA.figures.clientInsideMm === 101.6
+        && pGapA.body.drawing_total_length_in === R.totalLength({ uIn: label.uIn, diaMm: 8, outsideWidthMm: 118 }).str,
+        `${qOf(pRem, 'inside_mm')?.source} · ${qOf(pGap, 'inside_mm')?.source} · ${pGapA.status} ${pGapA.statusLine} ${JSON.stringify(pGapA.blocks)}`);
+      // A customer's earlier widths only raise a flag (Thermolab: nut washer at 24 inside).
+      const ts = await q1("SELECT id FROM customers WHERE customer_code = 'TS' ORDER BY id LIMIT 1");
+      if (ts) {
+        const oTs = await mkOrder({ customerId: ts.id });
+        const iTs = await mkItem(oTs);
+        const pTs = (await call('GET', `/api/drawing-agent/items/${iTs}`)).body;
+        const pTs24 = (await call('POST', `/api/drawing-agent/items/${iTs}/preview`, { answers: { inside_mm: '24' } })).body;
+        ok('Q7. a TS nut-washer clone at the standard 27 is flagged — earlier TS nut-washer sheets used 24 (roller 22) — but stays ready (a flag, not a default); at 24 (roller 22, exact) no such flag',
+          pTs.status === 'ready' && qOf(pTs, 'inside_mm')?.value === '27' && pTs.flags.some(f => /^Earlier U drawings for TS at Ø8 with nut washer used 24 inside \(roller 22\): 7U-250W ORD-007-26/.test(f))
+          && pTs24.status === 'ready' && pTs24.figures.rollerMm === 22 && !pTs24.flags.some(f => /^Earlier U drawings/.test(f)), `${pTs.status} ${JSON.stringify(pTs.flags)} · ${pTs24.status} ${JSON.stringify(pTs24.flags)}`);
+      } else ok('Q7. the customer TS exists to test the width history flag with', false);
     }
 
     ok('stubs: every storage write went to the stub; WhatsApp only through the stub', uploads.length > 0);
