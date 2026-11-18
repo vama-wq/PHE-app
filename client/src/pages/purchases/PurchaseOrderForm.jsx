@@ -28,6 +28,10 @@ export default function PurchaseOrderForm() {
   const [igstPercent, setIgstPercent] = useState('18');
   const [notes, setNotes] = useState('');
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
+  // Adjustment lines (owner, 18 Nov 2026): earlier costs to be borne by the
+  // other party, settled on this PO — + we pay the supplier more, − we pay less.
+  const [adjustments, setAdjustments] = useState([]);
+  const [supplierPos, setSupplierPos] = useState([]);
   // Ship To (owner, 30 Oct 2026): billing stays with us, delivery to another company.
   const BLANK_SHIP_TO = { name: '', address: '', gstin: '', contact: '' };
   const [shipToOn, setShipToOn] = useState(false);
@@ -57,6 +61,9 @@ export default function PurchaseOrderForm() {
         setNotes(po.notes || '');
         setExpectedDeliveryDate(po.expected_delivery_date || '');
         if (po.ship_to?.name) { setShipToOn(true); setShipTo({ ...BLANK_SHIP_TO, ...po.ship_to }); }
+        setAdjustments((po.adjustments || []).map(a => ({
+          sign: Number(a.amount) < 0 ? '-' : '+', amount: String(Math.abs(Number(a.amount))), reason: a.reason || '', ref_po_id: a.ref_po_id ? String(a.ref_po_id) : '',
+        })));
         setItems(po.items.map(i => ({
           id: i.id,
           inventory_item_id: i.inventory_item_id,
@@ -144,6 +151,19 @@ export default function PurchaseOrderForm() {
   };
   const removeItem = (idx) => setItems(prev => prev.filter((_, i) => i !== idx));
 
+  // This supplier's other POs, to say which earlier PO an adjustment is about.
+  useEffect(() => {
+    if (!supplierId) { setSupplierPos([]); return; }
+    api.get('/purchase-orders').then(r => setSupplierPos((r.data || [])
+      .filter(p => String(p.supplier_id) === String(supplierId) && String(p.id) !== String(id || ''))
+      .map(p => ({ id: p.id, po_number: p.po_number })))).catch(() => setSupplierPos([]));
+  }, [supplierId, id]);
+  const addAdjustment = () => setAdjustments(prev => [...prev, { sign: '+', amount: '', reason: '', ref_po_id: '' }]);
+  const updateAdjustment = (idx, field, value) => setAdjustments(prev => prev.map((a, i) => (i === idx ? { ...a, [field]: value } : a)));
+  const removeAdjustment = (idx) => setAdjustments(prev => prev.filter((_, i) => i !== idx));
+  const adjLines = adjustments.filter(a => (a.amount !== '' && Number(a.amount) !== 0) || a.reason.trim());
+  const adjValue = (a) => Math.round((a.sign === '-' ? -1 : 1) * (parseFloat(a.amount) || 0) * 100) / 100;
+
   // Computed totals
   const tc = parseFloat(transportCharges) || 0;
   const igst = parseFloat(igstPercent) || 0;
@@ -152,7 +172,9 @@ export default function PurchaseOrderForm() {
   const igstAmount = Math.round(subtotal * (igst / 100) * 100) / 100;
   // Mirrors calcTotals on the server: the payable rounds to the nearest rupee
   // and the dropped fraction is shown as Round Off.
-  const beforeRounding = Math.round((subtotal + igstAmount) * 100) / 100;
+  const adjTotal = Math.round(adjLines.reduce((t, a) => t + adjValue(a), 0) * 100) / 100;
+  // Adjustments are added after GST — no tax on them (as on the server).
+  const beforeRounding = Math.round((subtotal + igstAmount + adjTotal) * 100) / 100;
   const grandTotal = Math.round(beforeRounding);
   const roundOff = Math.round((grandTotal - beforeRounding) * 100) / 100;
   const fmt = n => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2 });
@@ -175,6 +197,10 @@ export default function PurchaseOrderForm() {
       return setError('Each item must be picked from the supplier’s list (use the dropdown).');
 
     if (shipToOn && (!shipTo.name.trim() || !shipTo.address.trim())) return setError('Ship To needs the company name and its address');
+    for (const a of adjLines) {
+      if (!(parseFloat(a.amount) > 0)) return setError('Each adjustment needs an amount (more than 0) — choose + or − for which way it goes');
+      if (!a.reason.trim()) return setError('Each adjustment needs a reason');
+    }
     setSaving(true);
     setError('');
     const payload = {
@@ -192,6 +218,7 @@ export default function PurchaseOrderForm() {
       notes,
       expected_delivery_date: expectedDeliveryDate || null,
       ship_to: shipToOn ? shipTo : null,
+      adjustments: adjLines.map(a => ({ amount: adjValue(a), reason: a.reason.trim(), ref_po_id: a.ref_po_id ? Number(a.ref_po_id) : null })),
     };
 
     try {
@@ -457,6 +484,12 @@ export default function PurchaseOrderForm() {
                 <span>IGST ({igstPercent}%)</span>
                 <span className="font-medium">₹{fmt(igstAmount)}</span>
               </div>
+              {adjLines.map((a, i) => (
+                <div key={`adj-${i}`} className="flex justify-between w-full text-gray-600">
+                  <span className="truncate pr-2" title={a.reason}>Adjustment{a.reason.trim() ? ` — ${a.reason.trim()}` : ''}</span>
+                  <span className="font-medium whitespace-nowrap">{adjValue(a) < 0 ? '−' : '+'}₹{fmt(Math.abs(adjValue(a)))}</span>
+                </div>
+              ))}
               {roundOff !== 0 && (
                 <div className="flex justify-between w-full text-gray-600">
                   <span>Round Off</span>
@@ -469,6 +502,48 @@ export default function PurchaseOrderForm() {
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Adjustments — earlier costs to be borne by the other party */}
+        <div className="card p-5">
+          <div className="flex items-center justify-between gap-3 mb-1">
+            <h3 className="font-semibold text-gray-900">Adjustments</h3>
+            <button type="button" className="btn-secondary btn-sm" onClick={addAdjustment} disabled={!supplierId}>
+              <Plus size={14} /> Add adjustment
+            </button>
+          </div>
+          <p className="text-xs text-gray-500 mb-3">
+            An earlier cost that was to be borne by the other party, settled on this PO. <b>+</b> the supplier bore a cost that was ours (we pay more);
+            <b> −</b> we bore a cost that was theirs (we pay less). Added after GST — no tax on it — and it does not change any item's cost.
+          </p>
+          {adjustments.length === 0 ? (
+            <p className="text-xs text-gray-400">No adjustments.</p>
+          ) : (
+            <div className="space-y-2">
+              {adjustments.map((a, idx) => (
+                <div key={idx} className="flex flex-wrap items-center gap-2">
+                  <select className="input w-20 text-sm" value={a.sign} onChange={e => updateAdjustment(idx, 'sign', e.target.value)} aria-label="Add or take off">
+                    <option value="+">+ add</option>
+                    <option value="-">− less</option>
+                  </select>
+                  <div className="flex items-center gap-1">
+                    <span className="text-sm text-gray-500">₹</span>
+                    <input className="input w-28 text-right text-sm" type="number" step="0.01" min="0" placeholder="0.00"
+                      value={a.amount} onChange={e => updateAdjustment(idx, 'amount', e.target.value)} aria-label="Adjustment amount" />
+                  </div>
+                  <input className="input flex-1 min-w-[12rem] text-sm" maxLength={300} placeholder="Reason, e.g. transport paid by supplier on an earlier order"
+                    value={a.reason} onChange={e => updateAdjustment(idx, 'reason', e.target.value)} aria-label="Adjustment reason" />
+                  <select className="input w-40 text-sm" value={a.ref_po_id} onChange={e => updateAdjustment(idx, 'ref_po_id', e.target.value)} aria-label="Earlier PO">
+                    <option value="">Earlier PO (optional)</option>
+                    {supplierPos.map(p => <option key={p.id} value={p.id}>{p.po_number}</option>)}
+                  </select>
+                  <button type="button" className="text-red-400 hover:text-red-600 p-1" onClick={() => removeAdjustment(idx)} aria-label="Remove adjustment">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{error}</div>}

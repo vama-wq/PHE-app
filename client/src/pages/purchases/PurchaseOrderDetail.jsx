@@ -9,7 +9,7 @@ import {
   ArrowLeft, Printer, Send, CheckCircle, XCircle,
   PackageCheck, Pencil, Loader2, Truck, Upload, FileText,
   ExternalLink, RefreshCw, MessageSquare, Trash2, AlertTriangle,
-  Paperclip, X, File, Download, Wallet
+  Paperclip, X, File, Download, Wallet, Plus
 } from 'lucide-react';
 import { compressImages } from '../../lib/compressImage';
 
@@ -330,6 +330,8 @@ export default function PurchaseOrderDetail() {
       )}
       {/* Packaging (no GST) — editable even after receiving (a billing figure). */}
       {canManagePO && <PackagingNoGst po={po} onSaved={load} />}
+      {/* Adjustments — earlier costs settled on this PO; editable after sending too. */}
+      {canManagePO && <PoAdjustments po={po} onSaved={load} />}
 
       {/* ── Item Receiving & QC panel (approved POs, screen only) ── */}
       {((po.status === 'approved' && po.delivery_status !== 'order_cancelled') || po.status === 'received'
@@ -537,6 +539,17 @@ export default function PurchaseOrderDetail() {
                 <td style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right' }}>{fmt(po.packaging_no_gst)}</td>
               </tr>
             )}
+            {/* Adjustments (owner, 18 Nov 2026) — earlier costs settled on this PO, no GST. */}
+            {(po.adjustments || []).map(a => (
+              <tr key={`adj-${a.id}`}>
+                <td colSpan={5} style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right', fontWeight: 600 }}>
+                  Adjustment — {a.reason}{a.ref_po_number ? ` (re ${a.ref_po_number})` : ''}
+                </td>
+                <td style={{ border: '1px solid #ccc', padding: '4px 8px', textAlign: 'right' }}>
+                  {Number(a.amount) < 0 ? '−' : '+'}{fmt(Math.abs(Number(a.amount)))}
+                </td>
+              </tr>
+            ))}
             {/* Round Off — only shown when there was actually a fraction to
                 drop, so a PO that lands on a whole rupee stays clean. */}
             {Number(po.round_off) !== 0 && (
@@ -1320,6 +1333,104 @@ function PackagingForwarding({ po, onSaved }) {
 // A packaging charge the supplier adds WITHOUT GST (owner, 16 Oct 2026): added
 // to the PO total after GST and owed in full. Editable even after the PO is
 // received — it is a billing figure, not part of any item's cost.
+// Adjustment lines (owner, 18 Nov 2026): earlier costs that were to be borne by
+// the other party, settled on this PO. + we pay the supplier more, − we pay less.
+// After GST (no tax), no change to any item's cost, owed with the first delivery.
+// A draft sets them on the PO form; once sent they are added / removed here.
+function PoAdjustments({ po, onSaved }) {
+  const [adding, setAdding] = useState(false);
+  const [f, setF] = useState({ sign: '+', amount: '', reason: '', ref_po_id: '' });
+  const [supplierPos, setSupplierPos] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const list = po.adjustments || [];
+  const editable = !['draft', 'rejected'].includes(po.status);
+  useEffect(() => {
+    if (!adding) return;
+    api.get('/purchase-orders').then(r => setSupplierPos((r.data || [])
+      .filter(p => p.supplier_id === po.supplier_id && p.id !== po.id).map(p => ({ id: p.id, po_number: p.po_number })))).catch(() => {});
+  }, [adding, po.id, po.supplier_id]);
+  if (!editable && !list.length) return null;   // a draft with none: set them on the PO form
+  const inr = (n) => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const add = async () => {
+    const amt = parseFloat(f.amount);
+    if (!(amt > 0)) return setError('Enter an amount more than 0, and choose + or − for which way it goes');
+    if (!f.reason.trim()) return setError('Give the reason for this adjustment');
+    setSaving(true); setError('');
+    try {
+      await api.post(`/purchase-orders/${po.id}/adjustments`, {
+        amount: (f.sign === '-' ? -1 : 1) * amt, reason: f.reason.trim(), ref_po_id: f.ref_po_id ? Number(f.ref_po_id) : null });
+      setAdding(false); setF({ sign: '+', amount: '', reason: '', ref_po_id: '' });
+      await onSaved();
+    } catch (err) { setError(err.response?.data?.error || 'Failed to add the adjustment'); }
+    finally { setSaving(false); }
+  };
+  const remove = async (a) => {
+    if (!window.confirm(`Remove the adjustment ${Number(a.amount) < 0 ? '−' : '+'}₹${inr(Math.abs(Number(a.amount)))} (${a.reason}) from ${po.po_number}?`)) return;
+    setError('');
+    try { await api.delete(`/purchase-orders/${po.id}/adjustments/${a.id}`); await onSaved(); }
+    catch (err) { setError(err.response?.data?.error || 'Failed to remove the adjustment'); }
+  };
+  return (
+    <div className="card p-4 mb-5 no-print">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-sm font-semibold text-gray-900">Adjustments</div>
+          <div className="text-xs text-gray-400">
+            Earlier costs to be borne by the other party: + we pay the supplier more, − we pay less. Added after GST (no tax), item costs unchanged, owed with the first delivery.
+            {!editable && ' Change a draft\'s adjustments on the PO form.'}
+          </div>
+        </div>
+        {editable && !adding && (
+          <button className="btn-secondary btn-sm" onClick={() => { setAdding(true); setError(''); }}><Plus size={14} /> Add adjustment</button>
+        )}
+      </div>
+      {list.length > 0 && (
+        <ul className="mt-3 divide-y divide-gray-100 text-sm">
+          {list.map(a => (
+            <li key={a.id} className="flex items-center justify-between gap-3 py-2">
+              <div className="min-w-0">
+                <div className="text-gray-800">{a.reason}{a.ref_po_number && <span className="text-gray-400"> · re {a.ref_po_number}</span>}</div>
+                <div className="text-xs text-gray-400">{a.created_by_name || '—'} · {fmtDate(a.created_at)}</div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <span className={`font-semibold tabular-nums ${Number(a.amount) < 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {Number(a.amount) < 0 ? '−' : '+'}₹{inr(Math.abs(Number(a.amount)))}
+                </span>
+                {editable && (
+                  <button className="text-red-400 hover:text-red-600 p-1" onClick={() => remove(a)} aria-label="Remove adjustment"><Trash2 size={14} /></button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {adding && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <select className="input w-24 text-sm" value={f.sign} onChange={e => setF({ ...f, sign: e.target.value })} aria-label="Add or take off">
+            <option value="+">+ add</option>
+            <option value="-">− less</option>
+          </select>
+          <div className="flex items-center gap-1">
+            <span className="text-sm text-gray-500">₹</span>
+            <input className="input w-28 text-right text-sm" type="number" step="0.01" min="0" autoFocus placeholder="0.00"
+              value={f.amount} onChange={e => setF({ ...f, amount: e.target.value })} aria-label="Adjustment amount" />
+          </div>
+          <input className="input flex-1 min-w-[12rem] text-sm" maxLength={300} placeholder="Reason, e.g. transport paid by supplier on an earlier order"
+            value={f.reason} onChange={e => setF({ ...f, reason: e.target.value })} aria-label="Adjustment reason" />
+          <select className="input w-40 text-sm" value={f.ref_po_id} onChange={e => setF({ ...f, ref_po_id: e.target.value })} aria-label="Earlier PO">
+            <option value="">Earlier PO (optional)</option>
+            {supplierPos.map(p => <option key={p.id} value={p.id}>{p.po_number}</option>)}
+          </select>
+          <button className="btn-primary btn-sm" onClick={add} disabled={saving}>{saving ? 'Saving…' : 'Add'}</button>
+          <button className="btn-secondary btn-sm" onClick={() => { setAdding(false); setError(''); }}>Cancel</button>
+        </div>
+      )}
+      {error && <p className="text-red-600 text-xs mt-2">{error}</p>}
+    </div>
+  );
+}
+
 function PackagingNoGst({ po, onSaved }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(String(Number(po.packaging_no_gst) || 0));

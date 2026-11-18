@@ -193,7 +193,7 @@ const VALID_DELIVERY_STATUSES = [
 
 // Totals (and a PO's standing) live in lib/poSettle.js, shared with the
 // startup correction: a short-closed line never counts toward the total.
-const { calcTotals, recomputePoTotals, settlePoStatus, settleBillCharges, invoiceKey } = require('../lib/poSettle');
+const { calcTotals, recomputePoTotals, settlePoStatus, settleBillCharges, invoiceKey, adjustmentsTotal } = require('../lib/poSettle');
 
 async function nextPoNumber(db) {
   const last = await db.get('SELECT po_number FROM purchase_orders ORDER BY id DESC LIMIT 1');
@@ -310,17 +310,29 @@ async function payableParts(db, pos) {
     if (parts.length && pfLeft > 0) parts[0].pf = r2(parts[0].pf + pfLeft);   // P&F not tied to a bill
     // A packaging charge billed without GST rides with the first part, untaxed.
     if (parts.length) parts[0].packaging_no_gst = r2(po.packaging_no_gst);
+    parts.forEach((pt) => { pt.payable = r2(receivedPayable(pt.material + pt.pf, po.igst_percent) + (Number(pt.packaging_no_gst) || 0)); });   // GST on material+P&F only
+    // Adjustments (owner, 18 Nov 2026), untaxed: an addition rides with the first
+    // part; a deduction comes off the first part, and what it cannot take off
+    // carries to the next — whatever is still left stays on the last part.
+    let adjLeft = r2(po.adjustments_total);
+    parts.forEach((pt, i) => {
+      if (!adjLeft) return;
+      const last = i === parts.length - 1;
+      const take = adjLeft > 0 || last ? adjLeft : Math.max(adjLeft, -pt.payable);
+      pt.adjustment = r2(take); pt.payable = r2(pt.payable + take); adjLeft = r2(adjLeft - take);
+    });
     let cleared = Number(po.paid_cleared || 0), pending = Number(po.paid_pending || 0);
     parts.forEach((pt) => {
-      pt.payable = r2(receivedPayable(pt.material + pt.pf, po.igst_percent) + (Number(pt.packaging_no_gst) || 0));   // GST on material+P&F only
-      pt.paid_cleared = r2(Math.min(cleared, pt.payable)); cleared = r2(cleared - pt.paid_cleared);
-      pt.paid_pending = r2(Math.min(pending, pt.payable - pt.paid_cleared)); pending = r2(pending - pt.paid_pending);
+      pt.paid_cleared = r2(Math.max(0, Math.min(cleared, pt.payable))); cleared = r2(cleared - pt.paid_cleared);
+      pt.paid_pending = r2(Math.max(0, Math.min(pending, pt.payable - pt.paid_cleared))); pending = r2(pending - pt.paid_pending);
       pt.remaining = r2(pt.payable - pt.paid_cleared - pt.paid_pending);
     });
     byPo.set(po.id, parts);
   }
   return byPo;
 }
+// The PO's adjustment lines, summed (owner, 18 Nov 2026).
+const PO_ADJ_SQL = `COALESCE((SELECT SUM(a.amount) FROM purchase_order_adjustments a WHERE a.po_id = po.id), 0) AS adjustments_total`;
 const PO_PAID_SQL = `
       COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
                 WHERE pce.po_id = po.id AND pce.entry_type = 'expense' AND pce.payment_method = 'paid_bank'), 0) AS paid_cleared,
@@ -330,7 +342,7 @@ const PO_PAID_SQL = `
 router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const db = getDB();
   const pos = await db.all(`
-    SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.packaging_no_gst, po.created_at, s.name AS supplier_name, ${PO_PAID_SQL}
+    SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.packaging_no_gst, ${PO_ADJ_SQL}, po.created_at, s.name AS supplier_name, ${PO_PAID_SQL}
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
     WHERE po.status NOT IN ('draft', 'rejected')`);
@@ -344,7 +356,7 @@ router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'
         id: `${po.id}-${pt.month || 'undated'}`, po_id: po.id, po_number: po.po_number, supplier_name: po.supplier_name,
         month: pt.month, received_at: pt.received_at, part_no: i + 1, parts_count: list.length,
         igst_percent: Number(po.igst_percent || 0), material_value: pt.material, packaging_forwarding: pt.pf,
-        packaging_no_gst: Number(pt.packaging_no_gst) || 0,
+        packaging_no_gst: Number(pt.packaging_no_gst) || 0, adjustment: Number(pt.adjustment) || 0,
         received_value: pt.payable, paid_cleared: pt.paid_cleared, paid_pending: pt.paid_pending, remaining: pt.remaining,
       });
     });
@@ -368,7 +380,7 @@ router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'acco
         const amount = Math.round(Number(p.amount) * 100) / 100;
         if (!Number.isInteger(poId) || !(amount > 0)) { errors.push('Invalid payment row skipped'); continue; }
         const po = await client.query(
-          `SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.packaging_no_gst, s.name AS supplier_name, ${PO_PAID_SQL}
+          `SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.packaging_no_gst, ${PO_ADJ_SQL}, s.name AS supplier_name, ${PO_PAID_SQL}
            FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id=$1`, [poId]);
         const row = po.rows[0];
         if (!row) { errors.push(`PO ${poId} not found`); continue; }
@@ -521,7 +533,14 @@ router.get('/:id', authenticate, async (req, res) => {
        LEFT JOIN users u ON u.id = dn.raised_by
       WHERE dn.po_id = $1 ORDER BY dn.id`, [req.params.id]);
 
-  res.json({ ...po, items, material_qc: materialQc || null, debit_notes: debitNotes,
+  const adjustments = await db.all(
+    `SELECT a.id, a.amount, a.reason, a.ref_po_id, rp.po_number AS ref_po_number, a.created_at, u.name AS created_by_name
+       FROM purchase_order_adjustments a
+       LEFT JOIN purchase_orders rp ON rp.id = a.ref_po_id
+       LEFT JOIN users u ON u.id = a.created_by
+      WHERE a.po_id = $1 ORDER BY a.id`, [req.params.id]);
+
+  res.json({ ...po, items, material_qc: materialQc || null, debit_notes: debitNotes, adjustments,
     payments, paid_cleared: sumBy('paid_bank'), paid_pending: sumBy('unpaid_bank') });
 });
 
@@ -538,6 +557,35 @@ function shipToFrom(raw) {
   return { value: st };
 }
 
+// Adjustment lines (owner, 18 Nov 2026): earlier costs to be borne by the other
+// party, settled on this PO. amount + (we pay the supplier more) or − (we pay
+// less), never 0; a reason always; optionally the earlier PO it is about.
+function adjustmentFrom(raw) {
+  const amount = Math.round(Number(raw?.amount) * 100) / 100;
+  const reason = String(raw?.reason ?? '').trim().slice(0, 300);
+  const ref = raw?.ref_po_id == null || raw.ref_po_id === '' ? null : parseInt(raw.ref_po_id, 10);
+  if (!Number.isFinite(amount) || amount === 0) return { error: 'Each adjustment needs an amount — + or −, not 0' };
+  if (Math.abs(amount) > 1e9) return { error: 'Adjustment amount is too large' };
+  if (!reason) return { error: 'Each adjustment needs a reason' };
+  if (ref != null && !Number.isInteger(ref)) return { error: 'The earlier PO for an adjustment is not valid' };
+  return { value: { amount, reason, ref_po_id: ref } };
+}
+function adjustmentsFrom(raw) {
+  if (raw == null) return { value: [] };
+  if (!Array.isArray(raw)) return { error: 'Adjustments must be a list' };
+  const out = [];
+  for (const a of raw) { const r = adjustmentFrom(a); if (r.error) return r; out.push(r.value); }
+  return { value: out };
+}
+const sumAdj = (list) => Math.round(list.reduce((t, a) => t + a.amount, 0) * 100) / 100;
+async function insertAdjustments(db, poId, list, userId) {
+  for (const a of list) {
+    await db.run('INSERT INTO purchase_order_adjustments (po_id, amount, reason, ref_po_id, created_by) VALUES ($1,$2,$3,$4,$5)',
+      [poId, a.amount, a.reason, a.ref_po_id, userId]);
+  }
+}
+const adjWords = (a) => `${a.amount > 0 ? '+' : '−'}₹${Math.abs(a.amount)} (${a.reason})`;
+
 router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
   const { supplier_id, items, transport_charges, igst_percent, notes, expected_delivery_date } = req.body;
   if (!supplier_id) return res.status(400).json({ error: 'Supplier is required' });
@@ -549,7 +597,9 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (r
   const igst = igst_percent !== undefined ? Number(igst_percent) : 18;
   const tc = Number(transport_charges || 0);
   const pkgNoGst = Number(req.body.packaging_no_gst || 0);
-  const { subtotal, igstAmount, grandTotal, roundOff } = calcTotals(items, tc, igst, pkgNoGst);
+  const adj = adjustmentsFrom(req.body.adjustments);
+  if (adj.error) return res.status(400).json({ error: adj.error });
+  const { subtotal, igstAmount, grandTotal, roundOff } = calcTotals(items, tc, igst, pkgNoGst, sumAdj(adj.value));
   const poNumber = await nextPoNumber(db);
 
   const r = await db.insert(
@@ -570,6 +620,8 @@ router.post('/', authenticate, authorize('owner', 'admin', 'accounts'), async (r
        Number(item.qty), Number(item.rate), Number(item.amount)]
     );
   }
+  await insertAdjustments(db, poId, adj.value, req.user.id);
+  if (adj.value.length) await logActivity(null, null, 'po_updated', `PO ${poNumber}: adjustment(s) ${adj.value.map(adjWords).join(', ')}`, req.user.id);
 
   const increases = await detectRateIncreases(db, supplier_id, items, 0);
   if (increases.length) await flagRateIncrease(db, { id: poId, po_number: poNumber }, increases, req.user.id);
@@ -594,7 +646,11 @@ router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async 
   const igst = igst_percent !== undefined ? Number(igst_percent) : po.igst_percent;
   const tc = Number(transport_charges !== undefined ? transport_charges : po.transport_charges);
   const pkgNoGst = Number(req.body.packaging_no_gst !== undefined ? req.body.packaging_no_gst : po.packaging_no_gst) || 0;
-  const { subtotal, igstAmount, grandTotal, roundOff } = calcTotals(items, tc, igst, pkgNoGst);
+  // A caller that sends no adjustments keeps the PO's own.
+  const adj = req.body.adjustments === undefined ? { value: null } : adjustmentsFrom(req.body.adjustments);
+  if (adj.error) return res.status(400).json({ error: adj.error });
+  const adjSum = adj.value ? sumAdj(adj.value) : await adjustmentsTotal(db, po.id);
+  const { subtotal, igstAmount, grandTotal, roundOff } = calcTotals(items, tc, igst, pkgNoGst, adjSum);
 
   await db.run(
     `UPDATE purchase_orders SET
@@ -615,6 +671,14 @@ router.put('/:id', authenticate, authorize('owner', 'admin', 'accounts'), async 
       [po.id, item.inventory_item_id||null, item.description, item.unit||null,
        Number(item.qty), Number(item.rate), Number(item.amount)]
     );
+  }
+  if (adj.value) {
+    const before = await db.all('SELECT amount, reason FROM purchase_order_adjustments WHERE po_id=$1 ORDER BY id', [po.id]);
+    await db.run('DELETE FROM purchase_order_adjustments WHERE po_id=$1', [po.id]);
+    await insertAdjustments(db, po.id, adj.value, req.user.id);
+    const was = before.map(a => adjWords({ amount: Number(a.amount), reason: a.reason })).join(', ') || 'none';
+    const now = adj.value.map(adjWords).join(', ') || 'none';
+    if (was !== now) await logActivity(null, null, 'po_updated', `PO ${po.po_number}: adjustments ${was} → ${now}`, req.user.id);
   }
 
   // Re-evaluate the rate-increase gate after the edit.
@@ -659,7 +723,8 @@ router.put('/:id/packaging-forwarding', authenticate, authorize('owner', 'admin'
   // short-closed balance is not coming, so it does not count.
   const items = await db.all('SELECT amount FROM purchase_order_items WHERE po_id=$1 AND NOT short_closed', [po.id]);
   const { subtotal, igstAmount, grandTotal, roundOff } =
-    calcTotals(items.map(i => ({ amount: Number(i.amount) || 0 })), amount, Number(po.igst_percent) || 0, Number(po.packaging_no_gst) || 0);
+    calcTotals(items.map(i => ({ amount: Number(i.amount) || 0 })), amount, Number(po.igst_percent) || 0, Number(po.packaging_no_gst) || 0,
+      await adjustmentsTotal(db, po.id));
 
   await db.run(
     `UPDATE purchase_orders SET transport_charges=$1, subtotal=$2, igst_amount=$3, round_off=$4, grand_total=$5
@@ -693,6 +758,54 @@ router.put('/:id/packaging-no-gst', authenticate, authorize('owner', 'admin', 'a
   await logActivity(null, null, 'po_updated',
     `PO ${po.po_number}: packaging (no GST) changed ₹${before} → ₹${amount} (total now ₹${t ? t.grandTotal : '?'})`, req.user.id);
   res.json({ message: 'Packaging (no GST) updated', grand_total: t ? t.grandTotal : null });
+});
+
+// Adjustments on a sent / received PO (owner, 18 Nov 2026). A draft takes its
+// adjustments on the PO form; once sent they are added and removed here — a
+// billing figure, so it can change after the goods arrive (like packaging
+// without GST). Each add / remove recomputes the total and is logged.
+router.post('/:id/adjustments', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const db = getDB();
+  const po = await db.get('SELECT id, po_number, status, supplier_id FROM purchase_orders WHERE id=$1', [req.params.id]);
+  if (!po) return res.status(404).json({ error: 'Not found' });
+  if (['draft', 'rejected'].includes(po.status)) {
+    return res.status(400).json({ error: 'Add adjustments on a draft PO from the PO form; this is for after it is sent.' });
+  }
+  const a = adjustmentFrom(req.body);
+  if (a.error) return res.status(400).json({ error: a.error });
+  if (a.value.ref_po_id != null) {
+    const ref = await db.get('SELECT id FROM purchase_orders WHERE id=$1', [a.value.ref_po_id]);
+    if (!ref) return res.status(400).json({ error: 'The earlier PO for this adjustment was not found' });
+    if (ref.id === po.id) return res.status(400).json({ error: 'An adjustment cannot refer to the same PO' });
+  }
+  const t = await db.withTransaction(async (client) => {
+    const cdb = { get: async (q, p) => (await client.query(q, p)).rows[0], all: async (q, p) => (await client.query(q, p)).rows,
+      run: async (q, p) => client.query(q, p) };
+    await insertAdjustments(cdb, po.id, [a.value], req.user.id);
+    return recomputePoTotals(cdb, po.id);
+  });
+  await logActivity(null, null, 'po_updated', `PO ${po.po_number}: adjustment added ${adjWords(a.value)} (total now ₹${t ? t.grandTotal : '?'})`, req.user.id);
+  res.status(201).json({ message: 'Adjustment added', grand_total: t ? t.grandTotal : null });
+});
+
+router.delete('/:id/adjustments/:adjId', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
+  const db = getDB();
+  const po = await db.get('SELECT id, po_number, status FROM purchase_orders WHERE id=$1', [req.params.id]);
+  if (!po) return res.status(404).json({ error: 'Not found' });
+  if (['draft', 'rejected'].includes(po.status)) {
+    return res.status(400).json({ error: 'Change a draft PO\'s adjustments on the PO form.' });
+  }
+  const adj = await db.get('SELECT id, amount, reason FROM purchase_order_adjustments WHERE id=$1 AND po_id=$2', [req.params.adjId, po.id]);
+  if (!adj) return res.status(404).json({ error: 'Adjustment not found on this PO' });
+  const t = await db.withTransaction(async (client) => {
+    const cdb = { get: async (q, p) => (await client.query(q, p)).rows[0], all: async (q, p) => (await client.query(q, p)).rows,
+      run: async (q, p) => client.query(q, p) };
+    await cdb.run('DELETE FROM purchase_order_adjustments WHERE id=$1', [adj.id]);
+    return recomputePoTotals(cdb, po.id);
+  });
+  await logActivity(null, null, 'po_updated',
+    `PO ${po.po_number}: adjustment removed ${adjWords({ amount: Number(adj.amount), reason: adj.reason })} (total now ₹${t ? t.grandTotal : '?'})`, req.user.id);
+  res.json({ message: 'Adjustment removed', grand_total: t ? t.grandTotal : null });
 });
 
 router.put('/:id/send', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
@@ -1767,5 +1880,11 @@ router.post('/:id/messages', authenticate, ...uploadChatAttachments, async (req,
     res.status(500).json({ error: 'Failed to send message' });
   }
 });
+
+// For scripts/test_po_adjustments.cjs: the Payments Due parts, read on a test transaction.
+router.payableParts = payableParts;
+router.adjustmentFrom = adjustmentFrom;
+router.PO_ADJ_SQL = PO_ADJ_SQL;
+router.PO_PAID_SQL = PO_PAID_SQL;
 
 module.exports = router;
