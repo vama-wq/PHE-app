@@ -2670,6 +2670,21 @@ async function initDB(retries = 20, delayMs = 10000) {
       set_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       set_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+    // Adjustments on a PO (owner, 18 Nov 2026): earlier costs that were to be
+    // borne by the other party, settled on this PO — + when the supplier bore a
+    // cost that was ours (we pay more), − when we bore one that was theirs (we
+    // pay less). Added to the total after GST (no tax on it), never to an
+    // item's cost, and owed with the first delivery on Payments Due.
+    await pool.query(`CREATE TABLE IF NOT EXISTS purchase_order_adjustments (
+      id SERIAL PRIMARY KEY,
+      po_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+      amount NUMERIC(12,2) NOT NULL CHECK (amount <> 0),
+      reason TEXT NOT NULL,
+      ref_po_id INTEGER REFERENCES purchase_orders(id) ON DELETE SET NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_po_adjustments_po ON purchase_order_adjustments(po_id)`);
 
       // Seed default users only on first run (empty table)
       const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');

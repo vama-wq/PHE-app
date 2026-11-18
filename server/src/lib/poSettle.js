@@ -13,13 +13,21 @@ const QC_RESOLVED = ['approved', 'rejected', 'partial'];
 // packagingNoGst (owner, 16 Oct 2026): a packaging charge some suppliers add
 // WITHOUT GST. Added to the total AFTER igst, so no tax falls on it; it is not
 // part of the subtotal the GST is worked out on.
-function calcTotals(items, transportCharges, igstPercent, packagingNoGst = 0) {
+// adjustments (owner, 18 Nov 2026): the PO's adjustment lines, summed — + or −,
+// also after GST, so no tax falls on them either.
+function calcTotals(items, transportCharges, igstPercent, packagingNoGst = 0, adjustments = 0) {
   const subtotal = items.reduce((s, i) => s + i.amount, 0) + Number(transportCharges || 0);
   const igstAmount = Math.round(subtotal * (igstPercent / 100) * 100) / 100;
-  const beforeRounding = Math.round((subtotal + igstAmount + Number(packagingNoGst || 0)) * 100) / 100;
+  const beforeRounding = Math.round((subtotal + igstAmount + Number(packagingNoGst || 0) + Number(adjustments || 0)) * 100) / 100;
   const grandTotal = Math.round(beforeRounding);
   const roundOff = Math.round((grandTotal - beforeRounding) * 100) / 100;
   return { subtotal, igstAmount, grandTotal, roundOff };
+}
+
+// The sum of a PO's adjustment lines (+ and −).
+async function adjustmentsTotal(db, poId) {
+  const r = await db.get('SELECT COALESCE(SUM(amount), 0) AS t FROM purchase_order_adjustments WHERE po_id=$1', [poId]);
+  return Math.round(Number(r?.t || 0) * 100) / 100;
 }
 
 // Rewrite the PO's totals from the lines still expected.
@@ -29,7 +37,7 @@ async function recomputePoTotals(db, poId) {
   const lines = await db.all(
     'SELECT amount FROM purchase_order_items WHERE po_id=$1 AND NOT short_closed', [poId]);
   const t = calcTotals(lines.map(l => ({ amount: Number(l.amount) || 0 })),
-    po.transport_charges, Number(po.igst_percent) || 0, Number(po.packaging_no_gst) || 0);
+    po.transport_charges, Number(po.igst_percent) || 0, Number(po.packaging_no_gst) || 0, await adjustmentsTotal(db, poId));
   await db.run(
     'UPDATE purchase_orders SET subtotal=$1, igst_amount=$2, round_off=$3, grand_total=$4 WHERE id=$5',
     [t.subtotal, t.igstAmount, t.roundOff, t.grandTotal, poId]);
@@ -129,4 +137,5 @@ async function settleBillCharges(db, poId) {
   }
 }
 
-module.exports = { calcTotals, recomputePoTotals, settlePoStatus, settleBillCharges, invoiceKey, QC_RESOLVED };
+module.exports = {
+  adjustmentsTotal, calcTotals, recomputePoTotals, settlePoStatus, settleBillCharges, invoiceKey, QC_RESOLVED };
