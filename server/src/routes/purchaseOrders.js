@@ -333,9 +333,12 @@ async function payableParts(db, pos) {
 }
 // The PO's adjustment lines, summed (owner, 18 Nov 2026).
 const PO_ADJ_SQL = `COALESCE((SELECT SUM(a.amount) FROM purchase_order_adjustments a WHERE a.po_id = po.id), 0) AS adjustments_total`;
+// A payment someone outside the business made (payment_method 'paid_external',
+// owner 23 Nov 2026: P PHE 03 "was paid externally") clears the bill like a bank
+// payment — it just touches no bank or cash balance.
 const PO_PAID_SQL = `
       COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
-                WHERE pce.po_id = po.id AND pce.entry_type = 'expense' AND pce.payment_method = 'paid_bank'), 0) AS paid_cleared,
+                WHERE pce.po_id = po.id AND pce.entry_type = 'expense' AND pce.payment_method IN ('paid_bank', 'paid_external')), 0) AS paid_cleared,
       COALESCE((SELECT SUM(pce.amount) FROM petty_cash_entries pce
                 WHERE pce.po_id = po.id AND pce.entry_type = 'expense' AND pce.payment_method = 'unpaid_bank'), 0) AS paid_pending`;
 
@@ -541,7 +544,8 @@ router.get('/:id', authenticate, async (req, res) => {
       WHERE a.po_id = $1 ORDER BY a.id`, [req.params.id]);
 
   res.json({ ...po, items, material_qc: materialQc || null, debit_notes: debitNotes, adjustments,
-    payments, paid_cleared: sumBy('paid_bank'), paid_pending: sumBy('unpaid_bank') });
+    // Paid — External (someone outside the business paid it, owner 23 Nov 2026) counts as paid.
+    payments, paid_cleared: Math.round((sumBy('paid_bank') + sumBy('paid_external')) * 100) / 100, paid_pending: sumBy('unpaid_bank') });
 });
 
 // Ship To (owner, 30 Oct 2026): "billing is me but shipping address is another

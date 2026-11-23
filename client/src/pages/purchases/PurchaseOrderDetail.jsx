@@ -682,6 +682,8 @@ export default function PurchaseOrderDetail() {
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {p.payment_method === 'paid_bank' ? (
                         <span className="text-xs font-semibold text-green-700 bg-green-50 rounded-full px-2 py-0.5">Paid</span>
+                      ) : p.payment_method === 'paid_external' ? (
+                        <span className="text-xs font-semibold text-violet-700 bg-violet-50 rounded-full px-2 py-0.5" title="Paid by someone outside the business — no bank or cash balance moved">Paid — External</span>
                       ) : (
                         <>
                           <span className="text-xs font-semibold text-amber-700 bg-amber-50 rounded-full px-2 py-0.5">Unpaid Bank</span>
