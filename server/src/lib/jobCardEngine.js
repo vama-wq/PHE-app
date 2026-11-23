@@ -42,6 +42,10 @@ const TUBE_DRAW = {
   // 8 mm (owner, 2 Oct 2026): copper 23.7 → 26.2%, SS316 20.7 → 22% → 23%
   // (owner, 3 Oct 2026); SS304 (and SS310, any other steel) stays 20.7%, flat at
   // every length. The old 43" and 50" breaks (20 / 19.7 / 19) are retired.
+  // SS316 split (owner, 23 Nov 2026: "keep SS316 SML Draw at 23% but other than
+  // that keep SS316 other tube at 21%", 8 mm only): the seamless tube
+  // (TUB-SS316-038-T06-SML) stays 23%; the other SS316 3/8" tube is 21%.
+  // 11 mm SS316, seamless or not, keeps the steel row.
   // Incoloy 3/8", both walls (owner, 26 Oct 2026 — what the tube now draws
   // at): a flat 22.5% at every length ("all lengths from 1" and above"). It was
   // a flat 21%, then 22% below a 65" drawing and 19% from 65" (24–26 Oct).
@@ -50,7 +54,8 @@ const TUBE_DRAW = {
   // the 0.7" allowance — write such a band with maxDrawing.
   8: {
     steel:   [ { maxTL: Infinity, pct: 0.207 } ],
-    ss316:   [ { maxTL: Infinity, pct: 0.23 } ],
+    ss316:     [ { maxTL: Infinity, pct: 0.21 } ],
+    ss316_sml: [ { maxTL: Infinity, pct: 0.23 } ],
     incoloy: [ { maxTL: Infinity, pct: 0.225 } ],
     copper:  [ { maxTL: Infinity, pct: 0.262 } ],
   },
@@ -178,7 +183,9 @@ function tubeGrade(tubeMaterial) {
   if (/\bcopper\b|\bcu\b|તાંબુ|तांबा/.test(s)) return 'copper';
   // Incoloy 0.6 mm wall has its own 11 mm row; elsewhere it falls back to 'incoloy'.
   if (/\bincoloy\b|\binc\b/.test(s)) return /\bt06\b|0\.6\s*mm/.test(s) ? 'incoloy_t06' : 'incoloy';
-  if (/\bss[\s-]*316/.test(s)) return 'ss316';
+  // SS316 seamless ("-SML" on the code, "Seamless" in the name) has its own 8 mm
+  // row; at 11 mm it falls back to ss316, then the steel row.
+  if (/\bss[\s-]*316/.test(s)) return /\bsml\b|seamless/.test(s) ? 'ss316_sml' : 'ss316';
   if (/\bss[\s-]*310/.test(s)) return 'ss310';
   if (/\bss[\s-]*304/.test(s)) return 'ss304';
   return null;

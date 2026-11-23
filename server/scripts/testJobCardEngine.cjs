@@ -356,15 +356,23 @@ const REGRESSIONS = [
   }, poisoned => poisoned === false],
 
   // ── Tube draw by grade (owner, 2 Oct 2026), pinned ────────────────────────
-  // 8 mm is flat at every length: SS304 20.7%, SS316 23% (owner, 3 Oct 2026),
-  // copper 26.2%; SS310 and any other steel use the steel row (20.7%); Incoloy,
-  // both walls, 22.5% (owner, 26 Oct 2026: "all lengths from 1" and above").
-  ...[['TUB-SS304-038-T06', 0.207], ['SS 304', 0.207], ['TUB-SS316-038-T06', 0.23], ['TUB-SS316-038-T06-SML', 0.23],
-      ['SS 316', 0.23], ['TUB-CU-038-T06', 0.262], ['Copper', 0.262],
+  // 8 mm is flat at every length: SS304 20.7%; SS316 21%, SS316 seamless (SML)
+  // 23% (owner, 23 Nov 2026 — all SS316 was 23% from 3 Oct); copper 26.2%; SS310
+  // and any other steel use the steel row (20.7%); Incoloy, both walls, 22.5%
+  // (owner, 26 Oct 2026: "all lengths from 1" and above").
+  ...[['TUB-SS304-038-T06', 0.207], ['SS 304', 0.207], ['TUB-SS316-038-T06', 0.21], ['TUB-SS316-038-T06-SML', 0.23],
+      ['SS316 Seamless 3/8" Tube, 0.6mm Thickness', 0.23], ['SS 316', 0.21], ['TUB-CU-038-T06', 0.262], ['Copper', 0.262],
       ['TUB-SS310-038-T06', 0.207], ['TUB-INC-038-T06', 0.225], ['TUB-INC-038-T05', 0.225], ['Incoloy', 0.225]].map(([m, want]) =>
     [`8 mm ${m} tube draw is a flat ${(want * 100).toFixed(1)}% at every length`,
       () => [12, 21.2, 42.9, 43, 50.1, 56, 120].map(tl => E.tubeDrawPct(E.materialClass(m), tl, 8, E.tubeGrade(m))),
       pcts => pcts.every(p => p === want)]),
+  ['11 mm SS316 is unchanged by the 8 mm split (owner, 23 Nov 2026): seamless and not both 15.6% to 51", 15% above',
+    () => [['TUB-SS316-12-T06', 40], ['TUB-SS316-12-T06', 60], ['TUB-SS316-12-T07-SML', 40], ['TUB-SS316-12-T07-SML', 60]]
+      .map(([m, tl]) => E.tubeDrawPct(E.materialClass(m), tl, 11, E.tubeGrade(m))),
+    pcts => JSON.stringify(pcts) === JSON.stringify([0.156, 0.15, 0.156, 0.15])],
+  ['a whole 8 mm SS316 card: normal tube 21%, seamless 23%',
+    () => ['TUB-SS316-038-T06', 'TUB-SS316-038-T06-SML'].map(m => E.buildJobCard({ tubeMaterial: m, tubeDiameterMm: 8, wattage: 1000, voltage: 230, drawingTotalLengthIn: 36 }).tubeDrawPct),
+    pcts => pcts[0] === 0.21 && pcts[1] === 0.23],
   ['a whole 8 mm Incoloy card draws 22.5% from a 1", 30", 64.5", 65" or 120" drawing',
     () => [1, 30, 64.5, 65, 120].map(d => E.buildJobCard({ tubeMaterial: 'TUB-INC-038-T06', tubeDiameterMm: 8, wattage: 1750, voltage: 230, drawingTotalLengthIn: d })),
     cards => cards.every(c => c.ok === true && c.tubeDrawPct === 0.225)],
