@@ -2,6 +2,7 @@
 // filters, conditional formatting, per-item detail, plain-English guide + analysis,
 // days-to-dispatch by product, finished-goods stocking suggestions, and delay reasons.
 const ExcelJS = require('exceljs');
+const { drawAnalysis } = require('./drawAnalysis');
 
 const RPT_STAGES = {
   1:'Coil',2:'Coil + Tube Cutting',3:'Ohms',4:'Spot',5:'Tube Cutting',6:'Filling',
@@ -266,6 +267,8 @@ async function generate(db, month) {
     ['Rejections by stage', 'Which production stage causes the most rejects — fix the top stage first for the biggest gain.', 'Focus top'],
     ['Ω OUT flag', 'Red = resistance outside ±5% of design. Investigate coil length/gauge for those items.', '—'],
     ['Delay reason', 'For items dispatched late (or overdue): why — usually a HOLD (too many rejects at a stage) or rework.', '—'],
+    ['Draw Summary — tube', 'For every app-made job card whose Draw stage (8) was done this month: the tube length after the draw (stage 8) ÷ the card\'s cutting length − 1 = the ACTUAL tube draw, against the draw % the card used. Grouped by tube material, diameter and drawing length. "vs card" is in percentage points: + means the tube drew more (came out longer) than the card planned.', 'Near 0'],
+    ['Draw Summary — wire', 'For every app-made job card whose last HV + Light check (27) was done this month: coil ohms at stage 3 ÷ the final ohms at stage 27 − 1 = the ACTUAL wire draw (as the card defines it: wound ÷ finished − 1), against the card\'s wire draw %. Grouped by tube material, diameter and wire gauge. "Final vs design" is how far the finished ohms landed from V²/W.', 'Near 0'],
     ['Finished-Goods candidate', 'Products you make again and again (many months/customers) are the safest to keep as ready stock so you can ship instantly. One-off make-to-order items should NOT be stocked.', '—'],
   ];
   guide.forEach(r => g.addRow({ m:r[0], w:r[1], d:r[2] }));
@@ -375,6 +378,81 @@ async function generate(db, month) {
   cf('lateDays', [{ type:'cellIs', operator:'greaterThan', formulae:['0'], style:{ fill:FILL(RED) }, priority:1 }]);
   cf('ohmsDev',  [{ type:'colorScale', cfvo:[{type:'num',value:-5},{type:'num',value:0},{type:'num',value:5}],
                     color:[{argb:'FFF8696B'},{argb:'FF63BE7B'},{argb:'FFF8696B'}], priority:1 }]);
+
+  // ── Draw Summary + card sheets (owner, 24 Nov 2026): actual tube draw and wire draw
+  //    from the checklist against each job card's own figures (lib/drawAnalysis.js). ──
+  const da = await drawAnalysis(db, mStart(y, m-1), mStart(y, m));
+  {
+    const ds = wb.addWorksheet('Draw Summary');
+    const W = [16, 7, 14, 7, 8, 11, 11, 9, 9, 13, 11, 13, 13];
+    W.forEach((w, i) => { ds.getColumn(i + 1).width = w; });
+    const headRow = (vals) => { const r = ds.addRow(vals); r.eachCell(c => { c.font = { bold:true, color:{ argb:'FFFFFFFF' } }; c.fill = FILL(HEAD); c.alignment = { vertical:'middle', wrapText:true }; }); r.height = 30; return r; };
+    const titleRow = (t) => { const r = ds.addRow([t]); r.getCell(1).font = { bold:true, size:12 }; return r; };
+    const noteRow = (t) => { const r = ds.addRow([t]); ds.mergeCells(r.number, 1, r.number, W.length); r.getCell(1).alignment = { wrapText:true }; r.getCell(1).font = { italic:true, color:{ argb:'FF666666' } }; r.height = 30; return r; };
+    const shade = (cell, d) => { if (d == null) return; const a = Math.abs(d); if (a >= 3) cell.fill = FILL(RED); else if (a >= 1) cell.fill = FILL(AMBER); else cell.fill = FILL(GREEN); };
+    titleRow(`TUBE DRAW — ${month} (cards drawn this month)`);
+    noteRow('Actual draw = length after draw (stage 8) ÷ the card\'s cutting length − 1. "vs card" in % points: + the tube drew more than the card planned (came out long), − less (came out short). Green within 1 point, amber 1–3, red 3 or more.');
+    headRow(['Tube', 'Ø mm', 'Drawing length', 'Cards', 'Pieces', 'Card draw %', 'Actual avg %', 'Min %', 'Max %', 'Weighted by pieces %', 'vs card (points)', 'Avg over / short (mm)']);
+    if (!da.tubeSummary.length) ds.addRow(['No app-made job card was drawn this month.']);
+    for (const g of da.tubeSummary) {
+      const r = ds.addRow([g.tube, g.dia, g.sub, g.cards, g.pieces, g.cardPct, g.actAvg, g.actMin, g.actMax, g.actWeighted, g.diffAvg, g.overAvgMm]);
+      shade(r.getCell(11), g.diffAvg);
+    }
+    if (da.tubeNoFigures) noteRow(`${da.tubeNoFigures} card(s) drawn this month were uploaded, not made in the app, so they carry no cutting length to compare with.`);
+    ds.addRow([]); ds.addRow([]);
+    titleRow(`WIRE DRAW (OHMS) — ${month} (cards finished this month)`);
+    noteRow('Actual wire draw = coil ohms at stage 3 ÷ final ohms at stage 27 − 1 (wound ÷ finished − 1, as the card defines it). "St 3 in range" = coil ohms inside the card\'s St 3 range. "Final vs design" = final ohms against V²/W.');
+    headRow(['Tube', 'Ø mm', 'Wire gauge', 'Cards', 'Pieces', 'Card wire draw %', 'Actual avg %', 'Min %', 'Max %', 'Weighted by pieces %', 'vs card (points)', 'St 3 in range', 'Final vs design avg %']);
+    if (!da.ohmSummary.length) ds.addRow(['No app-made job card finished this month.']);
+    for (const g of da.ohmSummary) {
+      const r = ds.addRow([g.tube, g.dia, g.sub, g.cards, g.pieces, g.cardPct, g.actAvg, g.actMin, g.actMax, g.actWeighted, g.diffAvg, g.st3InRange, g.finalVsDesignAvg]);
+      shade(r.getCell(11), g.diffAvg);
+      if (g.finalVsDesignAvg != null && Math.abs(g.finalVsDesignAvg) > 5) r.getCell(13).fill = FILL(RED);
+    }
+    if (da.ohmNoFigures) noteRow(`${da.ohmNoFigures} card(s) finished this month were uploaded, not made in the app, so they carry no ohms targets to compare with.`);
+  }
+  {
+    const td = wb.addWorksheet('Tube Draw (cards)');
+    td.columns = [
+      { header:'Job Card', key:'jc', width:26 }, { header:'Order', key:'order', width:12 }, { header:'Customer', key:'customer', width:9 },
+      { header:'Pieces', key:'qty', width:7 }, { header:'Drawn on', key:'drawnOn', width:11 }, { header:'Tube', key:'tube', width:14 },
+      { header:'Tube item', key:'tubeCode', width:20 }, { header:'Ø mm', key:'dia', width:6 }, { header:'Drawing length (in)', key:'drawingIn', width:10 },
+      { header:'Card total (in)', key:'totalIn', width:9 }, { header:'Card draw %', key:'cardPct', width:9 },
+      { header:'Card cut (mm)', key:'cutMm', width:10 }, { header:'Card cut (in)', key:'cutIn', width:9 }, { header:'Floor cut St 5 (mm)', key:'floorCutMm', width:10 },
+      { header:'After draw St 8 (mm)', key:'drawnMm', width:10 }, { header:'After draw St 8 (in)', key:'drawnIn', width:10 }, { header:'Wanted (mm)', key:'wantMm', width:10 },
+      { header:'Over / short (mm)', key:'overMm', width:10 }, { header:'Actual draw % (card cut)', key:'actPct', width:11 },
+      { header:'Actual draw % (floor cut)', key:'actFloorPct', width:11 }, { header:'vs card (points)', key:'diff', width:9 }, { header:'Note', key:'note', width:40 },
+    ];
+    td.addRows(da.tube.length ? da.tube : [{ jc:`No app-made job card was drawn in ${month}` }]);
+    styleHeader(td);
+    td.autoFilter = { from:{ row:1, column:1 }, to:{ row:1, column:td.columnCount } };
+    const last = Math.max(td.rowCount, 2), L = td.getColumn('diff').letter;
+    td.addConditionalFormatting({ ref:`${L}2:${L}${last}`, rules:[{ type:'colorScale', cfvo:[{type:'num',value:-3},{type:'num',value:0},{type:'num',value:3}],
+      color:[{argb:'FFF8696B'},{argb:'FF63BE7B'},{argb:'FFF8696B'}], priority:1 }] });
+  }
+  {
+    const wd = wb.addWorksheet('Wire Draw (cards)');
+    wd.columns = [
+      { header:'Job Card', key:'jc', width:26 }, { header:'Order', key:'order', width:12 }, { header:'Customer', key:'customer', width:9 },
+      { header:'Pieces', key:'qty', width:7 }, { header:'Finished (St 27) on', key:'finalOn', width:11 }, { header:'Tube', key:'tube', width:14 },
+      { header:'Tube item', key:'tubeCode', width:20 }, { header:'Ø mm', key:'dia', width:6 }, { header:'Wire', key:'gauge', width:11 }, { header:'Elements', key:'elements', width:8 },
+      { header:'Design Ω (V²/W)', key:'design', width:10 }, { header:'Card St 3 range Ω', key:'st3Range', width:20 }, { header:'St 3 coil Ω', key:'st3', width:9 },
+      { header:'St 3 vs card mid %', key:'st3Off', width:9 }, { header:'St 3 in range', key:'st3In', width:8 },
+      { header:'St 7 Ω (before draw)', key:'st7', width:10 }, { header:'St 9 Ω (after draw)', key:'st9', width:10 }, { header:'St 27 Ω (final)', key:'st27', width:10 },
+      { header:'Ω drop at the draw % (St 7 ÷ St 9 − 1)', key:'dropAtDraw', width:12 },
+      { header:'Card wire draw %', key:'cardWirePct', width:9 }, { header:'Actual wire draw % (St 3 ÷ St 27 − 1)', key:'actWirePct', width:12 },
+      { header:'vs card (points)', key:'diff', width:9 }, { header:'Final vs design %', key:'finalVsDesign', width:9 }, { header:'Note', key:'note', width:24 },
+    ];
+    wd.addRows(da.ohms.length ? da.ohms : [{ jc:`No app-made job card finished in ${month}` }]);
+    styleHeader(wd);
+    wd.autoFilter = { from:{ row:1, column:1 }, to:{ row:1, column:wd.columnCount } };
+    const last = Math.max(wd.rowCount, 2), col = (k) => wd.getColumn(k).letter;
+    wd.addConditionalFormatting({ ref:`${col('st3In')}2:${col('st3In')}${last}`, rules:[
+      { type:'containsText', operator:'containsText', text:'Out', style:{ fill:FILL(AMBER) }, priority:1 },
+      { type:'containsText', operator:'containsText', text:'In', style:{ fill:FILL(GREEN) }, priority:2 }] });
+    wd.addConditionalFormatting({ ref:`${col('finalVsDesign')}2:${col('finalVsDesign')}${last}`, rules:[{ type:'colorScale',
+      cfvo:[{type:'num',value:-5},{type:'num',value:0},{type:'num',value:5}], color:[{argb:'FFF8696B'},{argb:'FF63BE7B'},{argb:'FFF8696B'}], priority:1 }] });
+  }
 
   // ── Sheet 4: Late Items & Reasons ──
   const late = wb.addWorksheet('Late Items & Reasons');
