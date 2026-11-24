@@ -46,6 +46,10 @@ const TUBE_DRAW = {
   // that keep SS316 other tube at 21%", 8 mm only): the seamless tube
   // (TUB-SS316-038-T06-SML) stays 23%; the other SS316 3/8" tube is 21%.
   // 11 mm SS316, seamless or not, keeps the steel row.
+  // SS304 3/8" (owner, 24 Nov 2026: "make 16" to 30" SS304 8mm 21.5% rest will
+  // remain the same"): a 16"–30" DRAWING (both ends in) draws 21.5% — the short
+  // 10U tubes drew 21.2–22.1% on the floor after 20 Nov; under 16" and over 30"
+  // stay 20.7%. Drawing lengths, as she rules lengths (see Incoloy above).
   // Incoloy 3/8", both walls (owner, 26 Oct 2026 — what the tube now draws
   // at): a flat 22.5% at every length ("all lengths from 1" and above"). It was
   // a flat 21%, then 22% below a 65" drawing and 19% from 65" (24–26 Oct).
@@ -54,6 +58,7 @@ const TUBE_DRAW = {
   // the 0.7" allowance — write such a band with maxDrawing.
   8: {
     steel:   [ { maxTL: Infinity, pct: 0.207 } ],
+    ss304:   [ { maxDrawing: 15.9999, pct: 0.207 }, { maxDrawing: 30, pct: 0.215 }, { maxDrawing: Infinity, pct: 0.207 } ],
     ss316:     [ { maxTL: Infinity, pct: 0.21 } ],
     ss316_sml: [ { maxTL: Infinity, pct: 0.23 } ],
     incoloy: [ { maxTL: Infinity, pct: 0.225 } ],

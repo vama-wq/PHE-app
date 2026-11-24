@@ -360,12 +360,21 @@ const REGRESSIONS = [
   // 23% (owner, 23 Nov 2026 — all SS316 was 23% from 3 Oct); copper 26.2%; SS310
   // and any other steel use the steel row (20.7%); Incoloy, both walls, 22.5%
   // (owner, 26 Oct 2026: "all lengths from 1" and above").
-  ...[['TUB-SS304-038-T06', 0.207], ['SS 304', 0.207], ['TUB-SS316-038-T06', 0.21], ['TUB-SS316-038-T06-SML', 0.23],
+  ...[['TUB-SS316-038-T06', 0.21], ['TUB-SS316-038-T06-SML', 0.23],
       ['SS316 Seamless 3/8" Tube, 0.6mm Thickness', 0.23], ['SS 316', 0.21], ['TUB-CU-038-T06', 0.262], ['Copper', 0.262],
       ['TUB-SS310-038-T06', 0.207], ['TUB-INC-038-T06', 0.225], ['TUB-INC-038-T05', 0.225], ['Incoloy', 0.225]].map(([m, want]) =>
     [`8 mm ${m} tube draw is a flat ${(want * 100).toFixed(1)}% at every length`,
       () => [12, 21.2, 42.9, 43, 50.1, 56, 120].map(tl => E.tubeDrawPct(E.materialClass(m), tl, 8, E.tubeGrade(m))),
       pcts => pcts.every(p => p === want)]),
+  // SS304 3/8" (owner, 24 Nov 2026): a 16"–30" drawing draws 21.5%; under 16" and over 30" stay 20.7%.
+  ...['TUB-SS304-038-T06', 'SS 304'].map(m => [`8 mm ${m}: 20.7% under a 16" drawing, 21.5% from 16" to 30" (both in), 20.7% over 30"`,
+    () => [15.9, 15.99, 16, 20, 29.99, 30, 30.01, 31, 48.7].map(d => E.tubeDrawPct(E.materialClass(m), Math.round((d + E.TOTAL_LENGTH_ALLOWANCE_IN) * 1e4) / 1e4, 8, E.tubeGrade(m))),
+    p => JSON.stringify(p) === JSON.stringify([0.207, 0.207, 0.215, 0.215, 0.215, 0.215, 0.207, 0.207, 0.207])]),
+  ['a whole 8 mm SS304 card: 20" drawing 21.5% (cut 17.04"), 48" drawing 20.7%; SS310 at 20" stays 20.7%',
+    () => [['TUB-SS304-038-T06', 20], ['TUB-SS304-038-T06', 48], ['TUB-SS310-038-T06', 20]].map(([m, d]) => E.buildJobCard({ tubeMaterial: m, tubeDiameterMm: 8, wattage: 500, voltage: 230, drawingTotalLengthIn: d })),
+    c => c[0].tubeDrawPct === 0.215 && Math.abs(c[0].cuttingLengthIn - 17.037) < 0.001 && c[1].tubeDrawPct === 0.207 && c[2].tubeDrawPct === 0.207],
+  ['11 mm SS304 is unchanged by the 8 mm band: 15.6% to 51", 14.5% above',
+    () => [20, 60].map(tl => E.tubeDrawPct('steel', tl, 11, 'ss304')), p => p[0] === 0.156 && p[1] === 0.145],
   ['11 mm SS316 is unchanged by the 8 mm split (owner, 23 Nov 2026): seamless and not both 15.6% to 51", 15% above',
     () => [['TUB-SS316-12-T06', 40], ['TUB-SS316-12-T06', 60], ['TUB-SS316-12-T07-SML', 40], ['TUB-SS316-12-T07-SML', 60]]
       .map(([m, tl]) => E.tubeDrawPct(E.materialClass(m), tl, 11, E.tubeGrade(m))),
