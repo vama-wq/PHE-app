@@ -136,6 +136,13 @@ export default function PurchasePaymentsDue() {
           <td class="r">${b.paid_pending > 0 ? inr(b.paid_pending) : '—'}</td><td class="r">${inr(b.remaining)}</td>
           <td class="r">${sel[b.id] != null ? inr(parseFloat(sel[b.id]) || 0) : '—'}</td></tr>`).join('')}</tbody>
       </table>`;
+    const otherSection = otherUnpaid.length ? `
+      <h3>Other unpaid bills <span class="muted">· from the Account Statement, not linked to a purchase order · ${otherUnpaid.length} entr${otherUnpaid.length > 1 ? 'ies' : 'y'} · outstanding ${inr(otherTotal)}</span></h3>
+      <table>
+        <thead><tr><th>Date</th><th>Category</th><th>Paid to</th><th>Description</th><th class="r">Amount</th></tr></thead>
+        <tbody>${otherUnpaid.map(e => `<tr><td>${fmtDate(e.entry_date)}</td><td>${esc(e.category || '')}</td><td>${esc(e.paid_to || '')}</td><td>${esc(e.description || '')}</td><td class="r">${inr(e.amount)}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td colspan="4">Total</td><td class="r">${inr(otherTotal)}</td></tr></tfoot>
+      </table>` : '';
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Purchase Payments Due</title>
       <style>
         body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111;margin:32px;font-size:12px}
@@ -147,8 +154,9 @@ export default function PurchasePaymentsDue() {
         @media print{body{margin:12mm}}
       </style></head><body>
       <h1>Peena Heat Elements — Purchase Payments Due</h1>
-      <div class="meta">Generated ${new Date().toLocaleDateString('en-IN')} · Total outstanding <b>${inr(totalRemaining)}</b>${totalSelected > 0 ? ` · Proposed this run <b>${inr(totalSelected)}</b>` : ''}</div>
+      <div class="meta">Generated ${new Date().toLocaleDateString('en-IN')} · Purchase bills outstanding <b>${inr(totalRemaining)}</b>${otherUnpaid.length ? ` · Other unpaid bills <b>${inr(otherTotal)}</b> · Everything outstanding <b>${inr(totalRemaining + otherTotal)}</b>` : ''}${totalSelected > 0 ? ` · Proposed this run <b>${inr(totalSelected)}</b>` : ''}</div>
       ${groups.map(section).join('')}
+      ${otherSection}
       <div class="foot">For external review — these bills have <b>not</b> yet been posted to the Unpaid-Bank ledger.</div>
       </body></html>`;
     w.document.write(html); w.document.close(); w.focus();
@@ -163,7 +171,7 @@ export default function PurchasePaymentsDue() {
           <p className="text-gray-500 text-sm mt-0.5">Received purchases with an outstanding balance, grouped by the month each delivery was received.</p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn-secondary" onClick={exportPdf} disabled={bills.length === 0}><FileDown size={16} /> Export PDF</button>
+          <button className="btn-secondary" onClick={exportPdf} disabled={bills.length === 0 && otherUnpaid.length === 0}><FileDown size={16} /> Export PDF</button>
           <Link to="/purchases" className="btn-secondary"><ArrowLeft size={16} /> Purchases</Link>
         </div>
       </div>
