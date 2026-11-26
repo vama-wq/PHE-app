@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
-import { fmtDate } from '../../lib/utils';
+import { fmtDate, istTodayInput } from '../../lib/utils';
+import { useAuthStore } from '../../store/authStore';
 import { Wallet, ArrowLeft, Send, AlertTriangle, CheckSquare, Square, FileDown } from 'lucide-react';
 
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -13,7 +14,15 @@ const monthLabel = (key) => new Date(`${key}-01T00:00:00Z`).toLocaleDateString('
 // export a payables report for external review, then post the selected bills as
 // Unpaid-Bank entries. The owner later marks those Paid, deducting the Bank.
 export default function PurchasePaymentsDue() {
+  const { user } = useAuthStore();
+  const isOwner = user?.role === 'owner';
   const [bills, setBills] = useState([]);
+  // The rest of the Account Statement's Unpaid Bank — not linked to a PO (owner, 26 Nov 2026).
+  const [otherUnpaid, setOtherUnpaid] = useState([]);
+  const [otherTotal, setOtherTotal] = useState(0);
+  const [banks, setBanks] = useState([]);
+  const [paying, setPaying] = useState(null);   // { id, bank, paidOn, external }
+  const [payBusy, setPayBusy] = useState(false);
   const [totalRemaining, setTotalRemaining] = useState(0);
   const [loading, setLoading] = useState(true);
   const [sel, setSel] = useState({});            // po_id -> amount string (present only if selected)
@@ -25,10 +34,26 @@ export default function PurchasePaymentsDue() {
   const load = () => {
     setLoading(true);
     api.get('/purchase-orders/payments-due')
-      .then(r => { setBills(r.data.bills || []); setTotalRemaining(r.data.total_remaining || 0); })
+      .then(r => { setBills(r.data.bills || []); setTotalRemaining(r.data.total_remaining || 0);
+        setOtherUnpaid(r.data.other_unpaid || []); setOtherTotal(r.data.other_unpaid_total || 0); })
       .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
+  useEffect(() => { if (isOwner) api.get('/petty-cash/bank-accounts').then(r => setBanks((r.data || []).filter(b => b.active !== false))).catch(() => {}); }, [isOwner]);
+
+  // Mark one of the leftover unpaid entries paid, as on the Account Statement:
+  // which bank paid it and the day the money left (or paid externally).
+  const markPaid = async () => {
+    if (!paying) return;
+    if (!paying.external && !paying.bank) return setError('Choose which bank account paid it.');
+    setPayBusy(true); setError(''); setMsg('');
+    try {
+      await api.put(`/petty-cash/${paying.id}/mark-paid`, paying.external
+        ? { paid_external: true, paid_on: paying.paidOn } : { bank_account_id: Number(paying.bank), paid_on: paying.paidOn });
+      setPaying(null); setMsg('Marked paid — it is now on the Account Statement as paid.'); load();
+    } catch (e) { setError(e.response?.data?.error || 'Could not mark it paid'); }
+    finally { setPayBusy(false); }
+  };
 
   // Group by the RECEIVED month (YYYY-MM), oldest month first so the longest-
   // outstanding dues surface at the top. A PO that came in parts has one row per
@@ -73,15 +98,17 @@ export default function PurchasePaymentsDue() {
       if (sel[b.id] == null) continue;
       const amt = Math.round((parseFloat(sel[b.id]) || 0) * 100) / 100;
       if (!(amt > 0)) return setError(`Enter a valid amount for ${b.po_number}.`);
-      if (amt > b.remaining + 0.009) return setError(`${b.po_number}: amount can't exceed remaining ${inr(b.remaining)}.`);
       payments.push({ po_id: b.po_id ?? b.id, amount: amt });
     }
     if (!payments.length) return setError('Select at least one bill to pay.');
-    if (!window.confirm(`Send ${payments.length} payment(s) totalling ${inr(totalSelected)} to the Unpaid-Bank ledger? The owner then marks each Paid to deduct the Bank.`)) return;
+    const over = bills.filter(b => sel[b.id] != null && (parseFloat(sel[b.id]) || 0) > b.remaining + 0.009)
+      .map(b => `${b.po_number}: ${inr((parseFloat(sel[b.id]) || 0) - b.remaining)} more than due`);
+    if (!window.confirm(`Send ${payments.length} payment(s) totalling ${inr(totalSelected)} to the Unpaid-Bank ledger? The owner then marks each Paid to deduct the Bank.`
+      + (over.length ? `\n\nMore than the balance — ${over.join('; ')}. The extra comes off that supplier's next bill (or is noted on the PO if there is none).` : ''))) return;
     setSaving(true);
     try {
       const r = await api.post('/purchase-orders/payments-due/pay', { entry_date: entryDate, payments });
-      setMsg(`${r.data.created} payment(s) sent to the Account Statement (Unpaid Bank).`);
+      setMsg(`${r.data.created} payment(s) sent to the Account Statement (Unpaid Bank).${(r.data.warnings || []).length ? ' ' + r.data.warnings.join(' · ') : ''}`);
       setSel({});
       load();
     } catch (e) {
@@ -141,10 +168,14 @@ export default function PurchasePaymentsDue() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 my-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 my-4">
         <div className="card p-4">
-          <div className="text-xs text-gray-400 uppercase tracking-wide">Total Outstanding</div>
+          <div className="text-xs text-gray-400 uppercase tracking-wide">Purchase Bills Outstanding</div>
           <div className="text-2xl font-bold text-red-700 mt-1">{inr(totalRemaining)}</div>
+        </div>
+        <div className="card p-4">
+          <div className="text-xs text-gray-400 uppercase tracking-wide">Other Unpaid Bills</div>
+          <div className="text-2xl font-bold text-red-700 mt-1">{inr(otherTotal)}</div>
         </div>
         <div className="card p-4">
           <div className="text-xs text-gray-400 uppercase tracking-wide">Bills Selected</div>
@@ -221,8 +252,13 @@ export default function PurchasePaymentsDue() {
                         <td className="table-cell text-right text-sm font-bold text-red-700">{inr(b.remaining)}</td>
                         <td className="table-cell text-right">
                           {checked ? (
-                            <input className="input text-sm py-1 px-2 text-right w-32" type="number" step="any" min="0" max={b.remaining}
-                              value={sel[b.id]} onChange={e => setAmount(b, e.target.value)} />
+                            <div>
+                              <input className="input text-sm py-1 px-2 text-right w-32" type="number" step="any" min="0"
+                                value={sel[b.id]} onChange={e => setAmount(b, e.target.value)} />
+                              {(parseFloat(sel[b.id]) || 0) > b.remaining + 0.009 && (
+                                <div className="text-[10px] text-amber-700 mt-0.5 w-32 ml-auto leading-tight">{inr((parseFloat(sel[b.id]) || 0) - b.remaining)} more than due — comes off this supplier's next bill</div>
+                              )}
+                            </div>
                           ) : <span className="text-xs text-gray-300">—</span>}
                         </td>
                       </tr>
@@ -233,6 +269,67 @@ export default function PurchasePaymentsDue() {
             </div>
           </div>
         ))
+      )}
+
+      {/* The rest of the Account Statement's Unpaid Bank — not linked to a purchase order. */}
+      {!loading && otherUnpaid.length > 0 && (
+        <div className="card overflow-hidden mt-6">
+          <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+            <div className="text-sm font-semibold text-gray-700">
+              Other unpaid bills <span className="text-xs font-normal text-gray-400">· from the Account Statement, not linked to a purchase order · {otherUnpaid.length} entr{otherUnpaid.length > 1 ? 'ies' : 'y'}</span>
+            </div>
+            <span className="text-sm font-semibold text-red-700">{inr(otherTotal)}</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-white border-b border-gray-100">
+                <tr>
+                  <th className="table-header text-left">Date</th>
+                  <th className="table-header text-left">Category</th>
+                  <th className="table-header text-left">Paid to</th>
+                  <th className="table-header text-left">Description</th>
+                  <th className="table-header text-right">Amount</th>
+                  {isOwner && <th className="table-header text-right w-28"></th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {otherUnpaid.map(e => (
+                  <tr key={e.id} className="hover:bg-gray-50 align-top">
+                    <td className="table-cell text-xs text-gray-500 whitespace-nowrap">{fmtDate(e.entry_date)}</td>
+                    <td className="table-cell text-sm">{e.category || '—'}</td>
+                    <td className="table-cell text-sm font-medium text-gray-800">{e.paid_to || '—'}</td>
+                    <td className="table-cell text-sm text-gray-600">{e.description || '—'}</td>
+                    <td className="table-cell text-right text-sm font-bold text-red-700 whitespace-nowrap">{inr(e.amount)}</td>
+                    {isOwner && (
+                      <td className="table-cell text-right">
+                        {paying?.id === e.id ? (
+                          <div className="flex flex-col items-end gap-1.5">
+                            <label className="flex items-center gap-1 text-[11px] text-gray-500">
+                              <input type="checkbox" checked={paying.external} onChange={ev => setPaying({ ...paying, external: ev.target.checked })} /> paid externally
+                            </label>
+                            {!paying.external && (
+                              <select className="input text-xs py-1 w-32" value={paying.bank} onChange={ev => setPaying({ ...paying, bank: ev.target.value })}>
+                                <option value="">Bank…</option>
+                                {banks.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                              </select>
+                            )}
+                            <input className="input text-xs py-1 w-32" type="date" max={istTodayInput()} value={paying.paidOn} onChange={ev => setPaying({ ...paying, paidOn: ev.target.value })} />
+                            <div className="flex gap-1">
+                              <button className="btn-primary btn-sm" onClick={markPaid} disabled={payBusy}>{payBusy ? '…' : 'Mark paid'}</button>
+                              <button className="btn-secondary btn-sm" onClick={() => { setPaying(null); setError(''); }}>Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button className="btn-secondary btn-sm" onClick={() => { setPaying({ id: e.id, bank: banks[0] ? String(banks[0].id) : '', paidOn: istTodayInput(), external: false }); setError(''); }}>Mark paid</button>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
 
       {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg mt-4">{error}</p>}

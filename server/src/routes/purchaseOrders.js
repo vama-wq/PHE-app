@@ -366,7 +366,16 @@ router.get('/payments-due', authenticate, authorize('owner', 'admin', 'accounts'
   }
   bills.sort((a, b) => String(b.month || '').localeCompare(String(a.month || '')) || String(a.po_number).localeCompare(String(b.po_number)));
   const total_remaining = r2(bills.reduce((s, b) => s + b.remaining, 0));
-  res.json({ bills, total_remaining });
+  // The rest of the Account Statement's Unpaid Bank (owner, 26 Nov 2026: "make the
+  // payments due, with all the unpaid bank that's left"): every unpaid expense NOT
+  // linked to a PO — a PO-linked one already shows as Pending on its bill above.
+  const other_unpaid = (await db.all(
+    `SELECT id, entry_date::text AS entry_date, category, paid_to, description, amount::float AS amount
+       FROM petty_cash_entries
+      WHERE payment_method='unpaid_bank' AND entry_type='expense' AND po_id IS NULL
+      ORDER BY entry_date, id`)).map(e => ({ ...e, amount: r2(e.amount) }));
+  const other_unpaid_total = r2(other_unpaid.reduce((t, e) => t + e.amount, 0));
+  res.json({ bills, total_remaining, other_unpaid, other_unpaid_total });
 });
 
 router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'accounts'), async (req, res) => {
@@ -383,7 +392,7 @@ router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'acco
         const amount = Math.round(Number(p.amount) * 100) / 100;
         if (!Number.isInteger(poId) || !(amount > 0)) { errors.push('Invalid payment row skipped'); continue; }
         const po = await client.query(
-          `SELECT po.id, po.po_number, po.igst_percent, po.transport_charges, po.packaging_no_gst, ${PO_ADJ_SQL}, s.name AS supplier_name, ${PO_PAID_SQL}
+          `SELECT po.id, po.po_number, po.supplier_id, po.notes, po.igst_percent, po.transport_charges, po.packaging_no_gst, ${PO_ADJ_SQL}, s.name AS supplier_name, ${PO_PAID_SQL}
            FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id=$1`, [poId]);
         const row = po.rows[0];
         if (!row) { errors.push(`PO ${poId} not found`); continue; }
@@ -393,13 +402,45 @@ router.post('/payments-due/pay', authenticate, authorize('owner', 'admin', 'acco
         const parts = (await payableParts(tx, [row])).get(row.id) || [];
         const remaining = r2(parts.reduce((t, pt) => t + pt.remaining, 0));
         if (remaining <= 0) { errors.push(`${row.po_number}: already fully allocated`); continue; }
-        if (amount > remaining + 0.009) { errors.push(`${row.po_number}: ₹${amount} exceeds remaining ₹${remaining}`); continue; }
+        // More than this bill's balance (owner, 26 Nov 2026: "i must have paid 626 more
+        // in anant enterprise … adjust it for the next bill that is there or add a note
+        // if no bill exists"): the payment is recorded in full, the extra comes off the
+        // supplier's next bill as an adjustment line, or — when there is no next bill —
+        // is noted on this PO for whenever one comes.
+        const excess = amount > remaining + 0.009 ? r2(amount - remaining) : 0;
+        let desc = `Payment for ${row.po_number}`, carry = null;
+        if (excess) {
+          const cdb = { get: async (q, p) => (await client.query(q, p)).rows[0], all: async (q, p) => (await client.query(q, p)).rows, run: async (q, p) => client.query(q, p) };
+          const others = (await client.query(
+            `SELECT po.id, po.po_number, po.status, po.delivery_status, po.igst_percent, po.transport_charges, po.packaging_no_gst, ${PO_ADJ_SQL}, s.name AS supplier_name, ${PO_PAID_SQL}
+               FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id
+              WHERE po.supplier_id=$1 AND po.id<>$2 AND po.status NOT IN ('draft', 'rejected') AND po.delivery_status IS DISTINCT FROM 'order_cancelled'
+              ORDER BY po.id`, [row.supplier_id, poId])).rows;
+          const oparts = await payableParts(tx, others);
+          // A received bill with something left comes first; else the oldest order still to arrive.
+          carry = others.find(o => (oparts.get(o.id) || []).some(pt => pt.remaining > 0.009))
+               || others.find(o => !['received'].includes(o.status) && !(oparts.get(o.id) || []).length) || null;
+          if (carry) {
+            desc = `Payment for ${row.po_number} — ₹${excess} more than due, taken off ${carry.po_number}`;
+          } else {
+            desc = `Payment for ${row.po_number} — ₹${excess} more than due; no next bill yet, noted on the PO`;
+            const note = `[${entryDate}] Paid ₹${excess} more than this PO's balance (payment of ₹${amount}) — adjust it against ${row.supplier_name}'s next bill.`;
+            await client.query('UPDATE purchase_orders SET notes = CASE WHEN COALESCE(notes,\'\')=\'\' THEN $1 ELSE notes || E\'\\n\' || $1 END WHERE id=$2', [note, poId]);
+          }
+          if (carry) {
+            await insertAdjustments(cdb, carry.id, [{ amount: -excess, ref_po_id: poId,
+              reason: `₹${excess} paid in excess on ${row.po_number} (${entryDate}), taken off this bill` }], req.user.id);
+            await recomputePoTotals(cdb, carry.id);
+            await logActivity(null, null, 'po_updated', `${carry.po_number}: −₹${excess} adjustment — paid in excess on ${row.po_number}`, req.user.id);
+          }
+        }
         await client.query(
           `INSERT INTO petty_cash_entries (entry_date, entry_type, category, description, paid_to, amount,
              payment_method, affects_cash, po_id, created_by)
            VALUES ($1,'expense','Purchase Payment',$2,$3,$4,'unpaid_bank',FALSE,$5,$6)`,
-          [entryDate, `Payment for ${row.po_number}`, row.supplier_name, amount, poId, req.user.id]);
+          [entryDate, desc, row.supplier_name, amount, poId, req.user.id]);
         created += 1;
+        if (excess) errors.push(`${row.po_number}: ₹${excess} more than due — ${carry ? `taken off ${carry.po_number}` : 'no next bill, noted on the PO'}`);
       }
       if (created === 0) throw new Error(errors[0] || 'No valid payments to record');
     });
