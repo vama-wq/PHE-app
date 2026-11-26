@@ -118,46 +118,58 @@ export default function PurchasePaymentsDue() {
     }
   };
 
-  // Print-to-PDF report of the payables (grouped by month), including any amounts
-  // currently proposed — for external review BEFORE anything hits the ledger.
+  // Print-to-PDF in the owner's Debtors sheet layout (26 Nov 2026, "Debtors Dec
+  // 2025.pdf"): one row per supplier / payee, one INV/DT column per outstanding
+  // bill (date over amount), a TOTAL column, and a TOTAL row. Purchase bills and
+  // the other unpaid Account Statement entries are in the same table. Amounts are
+  // what is still outstanding on each bill.
   const exportPdf = () => {
     const w = window.open('', '_blank');
     if (!w) return setError('Allow pop-ups to export the report.');
-    const section = (g) => `
-      <h3>${esc(g.label)} <span class="muted">· received · ${g.bills.length} bill${g.bills.length > 1 ? 's' : ''} · outstanding ${inr(g.total)}</span></h3>
-      <table>
-        <thead><tr><th>Supplier</th><th>PO #</th><th>Received</th>
-          <th class="r">Material</th><th class="r">P&amp;F</th><th class="r">GST %</th><th class="r">Payable</th>
-          <th class="r">Paid</th><th class="r">Pending</th><th class="r">Remaining</th><th class="r">Proposed</th></tr></thead>
-        <tbody>${g.bills.map(b => `<tr>
-          <td>${esc(b.supplier_name)}</td><td>${esc(b.po_number)}${b.parts_count > 1 ? ` <span class="muted">(part ${b.part_no} of ${b.parts_count})</span>` : ''}</td><td>${fmtDate(b.received_at)}</td>
-          <td class="r">${inr(b.material_value)}</td><td class="r">${b.packaging_forwarding > 0 ? inr(b.packaging_forwarding) : '—'}</td><td class="r">${b.igst_percent}%</td><td class="r">${inr(b.received_value)}</td>
-          <td class="r">${b.paid_cleared > 0 ? inr(b.paid_cleared) : '—'}</td>
-          <td class="r">${b.paid_pending > 0 ? inr(b.paid_pending) : '—'}</td><td class="r">${inr(b.remaining)}</td>
-          <td class="r">${sel[b.id] != null ? inr(parseFloat(sel[b.id]) || 0) : '—'}</td></tr>`).join('')}</tbody>
-      </table>`;
-    const otherSection = otherUnpaid.length ? `
-      <h3>Other unpaid bills <span class="muted">· from the Account Statement, not linked to a purchase order · ${otherUnpaid.length} entr${otherUnpaid.length > 1 ? 'ies' : 'y'} · outstanding ${inr(otherTotal)}</span></h3>
-      <table>
-        <thead><tr><th>Date</th><th>Category</th><th>Paid to</th><th>Description</th><th class="r">Amount</th></tr></thead>
-        <tbody>${otherUnpaid.map(e => `<tr><td>${fmtDate(e.entry_date)}</td><td>${esc(e.category || '')}</td><td>${esc(e.paid_to || '')}</td><td>${esc(e.description || '')}</td><td class="r">${inr(e.amount)}</td></tr>`).join('')}</tbody>
-        <tfoot><tr><td colspan="4">Total</td><td class="r">${inr(otherTotal)}</td></tr></tfoot>
-      </table>` : '';
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Purchase Payments Due</title>
+    const ymd = (d) => { try { return new Date(d).toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.'); } catch { return ''; } };
+    const num = (n) => { const v = Math.round(Number(n || 0) * 100) / 100; return v.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(v) ? 0 : 2, maximumFractionDigits: 2 }); };
+    const money = (n) => `₹ ${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const bySupplier = new Map();
+    const add = (name, date, amount) => {
+      const key = String(name || '—').trim().toUpperCase();
+      if (!bySupplier.has(key)) bySupplier.set(key, []);
+      bySupplier.get(key).push({ date, amount });
+    };
+    for (const b of bills) add(b.supplier_name, b.received_at, b.remaining);
+    for (const e of otherUnpaid) add(e.paid_to || e.category, e.entry_date, e.amount);
+    const names = [...bySupplier.keys()].sort((x, y) => x.localeCompare(y));
+    for (const n of names) bySupplier.get(n).sort((x, y) => (new Date(x.date).getTime() || 0) - (new Date(y.date).getTime() || 0));
+    const PER = 6;   // bills per line; a supplier with more continues on the next line
+    const cols = Math.max(5, Math.min(PER, Math.max(0, ...names.map(n => bySupplier.get(n).length))));
+    const grand = names.reduce((t, n) => t + bySupplier.get(n).reduce((x, bl) => x + bl.amount, 0), 0);
+    const head = Array.from({ length: cols }, () => '<th>INV/DT</th>').join('');
+    const rowsHtml = names.map(n => {
+      const list = bySupplier.get(n), total = list.reduce((t, bl) => t + bl.amount, 0);
+      const lines = []; for (let i = 0; i < list.length; i += cols) lines.push(list.slice(i, i + cols));
+      return lines.map((ln, li) => `<tr>
+        <td class="name">${li === 0 ? esc(n) : ''}</td>
+        ${Array.from({ length: cols }, (_, i) => ln[i] ? `<td class="c"><div>${esc(ymd(ln[i].date))}</div><div>${num(ln[i].amount)}</div></td>` : '<td class="c"></td>').join('')}
+        <td class="tot">${li === 0 ? money(total) : ''}</td></tr>`).join('');
+    }).join('');
+    const month = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', month: 'short', year: '2-digit' }).replace(' ', '-').toLowerCase();
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Payments Due ${month}</title>
       <style>
-        body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111;margin:32px;font-size:12px}
-        h1{font-size:18px;margin:0 0 2px} h3{font-size:13px;margin:22px 0 6px;border-bottom:2px solid #333;padding-bottom:3px}
-        .muted{color:#777;font-weight:400;font-size:11px} .meta{color:#555;font-size:11px;margin-bottom:8px}
-        table{width:100%;border-collapse:collapse;margin-bottom:6px} th,td{border:1px solid #ccc;padding:5px 7px;text-align:left}
-        th{background:#f3f3f3;font-size:11px} .r{text-align:right} tfoot td{font-weight:700;background:#fafafa}
-        .foot{margin-top:20px;color:#777;font-size:10px;border-top:1px solid #ccc;padding-top:6px}
-        @media print{body{margin:12mm}}
+        @page{size:landscape;margin:12mm}
+        body{font-family:Calibri,Arial,Helvetica,sans-serif;color:#000;margin:18px;font-size:11px}
+        .title{text-align:center;font-size:11px;margin:0 0 2px}
+        table{width:100%;border-collapse:collapse;border:1.5px solid #000;table-layout:fixed}
+        th,td{border:1px solid #000;padding:2px 4px;vertical-align:bottom}
+        th{text-align:left;font-weight:700} th:first-child{width:24%} th:last-child{width:14%}
+        td.name{text-align:left;text-transform:uppercase} td.c{text-align:left} td.c div{line-height:1.25} td.tot{text-align:right;font-weight:700;white-space:nowrap}
+        tr{page-break-inside:avoid}
+        tfoot td{font-weight:700;text-align:center;border-top:1.5px solid #000} tfoot td.tot{text-align:right}
       </style></head><body>
-      <h1>Peena Heat Elements — Purchase Payments Due</h1>
-      <div class="meta">Generated ${new Date().toLocaleDateString('en-IN')} · Purchase bills outstanding <b>${inr(totalRemaining)}</b>${otherUnpaid.length ? ` · Other unpaid bills <b>${inr(otherTotal)}</b> · Everything outstanding <b>${inr(totalRemaining + otherTotal)}</b>` : ''}${totalSelected > 0 ? ` · Proposed this run <b>${inr(totalSelected)}</b>` : ''}</div>
-      ${groups.map(section).join('')}
-      ${otherSection}
-      <div class="foot">For external review — these bills have <b>not</b> yet been posted to the Unpaid-Bank ledger.</div>
+      <div class="title">Payments Due ${esc(month)}</div>
+      <table>
+        <thead><tr><th>SUPPLIER NAME</th>${head}<th>TOTAL</th></tr></thead>
+        <tbody>${rowsHtml || `<tr><td colspan="${cols + 2}" style="text-align:center">Nothing is due for payment.</td></tr>`}</tbody>
+        <tfoot><tr><td colspan="${cols + 1}">TOTAL</td><td class="tot">${money(grand)}</td></tr></tfoot>
+      </table>
       </body></html>`;
     w.document.write(html); w.document.close(); w.focus();
     setTimeout(() => w.print(), 350);
