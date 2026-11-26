@@ -453,11 +453,24 @@ router.get('/monthly-production', authenticate, authorize('owner'), async (req, 
 // balance to tie against the bank. Cash, Unpaid Bank and Paid — External entries
 // never touch a bank, so they are left out. Owner only, like the bank balances.
 router.get('/bank-reconciliation', authenticate, authorize('owner'), async (req, res) => {
-  const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : new Date().toISOString().slice(0, 7);
-  const [y, m] = month.split('-').map(Number);
-  const start = `${month}-01`;
-  const end = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);   // first day of the next month
-  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  // A month (?month=YYYY-MM) or any period (?from=YYYY-MM-DD&to=YYYY-MM-DD, both days
+  // included — owner, 26 Nov 2026: "if i want to get the bank reconcilitation for a period").
+  const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '') && !Number.isNaN(new Date(`${v}T00:00:00Z`).getTime());
+  let start, end, label, fileTag, closeDay;
+  const fmtDay = (d) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  if (isDay(req.query.from) && isDay(req.query.to)) {
+    if (req.query.from > req.query.to) return res.status(400).json({ error: 'The From date must not be after the To date.' });
+    start = req.query.from; closeDay = req.query.to;
+    end = new Date(new Date(`${closeDay}T00:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10);   // the day after To
+    label = `${fmtDay(start)} to ${fmtDay(closeDay)}`; fileTag = `${start}_to_${closeDay}`;
+  } else {
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : new Date().toISOString().slice(0, 7);
+    const [y, m] = month.split('-').map(Number);
+    start = `${month}-01`;
+    end = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);   // first day of the next month
+    closeDay = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    label = new Date(Date.UTC(y, m - 1, 1)).toLocaleString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' }); fileTag = month;
+  }
   const db = getDB();
   const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
   const accounts = await db.all('SELECT id, name FROM bank_accounts ORDER BY id');
@@ -492,8 +505,8 @@ router.get('/bank-reconciliation', authenticate, authorize('owner'), async (req,
       aoa.push([e.bank_date, e.entry_date, e.id, isIn ? 'Receipt' : 'Payment', e.category || '', e.paid_to || '',
         e.description || '', isIn ? '' : amt, isIn ? amt : '', bal]);
     }
-    aoa.push([], ['', '', '', 'Totals this month', '', '', '', dr, cr, ''],
-      [end > start ? new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) : '', '', '', 'Closing balance', '', '', '', '', '', bal]);
+    aoa.push([], ['', '', '', 'Totals for the period', '', '', '', dr, cr, ''],
+      [closeDay, '', '', 'Closing balance', '', '', '', '', '', bal]);
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws['!cols'] = [12, 12, 8, 16, 18, 30, 60, 15, 15, 15].map(wch => ({ wch }));
     ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } }, { s: { r: 1, c: 0 }, e: { r: 1, c: 9 } }];
@@ -510,7 +523,7 @@ router.get('/bank-reconciliation', authenticate, authorize('owner'), async (req,
   // Bank entries with no account named (older rows) get their own sheet, so nothing is lost.
   if (rows.some(x => x.bank_account_id == null)) XLSX.utils.book_append_sheet(wb, sheetFor('No bank named', null), 'No bank named');
   if (!wb.SheetNames.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['No bank accounts set up']]), 'Bank');
-  sendXlsx(res, wb, `bank_reconciliation_${month}.xlsx`);
+  sendXlsx(res, wb, `bank_reconciliation_${fileTag}.xlsx`);
 });
 
 router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (req, res) => {

@@ -36,6 +36,9 @@ export default function PettyCashLedger() {
   const [data, setData] = useState(null);
   const [ledgers, setLedgers] = useState(null); // owner-only accounts summary
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  // Bank reconciliation for any period (owner, 26 Nov 2026).
+  const [showPeriod, setShowPeriod] = useState(false);
+  const [period, setPeriod] = useState({ from: '', to: '' });
   const [filter, setFilter] = useState(null); // { category } | { company } | null
   const [showLedgers, setShowLedgers] = useState(false); // ledger cards collapsed by default
   const [showEntry, setShowEntry] = useState(null); // 'expense' | 'top_up'
@@ -303,6 +306,13 @@ export default function PettyCashLedger() {
               onClick={() => downloadExcel(`bank-reconciliation?month=${month}`, `bank_reconciliation_${month}.xlsx`)}
               title="Kotak and Kalupur for the month picked: only what went through each bank, by Paid On, with opening and closing balances — to tie against the bank statements">
               <Download size={15} /> Bank Reconciliation
+            </button>
+
+          )}
+          {isOwner && (
+            <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => { setPeriod(p => ({ from: p.from || `${month}-01`, to: p.to || istTodayInput() })); setShowPeriod(true); }}
+              title="Bank reconciliation for any From – To dates, not just one month">
+              <Download size={15} /> For a period…
             </button>
           )}
           {isOwner && (
@@ -737,6 +747,32 @@ export default function PettyCashLedger() {
         <EntryModal type={showEntry} isOwner={isOwner} receiptLimit={data?.receipt_required_above ?? 500}
           banks={banks} existingSamples={samples}
           onClose={() => setShowEntry(null)} onSaved={() => { setShowEntry(null); load(); }} />
+      )}
+
+      {/* Bank reconciliation for any period — Kotak and Kalupur sheets, opening and closing balance. */}
+      {showPeriod && (
+        <Modal open title="Bank reconciliation — for a period" onClose={() => setShowPeriod(false)} size="sm">
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">Kotak and Kalupur for the days you choose, both days included: only what went through each bank, by Paid On, with the opening and closing balance.</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">From</label>
+                <input className="input" type="date" value={period.from} max={period.to || undefined} onChange={e => setPeriod({ ...period, from: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">To</label>
+                <input className="input" type="date" value={period.to} min={period.from || undefined} onChange={e => setPeriod({ ...period, to: e.target.value })} />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button className="btn-secondary" onClick={() => setShowPeriod(false)}>Cancel</button>
+              <button className="btn-primary flex items-center gap-1.5" disabled={!period.from || !period.to || period.from > period.to}
+                onClick={() => { downloadExcel(`bank-reconciliation?from=${period.from}&to=${period.to}`, `bank_reconciliation_${period.from}_to_${period.to}.xlsx`); setShowPeriod(false); }}>
+                <Download size={15} /> Download
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Mark-paid asks which bank the money left, so the entry lands in the
