@@ -301,7 +301,7 @@ export default function PettyCashLedger() {
             onClick={() => downloadExcel('petty-cash', 'account_statement.xlsx')}>
             <Download size={15} /> Export
           </button>
-          {isOwner && (
+          {(isOwner || user.role === 'accounts') && (
             <button className="btn-secondary flex items-center gap-1.5 text-sm"
               onClick={() => downloadExcel(`bank-reconciliation?month=${month}`, `bank_reconciliation_${month}.xlsx`)}
               title="Kotak and Kalupur for the month picked: only what went through each bank, by Paid On, with opening and closing balances — to tie against the bank statements">
@@ -309,7 +309,7 @@ export default function PettyCashLedger() {
             </button>
 
           )}
-          {isOwner && (
+          {(isOwner || user.role === 'accounts') && (
             <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => { setPeriod(p => ({ from: p.from || `${month}-01`, to: p.to || istTodayInput() })); setShowPeriod(true); }}
               title="Bank reconciliation for any From – To dates, not just one month">
               <Download size={15} /> For a period…

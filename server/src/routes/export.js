@@ -451,8 +451,9 @@ router.get('/monthly-production', authenticate, authorize('owner'), async (req, 
 // bank in the month, dated by Paid On (the bank's date; the entry date when none),
 // an opening balance from everything before, a running balance and the closing
 // balance to tie against the bank. Cash, Unpaid Bank and Paid — External entries
-// never touch a bank, so they are left out. Owner only, like the bank balances.
-router.get('/bank-reconciliation', authenticate, authorize('owner'), async (req, res) => {
+// never touch a bank, so they are left out. Owner and accounts (owner, 26 Nov 2026: "accounts as well"),
+// month or period — the sheets carry the bank balances, which accounts otherwise do not see.
+router.get('/bank-reconciliation', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   // A month (?month=YYYY-MM) or any period (?from=YYYY-MM-DD&to=YYYY-MM-DD, both days
   // included — owner, 26 Nov 2026: "if i want to get the bank reconcilitation for a period").
   const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '') && !Number.isNaN(new Date(`${v}T00:00:00Z`).getTime());
