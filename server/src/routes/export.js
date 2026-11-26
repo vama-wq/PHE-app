@@ -444,6 +444,75 @@ router.get('/monthly-production', authenticate, authorize('owner'), async (req, 
 });
 
 // ── Petty Cash ledger ─────────────────────────────────────────────────────────
+// Bank reconciliation (owner, 26 Nov 2026: "an export button for bank
+// reconcilition … the separate bank payments for that month for kotak and
+// kalupur … just like how there are statements of the bank"). One sheet per bank
+// account, laid out like the bank's statement: only money that moved through that
+// bank in the month, dated by Paid On (the bank's date; the entry date when none),
+// an opening balance from everything before, a running balance and the closing
+// balance to tie against the bank. Cash, Unpaid Bank and Paid — External entries
+// never touch a bank, so they are left out. Owner only, like the bank balances.
+router.get('/bank-reconciliation', authenticate, authorize('owner'), async (req, res) => {
+  const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : new Date().toISOString().slice(0, 7);
+  const [y, m] = month.split('-').map(Number);
+  const start = `${month}-01`;
+  const end = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);   // first day of the next month
+  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const db = getDB();
+  const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
+  const accounts = await db.all('SELECT id, name FROM bank_accounts ORDER BY id');
+  const BANK_DATE = 'COALESCE(e.paid_on, e.entry_date)';
+  const opening = await db.all(`
+    SELECT e.bank_account_id AS id, SUM(CASE WHEN e.entry_type='top_up' THEN e.amount ELSE -e.amount END) AS bal
+      FROM petty_cash_entries e
+     WHERE e.payment_method='paid_bank' AND ${BANK_DATE} < $1::date
+     GROUP BY 1`, [start]);
+  const rows = await db.all(`
+    SELECT e.id, e.bank_account_id, e.entry_type, e.category, e.paid_to, e.description, e.amount,
+           ${BANK_DATE}::text AS bank_date, e.entry_date::text AS entry_date
+      FROM petty_cash_entries e
+     WHERE e.payment_method='paid_bank' AND ${BANK_DATE} >= $1::date AND ${BANK_DATE} < $2::date
+     ORDER BY ${BANK_DATE}, e.id`, [start, end]);
+  const openOf = (id) => r2((opening.find(o => (o.id ?? null) === id) || {}).bal);
+
+  const HEAD = ['Bank date', 'Entry date', 'Entry #', 'Type', 'Category', 'Paid to / from', 'Description (with transaction no.)', 'Withdrawal (Dr)', 'Deposit (Cr)', 'Balance'];
+  const sheetFor = (name, acctId) => {
+    let bal = openOf(acctId), dr = 0, cr = 0;
+    const aoa = [
+      [`${name} — bank reconciliation, ${label}`],
+      ['From the PHE app: only entries that went through this bank, by Paid On (the bank\'s date). Cash, Unpaid Bank and Paid — External entries are not here.'],
+      [],
+      HEAD,
+      [start, '', '', 'Opening balance', '', '', '', '', '', bal],
+    ];
+    for (const e of rows.filter(x => (x.bank_account_id ?? null) === acctId)) {
+      const amt = r2(e.amount), isIn = e.entry_type === 'top_up';
+      bal = r2(bal + (isIn ? amt : -amt));
+      if (isIn) cr = r2(cr + amt); else dr = r2(dr + amt);
+      aoa.push([e.bank_date, e.entry_date, e.id, isIn ? 'Receipt' : 'Payment', e.category || '', e.paid_to || '',
+        e.description || '', isIn ? '' : amt, isIn ? amt : '', bal]);
+    }
+    aoa.push([], ['', '', '', 'Totals this month', '', '', '', dr, cr, ''],
+      [end > start ? new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) : '', '', '', 'Closing balance', '', '', '', '', '', bal]);
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [12, 12, 8, 16, 18, 30, 60, 15, 15, 15].map(wch => ({ wch }));
+    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } }, { s: { r: 1, c: 0 }, e: { r: 1, c: 9 } }];
+    // Money columns with two decimals and thousands separators.
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    for (let R = 4; R <= range.e.r; R++) for (const C of [7, 8, 9]) {
+      const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+      if (cell && typeof cell.v === 'number') cell.z = '#,##,##0.00';
+    }
+    return ws;
+  };
+  const wb = XLSX.utils.book_new();
+  for (const a of accounts) XLSX.utils.book_append_sheet(wb, sheetFor(a.name, a.id), String(a.name).slice(0, 31));
+  // Bank entries with no account named (older rows) get their own sheet, so nothing is lost.
+  if (rows.some(x => x.bank_account_id == null)) XLSX.utils.book_append_sheet(wb, sheetFor('No bank named', null), 'No bank named');
+  if (!wb.SheetNames.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['No bank accounts set up']]), 'Bank');
+  sendXlsx(res, wb, `bank_reconciliation_${month}.xlsx`);
+});
+
 router.get('/petty-cash', authenticate, authorize('owner', 'accounts'), async (req, res) => {
   // ?account=cash → a Cash-in-Hand-only statement (accounts can export this
   // for the supervisor). Otherwise the full ledger.

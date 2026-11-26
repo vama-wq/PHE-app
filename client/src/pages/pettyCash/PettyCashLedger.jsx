@@ -299,6 +299,13 @@ export default function PettyCashLedger() {
             <Download size={15} /> Export
           </button>
           {isOwner && (
+            <button className="btn-secondary flex items-center gap-1.5 text-sm"
+              onClick={() => downloadExcel(`bank-reconciliation?month=${month}`, `bank_reconciliation_${month}.xlsx`)}
+              title="Kotak and Kalupur for the month picked: only what went through each bank, by Paid On, with opening and closing balances — to tie against the bank statements">
+              <Download size={15} /> Bank Reconciliation
+            </button>
+          )}
+          {isOwner && (
             <button className="btn-secondary flex items-center gap-1.5 text-sm" onClick={() => setShowEntry('top_up')}>
               <TrendingUp size={15} /> Add Top-up
             </button>
