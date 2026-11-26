@@ -131,7 +131,9 @@ export default function PurchasePaymentsDue() {
     const money = (n) => `₹ ${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     const bySupplier = new Map();
     const add = (name, date, amount) => {
-      const key = String(name || '—').trim().toUpperCase();
+      // Spellings of one payee are one row (owner, 26 Nov 2026: "all anjani are same").
+      let key = String(name || '—').trim().toUpperCase();
+      if (/^ANA?JANI\b/.test(key)) key = 'ANJANI TRANSPORT';
       if (!bySupplier.has(key)) bySupplier.set(key, []);
       bySupplier.get(key).push({ date, amount });
     };
